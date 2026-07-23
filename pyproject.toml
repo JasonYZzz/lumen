@@ -1,0 +1,64 @@
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[project]
+name = "lumen"
+version = "0.1.0"
+description = "Lumen: a configurable agent framework with local tools, MCP, and a Textual TUI"
+readme = "README.md"
+requires-python = ">=3.11,<3.14"
+dependencies = [
+  "pydantic>=2.11",
+  "pydantic-ai-slim[anthropic,google,mcp,openai]>=2.1.0",
+  "pyyaml>=6.0.2",
+  "textual>=6.1",
+  "typer>=0.16",
+]
+
+[project.scripts]
+lumen = "lumen.cli:app"
+
+[dependency-groups]
+dev = [
+  "mcp[cli]>=1.12",
+  "pyright>=1.1.400",
+  "pytest>=8.4",
+  "pytest-asyncio>=1.1",
+  "pytest-cov>=6.2",
+  "pytest-textual-snapshot>=1.1",
+  "pytest-timeout>=2.4",
+  "ruff>=0.12",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/lumen"]
+
+[tool.pytest.ini_options]
+addopts = "-q"
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 110
+extend-exclude = ["pi", "posting"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "ASYNC", "RUF"]
+
+[tool.pyright]
+include = ["src", "tests"]
+exclude = [".venv", "pi", "posting"]
+pythonVersion = "3.11"
+typeCheckingMode = "strict"
+reportMissingTypeStubs = false
+
+[tool.coverage.run]
+branch = true
+source = ["lumen"]
+
+[tool.coverage.report]
+fail_under = 80
+show_missing = true
+skip_covered = true

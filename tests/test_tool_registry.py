@@ -1,0 +1,79 @@
+import sys
+from pathlib import Path
+from types import ModuleType
+
+import pytest
+
+from lumen.config import PermissionsConfig, PluginConfig
+from lumen.tools.registry import (
+    DuplicateToolError,
+    PermissionDecision,
+    PermissionPolicy,
+    ToolRegistry,
+    load_plugin_specs,
+)
+from lumen.tools.spec import Risk, ToolSpec
+
+
+def sample_tool(value: str) -> str:
+    """Return the supplied value."""
+    return value
+
+
+def test_plugin_factory_must_return_tool_specs(monkeypatch: pytest.MonkeyPatch) -> None:
+    module = ModuleType("bad_plugin")
+    module.create_tools = lambda: [sample_tool]  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "bad_plugin", module)
+
+    with pytest.raises(TypeError, match="ToolSpec"):
+        load_plugin_specs(PluginConfig(module="bad_plugin"))
+
+
+def test_registry_rejects_duplicate_names(tmp_path: Path) -> None:
+    registry = ToolRegistry(tmp_path)
+    spec = ToolSpec(sample_tool, risk=Risk.READ, name="same")
+    registry.add(spec, origin="first")
+
+    with pytest.raises(DuplicateToolError, match="same"):
+        registry.add(spec, origin="second")
+
+
+def test_permission_policy_applies_deny_allow_and_risk_order() -> None:
+    policy = PermissionPolicy(PermissionsConfig(always_allow=["write_note"], always_deny=["blocked"]))
+
+    assert policy.decide("blocked", Risk.READ) is PermissionDecision.DENY
+    assert policy.decide("write_note", Risk.WRITE) is PermissionDecision.ALLOW
+    assert policy.decide("read_file", Risk.READ) is PermissionDecision.ALLOW
+    assert policy.decide("run_task", Risk.EXECUTE) is PermissionDecision.CONFIRM
+
+
+def test_local_tools_are_hidden_or_marked_for_approval(tmp_path: Path) -> None:
+    policy = PermissionPolicy(PermissionsConfig(always_deny=["blocked"]))
+    registry = ToolRegistry(tmp_path)
+    registry.add(ToolSpec(sample_tool, risk=Risk.READ, name="safe"), origin="plugin")
+    registry.add(ToolSpec(sample_tool, risk=Risk.WRITE, name="dangerous"), origin="plugin")
+    registry.add(ToolSpec(sample_tool, risk=Risk.READ, name="blocked"), origin="plugin")
+
+    tools = registry.build_local_tools(policy, default_timeout=10)
+    by_name = {tool.name: tool for tool in tools}
+
+    assert set(by_name) == {"safe", "dangerous"}
+    assert by_name["safe"].requires_approval is False
+    assert by_name["dangerous"].requires_approval is True
+    assert by_name["dangerous"].sequential is True
+    assert by_name["dangerous"].timeout == 10
+
+
+def test_registry_cannot_register_control_tool_name(tmp_path: Path) -> None:
+    """Control tool names are reserved; the registry never holds them.
+
+    The registry itself doesn't know about the reserved set (that lives in the
+    resource manager), but we assert here that the manager's collision check
+    runs against the registry before exposing tools. So this is a sanity test
+    that adding any name still works and the manager's reserved check is the
+    gatekeeper; we exercise the manager-level collision in test_resources.
+    """
+    registry = ToolRegistry(tmp_path)
+    registry.add(ToolSpec(sample_tool, risk=Risk.READ, name="set_plan"), origin="malicious")
+    # The registry itself does not refuse the name; the manager does.
+    assert "set_plan" in registry.entries

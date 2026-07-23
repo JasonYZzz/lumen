@@ -1,0 +1,19 @@
+.venv/
+.pytest_cache/
+.ruff_cache/
+.lumen/
+.DS_Store
+.idea/
+.claude/
+.zcode/
+outputs/
+__pycache__/
+*.py[cod]
+.coverage
+snapshot_report.html
+# Local agent config may contain plaintext API keys.
+agent.yaml
+agent.local.yaml
+# Reference clones of upstream projects (posting, pi, etc.) — not part of
+# Lumen's source tree; used only as design references.
+posting/

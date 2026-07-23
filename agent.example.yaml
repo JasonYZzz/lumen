@@ -1,0 +1,105 @@
+version: 1
+
+agent:
+  name: lumen
+  instructions_file: prompts/system.md
+  # Multi-model form: pick the active model with `default_model` (or via the
+  # CLI flag `--model <name>` / TUI command `/model <name>`). Each entry is a
+  # ModelSettingsConfig: id uses the `<provider>:<model>` convention, and the
+  # api_key is loaded from the named env var.
+  default_model: deepseek-v4-pro
+  models:
+    deepseek-v4-pro:
+      id: openai:deepseek-v4-pro
+      api_key_env: DEEPSEEK_API_KEY
+      base_url: https://api.deepseek.com/v1
+      api: chat                 # OpenAI-compatible /chat/completions path
+      settings:
+        max_tokens: 4096
+    glm-5.2:
+      id: openai:glm-5.2
+      api_key_env: DASHSCOPE_API_KEY
+      base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
+      api: chat                 # 阿里云百炼 Chat Completions(最稳)
+    qwen3-max:
+      id: openai:qwen3-max
+      api_key_env: DASHSCOPE_API_KEY
+      base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
+      api: responses            # 阿里云百炼 Responses API(可选;不开 previous_response_id/内置工具)
+  # Legacy single-model form is still accepted. Use either `model:` or
+  # `models:`, never both.
+  # model:
+  #   id: openai:gpt-5.2
+  #   api_key_env: OPENAI_API_KEY
+  #   base_url: null
+  #   settings:
+  #     max_tokens: 4096
+  limits:
+    request_count: 50          # raise if multi-step tasks halt at the limit
+    tool_calls: 100
+    # No total_tokens cap — context growth is handled by auto-compaction
+    # (context.soft_token_limit). See README "运行限制" section.
+    tool_timeout_seconds: 60
+
+tools:
+  builtins:
+    - read_file
+    - list_directory
+    - search_text
+    - write_file
+    - edit_file
+    - run_command
+
+mcp_servers:
+  # Two optional Streamable HTTP examples. Set `required: false` so a
+  # transient remote outage becomes a warning instead of a startup failure.
+  tyc-mcp:
+    transport: streamable_http
+    url: https://mcp.tianyancha.com/v1
+    headers:
+      Authorization: ${TYC_TOKEN}
+    # Generic dispatch can invoke capabilities beyond a simple lookup, so it
+    # stays approval-gated even in auto mode. The remaining tools are reads.
+    tool_risks:
+      call_tool: execute
+      call_tools_batch: execute
+      get_company_basic_profile: read
+      get_company_capabilities: read
+      get_company_group_profile: read
+      get_company_people: read
+      get_group_info: read
+      get_person_profile: read
+      get_person_risk_profile: read
+      search_bids: read
+      search_companies: read
+      search_companies_by_industry_region: read
+      search_companies_by_ranking: read
+      search_companies_by_tag: read
+      search_listed_companies: read
+      search_patents: read
+      search_trademarks: read
+    required: false
+  exa:
+    transport: streamable_http
+    url: https://mcp.exa.ai/mcp
+    headers:
+      x-api-key: ${EXA_API_KEY}
+    tool_risks:
+      web_fetch_exa: read
+      web_search_exa: read
+    required: false
+
+permissions:
+  # manual | accept_edits | auto (legacy "ask" is accepted as manual)
+  default_mode: manual
+  always_allow: []
+  always_deny: []
+
+sessions:
+  directory: .lumen/sessions
+
+context:
+  enabled: true
+  soft_token_limit: 60000
+  keep_recent_tokens: 20000   # 压缩后保留的最近窗口 token 预算(向后走到用户请求边界)
+  summary_max_tokens: 2000
