@@ -3,7 +3,7 @@ requires = ["hatchling>=1.27"]
 build-backend = "hatchling.build"
 
 [project]
-name = "lumen"
+name = "lumen-agent"
 version = "0.1.0"
 description = "Lumen: a configurable agent framework with local tools, MCP, and a Textual TUI"
 readme = "README.md"

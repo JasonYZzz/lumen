@@ -254,23 +254,95 @@ uv run lumen --resume <session-uuid>
 | `--resume` | — | — | 启动时恢复的 session UUID |
 | `--check-config` | — | `false` | 校验配置 + 发现工具后立即退出,不进 TUI |
 
-### 其他启动方式
+### 全局安装、打包与发布
 
-除了 `uv run lumen`，以下方式等价（都调用同一个 Typer app）：
+Lumen 将发行包名、Python 包名和终端命令分开：
+
+| 层级 | 名称 | 用途 |
+|------|------|------|
+| PyPI 发行包 | `lumen-agent` | `uv tool`、`pipx` 和 PyPI 使用的安装名 |
+| Python 包 | `lumen` | `import lumen` |
+| CLI 命令 | `lumen` | 由 `pyproject.toml` 的 `[project.scripts]` 注册 |
+
+从当前源码仓库安装为全局工具：
+
+```bash
+uv tool install .
+```
+
+安装后无需 `uv run`，可以在任意项目目录调用：
+
+```bash
+# 默认使用当前目录的 agent.yaml，并把当前目录作为工作区
+lumen
+
+# 显式把当前项目暴露给文件、命令和 MCP 工具
+lumen --cwd .
+
+# 使用集中存放的配置，同时操作当前项目
+lumen --config /absolute/path/to/agent.yaml --cwd .
+```
+
+`lumen` 的默认参数是 `--config agent.yaml --cwd .`。因此“任意目录可执行”表示命令已经全局可用；要真正启动 Agent，当前目录仍需有 `agent.yaml`，或者通过 `--config` 指向一份可用配置。配置中的 `instructions_file` 相对于配置文件解析，也必须存在；模型 API key 应通过环境变量提供。
+
+开发 Lumen 本身时，希望源码修改立即对全局命令生效，可以使用 editable 安装：
+
+```bash
+uv tool install --editable .
+
+# 已安装普通版本时，用 editable 版本替换它
+uv tool install --editable --force .
+```
+
+也可以使用 pipx：
+
+```bash
+pipx install .
+lumen
+```
+
+构建 wheel 和源码包：
+
+```bash
+uv build
+# 产物：dist/lumen_agent-0.1.0-py3-none-any.whl
+#      dist/lumen_agent-0.1.0.tar.gz
+
+# 在另一台机器或隔离环境验证本地 wheel
+uv tool install dist/lumen_agent-0.1.0-py3-none-any.whl
+```
+
+发布到 PyPI 后，用户可以直接安装发行包：
+
+```bash
+uv tool install lumen-agent
+# 或
+pipx install lumen-agent
+
+lumen
+```
+
+首次发布前先构建并检查产物，再执行 `uv publish`；`uv tool install lumen-agent` 只有在该版本已发布到 PyPI 后才会生效。
+
+与 TypeScript/npm 生态的对应关系：
+
+| TypeScript/npm | Python/Lumen |
+|----------------|--------------|
+| `npm install -g package` | `uv tool install package` 或 `pipx install package` |
+| `package.json` 的 `bin` | `pyproject.toml` 的 `[project.scripts]` |
+| npm registry | PyPI |
+| Node.js runtime | Python runtime |
+| `claude` / `pi` | `lumen` |
+
+全局安装解决的是“在任何项目里都有 `lumen` 命令”的分发问题。配置好模型、API key、审批策略和可选 MCP/skills 后，Lumen 可以在目标项目中读取与搜索文件、编辑文件、运行命令、制定计划、恢复会话并调用 MCP，使用形态与 Claude Code、pi 相同；但这不表示三者功能逐项完全等价，实际能力仍取决于 Lumen 当前实现、所选模型和配置。
+
+其他等价入口：
 
 ```bash
 # Python 模块入口
 uv run python -m lumen.cli --check-config
 
-# Python 内联
-uv run python -c "from lumen.cli import app; app(['--check-config'])"
-
-# 构建后用 wheel / sdist 安装(有 console_scripts entry point)
-uv build                                                    # 产出 dist/lumen-0.1.0-*.whl
-pipx install dist/lumen-0.1.0-py3-none-any.whl         # 然后 lumen ... 直接可用（无需 uv run）
-# 或
-uv pip install dist/lumen-0.1.0-py3-none-any.whl
-# 或(从当前项目直接运行,无需先 build)
+# 从当前项目临时运行，无需安装为全局工具
 uvx --from . lumen --check-config
 ```
 
@@ -610,5 +682,3 @@ uv run pytest
 ```
 
 自动化测试使用 Pydantic AI `FunctionModel/TestModel`，真实覆盖 stdio 与 Streamable HTTP MCP 发现，不需要外部 API Key。包含端到端：`set_plan → report_progress → read_file → edit_file（审批）→ run_command（审批）→ update_step → 最终 Markdown`，以及“拒绝后恢复”的回退场景。
-
-仓库中的 `pi/` 是保留的 TypeScript 参考实现（包括 `pi/tui/` 差分渲染引擎和 `pi/packages/coding-agent/` 的 skills/slash-command/compaction 等模块），不参与 Python 包构建或运行，作为设计参考。
