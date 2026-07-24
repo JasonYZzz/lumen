@@ -33,6 +33,7 @@ from lumen.events import (
     RunEvent,
 )
 from lumen.plan import PlanState
+from lumen.sessions import SessionRepository
 
 
 def _summary_function_model(content: str, *, fail: bool = False) -> FunctionModel:
@@ -58,6 +59,19 @@ def test_estimate_tokens_is_deterministic() -> None:
 
 def test_estimate_tokens_handles_empty_messages() -> None:
     assert estimate_message_tokens([]) == 0
+
+
+def test_estimate_tokens_overcounts_chinese_text() -> None:
+    """Characterization: the current byte/4 estimator overcounts CJK text.
+
+    Three Chinese characters are 9 UTF-8 bytes -> ceil(9/4) = 3 tokens by the
+    byte/4 estimator, whereas a real tiktoken tokenizer counts ~2. This locks
+    the current (imperfect) behaviour so M2's switch to a Chinese-aware
+    :class:`ConservativeTokenCounter` is a detectable, intentional change.
+    """
+
+    messages = [ModelRequest(parts=[UserPromptPart(content="你好世")])]  # 9 UTF-8 bytes
+    assert estimate_message_tokens(messages) == 3
 
 
 def test_recent_turns_keeps_complete_user_boundaries() -> None:
@@ -501,6 +515,61 @@ def test_summary_instructions_omits_previous_section_on_first_run() -> None:
     )
     assert "UPDATE" not in instructions
     assert "<previous-summary>" not in instructions
+
+
+async def test_session_resume_restores_summary_for_iterative_compaction(tmp_path: Path) -> None:
+    """Characterization: a compaction persisted to a session is restored on load
+    and feeds the *next* compaction as an UPDATE, not a from-scratch rebuild.
+
+    This is the recovery invariant (plan §3.1, §M0): resume rebuilds active
+    history and the latest summary, and iterative compaction continues from the
+    session's own summary rather than a stale App-level value.
+    """
+
+    repository = SessionRepository(tmp_path)
+    session = repository.create(agent_name="test", model_id="test")
+    # A history large enough to trigger compaction under a tiny soft limit.
+    history: list[ModelMessage] = [ModelRequest(parts=[UserPromptPart(content="x" * 4000)])]
+    config = ContextConfig(
+        enabled=True, soft_token_limit=100, keep_recent_tokens=1000, summary_max_tokens=2000
+    )
+    summary_yaml = (
+        '{"goals":["first goal"],"constraints":[],"completed":[],"current_plan":[],'
+        '"important_files":[],"key_facts":[],"failures_and_approvals":[],"outstanding":[]}'
+    )
+    manager = ContextManager(config, model=_summary_function_model(summary_yaml))
+
+    async def emit(event: RunEvent) -> None:
+        return None
+
+    prepared = await manager.prepare(history, PlanState(), [], emit)
+    assert prepared.compaction is not None
+
+    # Persist the compacted turn exactly as the coordinator would.
+    repository.append_turn(
+        session.id,
+        user_input="work",
+        messages=history,
+        approvals=[],
+        usage={},
+        status="completed",
+        plan=PlanState(),
+        diagnostics=[],
+        compaction=prepared.compaction,
+    )
+
+    # Resume: the repository restores the latest summary as a real ContextSummary.
+    loaded = repository.load(session.id)
+    restored = loaded.latest_compaction_summary
+    assert isinstance(restored, ContextSummary)
+    assert restored.goals == ["first goal"]
+
+    # The restored summary drives the next compaction as an iterative UPDATE.
+    instructions = manager._summary_instructions(  # type: ignore[reportPrivateUsage]
+        PlanState(), [], previous_summary=restored
+    )
+    assert "UPDATE" in instructions
+    assert "first goal" in instructions
 
 
 # ---------------------------------------------------------------------------

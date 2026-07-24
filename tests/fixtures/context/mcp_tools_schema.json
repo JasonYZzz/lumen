@@ -1,0 +1,58 @@
+[
+  {
+    "name": "filesystem_read_file",
+    "description": "Read the complete contents of a UTF-8 text file from the workspace.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "path": {"type": "string", "description": "Workspace-relative path to the file."},
+        "offset": {"type": "integer", "description": "Optional 0-based start line."},
+        "limit": {"type": "integer", "description": "Optional max line count."}
+      },
+      "required": ["path"]
+    }
+  },
+  {
+    "name": "filesystem_search",
+    "description": "Recursively search file contents with a regular expression and return matching lines with context.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "pattern": {"type": "string", "description": "Python regular expression."},
+        "include": {"type": "string", "description": "Glob filter for paths to search."},
+        "context_lines": {"type": "integer", "description": "Lines of context around each match."}
+      },
+      "required": ["pattern"]
+    }
+  },
+  {
+    "name": "git_status",
+    "description": "Return the working tree status as structured rows: staged, modified, untracked.",
+    "parameters": {"type": "object", "properties": {}, "required": []}
+  },
+  {
+    "name": "database_query",
+    "description": "Run a read-only SQL query against the configured project database and return rows.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "sql": {"type": "string", "description": "SELECT query only."},
+        "params": {"type": "array", "items": {}, "description": "Bound parameters."},
+        "limit": {"type": "integer", "description": "Max rows (default 100)."}
+      },
+      "required": ["sql"]
+    }
+  },
+  {
+    "name": "http_fetch",
+    "description": "Fetch a URL and return the response body converted to markdown. For private or authenticated URLs use an authenticated MCP tool instead.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "url": {"type": "string", "description": "http(s) URL."},
+        "timeout": {"type": "number", "description": "Per-request seconds."}
+      },
+      "required": ["url"]
+    }
+  }
+]
