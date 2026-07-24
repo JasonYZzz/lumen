@@ -38,6 +38,14 @@ packages = ["src/lumen"]
 addopts = "-q"
 asyncio_mode = "auto"
 testpaths = ["tests"]
+# The legacy ContextManager is deprecated behind ContextEngine (M1). The
+# characterization tests in test_context*.py intentionally exercise it directly,
+# so its deprecation warning is expected noise there; production code uses
+# ContextEngine. Scoped to this exact message so any other deprecation stays
+# visible.
+filterwarnings = [
+  "ignore:lumen.context.ContextManager is deprecated:DeprecationWarning",
+]
 
 [tool.ruff]
 target-version = "py311"

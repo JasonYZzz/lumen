@@ -35,11 +35,15 @@ from pydantic_ai.usage import RunUsage
 
 from lumen.config import LimitsConfig
 from lumen.context import (
-    ContextManager,
-    ContextSummary,
-    PreparedContext,
-    RequestBudgetEstimator,
-    estimate_message_tokens,
+    AgentRef,
+    ContextCommit,
+    ContextEngine,
+    ContextEnvelope,
+    ContextRequest,
+    PreviousSummary,
+    RuntimeContextSnapshot,
+    SessionRef,
+    TaskSnapshot,
 )
 from lumen.events import (
     ApprovalRequest,
@@ -316,21 +320,20 @@ class AgentRuntime:
         limits: LimitsConfig,
         tool_metadata: dict[str, dict[str, str]],
         model_settings: ModelSettings | None = None,
-        context_manager: ContextManager | None = None,
+        context_engine: ContextEngine | None = None,
         tool_schema_documents: Sequence[dict[str, Any]] = (),
     ) -> None:
         self.limits = limits
         self.tool_metadata = tool_metadata
-        # Store the instructions text so the context manager can reserve space
-        # for them in the compaction budget (they're sent with every request).
+        # Store the instructions text so the context engine can reserve space
+        # for them in the assembly budget (they're sent with every request).
         self.instructions = instructions
         self.controller = TaskController()
-        self.context_manager = context_manager
+        self.context_engine = context_engine
         self.interactive_queue = InteractiveMessageQueue()
         control_tools = [
             _control_tool(name, self.controller) for name in ("set_plan", "update_step", "report_progress")
         ]
-        self.request_budget_estimator = RequestBudgetEstimator()
         self.tool_schema_documents = [
             *(_tool_schema_document(tool) for tool in [*control_tools, *tools]),
             *tool_schema_documents,
@@ -345,9 +348,6 @@ class AgentRuntime:
             tool_timeout=limits.tool_timeout_seconds,
         )
 
-    def _estimate_tool_schema_tokens(self) -> int:
-        return self.request_budget_estimator.estimate_tool_schemas(self.tool_schema_documents)
-
     async def run(
         self,
         prompt: str,
@@ -356,7 +356,10 @@ class AgentRuntime:
         approve: ApprovalHandler,
         *,
         plan: PlanState | None = None,
-        previous_summary: ContextSummary | None = None,
+        previous_summary: PreviousSummary | None = None,
+        session_id: str | None = None,
+        focus: str | None = None,
+        force_compaction: bool = False,
     ) -> RunOutcome:
         await emit(RunStarted(prompt))
         self.controller.start(plan or PlanState(), emit)
@@ -369,36 +372,33 @@ class AgentRuntime:
         finished_calls: set[str] = set()
         tool_call_count = 0
         run_usage = RunUsage()
-        context_estimate = estimate_message_tokens(history)
+        # ``context_estimate`` is the value surfaced in ``UsageUpdated``; the
+        # engine computes it during prepare (no estimator reference here).
+        context_estimate = 0
 
-        # Compaction rebuilds the active model context from a structured summary
-        # plus the recent complete turns. The session repository still preserves
-        # the full raw history; only what the model sees changes.
-        # ``previous_summary`` (from the last compaction in this session) lets
-        # the summarizer do an iterative update instead of rebuilding from
-        # scratch — preventing summary drift on long sessions.
-        prepared: PreparedContext | None = None
-        if self.context_manager is not None:
-            # Reserve space for the upcoming request: the current prompt, the
-            # system instructions, and the tool schema. The compaction window
-            # is sized so window + prompt + instructions + schema stays within
-            # keep_recent_tokens, preventing a compacted window that — combined
-            # with a large new prompt — still exceeds the provider limit.
-            reservation = self.request_budget_estimator.build_reservation(
+        # The context engine is the single Seam for context assembly: it sizes
+        # the request reservation, decides whether to compact, and returns a
+        # provider-ready envelope. ``previous_summary`` (from the last compaction
+        # in this session) lets the summarizer do an iterative update instead of
+        # rebuilding from scratch, preventing summary drift on long sessions.
+        envelope: ContextEnvelope | None = None
+        if self.context_engine is not None:
+            request = ContextRequest(
+                session=SessionRef(id=session_id or "default"),
+                agent=AgentRef(name="lumen"),
                 prompt=prompt,
-                instructions=self.instructions,
-                tool_schemas=self.tool_schema_documents,
-                safety_tokens=max(1, self.context_manager.config.soft_token_limit // 100),
+                task=TaskSnapshot(plan=self.controller.snapshot(), diagnostics=tuple(diagnostics)),
+                runtime=RuntimeContextSnapshot(
+                    instructions=self.instructions,
+                    tool_schema_documents=tuple(self.tool_schema_documents),
+                ),
+                history=tuple(history),
+                previous_summary=previous_summary,
+                focus=focus,
+                force_compaction=force_compaction,
             )
             try:
-                prepared = await self.context_manager.prepare(
-                    history,
-                    self.controller.snapshot(),
-                    diagnostics,
-                    emit,
-                    previous_summary=previous_summary,
-                    reservation=reservation,
-                )
+                envelope = await self.context_engine.prepare(request, emit)
             except Exception as error:
                 await emit(RunFailed(str(error)))
                 raise attach_partial_outcome(
@@ -412,8 +412,8 @@ class AgentRuntime:
                         retryable=False,
                     ),
                 ) from None
-            active_history_input: Sequence[ModelMessage] = prepared.history
-            context_estimate = estimate_message_tokens(prepared.history) + reservation.total_tokens
+            active_history_input: Sequence[ModelMessage] = list(envelope.messages)
+            context_estimate = envelope.budget.used_tokens if envelope.budget is not None else 0
         else:
             active_history_input = history
 
@@ -478,9 +478,9 @@ class AgentRuntime:
 
         # Usage limits. We deliberately do NOT pass ``total_tokens_limit``:
         # coding-agent doesn't cap cumulative tokens either. Context growth is
-        # handled by :class:`ContextManager`'s auto-compaction, which summarizes
-        # old history before the provider's window fills. A hard token wall
-        # would halt long agentic loops mid-task.
+        # handled by the context engine's auto-compaction, which summarizes old
+        # history before the provider's window fills. A hard token wall would
+        # halt long agentic loops mid-task.
         limits = UsageLimits(
             request_limit=self.limits.request_count,
             tool_calls_limit=self.limits.tool_calls,
@@ -528,7 +528,9 @@ class AgentRuntime:
                 message=message,
                 approvals=list(approval_log),
                 usage=_merge_usage(
-                    prepared.usage if prepared is not None else {},
+                    envelope.compaction.usage
+                    if envelope is not None and envelope.compaction is not None
+                    else {},
                     asdict(run_usage),
                 ),
                 plan=self.controller.snapshot(),
@@ -670,7 +672,7 @@ class AgentRuntime:
                 raise RuntimeError("agent stream ended without a final result")
             result = final_result.result
             usage = _merge_usage(
-                prepared.usage if prepared is not None else {},
+                envelope.compaction.usage if envelope is not None and envelope.compaction is not None else {},
                 asdict(run_usage),
             )
             output = str(result.output)
@@ -685,19 +687,35 @@ class AgentRuntime:
                 )
             )
             await emit(RunCompleted(output, usage))
-            # The active history the next run should see is whatever the model
-            # actually consumed (possibly compacted) plus the new messages from
-            # this run. The full raw history is still preserved by the caller.
-            active_history: list[ModelMessage] = [*active_history_input, *result.new_messages()]
+            # Commit the run's new messages through the engine: it verifies the
+            # envelope fingerprint (idempotent for a repeat) and returns the next
+            # active history (the model-consumed envelope plus the new messages).
+            # The full raw history is still preserved by the caller via the
+            # session repository.
+            new_messages = result.new_messages()
+            if envelope is not None and self.context_engine is not None:
+                transition = await self.context_engine.commit(
+                    ContextCommit(
+                        session=SessionRef(id=session_id or "default"),
+                        envelope_fingerprint=envelope.fingerprint,
+                        new_messages=tuple(new_messages),
+                    ),
+                    emit,
+                )
+                active_history: list[ModelMessage] = list(transition.active_history)
+                compaction = envelope.compaction
+            else:
+                active_history = [*active_history_input, *new_messages]
+                compaction = None
             return RunOutcome(
                 output=output,
-                new_messages=result.new_messages(),
+                new_messages=new_messages,
                 usage=usage,
                 approvals=approval_log,
                 plan=self.controller.snapshot(),
                 active_history=active_history,
                 diagnostics=diagnostics,
-                compaction=prepared.compaction if prepared is not None else None,
+                compaction=compaction,
             )
         except asyncio.CancelledError as error:
             # Flush any buffered text so the user sees partial output before
@@ -721,7 +739,9 @@ class AgentRuntime:
                     message="Run cancelled",
                     approvals=list(approval_log),
                     usage=_merge_usage(
-                        prepared.usage if prepared is not None else {},
+                        envelope.compaction.usage
+                        if envelope is not None and envelope.compaction is not None
+                        else {},
                         asdict(run_usage),
                     ),
                     plan=self.controller.snapshot(),

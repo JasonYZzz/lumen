@@ -9,7 +9,7 @@ from pydantic_ai.toolsets import AbstractToolset
 
 from lumen.branding import FRAMEWORK_NAME
 from lumen.config import AppConfig, ModelSettingsConfig
-from lumen.context import ContextManager
+from lumen.context import ContextEngine
 from lumen.mcp_tools import McpToolsetBundle, build_mcp_toolset
 from lumen.models import build_model
 from lumen.runtime import CONTROL_INSTRUCTIONS, AgentRuntime
@@ -472,7 +472,7 @@ class ResourceManager:
                 limits=self.config.agent.limits,
                 tool_metadata=self.tool_metadata,
                 model_settings=cast(ModelSettings, model_cfg.settings),
-                context_manager=ContextManager(
+                context_engine=ContextEngine(
                     config=self.config.context,
                     model=build_model(model_cfg),
                 ),

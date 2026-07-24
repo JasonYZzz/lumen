@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import json
 import math
+import warnings
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import asdict, dataclass, field
 from typing import Any
@@ -353,6 +354,12 @@ def retain_recent_turns(messages: Sequence[ModelMessage], keep_turns: int) -> li
 class ContextManager:
     """Compacts the active model context when it crosses the soft limit.
 
+    .. deprecated:: M1
+        Retained as the implementation behind :class:`lumen.context.ContextEngine`.
+        New callers should depend on ``ContextEngine.prepare``/``commit``/``control``
+        rather than constructing a ``ContextManager`` directly; this type is
+        removed at the end of the deprecation period (M8).
+
     Compaction uses a dedicated, tool-free agent with a strict structured output
     type so the model cannot free-form ramble into the active context. On any
     failure the original history is returned unchanged.
@@ -360,6 +367,20 @@ class ContextManager:
 
     config: ContextConfig
     model: Model | str
+    #: Internal-use flag: the :class:`ContextEngine` constructs the manager it
+    #: wraps with ``_internal=True`` so its own construction does not emit the
+    #: deprecation warning intended for external callers.
+    _internal: bool = field(default=False, repr=False, compare=False)
+
+    def __post_init__(self) -> None:
+        if not self._internal:
+            warnings.warn(
+                "lumen.context.ContextManager is deprecated; use "
+                "lumen.context.ContextEngine instead. The manager is retained as "
+                "an internal implementation and will be removed in M8.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
 
     async def prepare(
         self,

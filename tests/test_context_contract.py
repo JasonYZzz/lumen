@@ -13,7 +13,7 @@ from datetime import UTC, datetime
 import pytest
 from pydantic import ValidationError
 
-from lumen.context_contract import (
+from lumen.context.types import (
     CheckpointItem,
     CompactionCheckpointV1,
     ContextBlock,

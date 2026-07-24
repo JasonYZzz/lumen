@@ -110,6 +110,7 @@ class RunCoordinator:
                 approve,
                 plan=state.plan,
                 previous_summary=state.compaction_summary,
+                session_id=state.session.id,
             )
         except asyncio.CancelledError as error:
             self._append_partial(run_input, error, status="cancelled", timeline_events=timeline_events)
