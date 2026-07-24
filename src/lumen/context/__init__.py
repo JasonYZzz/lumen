@@ -33,6 +33,13 @@ from lumen.context.budget import (
     resolve_model_spec,
     select_token_counter,
 )
+from lumen.context.compaction import (
+    CompactionPolicy,
+    CompactionThrashState,
+    FixedContextTooLarge,
+    Thresholds,
+    degrade_to_window,
+)
 from lumen.context.engine import (
     AgentRef,
     ContextCommit,
@@ -97,8 +104,10 @@ __all__ = [
     # domain contracts
     "CheckpointItem",
     "CompactionCheckpointV1",
+    "CompactionPolicy",
     # legacy compat (deprecation period)
     "CompactionRecord",
+    "CompactionThrashState",
     "ConservativeTokenCounter",
     "ContextAssembler",
     "ContextBlock",
@@ -126,6 +135,7 @@ __all__ = [
     "ExactLiteral",
     "ExecutionState",
     "FileState",
+    "FixedContextTooLarge",
     "MemoryCandidateRef",
     "ModelContextSpec",
     "ObservationState",
@@ -140,6 +150,7 @@ __all__ = [
     "SessionRef",
     "SourceKind",
     "TaskSnapshot",
+    "Thresholds",
     "TokenCount",
     "TokenCounter",
     "ToolReceipt",
@@ -147,6 +158,7 @@ __all__ = [
     "ZoneCaps",
     "ZoneUsage",
     "build_receipt",
+    "degrade_to_window",
     "estimate_message_tokens",
     "reduce_tool_outputs",
     "resolve_model_spec",

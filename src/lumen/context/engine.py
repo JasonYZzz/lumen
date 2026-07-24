@@ -33,6 +33,7 @@ import hashlib
 import json
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from typing import Any, Literal
 
 from pydantic_ai.messages import ModelMessage, ModelMessagesTypeAdapter
@@ -45,15 +46,23 @@ from lumen.context.budget import (
     resolve_model_spec,
     select_token_counter,
 )
+from lumen.context.compaction import (
+    CompactionPolicy,
+    CompactionThrashState,
+    Thresholds,
+    degrade_to_window,
+)
 from lumen.context.legacy import (
     CompactionRecord,
     ContextManager,
     ContextSummary,
     RequestBudgetEstimator,
+    estimate_message_tokens,
     retain_recent_tokens,
 )
 from lumen.context.transcript import reduce_tool_outputs
 from lumen.context.types import (
+    CompactionCheckpointV1,
     ContextBudgetReport,
 )
 from lumen.events import RunEvent
@@ -200,9 +209,10 @@ class ContextReportCommand:
 
 @dataclass(frozen=True, slots=True)
 class ContextCompactCommand:
-    """``/compact [focus]``: force a compaction (M4)."""
+    """``/compact [focus]``: force a compaction on the next turn (M4)."""
 
     focus: str | None = None
+    session_id: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -261,10 +271,18 @@ class ContextEngine:
     _estimator: RequestBudgetEstimator = field(default_factory=RequestBudgetEstimator)
     _assembler: ContextAssembler = field(init=False)
     _artifacts: ArtifactStore | None = field(init=False, default=None)
+    _policy: CompactionPolicy = field(default_factory=CompactionPolicy)
+    _thresholds: Thresholds = field(init=False)
     #: session id -> last prepared envelope, for commit verification.
     _pending: dict[str, ContextEnvelope] = field(default_factory=dict[str, ContextEnvelope])
     #: fingerprint -> committed transition, for commit idempotency.
     _committed: dict[str, ContextTransition] = field(default_factory=dict[str, ContextTransition])
+    #: session id -> anti-thrash state (plan §9.1).
+    _thrash: dict[str, CompactionThrashState] = field(default_factory=dict[str, CompactionThrashState])
+    #: session ids whose next prepare should force a compaction (``/compact``).
+    _force_sessions: set[str] = field(default_factory=set[str])
+    #: session id -> last checkpoint id, for parent linking (plan §10).
+    _last_checkpoint: dict[str, str] = field(default_factory=dict[str, str])
 
     def __post_init__(self) -> None:
         # ``_internal=True`` suppresses the legacy-manager deprecation warning;
@@ -278,6 +296,7 @@ class ContextEngine:
             counter=select_token_counter(spec),
             estimated_window=estimated,
         )
+        self._thresholds = Thresholds.for_window(spec.context_window_tokens, self._policy)
         if self.artifact_root is not None:
             self._artifacts = ArtifactStore(self.artifact_root)
 
@@ -313,14 +332,63 @@ class ContextEngine:
             for receipt in reduced.receipts:
                 if receipt.artifact_ref is not None:
                     self._artifacts.add_hold(receipt.artifact_ref, request.session.id)
-        prepared = await self._manager.prepare(
-            history_input,
-            request.task.plan,
-            list(request.task.diagnostics),
-            emit,
-            previous_summary=request.previous_summary,
-            reservation=reservation,
+
+        # M4: compaction decision. The legacy manager's soft_token_limit still
+        # drives the trigger; the engine adds anti-thrash (skip re-summarising
+        # past the auto limit) and force (/compact) on top, then a safety net
+        # that degrades any over-limit result instead of sending it to the
+        # provider (plan §9.4).
+        thrash = self._thrash.setdefault(request.session.id, CompactionThrashState())
+        thrash.advance_turn()
+        force = request.force_compaction or request.session.id in self._force_sessions
+        self._force_sessions.discard(request.session.id)
+        over_soft = (
+            estimate_message_tokens(history_input) + reservation.total_tokens > self.config.soft_token_limit
         )
+        prepared_compaction: CompactionRecord | None = None
+        checkpoint: CompactionCheckpointV1 | None = None
+        if over_soft and thrash.thrashed(self._policy) and not force:
+            # Anti-thrash: stop re-calling the summariser; the safety net below
+            # deterministically shrinks instead (plan §9.1).
+            active_history: list[ModelMessage] = history_input
+        else:
+            prepared = await self._manager.prepare(
+                history_input,
+                request.task.plan,
+                list(request.task.diagnostics),
+                emit,
+                previous_summary=request.previous_summary,
+                reservation=reservation,
+                force_compaction=force,
+            )
+            active_history = list(prepared.history)
+            prepared_compaction = prepared.compaction
+            if prepared.compaction is not None and not force:
+                thrash.record_auto_compaction()
+            if prepared.compaction is not None:
+                checkpoint = self._build_checkpoint(request, history_input, prepared.compaction)
+
+        # M4 safety net: whatever the legacy manager returned, if it is over the
+        # hard threshold (model window) the engine degrades deterministically -
+        # never sending an over-limit history to the provider (plan §9.4). This
+        # replaces "summary failure returns the original over-limit history".
+        counter = self._assembler.counter
+        fixed_tokens = reservation.total_tokens
+        if counter.count_messages(active_history).tokens + fixed_tokens > self._thresholds.hard:
+            active_history = degrade_to_window(
+                active_history,
+                window_tokens=self._assembler.window_tokens,
+                fixed_tokens=fixed_tokens,
+                output_reserve=self._thresholds.emergency_reserve,
+                counter=counter,
+                store=self._artifacts,
+                keep_recent_tokens=self.config.keep_recent_tokens,
+            )
+            # Degradation discards any summary prefix: the model sees a shrunk
+            # recent window, not the failed/over-limit compaction result.
+            prepared_compaction = None
+            checkpoint = None
+
         # Assemble structured blocks + a real budget report (M2). This also
         # runs the fixed-context preflight against the model window with the
         # Chinese-aware counter, so a request whose fixed footprint cannot fit
@@ -329,20 +397,62 @@ class ContextEngine:
             instructions=request.runtime.instructions,
             prompt=request.prompt,
             tool_schemas=request.runtime.tool_schema_documents,
-            history=prepared.history,
+            history=active_history,
         )
-        fingerprint = self._fingerprint(request.session.id, prepared.history)
+        fingerprint = self._fingerprint(request.session.id, active_history)
         envelope = ContextEnvelope(
-            messages=tuple(prepared.history),
+            messages=tuple(active_history),
             blocks=assembled.blocks,
             budget=assembled.budget,
-            checkpoint=None,
-            compaction=prepared.compaction,
+            checkpoint=checkpoint,
+            compaction=prepared_compaction,
             tool_receipts=receipts,
             fingerprint=fingerprint,
         )
         self._pending[request.session.id] = envelope
+        if checkpoint is not None:
+            self._last_checkpoint[request.session.id] = checkpoint.checkpoint_id
         return envelope
+
+    def _build_checkpoint(
+        self,
+        request: ContextRequest,
+        history: Sequence[ModelMessage],
+        compaction: CompactionRecord,
+    ) -> CompactionCheckpointV1:
+        """Build a structured checkpoint from a successful compaction (plan §10).
+
+        M4 populates the metadata (id, parent, continuous source range, digest,
+        objective, focus); full exact-literal/item population and delta-only
+        summarisation input are M4-stretch/M8. The source range is the slice of
+        history this compaction covered, referenced by its parent so the next
+        compaction's delta is well-defined.
+        """
+
+        session_id = request.session.id
+        parent = self._last_checkpoint.get(session_id)
+        source_end = len(history)
+        digest_input = json.dumps(
+            ModelMessagesTypeAdapter.dump_python(list(history), mode="json"),
+            ensure_ascii=False,
+            sort_keys=True,
+            default=str,
+        )
+        digest = hashlib.sha256(digest_input.encode("utf-8")).hexdigest()
+        objective = "; ".join(compaction.summary.goals) if compaction.summary.goals else ""
+        checkpoint_id = (
+            f"cp-{hashlib.sha256((session_id + str(source_end) + digest).encode()).hexdigest()[:12]}"
+        )
+        return CompactionCheckpointV1(
+            checkpoint_id=checkpoint_id,
+            parent_checkpoint_id=parent,
+            source_start=0,  # legacy summarises from the start; delta-only is M4-stretch
+            source_end=source_end,
+            source_digest=f"sha256:{digest[:16]}",
+            created_at=datetime.now(UTC),
+            focus=request.focus,
+            objective=objective,
+        )
 
     # -- commit ------------------------------------------------------------
 
@@ -391,7 +501,19 @@ class ContextEngine:
         if isinstance(command, ContextReportCommand):
             return self._report()
         if isinstance(command, ContextCompactCommand):
-            return ContextControlResult(status="unsupported", message="/compact is implemented in M4")
+            # Force the next prepare for this session to compact (plan §9.1
+            # manual trigger). Manual compaction does not count toward the
+            # anti-thrash auto limit. Without a session id, force the most
+            # recently prepared session.
+            session_id = command.session_id or next(reversed(self._pending), None)
+            if session_id is None:
+                return ContextControlResult(status="ok", message="no active session to compact")
+            self._force_sessions.add(session_id)
+            focus = f" (focus: {command.focus})" if command.focus else ""
+            return ContextControlResult(
+                status="ok",
+                message=f"compaction scheduled for the next turn{focus}",
+            )
         # Remaining union member is ContextMemoryCommand (exhaustive match).
         return ContextControlResult(status="unsupported", message="/memory is implemented in M5")
 

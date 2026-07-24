@@ -394,6 +394,7 @@ class ContextManager:
         current_prompt: str | None = None,
         instructions_estimate: int = 0,
         tool_schema_estimate: int = 0,
+        force_compaction: bool = False,
     ) -> PreparedContext:
         """Return the history the next run should use, compacting if needed.
 
@@ -434,7 +435,7 @@ class ContextManager:
             return PreparedContext(history=list(history), compaction=None)
 
         estimate = estimate_message_tokens(history)
-        if estimate + reservation.total_tokens < self.config.soft_token_limit:
+        if not force_compaction and estimate + reservation.total_tokens < self.config.soft_token_limit:
             return PreparedContext(history=list(history), compaction=None)
 
         await emit(ContextCompactionStarted(source_message_count=len(history)))

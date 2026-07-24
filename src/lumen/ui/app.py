@@ -1223,7 +1223,8 @@ class LumenApp(App[None]):
             await self._render_context(parts)
         elif command == "/compact":
             focus = shlex.join(parts[1:]) if len(parts) > 1 else None
-            await self._run_context_control(ContextCompactCommand(focus=focus))
+            session_id = self.session.id if self.session is not None else None
+            await self._run_context_control(ContextCompactCommand(focus=focus, session_id=session_id))
         elif command == "/memory":
             action = parts[1] if len(parts) > 1 else "list"
             await self._run_context_control(ContextMemoryCommand(action=action))

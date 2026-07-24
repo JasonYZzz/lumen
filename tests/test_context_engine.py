@@ -26,6 +26,7 @@ from pydantic_ai.models.function import AgentInfo, FunctionModel
 from lumen.config import ContextConfig
 from lumen.context import (
     AgentRef,
+    ConservativeTokenCounter,
     ContextCommit,
     ContextCompactCommand,
     ContextEngine,
@@ -116,7 +117,11 @@ async def test_prepare_returns_envelope_with_fingerprint_and_budget() -> None:
     # carried (M1-compat bridge until the structured checkpoint lands in M4).
     assert envelope.compaction is not None
     assert envelope.compaction.source_message_count == 3
-    assert envelope.checkpoint is None  # M4
+    # M4: a successful compaction produces a structured checkpoint (source range
+    # + parent + digest), replacing the bare None.
+    assert envelope.checkpoint is not None
+    assert envelope.checkpoint.source_end == 3
+    assert envelope.checkpoint.parent_checkpoint_id is None  # first compaction
     # M2: the envelope now carries source-tracked blocks (SYSTEM etc.).
     assert envelope.blocks
     assert any(block.zone is ContextZone.SYSTEM for block in envelope.blocks)
@@ -266,10 +271,13 @@ async def test_control_report_without_prepare_is_empty() -> None:
     assert result.payload == {}
 
 
-async def test_control_compact_and_memory_are_unsupported_in_m1() -> None:
+async def test_control_compact_schedules_and_memory_is_unsupported() -> None:
+    """/compact (M4) schedules a forced compaction; /memory stays M5-unsupported."""
+
     engine = _engine()
-    compact = await engine.control(ContextCompactCommand(focus="x"), _no_emit)
-    assert compact.status == "unsupported"
+    compact = await engine.control(ContextCompactCommand(focus="x", session_id="s1"), _no_emit)
+    assert compact.status == "ok"
+    assert "scheduled" in compact.message
     memory = await engine.control(ContextMemoryCommand(action="list"), _no_emit)
     assert memory.status == "unsupported"
 
@@ -358,3 +366,79 @@ async def test_prepare_reduces_large_tool_outputs_outside_recent_window(
     )
     assert "X" * 5000 not in rendered
     assert "tool-receipt" in rendered
+
+
+# --------------------------------------------------------------------------- #
+# M4: safety net, anti-thrash, /compact force, checkpoint linking
+# --------------------------------------------------------------------------- #
+
+
+def _failing_summary_model() -> FunctionModel:
+    """A FunctionModel whose summary call always raises (forces the safety net)."""
+
+    def function(_messages: list[ModelMessage], _info: AgentInfo) -> ModelResponse:
+        raise RuntimeError("summary model exploded")
+
+    return FunctionModel(function=function)
+
+
+async def test_prepare_safety_net_never_returns_over_limit_history(tmp_path: Path) -> None:
+    """A failed summary must NOT fall back to the original over-limit history.
+
+    The legacy manager returns the original history on summary failure; the M4
+    safety net degrades it so the envelope fits the model window (plan §9.4).
+    """
+
+    engine = ContextEngine(
+        ContextConfig(enabled=True, soft_token_limit=100, keep_recent_tokens=2000, summary_max_tokens=2000),
+        model=_failing_summary_model(),
+        artifact_root=str(tmp_path / "artifacts"),
+    )
+    # 10 user turns of ~4000 tokens each = ~40000 tokens, over the 32k window.
+    history: list[ModelMessage] = [
+        ModelRequest(parts=[UserPromptPart(content="x" * 16000 + str(i))]) for i in range(10)
+    ]
+    envelope = await engine.prepare(_request(history), _no_emit)
+    # The summary failed -> no compaction record, no checkpoint.
+    assert envelope.compaction is None
+    assert envelope.checkpoint is None
+    # The safety invariant: the prepared history fits the model window.
+    counter = ConservativeTokenCounter()
+    used = counter.count_messages(envelope.messages).tokens
+    assert used + 2000 <= 32_000  # used + fixed-ish + reserve within the window
+    # Degradation shrank the over-limit history.
+    assert len(envelope.messages) < len(history)
+
+
+async def test_anti_thrash_stops_re_summarizing_after_auto_limit() -> None:
+    """Past the auto-compaction limit, the engine degrades instead of re-summarising."""
+
+    engine = _engine(soft_token_limit=100)  # _history_over_limit (~2000 tok) is over soft
+    history = _history_over_limit()
+    # First two auto-compactions succeed.
+    env1 = await engine.prepare(_request(history), _no_emit)
+    env2 = await engine.prepare(_request(history), _no_emit)
+    assert env1.compaction is not None
+    assert env2.compaction is not None
+    # The second checkpoint links to the first (parent chain, plan §10).
+    assert env2.checkpoint is not None
+    assert env2.checkpoint.parent_checkpoint_id == env1.checkpoint.checkpoint_id
+    # Third prepare is thrashed: no re-summarisation (no compaction record).
+    env3 = await engine.prepare(_request(history), _no_emit)
+    assert env3.compaction is None
+
+
+async def test_compact_command_forces_compaction_even_under_soft_limit() -> None:
+    """/compact schedules a forced compaction on the next turn (plan §9.1)."""
+
+    engine = _engine(soft_token_limit=1_000_000)  # history is under soft -> no auto compact
+    history = _history_over_limit()
+    # Without /compact, no compaction (under the generous soft limit).
+    env_plain = await engine.prepare(_request(history), _no_emit)
+    assert env_plain.compaction is None
+    # /compact forces the next prepare to compact.
+    scheduled = await engine.control(ContextCompactCommand(session_id="s1"), _no_emit)
+    assert scheduled.status == "ok"
+    env_forced = await engine.prepare(_request(history), _no_emit)
+    assert env_forced.compaction is not None
+    assert env_forced.checkpoint is not None
