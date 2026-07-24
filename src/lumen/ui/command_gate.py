@@ -47,6 +47,11 @@ _ALWAYS_ALLOWED: frozenset[str] = frozenset(
         "/tools",
         "/skills",
         "/sessions",
+        "/context",
+        # ``/compact`` and ``/memory`` are stubs until M4/M5; in M2 they only
+        # report ``unsupported`` through the engine, so they are safe anytime.
+        "/compact",
+        "/memory",
     }
 )
 

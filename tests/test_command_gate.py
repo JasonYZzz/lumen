@@ -8,7 +8,20 @@ from lumen.ui.command_gate import (
 
 
 def test_read_only_commands_always_allowed() -> None:
-    for line in ["/help", "/mode", "/mode auto", "/tools", "/skills", "/sessions"]:
+    for line in [
+        "/help",
+        "/mode",
+        "/mode auto",
+        "/tools",
+        "/skills",
+        "/sessions",
+        "/context",
+        "/context --json",
+        "/compact",
+        "/compact focus auth",
+        "/memory",
+        "/memory list",
+    ]:
         assert classify_command(line) is CommandPolicy.ALLOW, line
 
 

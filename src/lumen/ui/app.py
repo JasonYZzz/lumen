@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import re
 import shlex
 from typing import Any, ClassVar, cast
@@ -18,7 +19,14 @@ from textual.worker import Worker
 from lumen.approval import ApprovalMode, ApprovalPolicy
 from lumen.branding import FRAMEWORK_NAME, product_label
 from lumen.config import AppConfig
-from lumen.context import ContextSummary
+from lumen.context import (
+    ContextCompactCommand,
+    ContextControlResult,
+    ContextEngine,
+    ContextMemoryCommand,
+    ContextReportCommand,
+    ContextSummary,
+)
 from lumen.events import (
     ApprovalRequest,
     CommentaryDelta,
@@ -954,6 +962,9 @@ class LumenApp(App[None]):
             ("/resume", "Resume a session by id"),
             ("/tools", f"List visible tools · {len(self.resources.tool_metadata)} loaded"),
             ("/skills", f"List available skills · {len(self.resources.skills)} loaded"),
+            ("/context", "Show context budget · zones, blocks, pressure"),
+            ("/compact", "Force a compaction (M4)"),
+            ("/memory", "Memory commands (M5)"),
             ("/retry", "Re-send the last prompt"),
             ("/quit", f"Exit {FRAMEWORK_NAME}"),
         ]
@@ -995,6 +1006,63 @@ class LumenApp(App[None]):
                 await worker.wait()
             except Exception:
                 pass
+
+    def _context_engine(self) -> ContextEngine | None:
+        """The active session's context engine, if a runtime is open."""
+
+        runtime = self.resources.runtime
+        return runtime.context_engine if runtime is not None else None
+
+    async def _run_context_control(self, command: Any) -> None:
+        """Run a read-only/stub context control command and display its result."""
+
+        engine = self._context_engine()
+        if engine is None:
+            await self._append_system("Context engine is not available yet.")
+            return
+
+        async def _noop(_event: Any) -> None:
+            return None
+
+        result = await engine.control(command, _noop)
+        await self._append_system(self._format_context_result(result))
+
+    async def _render_context(self, parts: list[str]) -> None:
+        """Render the ``/context`` budget report (``--json`` for machine output)."""
+
+        engine = self._context_engine()
+        if engine is None:
+            await self._append_system("Context engine is not available yet.")
+            return
+
+        async def _noop(_event: Any) -> None:
+            return None
+
+        result = await engine.control(ContextReportCommand(), _noop)
+        if len(parts) > 1 and parts[1] == "--json":
+            await self._append_system(json.dumps(result.payload, ensure_ascii=False, indent=2))
+            return
+        await self._append_system(self._format_context_result(result))
+
+    @staticmethod
+    def _format_context_result(result: ContextControlResult) -> str:
+        """Format a control result as the ``/context`` zone table (plan §14.1)."""
+
+        payload = result.payload
+        if not payload:
+            return result.message or "No context prepared yet."
+        lines = [result.message]
+        for zone in payload.get("zones", []):
+            share_pct = zone["share"] * 100
+            lines.append(f"  {zone['zone']:<18} {zone['tokens']:>7}  {share_pct:5.1f}%  {zone['survival']}")
+        pressure = payload.get("pressure", [])
+        if pressure:
+            lines.append("Top pressure:")
+            for item in pressure[:5]:
+                lines.append(f"  {item['label']}: {item['tokens']}  ({item['source']})")
+        if payload.get("estimated"):
+            lines.append("(model window estimated; no known profile for this provider)")
+        return "\n".join(lines)
 
     async def _handle_command(self, line: str) -> None:
         try:
@@ -1062,7 +1130,8 @@ class LumenApp(App[None]):
             await self._append_system(
                 "/help · /clear · /new · /model [name] · "
                 "/mode [manual|accept_edits|auto] · /sessions · "
-                "/resume <id> · /tools · /skills · /skill:<name> · /retry · /quit"
+                "/resume <id> · /tools · /skills · /skill:<name> · "
+                "/context [--json] · /compact · /memory · /retry · /quit"
             )
         elif command == "/clear":
             await self._clear_visible_timeline()
@@ -1150,6 +1219,14 @@ class LumenApp(App[None]):
                 for name, metadata in sorted(self.resources.tool_metadata.items())
             ]
             await self._append_system("\n".join(lines) or "No tools enabled.")
+        elif command == "/context":
+            await self._render_context(parts)
+        elif command == "/compact":
+            focus = shlex.join(parts[1:]) if len(parts) > 1 else None
+            await self._run_context_control(ContextCompactCommand(focus=focus))
+        elif command == "/memory":
+            action = parts[1] if len(parts) > 1 else "list"
+            await self._run_context_control(ContextMemoryCommand(action=action))
         elif command == "/retry":
             if self.last_prompt is None:
                 await self._append_system("There is no previous prompt to retry.")
