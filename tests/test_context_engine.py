@@ -24,6 +24,7 @@ from lumen.context import (
     ContextRequest,
     ContextSequenceError,
     ContextSummary,
+    ContextZone,
     RuntimeContextSnapshot,
     SessionRef,
     TaskSnapshot,
@@ -46,7 +47,11 @@ def _summary_model() -> FunctionModel:
     return FunctionModel(function=function)
 
 
-def _engine(*, soft_token_limit: int = 100) -> ContextEngine:
+def _engine(
+    *,
+    soft_token_limit: int = 100,
+    model_id: str | None = None,
+) -> ContextEngine:
     return ContextEngine(
         ContextConfig(
             enabled=True,
@@ -55,6 +60,7 @@ def _engine(*, soft_token_limit: int = 100) -> ContextEngine:
             summary_max_tokens=2000,
         ),
         model=_summary_model(),
+        model_id=model_id,
     )
 
 
@@ -101,7 +107,9 @@ async def test_prepare_returns_envelope_with_fingerprint_and_budget() -> None:
     assert envelope.compaction is not None
     assert envelope.compaction.source_message_count == 3
     assert envelope.checkpoint is None  # M4
-    assert envelope.blocks == ()  # M2
+    # M2: the envelope now carries source-tracked blocks (SYSTEM etc.).
+    assert envelope.blocks
+    assert any(block.zone is ContextZone.SYSTEM for block in envelope.blocks)
 
 
 async def test_prepare_under_generous_limit_carries_no_compaction() -> None:
@@ -218,12 +226,27 @@ async def test_commit_is_scoped_per_session() -> None:
 
 
 async def test_control_report_returns_last_prepared_budget() -> None:
-    engine = _engine(soft_token_limit=1_000_000)
+    engine = _engine(soft_token_limit=1_000_000, model_id="anthropic:claude-opus-4")
     await engine.prepare(_request([ModelRequest(parts=[UserPromptPart(content="q")])]), _no_emit)
     result = await engine.control(ContextReportCommand(), _no_emit)
     assert result.status == "ok"
     assert result.payload["used_tokens"] > 0
-    assert result.payload["context_window_tokens"] == 1_000_000
+    # M2: the window is the resolved model spec (200k for anthropic), not the
+    # legacy soft_token_limit.
+    assert result.payload["context_window_tokens"] == 200_000
+    assert result.payload["estimated"] is False
+    # /context surfaces per-zone usage and the source-tracked blocks.
+    assert result.payload["zones"]
+    assert result.payload["blocks"]
+    assert any(b["zone"] == "system" for b in result.payload["blocks"])
+
+
+async def test_control_report_marks_estimated_window_for_unknown_model() -> None:
+    engine = _engine(soft_token_limit=1_000_000, model_id="acme:custom-7b")
+    await engine.prepare(_request([ModelRequest(parts=[UserPromptPart(content="q")])]), _no_emit)
+    result = await engine.control(ContextReportCommand(), _no_emit)
+    assert result.payload["context_window_tokens"] == 32_000
+    assert result.payload["estimated"] is True
 
 
 async def test_control_report_without_prepare_is_empty() -> None:

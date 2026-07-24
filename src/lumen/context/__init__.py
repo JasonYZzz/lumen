@@ -22,6 +22,16 @@ M8 removes them once no caller remains.
 
 from __future__ import annotations
 
+from lumen.context.assembler import AssembledContext, ContextAssembler, ZoneCaps
+from lumen.context.budget import (
+    ConservativeTokenCounter,
+    DeterministicTokenCounter,
+    ProviderTokenCounter,
+    TokenCount,
+    TokenCounter,
+    resolve_model_spec,
+    select_token_counter,
+)
 from lumen.context.engine import (
     AgentRef,
     ContextCommit,
@@ -79,11 +89,14 @@ from lumen.context.types import (
 __all__ = [
     # engine Seam + DTOs
     "AgentRef",
+    "AssembledContext",
     # domain contracts
     "CheckpointItem",
     "CompactionCheckpointV1",
     # legacy compat (deprecation period)
     "CompactionRecord",
+    "ConservativeTokenCounter",
+    "ContextAssembler",
     "ContextBlock",
     "ContextBudgetExceeded",
     "ContextBudgetReport",
@@ -103,6 +116,7 @@ __all__ = [
     "ContextSummary",
     "ContextTransition",
     "ContextZone",
+    "DeterministicTokenCounter",
     "EventSink",
     "EvidenceRef",
     "ExactLiteral",
@@ -114,17 +128,23 @@ __all__ = [
     "PreparedContext",
     "PressureItem",
     "PreviousSummary",
+    "ProviderTokenCounter",
     "RequestBudgetEstimator",
     "RetentionPolicy",
     "RuntimeContextSnapshot",
     "SessionRef",
     "SourceKind",
     "TaskSnapshot",
+    "TokenCount",
+    "TokenCounter",
     "ToolReceipt",
     "TrustLevel",
+    "ZoneCaps",
     "ZoneUsage",
     "estimate_message_tokens",
+    "resolve_model_spec",
     "retain_recent_tokens",
     "retain_recent_turns",
+    "select_token_counter",
     "validate_active_history",
 ]

@@ -150,7 +150,7 @@ class PreparedContext:
     usage: dict[str, Any] = field(default_factory=dict[str, Any])
 
 
-def _part_text(part: Any) -> str:
+def render_part_text(part: Any) -> str:
     """Best-effort textual rendering of one message part for token counting."""
 
     content = getattr(part, "content", None)
@@ -189,7 +189,7 @@ def estimate_message_tokens(messages: Sequence[ModelMessage]) -> int:
     total_bytes = 0
     for message in messages:
         for part in getattr(message, "parts", []):
-            total_bytes += len(_part_text(part).encode("utf-8"))
+            total_bytes += len(render_part_text(part).encode("utf-8"))
     return math.ceil(total_bytes / 4)
 
 

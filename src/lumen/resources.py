@@ -475,6 +475,7 @@ class ResourceManager:
                 context_engine=ContextEngine(
                     config=self.config.context,
                     model=build_model(model_cfg),
+                    model_id=model_cfg.id,
                 ),
                 tool_schema_documents=self._remote_tool_schema_documents,
             )

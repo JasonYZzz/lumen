@@ -39,20 +39,19 @@ from pydantic_ai.messages import ModelMessage, ModelMessagesTypeAdapter
 from pydantic_ai.models import Model
 
 from lumen.config import ContextConfig
+from lumen.context.assembler import ContextAssembler
+from lumen.context.budget import (
+    resolve_model_spec,
+    select_token_counter,
+)
 from lumen.context.legacy import (
     CompactionRecord,
     ContextManager,
-    ContextReservation,
     ContextSummary,
     RequestBudgetEstimator,
-    estimate_message_tokens,
 )
 from lumen.context.types import (
     ContextBudgetReport,
-    ContextZone,
-    PressureItem,
-    RetentionPolicy,
-    ZoneUsage,
 )
 from lumen.events import RunEvent
 from lumen.plan import PlanState
@@ -244,8 +243,13 @@ class ContextEngine:
 
     config: ContextConfig
     model: Model | str
+    #: Model id (``provider:name``) for :class:`ModelContextSpec` resolution.
+    #: When unknown, the spec falls back to a conservative window flagged
+    #: ``estimated`` so ``/context`` can mark it.
+    model_id: str | None = None
     _manager: ContextManager = field(init=False)
     _estimator: RequestBudgetEstimator = field(default_factory=RequestBudgetEstimator)
+    _assembler: ContextAssembler = field(init=False)
     #: session id -> last prepared envelope, for commit verification.
     _pending: dict[str, ContextEnvelope] = field(default_factory=dict[str, ContextEnvelope])
     #: fingerprint -> committed transition, for commit idempotency.
@@ -256,6 +260,13 @@ class ContextEngine:
         # the manager is the engine's internal implementation, not an external
         # caller that should migrate.
         self._manager = ContextManager(self.config, self.model, _internal=True)
+        spec, estimated = resolve_model_spec(self.model_id or "")
+        self._assembler = ContextAssembler(
+            window_tokens=spec.context_window_tokens,
+            max_output_tokens=spec.max_output_tokens,
+            counter=select_token_counter(spec),
+            estimated_window=estimated,
+        )
 
     # -- prepare -----------------------------------------------------------
 
@@ -282,11 +293,21 @@ class ContextEngine:
             previous_summary=request.previous_summary,
             reservation=reservation,
         )
+        # Assemble structured blocks + a real budget report (M2). This also
+        # runs the fixed-context preflight against the model window with the
+        # Chinese-aware counter, so a request whose fixed footprint cannot fit
+        # fails here, before the provider call (plan §8.2 #3).
+        assembled = self._assembler.assemble(
+            instructions=request.runtime.instructions,
+            prompt=request.prompt,
+            tool_schemas=request.runtime.tool_schema_documents,
+            history=prepared.history,
+        )
         fingerprint = self._fingerprint(request.session.id, prepared.history)
         envelope = ContextEnvelope(
             messages=tuple(prepared.history),
-            blocks=(),
-            budget=self._budget_report(prepared.history, reservation),
+            blocks=assembled.blocks,
+            budget=assembled.budget,
             checkpoint=None,
             compaction=prepared.compaction,
             fingerprint=fingerprint,
@@ -367,42 +388,11 @@ class ContextEngine:
         ).encode("utf-8")
         return hashlib.sha256(payload).hexdigest()
 
-    def _budget_report(
-        self, messages: Sequence[ModelMessage], reservation: ContextReservation
-    ) -> ContextBudgetReport:
-        """Minimal M1 budget report (plan §8.3, §14.1).
-
-        M2 replaces this with real zone accounting and a provider-aware window;
-        for M1 the window is the legacy ``soft_token_limit`` and the report
-        carries only the totals the runtime surfaces in ``UsageUpdated``.
-        """
-
-        window = self.config.soft_token_limit
-        used = estimate_message_tokens(messages) + reservation.total_tokens
-        return ContextBudgetReport(
-            context_window_tokens=window,
-            used_tokens=used,
-            output_reserve_tokens=reservation.safety_tokens,
-            soft_threshold_tokens=window,
-            hard_threshold_tokens=int(window * 0.92),
-            target_tokens=int(window * 0.55),
-            estimated=True,
-            zones=(
-                ZoneUsage(
-                    zone=ContextZone.RECENT_HISTORY,
-                    tokens=estimate_message_tokens(messages),
-                    share=0.0,
-                    survival=RetentionPolicy.PINNED,
-                ),
-            ),
-            pressure=(PressureItem(label="legacy estimate", tokens=used),),
-        )
-
     def _report(self) -> ContextControlResult:
         """Build the ``/context`` result from the last prepared envelope."""
 
-        # Prefer the most recently prepared envelope across sessions; M2 will
-        # key this to the active session id explicitly.
+        # Prefer the most recently prepared envelope across sessions; a later
+        # milestone keys this to the active session id explicitly.
         envelope = next(reversed(self._pending.values()), None)
         if envelope is None or envelope.budget is None:
             return ContextControlResult(status="ok", message="no context prepared yet", payload={})
@@ -413,7 +403,32 @@ class ContextEngine:
             payload={
                 "used_tokens": budget.used_tokens,
                 "context_window_tokens": budget.context_window_tokens,
+                "output_reserve_tokens": budget.output_reserve_tokens,
                 "estimated": budget.estimated,
+                "zones": [
+                    {
+                        "zone": zone.zone.value,
+                        "tokens": zone.tokens,
+                        "share": zone.share,
+                        "survival": zone.survival.value,
+                    }
+                    for zone in budget.zones
+                ],
+                "pressure": [
+                    {"label": item.label, "tokens": item.tokens, "source": item.source}
+                    for item in budget.pressure
+                ],
+                "blocks": [
+                    {
+                        "id": block.id,
+                        "zone": block.zone.value,
+                        "origin": block.source.origin,
+                        "revision": block.source.revision,
+                        "tokens": block.token_estimate,
+                        "trust": block.trust.value,
+                    }
+                    for block in envelope.blocks
+                ],
             },
         )
 
