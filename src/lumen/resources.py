@@ -10,6 +10,7 @@ from pydantic_ai.toolsets import AbstractToolset
 from lumen.branding import FRAMEWORK_NAME
 from lumen.config import AppConfig, ModelSettingsConfig
 from lumen.context import ContextEngine
+from lumen.context.memory import MemoryManager, SQLiteMemoryRepository
 from lumen.mcp_tools import McpToolsetBundle, build_mcp_toolset
 from lumen.models import build_model
 from lumen.runtime import CONTROL_INSTRUCTIONS, AgentRuntime
@@ -162,6 +163,18 @@ class ResourceManager:
         """Return the ``ModelSettingsConfig`` for the active model."""
 
         return self.model_registry[self._active_model_name]
+
+    def _build_memory_manager(self) -> MemoryManager:
+        """Build the durable-memory manager on the SQLite authority (plan §11.2).
+
+        ``memory.use`` defaults to True (explicit recall on); auto-learning stays
+        off until M6. The SQLite file lives under ``~/.lumen/state/`` so it is
+        shared across sessions and worktrees by canonical home, not repo path.
+        """
+
+        store_path = Path.home() / ".lumen" / "state" / "memory.sqlite3"
+        repository = SQLiteMemoryRepository(store_path)
+        return MemoryManager(repository, use=True)
 
     def available_models(self) -> list[str]:
         """Return the sorted logical names of all configured models."""
@@ -477,6 +490,7 @@ class ResourceManager:
                     model=build_model(model_cfg),
                     model_id=model_cfg.id,
                     artifact_root=str(Path.home() / ".lumen" / "artifacts"),
+                    memory=self._build_memory_manager(),
                 ),
                 tool_schema_documents=self._remote_tool_schema_documents,
             )

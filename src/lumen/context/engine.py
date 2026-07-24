@@ -60,6 +60,8 @@ from lumen.context.legacy import (
     estimate_message_tokens,
     retain_recent_tokens,
 )
+from lumen.context.memory import MemoryManager, render_memory_index
+from lumen.context.memory.records import MemoryKind, MemoryScope
 from lumen.context.transcript import reduce_tool_outputs
 from lumen.context.types import (
     CompactionCheckpointV1,
@@ -267,6 +269,9 @@ class ContextEngine:
     #: ``None`` the engine does not spill tool outputs to disk (receipts still
     #: inline head/tail); production wires ``~/.lumen/artifacts``.
     artifact_root: str | None = None
+    #: Durable memory manager (M5). When ``None``, ``/memory`` reports
+    #: unavailable; production wires a SQLite-backed manager.
+    memory: MemoryManager | None = None
     _manager: ContextManager = field(init=False)
     _estimator: RequestBudgetEstimator = field(default_factory=RequestBudgetEstimator)
     _assembler: ContextAssembler = field(init=False)
@@ -514,8 +519,75 @@ class ContextEngine:
                 status="ok",
                 message=f"compaction scheduled for the next turn{focus}",
             )
-        # Remaining union member is ContextMemoryCommand (exhaustive match).
-        return ContextControlResult(status="unsupported", message="/memory is implemented in M5")
+        # Remaining union member is ContextMemoryCommand (M5).
+        return self._handle_memory(command)
+
+    def _handle_memory(self, command: ContextMemoryCommand) -> ContextControlResult:
+        """Dispatch ``/memory`` actions to the memory manager (plan §14.2).
+
+        ``rebuild`` re-renders the Markdown projection from the authority
+        without any model call; ``use`` toggles recall (the privacy switch);
+        ``remember``/``forget`` are explicit writes/tombstones.
+        """
+
+        if self.memory is None:
+            return ContextControlResult(status="unsupported", message="memory is not configured")
+        action = command.action
+        payload = command.payload
+        if action == "remember":
+            content = str(payload.get("content", "")).strip()
+            if not content:
+                return ContextControlResult(status="error", message="remember requires content")
+            scope = _parse_scope(payload.get("scope"))
+            kind = _parse_kind(payload.get("kind"))
+            record = self.memory.remember(
+                content,
+                scope=scope,
+                kind=kind,
+                session_id=payload.get("session_id"),
+            )
+            return ContextControlResult(
+                status="ok",
+                message=f"remembered {record.id} ({record.scope.value})",
+                payload={"id": record.id, "status": record.status.value},
+            )
+        if action == "forget":
+            target = str(payload.get("target", "")).strip()
+            if not target:
+                return ContextControlResult(status="error", message="forget requires a target")
+            count = self.memory.forget(target)
+            return ContextControlResult(
+                status="ok",
+                message=f"forgotten {count} record(s)",
+                payload={"count": count},
+            )
+        if action == "use":
+            self.memory.use = bool(payload.get("enabled", True))
+            return ContextControlResult(
+                status="ok",
+                message=f"memory recall {'on' if self.memory.use else 'off'}",
+                payload={"use": self.memory.use},
+            )
+        if action == "list":
+            records = self.memory.list()
+            return ContextControlResult(
+                status="ok",
+                message=f"{len(records)} active record(s)",
+                payload={
+                    "records": [
+                        {"id": r.id, "scope": r.scope.value, "content": r.content, "status": r.status.value}
+                        for r in records
+                    ]
+                },
+            )
+        if action == "rebuild":
+            projection = render_memory_index(self.memory.index())
+            return ContextControlResult(
+                status="ok",
+                message="memory index rebuilt from the authority (no model call)",
+                payload={"projection": projection},
+            )
+        return ContextControlResult(status="error", message=f"unknown memory action: {action}")
 
     # -- internal helpers -------------------------------------------------
 
@@ -582,6 +654,28 @@ class ContextEngine:
                 ],
             },
         )
+
+
+def _parse_scope(value: object) -> MemoryScope:
+    """Parse a scope string from a /memory payload, defaulting to project."""
+
+    if isinstance(value, str):
+        try:
+            return MemoryScope(value)
+        except ValueError:
+            return MemoryScope.PROJECT
+    return MemoryScope.PROJECT
+
+
+def _parse_kind(value: object) -> MemoryKind:
+    """Parse a kind string from a /memory payload, defaulting to preference."""
+
+    if isinstance(value, str):
+        try:
+            return MemoryKind(value)
+        except ValueError:
+            return MemoryKind.PREFERENCE
+    return MemoryKind.PREFERENCE
 
 
 __all__ = [
