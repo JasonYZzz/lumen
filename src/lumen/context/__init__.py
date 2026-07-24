@@ -22,6 +22,7 @@ M8 removes them once no caller remains.
 
 from __future__ import annotations
 
+from lumen.context.artifacts import ArtifactStore, ArtifactStoreError
 from lumen.context.assembler import AssembledContext, ContextAssembler, ZoneCaps
 from lumen.context.budget import (
     ConservativeTokenCounter,
@@ -63,6 +64,7 @@ from lumen.context.legacy import (
     retain_recent_turns,
     validate_active_history,
 )
+from lumen.context.transcript import ReductionResult, build_receipt, reduce_tool_outputs
 from lumen.context.types import (
     CheckpointItem,
     CompactionCheckpointV1,
@@ -89,6 +91,8 @@ from lumen.context.types import (
 __all__ = [
     # engine Seam + DTOs
     "AgentRef",
+    "ArtifactStore",
+    "ArtifactStoreError",
     "AssembledContext",
     # domain contracts
     "CheckpointItem",
@@ -129,6 +133,7 @@ __all__ = [
     "PressureItem",
     "PreviousSummary",
     "ProviderTokenCounter",
+    "ReductionResult",
     "RequestBudgetEstimator",
     "RetentionPolicy",
     "RuntimeContextSnapshot",
@@ -141,7 +146,9 @@ __all__ = [
     "TrustLevel",
     "ZoneCaps",
     "ZoneUsage",
+    "build_receipt",
     "estimate_message_tokens",
+    "reduce_tool_outputs",
     "resolve_model_spec",
     "retain_recent_tokens",
     "retain_recent_turns",

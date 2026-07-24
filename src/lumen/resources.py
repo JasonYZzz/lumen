@@ -476,6 +476,7 @@ class ResourceManager:
                     config=self.config.context,
                     model=build_model(model_cfg),
                     model_id=model_cfg.id,
+                    artifact_root=str(Path.home() / ".lumen" / "artifacts"),
                 ),
                 tool_schema_documents=self._remote_tool_schema_documents,
             )

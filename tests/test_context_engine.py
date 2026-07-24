@@ -9,8 +9,18 @@ migrated onto it.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
-from pydantic_ai.messages import ModelMessage, ModelRequest, ModelResponse, TextPart, UserPromptPart
+from pydantic_ai.messages import (
+    ModelMessage,
+    ModelRequest,
+    ModelResponse,
+    TextPart,
+    ToolCallPart,
+    ToolReturnPart,
+    UserPromptPart,
+)
 from pydantic_ai.models.function import AgentInfo, FunctionModel
 
 from lumen.config import ContextConfig
@@ -299,3 +309,52 @@ def test_engine_construction_does_not_warn() -> None:
     with warnings.catch_warnings():
         warnings.simplefilter("error", DeprecationWarning)
         _engine()  # must not raise
+
+
+# --------------------------------------------------------------------------- #
+# M3: tool-output reduction is wired into prepare
+# --------------------------------------------------------------------------- #
+
+
+async def test_prepare_reduces_large_tool_outputs_outside_recent_window(
+    tmp_path: Path,
+) -> None:
+    """A big tool output before the recent window is receipt-ized in prepare.
+
+    The recent window (kept full) is tiny here, so the early 5000-byte output
+    falls outside it and is replaced by a receipt; the envelope carries the
+    structured receipt and its artifact ref. (plan §9.3, §3.2 #8)
+    """
+
+    engine = ContextEngine(
+        ContextConfig(
+            enabled=True,
+            soft_token_limit=1_000_000,  # no compaction; isolation of reduction
+            keep_recent_tokens=10,  # tiny recent window -> big output is "old"
+            summary_max_tokens=2000,
+        ),
+        model=_summary_model(),
+        artifact_root=str(tmp_path / "artifacts"),
+    )
+    history: list[ModelMessage] = [
+        ModelRequest(parts=[UserPromptPart(content="run the build")]),
+        ModelResponse(parts=[ToolCallPart(tool_name="run_command", args={}, tool_call_id="c1")]),
+        ModelRequest(parts=[ToolReturnPart(tool_name="run_command", content="X" * 5000, tool_call_id="c1")]),
+        ModelResponse(parts=[TextPart(content="done")]),
+        # A trailing user turn becomes the safe-cut boundary for the recent window.
+        ModelRequest(parts=[UserPromptPart(content="next step")]),
+        ModelResponse(parts=[TextPart(content="ok")]),
+    ]
+    envelope = await engine.prepare(_request(history), _no_emit)
+
+    # The big body was spilled to an artifact and surfaced as a receipt.
+    assert len(envelope.tool_receipts) == 1
+    receipt = envelope.tool_receipts[0]
+    assert receipt.artifact_ref is not None
+    assert receipt.byte_size == 5000
+    # The model-visible messages no longer carry the raw 5000-byte body.
+    rendered = "\n".join(
+        str(getattr(p, "content", "")) for m in envelope.messages for p in getattr(m, "parts", [])
+    )
+    assert "X" * 5000 not in rendered
+    assert "tool-receipt" in rendered

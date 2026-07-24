@@ -39,6 +39,7 @@ from pydantic_ai.messages import ModelMessage, ModelMessagesTypeAdapter
 from pydantic_ai.models import Model
 
 from lumen.config import ContextConfig
+from lumen.context.artifacts import ArtifactStore
 from lumen.context.assembler import ContextAssembler
 from lumen.context.budget import (
     resolve_model_spec,
@@ -49,7 +50,9 @@ from lumen.context.legacy import (
     ContextManager,
     ContextSummary,
     RequestBudgetEstimator,
+    retain_recent_tokens,
 )
+from lumen.context.transcript import reduce_tool_outputs
 from lumen.context.types import (
     ContextBudgetReport,
 )
@@ -155,6 +158,9 @@ class ContextEnvelope:
     budget: ContextBudgetReport | None = None
     checkpoint: Any | None = None
     compaction: CompactionRecord | None = None
+    #: Tool outputs receipt-ized from the history (M3). Each receipt's
+    #: ``artifact_ref`` points into the engine's artifact store.
+    tool_receipts: tuple[Any, ...] = ()
     fingerprint: str = ""
 
 
@@ -247,9 +253,14 @@ class ContextEngine:
     #: When unknown, the spec falls back to a conservative window flagged
     #: ``estimated`` so ``/context`` can mark it.
     model_id: str | None = None
+    #: Root directory for the content-addressed artifact store (plan §9.3). When
+    #: ``None`` the engine does not spill tool outputs to disk (receipts still
+    #: inline head/tail); production wires ``~/.lumen/artifacts``.
+    artifact_root: str | None = None
     _manager: ContextManager = field(init=False)
     _estimator: RequestBudgetEstimator = field(default_factory=RequestBudgetEstimator)
     _assembler: ContextAssembler = field(init=False)
+    _artifacts: ArtifactStore | None = field(init=False, default=None)
     #: session id -> last prepared envelope, for commit verification.
     _pending: dict[str, ContextEnvelope] = field(default_factory=dict[str, ContextEnvelope])
     #: fingerprint -> committed transition, for commit idempotency.
@@ -267,6 +278,8 @@ class ContextEngine:
             counter=select_token_counter(spec),
             estimated_window=estimated,
         )
+        if self.artifact_root is not None:
+            self._artifacts = ArtifactStore(self.artifact_root)
 
     # -- prepare -----------------------------------------------------------
 
@@ -285,8 +298,23 @@ class ContextEngine:
             tool_schemas=request.runtime.tool_schema_documents,
             safety_tokens=self._safety_tokens(),
         )
+        # M3: reduce bulky/empty/duplicate tool outputs to receipts before
+        # compaction, so a 50 MB build log cannot crowd the window for the whole
+        # session (plan §9.3, §3.2 #8). The recent window compaction keeps is
+        # left verbatim (keep_recent_full = the retain-recent cut), so the model
+        # still sees full tool outputs where it matters.
+        history_input: list[ModelMessage] = list(request.history)
+        receipts: tuple[Any, ...] = ()
+        if self._artifacts is not None:
+            keep_recent_full = len(retain_recent_tokens(history_input, self.config.keep_recent_tokens))
+            reduced = reduce_tool_outputs(history_input, self._artifacts, keep_recent_full=keep_recent_full)
+            history_input = reduced.messages
+            receipts = tuple(reduced.receipts)
+            for receipt in reduced.receipts:
+                if receipt.artifact_ref is not None:
+                    self._artifacts.add_hold(receipt.artifact_ref, request.session.id)
         prepared = await self._manager.prepare(
-            list(request.history),
+            history_input,
             request.task.plan,
             list(request.task.diagnostics),
             emit,
@@ -310,6 +338,7 @@ class ContextEngine:
             budget=assembled.budget,
             checkpoint=None,
             compaction=prepared.compaction,
+            tool_receipts=receipts,
             fingerprint=fingerprint,
         )
         self._pending[request.session.id] = envelope
