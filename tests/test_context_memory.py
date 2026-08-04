@@ -2,16 +2,26 @@
 
 from __future__ import annotations
 
+import asyncio
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
-from pydantic_ai.messages import ModelMessage, ModelResponse, TextPart
+from pydantic_ai.messages import ModelMessage, ModelRequest, ModelResponse, TextPart, UserPromptPart
 from pydantic_ai.models.function import AgentInfo, FunctionModel
 
 from lumen.config import ContextConfig
-from lumen.context.engine import ContextEngine, ContextMemoryCommand
+from lumen.context.engine import (
+    AgentRef,
+    ContextCommit,
+    ContextEngine,
+    ContextMemoryCommand,
+    ContextRequest,
+    RuntimeContextSnapshot,
+    SessionRef,
+    TaskSnapshot,
+)
 from lumen.context.memory import (
     InMemoryMemoryRepository,
     MemoryKind,
@@ -24,6 +34,7 @@ from lumen.context.memory import (
     render_memory_index,
 )
 from lumen.context.memory.records import MemoryRecord
+from lumen.plan import PlanState
 
 
 def _record(
@@ -37,6 +48,7 @@ def _record(
     valid_from: datetime | None = None,
     valid_until: datetime | None = None,
     sensitivity: Sensitivity = Sensitivity.INTERNAL,
+    project_id: str | None = "project-a",
 ) -> MemoryRecord:
     now = datetime(2026, 7, 24, tzinfo=UTC)
     start = valid_from or now
@@ -54,6 +66,7 @@ def _record(
         status=status,
         path_glob=path_glob,
         sensitivity=sensitivity,
+        project_id=project_id,
     )
 
 
@@ -92,17 +105,18 @@ def test_tombstone_prevents_resurrection_in_memory() -> None:
     assert repo.forget("mem-test") is True
     # Re-remembering the same id is refused; the tombstone stays.
     repo.remember(_record(content="fact A revived"))
-    assert repo.get("mem-test").status is MemoryStatus.FORGOTTEN
+    forgotten = repo.get("mem-test")
+    assert forgotten is not None
+    assert forgotten.status is MemoryStatus.FORGOTTEN
 
 
-def test_conflict_marks_same_scope_overlapping_records() -> None:
-    """Two active same-scope records sharing a topic are both conflicted."""
+def test_shared_topic_does_not_imply_a_memory_conflict() -> None:
+    """Lexical overlap alone is not evidence that two facts contradict."""
 
     repo = InMemoryMemoryRepository()
     repo.remember(_record(id="mem-1", content="always use ruff for linting"))
     repo.remember(_record(id="mem-2", content="always use black for linting"))
-    conflicted = [r for r in repo.list() if r.status is MemoryStatus.CONFLICTED]
-    assert conflicted  # both marked conflicted via the shared "linting" topic
+    assert {record.status for record in repo.list()} == {MemoryStatus.ACTIVE}
 
 
 def test_index_excludes_conflicted_low_confidence_and_expired() -> None:
@@ -126,12 +140,22 @@ def test_query_ranks_by_relevance() -> None:
     assert hits and hits[0].id == "m1"
 
 
+def test_query_can_recall_low_confidence_record_not_loaded_in_fixed_index() -> None:
+    repo = InMemoryMemoryRepository()
+    repo.remember(_record(id="low", content="rare frobnicator workflow", confidence=0.2))
+
+    assert repo.index() == []
+    assert [record.id for record in repo.query("frobnicator")] == ["low"]
+
+
 def test_sqlite_repository_round_trips_and_forgets(tmp_path: Path) -> None:
     repo = SQLiteMemoryRepository(tmp_path / "memory.sqlite3")
     repo.remember(_record(content="a sqlite-backed fact"))
     assert repo.get("mem-test") is not None
     assert repo.forget("mem-test") is True
-    assert repo.get("mem-test").status is MemoryStatus.FORGOTTEN
+    forgotten = repo.get("mem-test")
+    assert forgotten is not None
+    assert forgotten.status is MemoryStatus.FORGOTTEN
     repo.close()
 
 
@@ -141,6 +165,16 @@ def test_sqlite_fts_query_finds_content(tmp_path: Path) -> None:
     repo.remember(_record(id="fts2", content="deploy to production with care"))
     hits = repo.query("ruff", limit=5)
     assert any(r.id == "fts1" for r in hits)
+    repo.close()
+
+
+def test_sqlite_repository_does_not_infer_conflict_from_shared_words(tmp_path: Path) -> None:
+    repo = SQLiteMemoryRepository(tmp_path / "memory.sqlite3")
+    repo.remember(_record(id="ruff", content="always use ruff for linting"))
+    repo.remember(_record(id="black", content="always use black for linting"))
+
+    assert {record.status for record in repo.list()} == {MemoryStatus.ACTIVE}
+    assert {record.id for record in repo.index()} == {"ruff", "black"}
     repo.close()
 
 
@@ -174,6 +208,38 @@ def test_manager_recall_disabled_returns_empty() -> None:
     assert mgr.index() == []
 
 
+def test_project_memories_are_isolated_by_repository_identity() -> None:
+    repo = InMemoryMemoryRepository()
+    project_a = MemoryManager(repo, project_id="repo-a")
+    project_b = MemoryManager(repo, project_id="repo-b")
+    project_a.remember("only project A uses bazel", scope=MemoryScope.PROJECT)
+
+    assert [record.content for record in project_a.recall("bazel")] == ["only project A uses bazel"]
+    assert project_b.recall("bazel") == []
+    assert project_b.index() == []
+
+
+def test_same_content_has_distinct_project_identity_and_cannot_be_forgotten_cross_project() -> None:
+    repo = InMemoryMemoryRepository()
+    project_a = MemoryManager(repo, project_id="repo-a")
+    project_b = MemoryManager(repo, project_id="repo-b")
+
+    record_a = project_a.remember("run the shared build command")
+    record_b = project_b.remember("run the shared build command")
+
+    assert record_a.id != record_b.id
+    assert project_b.forget(record_a.id) == 0
+    assert [record.id for record in project_a.list()] == [record_a.id]
+    assert [record.id for record in project_b.list()] == [record_b.id]
+
+
+def test_explicit_memory_rejects_secrets() -> None:
+    manager = MemoryManager(InMemoryMemoryRepository(), project_id="repo-a")
+
+    with pytest.raises(ValueError, match="sensitive"):
+        manager.remember("API_KEY=sk-1234567890abcdefghijklmnop")
+
+
 # --------------------------------------------------------------------------- #
 # Projection
 # --------------------------------------------------------------------------- #
@@ -194,6 +260,20 @@ def test_projection_excludes_restricted_and_groups_by_scope() -> None:
     assert "a public fact" in text
     assert "a user preference" in text
     assert "api key location" not in text  # restricted never projected
+
+
+def test_projection_removes_stale_topic_after_last_record_is_forgotten(tmp_path: Path) -> None:
+    manager = MemoryManager(
+        InMemoryMemoryRepository(),
+        project_id="repo-a",
+        projection_dir=tmp_path / "memory",
+    )
+    record = manager.remember("use the project formatter", kind=MemoryKind.PREFERENCE)
+    topic = tmp_path / "memory" / "topics" / "preference.md"
+    assert topic.is_file()
+
+    assert manager.forget(record.id) == 1
+    assert not topic.exists()
 
 
 # --------------------------------------------------------------------------- #
@@ -251,4 +331,122 @@ async def test_control_memory_use_toggles_recall() -> None:
     await engine.control(ContextMemoryCommand(action="remember", payload={"content": "a python fact"}), _noop)
     off = await engine.control(ContextMemoryCommand(action="use", payload={"enabled": False}), _noop)
     assert off.payload["use"] is False
-    assert engine.memory.recall("python") == []
+    memory = engine.memory
+    assert memory is not None
+    assert memory.recall("python") == []
+
+
+async def test_control_memory_edit_exports_validates_and_applies_draft(tmp_path: Path) -> None:
+    manager = MemoryManager(
+        InMemoryMemoryRepository(),
+        project_id="repo-a",
+        projection_dir=tmp_path / "memory",
+    )
+    engine = _engine_with_memory()
+    engine.memory = manager
+    remembered = await engine.control(
+        ContextMemoryCommand(
+            action="remember",
+            payload={"content": "always run the old command", "scope": "project"},
+        ),
+        _noop,
+    )
+    record_id = remembered.payload["id"]
+
+    exported = await engine.control(
+        ContextMemoryCommand(action="edit", payload={"target": record_id}),
+        _noop,
+    )
+
+    assert exported.status == "ok"
+    draft_path = Path(exported.payload["draft_path"])
+    assert await asyncio.to_thread(draft_path.is_file)
+    draft_mode = await asyncio.to_thread(lambda: draft_path.stat().st_mode)
+    assert draft_mode & 0o777 == 0o600
+    await asyncio.to_thread(
+        draft_path.write_text,
+        str(exported.payload["draft"]).replace("always run the old command", "always run uv test"),
+        encoding="utf-8",
+    )
+
+    applied = await engine.control(
+        ContextMemoryCommand(action="edit", payload={"target": record_id, "apply": True}),
+        _noop,
+    )
+
+    assert applied.status == "ok"
+    assert applied.payload["id"] == record_id
+    assert [record.content for record in manager.recall("uv test")] == ["always run uv test"]
+    assert not await asyncio.to_thread(draft_path.exists)
+
+
+async def test_control_memory_edit_rejects_invalid_yaml_without_mutation(tmp_path: Path) -> None:
+    manager = MemoryManager(
+        InMemoryMemoryRepository(),
+        project_id="repo-a",
+        projection_dir=tmp_path / "memory",
+    )
+    engine = _engine_with_memory()
+    engine.memory = manager
+    remembered = await engine.control(
+        ContextMemoryCommand(action="remember", payload={"content": "keep this fact"}),
+        _noop,
+    )
+    record_id = remembered.payload["id"]
+    exported = await engine.control(
+        ContextMemoryCommand(action="edit", payload={"target": record_id}),
+        _noop,
+    )
+    draft_path = Path(exported.payload["draft_path"])
+    await asyncio.to_thread(
+        draft_path.write_text,
+        "---\ninvalid: [\n---\nreplace this fact\n",
+        encoding="utf-8",
+    )
+
+    result = await engine.control(
+        ContextMemoryCommand(action="edit", payload={"target": record_id, "apply": True}),
+        _noop,
+    )
+
+    assert result.status == "error"
+    assert [record.content for record in manager.list()] == ["keep this fact"]
+
+
+async def test_prepare_reinjects_memory_without_persisting_it_in_active_history() -> None:
+    engine = _engine_with_memory()
+    assert engine.memory is not None
+    engine.memory.remember("run uv sync before tests", scope=MemoryScope.PROJECT)
+    request = ContextRequest(
+        session=SessionRef(id="memory-session"),
+        agent=AgentRef(name="test"),
+        prompt="how should I run the tests?",
+        task=TaskSnapshot(plan=PlanState()),
+        runtime=RuntimeContextSnapshot(instructions="be helpful"),
+        history=(ModelRequest(parts=[UserPromptPart(content="hello")]),),
+    )
+
+    envelope = await engine.prepare(request, _noop)
+    visible = "\n".join(
+        str(getattr(part, "content", ""))
+        for message in envelope.messages
+        for part in getattr(message, "parts", ())
+    )
+    assert "run uv sync before tests" in visible
+    assert envelope.budget is not None
+    assert any(zone.zone.value == "memory_index" for zone in envelope.budget.zones)
+
+    transition = await engine.commit(
+        ContextCommit(
+            session=request.session,
+            envelope_fingerprint=envelope.fingerprint,
+            new_messages=(ModelResponse(parts=[TextPart(content="done")]),),
+        ),
+        _noop,
+    )
+    canonical = "\n".join(
+        str(getattr(part, "content", ""))
+        for message in transition.active_history
+        for part in getattr(message, "parts", ())
+    )
+    assert "run uv sync before tests" not in canonical

@@ -1,0 +1,285 @@
+.stage {
+  position: relative;
+  width: 168px;
+  height: 168px;
+  flex: 0 0 auto;
+  isolation: isolate;
+}
+
+.rendererLayer {
+  position: absolute;
+  inset: 0;
+  opacity: 1;
+  transition: opacity 280ms ease;
+}
+
+.rendererHidden {
+  opacity: 0;
+}
+
+.riveLayer {
+  opacity: 0;
+}
+
+.rendererReady {
+  opacity: 1;
+}
+
+.riveCanvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.visual {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  animation: mascotEntrance 520ms cubic-bezier(.2, .78, .24, 1) both;
+}
+
+.aura {
+  position: absolute;
+  inset: 22% 17% 10%;
+  z-index: -2;
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(255, 198, 133, .18), rgba(255, 198, 133, 0) 70%);
+  filter: blur(13px);
+}
+
+.shadow {
+  position: absolute;
+  left: 28%;
+  right: 25%;
+  bottom: 3.8%;
+  height: 8%;
+  z-index: -1;
+  border-radius: 50%;
+  background: rgba(68, 47, 36, .13);
+  filter: blur(5px);
+}
+
+.rig {
+  position: absolute;
+  inset: 0;
+  transform-origin: 51% 91%;
+}
+
+.layeredCharacter {
+  position: absolute;
+  inset: 0;
+  opacity: 1;
+  transform: scale(1);
+  transition:
+    opacity 360ms cubic-bezier(.22, .72, .22, 1),
+    transform 420ms cubic-bezier(.22, .72, .22, 1),
+    filter 320ms ease;
+}
+
+.layeredCharacterHidden {
+  opacity: 0;
+  transform: translateY(1px) scale(.985);
+  filter: blur(1.5px);
+}
+
+.bodyRig {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  transform: translateY(2.1%) scale(.86);
+  transform-origin: 51% 91%;
+}
+
+.bodyLife {
+  animation: bodyCounterbalance 8.1s cubic-bezier(.4, 0, .22, 1) infinite;
+}
+
+.tail,
+.body,
+.localLayer,
+.authoredPose {
+  position: absolute;
+  inset: 0;
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  transform-origin: 51% 91%;
+  user-select: none;
+}
+
+.tail {
+  z-index: 0;
+  transform: translateY(-4.4%) scale(1.018);
+  transform-origin: 51% 80%;
+}
+
+.tailMotion {
+  animation: tailDrift 8.1s cubic-bezier(.4, 0, .22, 1) infinite;
+}
+
+.body {
+  z-index: 1;
+  opacity: 1;
+}
+
+.authoredPose {
+  z-index: 5;
+  opacity: 0;
+  transform: translateY(2px) scale(.985);
+  filter: blur(1.8px);
+  transition:
+    opacity 360ms cubic-bezier(.22, .72, .22, 1),
+    transform 420ms cubic-bezier(.22, .72, .22, 1),
+    filter 300ms ease;
+}
+
+.authoredPoseActive {
+  opacity: 1;
+  transform: translateY(0) scale(1);
+  filter: blur(0);
+}
+
+.localLayer {
+  z-index: 2;
+  opacity: 0;
+  mask-image: radial-gradient(ellipse 43% 48% at 50% 38%, #000 56%, rgb(0 0 0 / .82) 68%, transparent 82%);
+  transition: opacity 260ms ease;
+}
+
+.localLayerActive {
+  opacity: 1;
+}
+
+.breathLayer {
+  z-index: 2;
+  mask-image: radial-gradient(ellipse 32% 34% at 50% 52%, #000 46%, rgb(0 0 0 / .76) 64%, transparent 82%);
+  transform-origin: 50% 63%;
+}
+
+.breathActive {
+  opacity: 1;
+  animation: localizedBreath 4.2s cubic-bezier(.42, 0, .3, 1) infinite;
+}
+
+.focusLayer {
+  z-index: 3;
+  mask-image: radial-gradient(ellipse 33% 30% at 50% 39%, #000 48%, rgb(0 0 0 / .72) 65%, transparent 82%);
+  transform-origin: 50% 56%;
+  filter: saturate(1.025) brightness(1.008);
+}
+
+.focusLayer.localLayerActive {
+  animation: focusResponse 430ms cubic-bezier(.2, .72, .25, 1) both;
+}
+
+.blinkLayer {
+  z-index: 4;
+  transition-duration: 65ms;
+}
+
+@keyframes mascotEntrance {
+  from { opacity: 0; transform: translateY(7px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes tailDrift {
+  0%, 100% { transform: translateY(-4.4%) scale(1.018) rotate(-2.2deg); }
+  18% { transform: translateY(-4.52%) scale(1.019) rotate(-1.85deg); }
+  43% { transform: translateY(-4.82%) scale(1.021) rotate(2.65deg); }
+  57% { transform: translateY(-4.76%) scale(1.02) rotate(2.35deg); }
+  78% { transform: translateY(-4.46%) scale(1.019) rotate(-.5deg); }
+}
+
+@keyframes bodyCounterbalance {
+  0%, 100% { transform: translate(.18%, 2.1%) scale(.86) rotate(.36deg); }
+  18% { transform: translate(.12%, 2.05%) scale(.86) rotate(.28deg); }
+  43% { transform: translate(-.34%, 1.78%) scale(.86) rotate(-.58deg); }
+  57% { transform: translate(-.28%, 1.84%) scale(.86) rotate(-.48deg); }
+  78% { transform: translate(-.04%, 2.02%) scale(.86) rotate(.08deg); }
+}
+
+@keyframes localizedBreath {
+  0%, 100% { transform: translateY(0) scaleX(1) scaleY(1); }
+  52% { transform: translateY(-.62%) scaleX(1.004) scaleY(1.012); }
+}
+
+@keyframes focusResponse {
+  from { transform: translateY(0) rotate(0); }
+  62% { transform: translateY(-1.15%) rotate(-.48deg); }
+  to { transform: translateY(-.8%) rotate(-.3deg); }
+}
+
+.gestureSettle.rig {
+  animation: cohesiveSettle 1.65s cubic-bezier(.22, .72, .22, 1) both;
+}
+
+.gestureSubmit.rig {
+  animation: cohesiveSubmit 760ms cubic-bezier(.2, .76, .25, 1) both;
+}
+
+.gestureSettle.shadow {
+  animation: shadowSettle 1.65s cubic-bezier(.22, .72, .22, 1) both;
+}
+
+.gestureSubmit.shadow {
+  animation: shadowSubmit 760ms cubic-bezier(.2, .76, .25, 1) both;
+}
+
+@keyframes cohesiveSettle {
+  0%, 100% { transform: translateY(0) rotate(0) scale(1); }
+  24% { transform: translateY(2px) rotate(-.9deg) scaleX(1.012) scaleY(.988); }
+  56% { transform: translateY(-2.2px) rotate(.68deg) scaleX(.996) scaleY(1.008); }
+  78% { transform: translateY(.6px) rotate(-.22deg) scale(1); }
+}
+
+@keyframes cohesiveSubmit {
+  0%, 100% { transform: translateY(0) rotate(0) scale(1); }
+  32% { transform: translateY(-2px) rotate(-.35deg) scale(1.006); }
+  66% { transform: translateY(.7px) rotate(.14deg) scaleX(1.004) scaleY(.996); }
+}
+
+@keyframes shadowSettle {
+  0%, 100% { opacity: 1; transform: scaleX(1); }
+  24% { opacity: .92; transform: scaleX(1.035); }
+  56% { opacity: .82; transform: scaleX(.97); }
+}
+
+@keyframes shadowSubmit {
+  0%, 100% { opacity: 1; transform: scaleX(1); }
+  32% { opacity: .74; transform: scaleX(.94); }
+  66% { opacity: .94; transform: scaleX(1.025); }
+}
+
+@media (max-width: 640px) {
+  .stage {
+    width: 120px;
+    height: 120px;
+  }
+
+  .aura {
+    display: none;
+  }
+
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .visual,
+  .tailMotion,
+  .bodyLife,
+  .breathActive,
+  .gestureSettle,
+  .gestureSubmit,
+  .focusLayer.localLayerActive {
+    animation: none;
+  }
+
+  .localLayer {
+    transition-duration: 0ms;
+  }
+
+  .layeredCharacter,
+  .authoredPose {
+    transition-duration: 0ms;
+  }
+}

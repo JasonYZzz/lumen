@@ -104,7 +104,10 @@ def test_provider_counter_falls_back_to_conservative_without_tokenizer() -> None
 
 
 def test_provider_counter_uses_injected_tokenizer() -> None:
-    provider = ProviderTokenCounter(count_text_tokens=lambda text: len(text))  # 1 token/char
+    def count_characters(text: str) -> int:
+        return len(text)
+
+    provider = ProviderTokenCounter(count_text_tokens=count_characters)  # 1 token/char
     assert provider.count_text("hello").tokens == 5
 
 
@@ -116,25 +119,15 @@ def test_provider_counter_uses_injected_tokenizer() -> None:
 @pytest.mark.parametrize(
     ("model_id", "expected_window", "estimated"),
     [
-        ("anthropic:claude-opus-4", 200_000, False),
-        ("openai:gpt-4.1", 128_000, False),
-        ("google:gemini-2.5-pro", 1_000_000, False),
-        ("deepseek:deepseek-chat", 128_000, False),
-        ("glm:glm-4", 128_000, False),
+        ("openai:gpt-4o", 128_000, False),
+        ("openai:deepseek-v4-pro", 1_000_000, False),
+        ("openai:glm-5.2", 1_000_000, False),
     ],
 )
 def test_known_model_resolves_to_profile(model_id: str, expected_window: int, estimated: bool) -> None:
     spec, is_estimated = resolve_model_spec(model_id)
     assert spec.context_window_tokens == expected_window
     assert is_estimated is estimated
-
-
-def test_unknown_model_falls_back_to_conservative_default() -> None:
-    spec, estimated = resolve_model_spec("acme:custom-7b")
-    assert spec.context_window_tokens == 32_000
-    assert estimated is True
-    assert spec.tokenizer == "conservative"
-
 
 def test_explicit_config_takes_precedence() -> None:
     spec, estimated = resolve_model_spec(

@@ -15,9 +15,10 @@ Three adapters (plan §8.4):
   available; falls back to the conservative counter when the optional
   dependency is missing, so production never hard-fails on a tokenizer import.
 
-:class:`resolve_model_spec` resolves a model id to a :class:`ModelContextSpec`
-via explicit config > provider profile > known-model table > conservative
-default (plan §8.1), marking the fallback so ``/context`` can flag ``estimated``.
+:class:`resolve_model_spec` is a compatibility projection over the canonical
+model-profile resolver. Resolution is explicit config > explicit profile >
+exact model-slug alias > conservative fallback; the transport prefix is never
+used as a model-family signal.
 """
 
 from __future__ import annotations
@@ -30,7 +31,10 @@ from typing import Any, Protocol
 
 from pydantic_ai.messages import ModelMessage
 
+from lumen.config import ContextConfig, ModelContextOverride, ModelSettingsConfig
 from lumen.context.legacy import ContextBudgetExceeded, render_part_text
+from lumen.context.profiles import TokenizerSpec, resolve_context_policy
+from lumen.context.tokenizers import build_tiktoken_callable
 from lumen.context.types import ModelContextSpec
 
 # --------------------------------------------------------------------------- #
@@ -185,6 +189,36 @@ class ProviderTokenCounter:
         return self._fallback.count_tools(schemas)
 
 
+@dataclass(frozen=True, slots=True)
+class TokenCounterSelection:
+    counter: TokenCounter
+    adapter: str
+    fallback_reason: str | None = None
+
+
+class TokenCounterFactory:
+    """Create offline counters from model-family tokenizer specifications."""
+
+    @staticmethod
+    def create(spec: TokenizerSpec) -> TokenCounterSelection:
+        if spec.kind == "tiktoken":
+            assert spec.encoding is not None
+            callable_ = build_tiktoken_callable(spec.encoding)
+            if callable_ is not None:
+                return TokenCounterSelection(
+                    ProviderTokenCounter(callable_),
+                    adapter=f"tiktoken:{spec.encoding}",
+                )
+            return TokenCounterSelection(
+                ConservativeTokenCounter(),
+                adapter="conservative-cjk",
+                fallback_reason=f"optional tiktoken encoding {spec.encoding!r} is unavailable",
+            )
+        if spec.kind == "deterministic":
+            return TokenCounterSelection(DeterministicTokenCounter(), adapter="deterministic")
+        return TokenCounterSelection(ConservativeTokenCounter(), adapter="conservative-cjk")
+
+
 # --------------------------------------------------------------------------- #
 # Model context spec resolution (plan §8.1)
 # --------------------------------------------------------------------------- #
@@ -195,22 +229,10 @@ class ProviderTokenCounter:
 _DEFAULT_WINDOW_TOKENS = 32_000
 _DEFAULT_MAX_OUTPUT_TOKENS = 4_096
 
-#: Known model windows keyed by provider prefix (plan §8.1 "已知模型表").
-#: Windows are upper bounds from public docs; the conservative default covers
-#: anything not listed here. Kept small and public so calibration can extend it.
-_KNOWN_MODEL_WINDOWS: dict[str, tuple[int, int]] = {
-    # provider prefix -> (context_window_tokens, max_output_tokens)
-    "anthropic": (200_000, 8_192),
-    "openai": (128_000, 16_384),
-    "google": (1_000_000, 8_192),
-    "gemini": (1_000_000, 8_192),
-    "deepseek": (128_000, 8_192),
-    "openrouter": (128_000, 8_192),
-    "zhipu": (128_000, 4_096),
-    "glm": (128_000, 4_096),
-    "moonshot": (128_000, 8_192),
-    "mistral": (128_000, 8_192),
-}
+# Compatibility export retained for callers that imported the old table.
+# Resolution no longer consults provider prefixes; all built-ins live in
+# ``context.profiles`` and match exact model slugs.
+_KNOWN_MODEL_WINDOWS: dict[str, tuple[int, int]] = {}
 
 
 def resolve_model_spec(
@@ -221,54 +243,50 @@ def resolve_model_spec(
 ) -> tuple[ModelContextSpec, bool]:
     """Resolve a model id to a :class:`ModelContextSpec` (plan §8.1).
 
-    Resolution order: explicit config > known-model table (by provider prefix)
-    > conservative default. Returns the spec plus an ``estimated`` flag (True
-    when the window came from the conservative default rather than a known
-    profile or explicit config) so ``/context`` can mark it.
+    Deprecated compatibility projection over :func:`resolve_context_policy`.
+    Provider prefixes are deliberately ignored; resolution is explicit fields
+    > exact model profile alias > conservative fallback.
     """
 
-    if explicit_window is not None and explicit_window > 0:
-        return (
-            ModelContextSpec(
-                context_window_tokens=explicit_window,
-                max_output_tokens=explicit_max_output or _DEFAULT_MAX_OUTPUT_TOKENS,
-                tokenizer="explicit",
-            ),
-            False,
-        )
-    prefix = model_id.split(":", 1)[0].lower() if model_id else ""
-    known = _KNOWN_MODEL_WINDOWS.get(prefix)
-    if known is not None:
-        window, max_output = known
-        return (
-            ModelContextSpec(
-                context_window_tokens=window,
-                max_output_tokens=explicit_max_output or max_output,
-                tokenizer=f"provider:{prefix}",
-            ),
-            False,
-        )
+    override = ModelContextOverride(
+        window_tokens=explicit_window,
+        max_output_tokens=explicit_max_output,
+    )
+    policy = resolve_context_policy(
+        ModelSettingsConfig(id=model_id, context=override),
+        ContextConfig(),
+    )
+    tokenizer = (
+        f"tiktoken:{policy.tokenizer.encoding}"
+        if policy.tokenizer.kind == "tiktoken"
+        else policy.tokenizer.kind
+    )
     return (
         ModelContextSpec(
-            context_window_tokens=_DEFAULT_WINDOW_TOKENS,
-            max_output_tokens=explicit_max_output or _DEFAULT_MAX_OUTPUT_TOKENS,
-            tokenizer="conservative",
+            context_window_tokens=policy.context_window_tokens,
+            max_output_tokens=policy.output_reserve_tokens,
+            tokenizer=tokenizer,
         ),
-        True,
+        "context_window_tokens" in policy.estimated_fields,
     )
 
 
-def select_token_counter(spec: ModelContextSpec) -> TokenCounter:
+def select_token_counter(spec: ModelContextSpec, *, model_id: str | None = None) -> TokenCounter:
     """Pick the token counter for a resolved spec (plan §8.4).
 
-    A real provider tokenizer is wired by constructing a
-    :class:`ProviderTokenCounter` with the tokenizer callable; until then the
-    conservative counter is the safe default.
+    The tokenizer declared by the resolved model profile is used directly.
+    Missing optional tokenizer dependencies fall back to the conservative
+    counter without downloading files or making a network request.
     """
 
     tokenizer = spec.tokenizer
+    if tokenizer.startswith("tiktoken:"):
+        callable_ = build_tiktoken_callable(tokenizer.partition(":")[2])
+        if callable_ is not None:
+            return ProviderTokenCounter(count_text_tokens=callable_)
+        return ProviderTokenCounter(count_text_tokens=None)
     if tokenizer.startswith("provider:"):
-        # No tokenizer dependency is wired yet; fall back to conservative.
+        # No exact offline tokenizer for this provider; stay conservative.
         return ProviderTokenCounter(count_text_tokens=None)
     return ConservativeTokenCounter()
 
@@ -299,6 +317,8 @@ __all__ = [
     "ProviderTokenCounter",
     "TokenCount",
     "TokenCounter",
+    "TokenCounterFactory",
+    "TokenCounterSelection",
     "raise_if_fixed_context_exceeds_window",
     "resolve_model_spec",
     "select_token_counter",

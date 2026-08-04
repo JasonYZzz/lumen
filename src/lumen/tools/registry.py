@@ -5,7 +5,7 @@ import sys
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, Literal, cast
 
 from pydantic_ai import Tool
 
@@ -15,6 +15,10 @@ from lumen.tools.spec import Risk, ToolSpec
 
 class DuplicateToolError(ValueError):
     """Raised when two configured tools expose the same model-visible name."""
+
+
+class PluginLoadError(RuntimeError):
+    """A configured Python tool plugin could not be imported."""
 
 
 class PermissionDecision(StrEnum):
@@ -47,7 +51,16 @@ def load_plugin_specs(config: PluginConfig, *, search_path: str | Path | None = 
     if added_path is not None:
         sys.path.insert(0, added_path)
     try:
-        module = importlib.import_module(config.module)
+        try:
+            module = importlib.import_module(config.module)
+        except ModuleNotFoundError as error:
+            missing = error.name or config.module
+            if config.module == missing or config.module.startswith(f"{missing}."):
+                location = added_path or "the Python import path"
+                raise PluginLoadError(f"plugin {config.module!r} was not found under {location}") from error
+            raise PluginLoadError(
+                f"plugin {config.module!r} could not be imported; missing dependency {missing!r}"
+            ) from error
     finally:
         if added_path is not None:
             sys.path.remove(added_path)
@@ -85,7 +98,13 @@ class ToolRegistry:
         for spec in specs:
             self.add(spec, origin=origin)
 
-    def build_local_tools(self, policy: PermissionPolicy, *, default_timeout: float) -> list[Tool[None]]:
+    def build_local_tools(
+        self,
+        policy: PermissionPolicy,
+        *,
+        default_timeout: float,
+        parallel_mode: Literal["sequential", "parallel_safe", "parallel"] = "sequential",
+    ) -> list[Tool[None]]:
         tools: list[Tool[None]] = []
         for name, entry in self._entries.items():
             decision = policy.decide(name, entry.spec.risk)
@@ -96,10 +115,18 @@ class ToolRegistry:
                     entry.spec.function,
                     name=name,
                     description=entry.spec.description,
-                    sequential=True,
+                    sequential=not _allows_parallel(parallel_mode, entry.spec.risk),
                     requires_approval=decision is PermissionDecision.CONFIRM,
                     timeout=entry.spec.timeout or default_timeout,
                     metadata={"origin": entry.origin, "risk": entry.spec.risk.value},
                 )
             )
         return tools
+
+
+def _allows_parallel(mode: Literal["sequential", "parallel_safe", "parallel"], risk: Risk) -> bool:
+    if mode == "sequential":
+        return False
+    if mode == "parallel_safe":
+        return risk is Risk.READ
+    return True

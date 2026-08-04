@@ -16,6 +16,7 @@ import json
 from pathlib import Path
 from typing import Any
 
+from pydantic import TypeAdapter
 from pydantic_ai.messages import (
     ModelMessage,
     ModelRequest,
@@ -71,9 +72,7 @@ def load_mcp_tool_schemas() -> list[dict[str, Any]]:
     """A representative set of MCP tool schemas for budget estimation."""
 
     schemas = _read_json("mcp_tools_schema.json")
-    if not isinstance(schemas, list):
-        raise TypeError("mcp_tools_schema.json must be a JSON array of tool schemas")
-    return list(schemas)
+    return TypeAdapter(list[dict[str, Any]]).validate_python(schemas)
 
 
 def load_chinese_history() -> list[ModelMessage]:

@@ -14,31 +14,20 @@ interpreted correctly when they arrive.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import TYPE_CHECKING, ClassVar
+from typing import TYPE_CHECKING, ClassVar, cast
 
+from rich.text import Text
+from textual.app import App
 from textual.binding import Binding, BindingType
 from textual.message import Message
 from textual.widgets import OptionList
 from textual.widgets.option_list import Option
 
+from lumen.completion import CompletionSuggestion
+from lumen.ui.themes import theme_color
+
 if TYPE_CHECKING:
     from textual.widget import Widget
-
-
-@dataclass(frozen=True, slots=True)
-class CompletionSuggestion:
-    """One item in the completion dropdown.
-
-    ``label`` is what the user sees; ``insert`` is what replaces the trigger
-    prefix in the editor when picked. They can differ — e.g. a file
-    suggestion's label might be ``config.yaml`` while ``insert`` is
-    ``@config.yaml`` (preserving the trigger character the user typed).
-    """
-
-    label: str
-    insert: str
-    description: str | None = None
 
 
 class CompletionDropdown(OptionList):
@@ -59,21 +48,22 @@ class CompletionDropdown(OptionList):
         layer: above;
         dock: top;
         max-height: 10;
-        min-width: 48;
-        max-width: 110;
+        min-width: 24;
         width: 92%;
         height: auto;
         display: none;
-        background: $panel 98%;
-        border-top: solid $primary 45%;
-        border-bottom: solid $primary 45%;
-        padding: 0;
+        background: $surface 100%;
+        border: round $primary 55%;
+        border-title-color: $primary;
+        border-title-style: bold;
+        border-subtitle-color: $text-muted;
+        scrollbar-background: $surface;
+        padding: 0 1;
         margin: 0;
     }
     CompletionDropdown > .option-list--option-highlighted {
-        background: $primary 30%;
+        background: $primary 22%;
         color: $text;
-        text-style: bold;
     }
     """
 
@@ -113,13 +103,11 @@ class CompletionDropdown(OptionList):
 
         self._suggestions = list(suggestions)
         self.trigger_prefix = prefix
+        self.border_title = "Commands" if prefix.startswith("/") else "Files"
         self.clear_options()
         label_width = min(28, max((len(suggestion.label) for suggestion in self._suggestions), default=0))
         for sug in self._suggestions:
-            prompt = sug.label
-            if sug.description:
-                prompt = f"{sug.label:<{label_width}}  {sug.description}"
-            self.add_option(Option(prompt, id=sug.insert))
+            self.add_option(Option(self._render_suggestion(sug, label_width, prefix), id=sug.insert))
         if self._suggestions:
             self.display = True
             self.highlighted = self._best_match_index(prefix)
@@ -168,6 +156,14 @@ class CompletionDropdown(OptionList):
         content_rows = min(len(self._suggestions), 8)
         want = content_rows + 2
         target_region = target.region
+        # Match the composer exactly instead of leaving an arbitrary 8% gap.
+        # The complete rounded outline now reads as one anchored popover.
+        self.styles.width = target_region.width
+        self.border_subtitle = (
+            "↑↓ navigate · Enter select · Esc close"
+            if target_region.width >= 60
+            else "↑↓ · Enter · Esc"
+        )
         available_above = max(0, target_region.y)
         height = min(want, available_above)
         if height < 3:
@@ -179,6 +175,30 @@ class CompletionDropdown(OptionList):
         offset_x = target_region.x
         self.styles.offset = (offset_x, desired_top)
         self.styles.height = height
+
+    def _render_suggestion(
+        self,
+        suggestion: CompletionSuggestion,
+        label_width: int,
+        prefix: str,
+    ) -> Text:
+        """Render labels and descriptions with restrained semantic color."""
+
+        label_token = "mode-edit" if prefix.startswith("@") else "activity"
+        if suggestion.label.startswith(("/tool", "/skill", "/mcp", "/resource", "/prompt")):
+            label_token = "tool"
+        label_color = self._theme_variable(label_token, "#F0A24A")
+        meta_color = self._theme_variable("activity-meta", "#948A80")
+        rendered = Text()
+        rendered.append(f"{suggestion.label:<{label_width}}", style=f"bold {label_color}")
+        if suggestion.description:
+            rendered.append("  ")
+            rendered.append(suggestion.description, style=meta_color)
+        return rendered
+
+    def _theme_variable(self, token: str, fallback: str) -> str:
+        app = cast(App[object], self.app)  # type: ignore[reportUnknownMemberType]
+        return theme_color(app, token, fallback)
 
     def hide(self) -> None:
         """Hide the dropdown and clear its state."""

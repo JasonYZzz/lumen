@@ -15,6 +15,7 @@ never silently overwrites a contradictory fact.
 
 from __future__ import annotations
 
+import hashlib
 from datetime import datetime
 from enum import StrEnum
 
@@ -94,6 +95,10 @@ class MemoryRecord(BaseModel):
     supersedes: tuple[str, ...] = Field(default_factory=tuple)
     status: MemoryStatus = MemoryStatus.ACTIVE
     sensitivity: Sensitivity = Sensitivity.INTERNAL
+    #: Canonical repository identity. USER memories are intentionally global;
+    #: project/path/agent memories are filtered by this key so worktrees share
+    #: knowledge without leaking it into unrelated repositories.
+    project_id: str | None = None
     #: Optional path glob for PATH-scope recall (plan §11.2).
     path_glob: str | None = None
 
@@ -106,6 +111,14 @@ class MemoryRecord(BaseModel):
         return self
 
 
+def memory_record_id(scope: MemoryScope, content: str, *, project_id: str | None) -> str:
+    """Return the stable authority key shared by explicit and learned memory."""
+
+    namespace = "global" if scope is MemoryScope.USER else (project_id or "default")
+    digest = hashlib.sha256(f"{namespace}:{scope.value}:{content}".encode()).hexdigest()
+    return f"mem-{digest[:16]}"
+
+
 __all__ = [
     "MemoryKind",
     "MemoryRecord",
@@ -113,4 +126,5 @@ __all__ = [
     "MemorySource",
     "MemoryStatus",
     "Sensitivity",
+    "memory_record_id",
 ]

@@ -88,9 +88,7 @@ def test_tui_state_snapshot(
         # Snapshot fixtures must not include per-run UUIDs or pytest's
         # generated temporary path. Dynamic-value behaviour is covered by
         # integration tests; these images guard the visual contract.
-        app.query_one("#topbar", Static).update(
-            "◆ Lumen / snapshot-agent  ·  model test  ·  manual mode  ·  session a1b2c3d4"
-        )
+        app.query_one("#topbar", Static).update("◆ Lumen / snapshot-agent  ·  lumen  ·  a1b2c3d4")
         app.query_one(WelcomePanel).update_context(
             agent_name="snapshot-agent",
             model="test",
@@ -107,7 +105,7 @@ def test_tui_state_snapshot(
         if state in {"slash-menu", "slash-filter"}:
             editor = app.query_one("#prompt")
             editor.focus()
-            keys = "/" if state == "slash-menu" else "/qu"
+            keys = "/" if state == "slash-menu" else "/ex"
             for key in keys:
                 await pilot.press(key)
         elif state == "loading":
@@ -122,6 +120,8 @@ def test_tui_state_snapshot(
                 )
             )
         elif state == "todo":
+            await app._append_user("Implement the requested UI change")  # type: ignore[reportPrivateUsage]
+            await app.render_event(RunStarted("Implement the requested UI change"))
             await app.render_event(
                 PlanCreated(
                     PlanState(

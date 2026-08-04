@@ -20,7 +20,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass
 
-from pydantic_ai.messages import ModelMessage
+from pydantic_ai.messages import ModelMessage, ModelRequest, SystemPromptPart
 
 from lumen.context.artifacts import ArtifactStore
 from lumen.context.budget import ContextBudgetExceeded, TokenCounter
@@ -37,6 +37,14 @@ class FixedContextTooLarge(ContextBudgetExceeded):
     """
 
 
+def _is_summary_prefix(message: ModelMessage) -> bool:
+    return (
+        isinstance(message, ModelRequest)
+        and len(message.parts) == 1
+        and isinstance(message.parts[0], SystemPromptPart)
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class CompactionPolicy:
     """Compaction thresholds and anti-thrash limits (plan §8.3, §9.1)."""
@@ -47,6 +55,8 @@ class CompactionPolicy:
     emergency_reserve_ratio: float = 0.05
     max_auto_compactions: int = 2
     anti_thrash_turns: int = 5
+    failure_cooldown_after: int = 3
+    failure_cooldown_turns: int = 3
 
 
 @dataclass(frozen=True, slots=True)
@@ -80,6 +90,10 @@ class CompactionThrashState:
     auto_count: int = 0
     window_start_turn: int = 0
     turn: int = 0
+    consecutive_failures: int = 0
+    cooldown_until_turn: int = 0
+    total_successes: int = 0
+    total_failures: int = 0
 
     def advance_turn(self) -> None:
         """Record one user turn; expire the thrash window when it elapses."""
@@ -92,33 +106,24 @@ class CompactionThrashState:
     def record_auto_compaction(self) -> None:
         self.auto_count += 1
 
+    def record_success(self) -> None:
+        self.total_successes += 1
+        self.consecutive_failures = 0
+        self.cooldown_until_turn = 0
+
+    def record_failure(self, policy: CompactionPolicy) -> None:
+        self.total_failures += 1
+        self.consecutive_failures += 1
+        if self.consecutive_failures >= policy.failure_cooldown_after:
+            self.cooldown_until_turn = self.turn + policy.failure_cooldown_turns
+
+    def cooling_down(self) -> bool:
+        return self.turn < self.cooldown_until_turn
+
     def thrashed(self, policy: CompactionPolicy) -> bool:
         """Whether the auto-compaction limit for the window is reached."""
 
         return self.auto_count >= policy.max_auto_compactions
-
-
-def should_compact(
-    *,
-    projected_tokens: int,
-    thresholds: Thresholds,
-    policy: CompactionPolicy,
-    thrash: CompactionThrashState,
-    force: bool = False,
-) -> bool:
-    """Whether to compact this turn (plan §9.1 triggers).
-
-    Forced (``/compact``) always compacts. Auto compacts when projected usage
-    reaches the soft threshold - unless the anti-thrash limit is hit, in which
-    case the engine degrades instead of re-calling the summariser.
-    """
-
-    if force:
-        return True
-    if projected_tokens < thresholds.soft:
-        return False
-    # Past soft but thrashed: do not re-summarise; the engine degrades instead.
-    return not thrash.thrashed(policy)
 
 
 def degrade_to_window(
@@ -149,24 +154,44 @@ def degrade_to_window(
         )
 
     messages = list(history)
+    # A successful compaction's leading system-only request is the durable
+    # representation of the already-covered delta. It must survive emergency
+    # history reduction or the checkpoint would advance while its summary
+    # silently disappears from the provider context.
+    summary_prefix: list[ModelMessage] = []
+    while messages and _is_summary_prefix(messages[0]):
+        summary_prefix.append(messages.pop(0))
+    prefix_tokens = counter.count_messages(summary_prefix).tokens
+    if prefix_tokens > budget:
+        raise FixedContextTooLarge(
+            "compaction summary cannot fit after fixed context and output "
+            f"reserve (summary={prefix_tokens}, history_budget={budget})"
+        )
+    if _fits([*summary_prefix, *messages], budget, counter):
+        return [*summary_prefix, *messages]
 
     # Step 1: reduce tool outputs to receipts (no re-summarisation).
     if store is not None:
-        reduced = reduce_tool_outputs(messages, store, keep_recent_full=len(messages))
+        # Emergency mode may receipt-ize even the newest oversized body. The
+        # receipt keeps tool name/call id/status plus diagnostic head/tail while
+        # the complete body remains addressable in the artifact store.
+        reduced = reduce_tool_outputs(messages, store, keep_recent_full=0)
         messages = reduced.messages
-        if _fits(messages, budget, counter):
-            return messages
+        if _fits([*summary_prefix, *messages], budget, counter):
+            return [*summary_prefix, *messages]
 
     # Step 2: shrink the recent window progressively, snapped to a safe boundary.
     for keep in _shrinking_budgets(keep_recent_tokens):
         recent = retain_recent_tokens(messages, keep)
-        if recent and _fits(recent, budget, counter):
-            return recent
+        if recent and _fits([*summary_prefix, *recent], budget, counter):
+            return [*summary_prefix, *recent]
 
     # Step 3: keep only the last coherent user turn (smallest safe window).
     last_boundary = _last_safe_boundary(messages)
-    if last_boundary and _fits(last_boundary, budget, counter):
-        return last_boundary
+    if last_boundary and _fits([*summary_prefix, *last_boundary], budget, counter):
+        return [*summary_prefix, *last_boundary]
+    if summary_prefix:
+        return summary_prefix
 
     # Nothing fits: the fixed prefix dominates. Fail loudly, never over-limit.
     raise FixedContextTooLarge(
@@ -201,5 +226,4 @@ __all__ = [
     "FixedContextTooLarge",
     "Thresholds",
     "degrade_to_window",
-    "should_compact",
 ]

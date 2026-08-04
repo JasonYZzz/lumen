@@ -7,11 +7,13 @@ from typing import Any
 
 import pytest
 from pydantic_ai.messages import ModelMessage, ModelRequest, UserPromptPart
+from rich.text import Text
 from textual.app import App, ComposeResult
 from textual.containers import Vertical, VerticalScroll
 from textual.widgets import Static
 
 from lumen.events import (
+    ClarificationRequested,
     CommentaryDelta,
     ContextCompactionCompleted,
     ContextCompactionStarted,
@@ -21,6 +23,7 @@ from lumen.events import (
     RunCancelled,
     RunCompleted,
     RunStarted,
+    RunWaitingForUser,
     TextDelta,
     TextRetracted,
     ToolApprovalPending,
@@ -71,8 +74,8 @@ async def test_plan_panel_marks_active_and_completed_steps() -> None:
         await pilot.pause()
         panel = app.query_one(PlanPanel)
         summary = _panel_summary(panel)
-    assert "✓ Inspect" in summary
-    assert "● Test" in summary
+    assert "✔ Inspect" in summary
+    assert "▣ Test" in summary
 
 
 async def test_plan_panel_updates_on_event() -> None:
@@ -83,7 +86,7 @@ async def test_plan_panel_updates_on_event() -> None:
         panel.update_plan(PlanState(steps=[PlanStep(id="x", title="A", status=StepStatus.PENDING)]))
         await pilot.pause()
         summary = _panel_summary(panel)
-    assert "○ A" in summary
+    assert "☐ A" in summary
 
 
 async def test_plan_panel_collapse_api_toggles_class() -> None:
@@ -97,12 +100,12 @@ async def test_plan_panel_collapse_api_toggles_class() -> None:
         panel.collapse(True)
         await pilot.pause()
         assert panel.has_class("plan-collapsed")
-        assert "Todo 0/1 · active: Inspect" in _panel_summary(panel)
+        assert "Tasks 0/1 · Inspect" in _panel_summary(panel)
         assert len(panel.query(".plan-step")) == 0
         panel.collapse(False)
         await pilot.pause()
         assert not panel.has_class("plan-collapsed")
-        assert "○ Inspect" in _panel_summary(panel)
+        assert "☐ Inspect" in _panel_summary(panel)
 
 
 def test_render_plan_summary_handles_blocked_state() -> None:
@@ -148,6 +151,9 @@ async def test_tool_card_renders_running_then_finished() -> None:
         card.start(args={"path": "x"}, origin="builtin", risk="read")
         await pilot.pause()
         assert "●" in _header_text(card)
+        header = card.query_one(".tool-header", Static).content
+        assert isinstance(header, Text)
+        assert "bold #C7ACE8" in {str(span.style) for span in header.spans}
         card.update_result(result="ok", is_error=False, elapsed_seconds=0.5)
         await pilot.pause()
         assert "✓" in _header_text(card)
@@ -498,6 +504,25 @@ async def test_final_answer_does_not_contain_progress_text(tmp_path: Path) -> No
     assert assistant_text == "Final answer only."
 
 
+async def test_progress_uses_markdown_and_control_tools_stay_hidden(tmp_path: Path) -> None:
+    app = _make_app(tmp_path)
+    async with app.run_test() as pilot:
+        await app.render_event(RunStarted("inspect"))
+        await app.render_event(
+            ToolCallStarted("control-1", "set_plan", {}, origin="control", risk="read")
+        )
+        await app.render_event(
+            PlanCreated(PlanState(steps=[PlanStep(id="one", title="Inspect")]))
+        )
+        await app.render_event(ProgressReported(summary="**Step 1:** inspect"))
+        await pilot.pause()
+
+        assert len(app.query(ToolCard)) == 0
+        progress = list(app.query(".progress-block").results(AssistantMarkdown))
+        assert len(progress) == 1
+        assert progress[0].source == "↳ **Step 1:** inspect"
+
+
 async def test_inline_approval_replaces_modal(tmp_path: Path) -> None:
     """There is no longer an ApprovalModal; the modal class is gone entirely.
 
@@ -580,7 +605,33 @@ async def test_provisional_stream_is_reclassified_without_duplicate_answer(tmp_p
         assert [document.source for document in app.query(AssistantMarkdown)] == ["Done."]
         commentary = list(app.query(".commentary-block").results(Static))
         assert len(commentary) == 1
-        assert str(commentary[0].content) == "Inspecting."
+        assert str(commentary[0].content) == "∴ Inspecting."
+
+
+async def test_blocking_clarification_renders_and_finishes_run_ui(tmp_path: Path) -> None:
+    app = _make_app(tmp_path)
+    async with app.run_test() as pilot:
+        await app.render_event(RunStarted("choose target"))
+        await app.render_event(
+            ClarificationRequested(
+                question_id="clarify-1",
+                question="Choose a target",
+                choices=("A", "B"),
+            )
+        )
+        await app.render_event(
+            RunWaitingForUser(
+                question_id="clarify-1",
+                question="Choose a target",
+                choices=("A", "B"),
+            )
+        )
+        await pilot.pause()
+
+        messages = [str(widget.content) for widget in app.query(".system-message").results(Static)]
+        assert any("Choose a target\n- A\n- B" in message for message in messages)
+        assert "Waiting for your answer" in str(app.query_one("#status", Static).content)
+        assert not app.query_one(RunActivityIndicator).has_class("running")
 
 
 async def test_stale_file_completion_search_is_discarded(
@@ -687,57 +738,57 @@ async def test_scrolling_restored_timeline_to_top_loads_older_page_without_jump(
 
 
 # ---------------------------------------------------------------------------
-# PlanPanel pinned layout (top of screen, not inside the scrolling timeline)
+# PlanPanel conversation ownership
 # ---------------------------------------------------------------------------
 
 
-async def test_plan_panel_mounted_at_compose_top_level(tmp_path: Path) -> None:
-    """PlanPanel is a direct child of the screen, not nested inside #messages.
-
-    This guarantees the plan stays pinned at the top while tool output scrolls
-    beneath it — the opencode/cursor layout. If PlanPanel were mounted into
-    #messages it would scroll away with the transcript.
-    """
+async def test_plan_panel_is_not_global_chrome(tmp_path: Path) -> None:
+    """An empty app has no plan panel occupying fixed screen space."""
 
     app = _make_app(tmp_path)
     async with app.run_test() as pilot:
         await pilot.pause()
-        panel = app.query_one(PlanPanel)
-        messages = app.query_one("#messages")
-        # PlanPanel's parent should be the screen, NOT the messages container.
-        assert panel.parent is not messages
-        assert panel.parent is app.screen
+        assert len(app.query(PlanPanel)) == 0
 
 
-async def test_plan_created_event_updates_pinned_panel(tmp_path: Path) -> None:
-    """A PlanCreated event reaches the pinned PlanPanel without mounting.
-
-    Previously the handler tried ``messages.mount(panel)`` on first sight;
-    now the panel is always present (from compose) so the event just updates
-    it in place.
-    """
+async def test_plan_created_event_mounts_panel_in_owning_turn(tmp_path: Path) -> None:
+    """A plan is part of the scrolling transcript, not screen chrome."""
 
     app = _make_app(tmp_path)
     async with app.run_test() as pilot:
         await pilot.pause()
+        await app._append_user("Do the first thing")  # type: ignore[reportPrivateUsage]
+        await app._render_event(RunStarted("Do the first thing"))  # type: ignore[reportPrivateUsage]
         plan = PlanState(steps=[PlanStep(id="s1", title="Do thing", status=StepStatus.PENDING)])
         await app._render_event(PlanCreated(plan=plan))  # type: ignore[reportPrivateUsage]
         await pilot.pause()
         panel = app.query_one(PlanPanel)
+        messages = app.query_one("#messages")
+        assert panel.parent is messages
+        assert list(messages.children).index(panel) > 0
         assert panel.has_class("has-plan")
         summary = _panel_summary(panel)
         assert "Do thing" in summary
 
 
-async def test_plan_panel_hidden_until_plan_arrives(tmp_path: Path) -> None:
-    """No plan → PlanPanel is display:none so it doesn't waste screen rows."""
+async def test_new_turn_gets_a_distinct_plan_panel(tmp_path: Path) -> None:
+    """Updating a later turn cannot move or replace an earlier turn's plan."""
 
     app = _make_app(tmp_path)
     async with app.run_test() as pilot:
         await pilot.pause()
-        panel = app.query_one(PlanPanel)
-        assert not panel.has_class("has-plan")
-        assert panel.display is False
+        first = PlanState(steps=[PlanStep(id="one", title="First plan")])
+        second = PlanState(steps=[PlanStep(id="two", title="Second plan")])
+        await app._render_event(RunStarted("First question"))  # type: ignore[reportPrivateUsage]
+        await app._render_event(PlanCreated(first))  # type: ignore[reportPrivateUsage]
+        await app._render_event(PlanUpdated(first))  # type: ignore[reportPrivateUsage]
+        await app._render_event(RunStarted("Second question"))  # type: ignore[reportPrivateUsage]
+        await app._render_event(PlanCreated(second))  # type: ignore[reportPrivateUsage]
+        await pilot.pause()
+        panels = list(app.query(PlanPanel))
+        assert len(panels) == 2
+        assert "First plan" in _panel_summary(panels[0])
+        assert "Second plan" in _panel_summary(panels[1])
 
 
 # ---------------------------------------------------------------------------
@@ -788,9 +839,8 @@ async def test_status_bar_shows_mode_and_model(tmp_path: Path) -> None:
         assert "manual" in status_text
         assert "test" in status_text  # model id from _make_app
         assert "ctx" not in status_text
-        # A one-row widget with a top border clips its only content row.
-        assert app.query_one("#status", Static).region.height >= 2
-        assert app.query_one("#topbar", Static).region.height >= 2
+        assert app.query_one("#status", Static).region.height == 1
+        assert app.query_one("#topbar", Static).region.height == 1
 
 
 async def test_idle_welcome_surfaces_runtime_context(tmp_path: Path) -> None:
@@ -809,25 +859,29 @@ async def test_idle_welcome_surfaces_runtime_context(tmp_path: Path) -> None:
 
 
 async def test_status_bar_updates_on_mode_switch(tmp_path: Path) -> None:
-    """Switching approval mode via Ctrl+M refreshes the status bar suffix."""
+    """Shift+Tab updates the single composer-adjacent mode indicator."""
 
     app = _make_app(tmp_path)
     async with app.run_test() as pilot:
         await pilot.pause()
         # First toggle enters accept-edits.
-        await pilot.press("ctrl+m")
+        await pilot.press("shift+tab")
         await pilot.pause()
         status_text = str(app.query_one("#status", Static).content)
-        assert "accept_edits" in status_text
-        # Entering auto requires an explicit confirmation.
-        await pilot.press("ctrl+m")
+        assert "accept edits on" in status_text
+        accept_content = app.query_one("#status", Static).content
+        assert isinstance(accept_content, Text)
+        assert "bold #69B9AF" in {str(span.style) for span in accept_content.spans}
+        await pilot.press("shift+tab")
         await pilot.pause()
-        assert "accept_edits" in str(app.query_one("#status", Static).content)
-        await pilot.press("y")
+        assert "plan mode on" in str(app.query_one("#status", Static).content)
+        plan_content = app.query_one("#status", Static).content
+        assert isinstance(plan_content, Text)
+        assert "bold #93B97A" in {str(span.style) for span in plan_content.spans}
+        await pilot.press("shift+tab")
         await pilot.pause()
         assert "auto" in str(app.query_one("#status", Static).content)
-        # The next cycle returns to manual.
-        await pilot.press("ctrl+m")
+        await pilot.press("shift+tab")
         await pilot.pause()
         status_text = str(app.query_one("#status", Static).content)
         assert "manual" in status_text
@@ -843,8 +897,8 @@ async def test_shift_tab_cycles_approval_mode(tmp_path: Path) -> None:
         assert app.approval_mode == "accept_edits"
         await pilot.press("shift+tab")
         await pilot.pause()
-        assert app.approval_mode == "accept_edits"
-        await pilot.press("y")
+        assert app.approval_mode == "plan"
+        await pilot.press("shift+tab")
         await pilot.pause()
         assert app.approval_mode == "auto"
         assert "auto mode" in str(app.query_one("#status", Static).content)

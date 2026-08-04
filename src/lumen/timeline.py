@@ -9,18 +9,23 @@ from typing import Any, Protocol
 from pydantic_ai.messages import ModelResponse, TextPart, ToolCallPart, ToolReturnPart
 
 from lumen.events import (
+    ClarificationRequested,
     CommentaryDelta,
     ContextCompactionCompleted,
     ContextCompactionFailed,
     ContextCompactionStarted,
+    PlanCreated,
+    PlanUpdated,
     ProgressReported,
     RunCancelled,
     RunCompleted,
     RunEvent,
     RunFailed,
     RunStarted,
+    RunWaitingForUser,
     TextDelta,
     TextRetracted,
+    ToolApprovalBatchPending,
     ToolApprovalPending,
     ToolApprovalResolved,
     ToolCallFinished,
@@ -28,10 +33,15 @@ from lumen.events import (
 )
 from lumen.sessions import SessionRepository, TurnRecord
 
+_CONTROL_TOOL_NAMES = frozenset(
+    {"set_plan", "update_step", "report_progress", "request_clarification"}
+)
+
 
 class TimelineKind(StrEnum):
     USER = "user"
     ASSISTANT = "assistant"
+    PLAN = "plan"
     COMMENTARY = "commentary"
     PROGRESS = "progress"
     TOOL = "tool"
@@ -53,6 +63,7 @@ class TimelineItem:
     status: str | None = None
     pending_approval: bool = False
     is_error: bool = False
+    plan: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -130,10 +141,23 @@ class TimelineStore:
                 self._items[-1] = item
                 return item
             item = self._new(TimelineKind.COMMENTARY, text=event.text)
+        elif isinstance(event, PlanCreated | PlanUpdated):
+            plan = event.plan.model_dump(mode="json")
+            for index in range(len(self._items) - 1, -1, -1):
+                existing = self._items[index]
+                if existing.kind is TimelineKind.USER:
+                    break
+                if existing.kind is TimelineKind.PLAN:
+                    item = replace(existing, plan=plan)
+                    self._items[index] = item
+                    return item
+            item = self._new(TimelineKind.PLAN, plan=plan)
         elif isinstance(event, ProgressReported):
             text = event.summary + (f"\n{event.next_action}" if event.next_action else "")
             item = self._new(TimelineKind.PROGRESS, text=text)
         elif isinstance(event, ToolCallStarted):
+            if event.origin == "control" or event.name in _CONTROL_TOOL_NAMES:
+                return None
             item = self._new(
                 TimelineKind.TOOL,
                 call_id=event.call_id,
@@ -167,6 +191,20 @@ class TimelineStore:
                 status="pending",
                 pending_approval=True,
             )
+        elif isinstance(event, ToolApprovalBatchPending):
+            first: TimelineItem | None = None
+            for request in event.requests:
+                current = self.apply(
+                    ToolApprovalPending(
+                        request.call_id,
+                        request.name,
+                        request.args,
+                        request.origin,
+                        request.risk,
+                    )
+                )
+                first = first or current
+            return first
         elif isinstance(event, ToolApprovalResolved):
             return self._update_tool(
                 event.call_id,
@@ -186,7 +224,11 @@ class TimelineStore:
             item = self._new(TimelineKind.ERROR, text=event.message, is_error=True)
         elif isinstance(event, RunCancelled):
             item = self._new(TimelineKind.SYSTEM, text=event.message)
-        elif isinstance(event, RunCompleted):
+        elif isinstance(event, ClarificationRequested):
+            choices = "\n".join(f"- {choice}" for choice in event.choices)
+            text = event.question + (f"\n{choices}" if choices else "")
+            item = self._new(TimelineKind.SYSTEM, text=text, status="waiting_for_user")
+        elif isinstance(event, RunCompleted | RunWaitingForUser):
             return None
         if item is not None:
             self._append(item)
@@ -239,11 +281,24 @@ def _turn_items(turn: TurnRecord, *, ordinal: int) -> list[TimelineItem]:
         replay = TimelineStore()
         for record in sorted(turn.timeline_events, key=lambda item: item.sequence):
             replay.apply(record.to_event())
-        return [
+        items = [
             replace(item, id=f"{prefix}:event:{index}")
             for index, item in enumerate(replay.window(limit=max(1, len(turn.timeline_events))), 1)
         ]
+        # Eventful turns are authoritative: only an actual PlanCreated or
+        # PlanUpdated event makes a plan belong to this turn. ``turn.plan`` is
+        # the session's latest diagnostic snapshot and may be inherited from
+        # an earlier run, so using it here duplicates stale plans after reload.
+        return items
     items = [TimelineItem(f"{prefix}:user", TimelineKind.USER, text=turn.user_input)]
+    if turn.plan.steps:
+        items.append(
+            TimelineItem(
+                f"{prefix}:plan",
+                TimelineKind.PLAN,
+                plan=turn.plan.model_dump(mode="json"),
+            )
+        )
     assistant_parts: list[str] = []
     tool_number = 0
     tool_positions: dict[str, int] = {}
@@ -253,6 +308,8 @@ def _turn_items(turn: TurnRecord, *, ordinal: int) -> list[TimelineItem]:
                 if isinstance(part, TextPart):
                     assistant_parts.append(part.content)
                 elif isinstance(part, ToolCallPart):
+                    if part.tool_name in _CONTROL_TOOL_NAMES:
+                        continue
                     tool_number += 1
                     items.append(
                         TimelineItem(
@@ -268,6 +325,8 @@ def _turn_items(turn: TurnRecord, *, ordinal: int) -> list[TimelineItem]:
         else:
             for part in message.parts:
                 if not isinstance(part, ToolReturnPart):
+                    continue
+                if part.tool_name in _CONTROL_TOOL_NAMES:
                     continue
                 result = str(part.content)
                 position = tool_positions.get(part.tool_call_id)

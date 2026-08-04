@@ -1,9 +1,12 @@
+import hashlib
 import json
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
 from pydantic_ai.messages import (
     ModelMessage,
+    ModelMessagesTypeAdapter,
     ModelRequest,
     ModelResponse,
     SystemPromptPart,
@@ -11,7 +14,14 @@ from pydantic_ai.messages import (
     UserPromptPart,
 )
 
-from lumen.context import CompactionRecord, ContextSummary
+from lumen.context import (
+    CompactionCheckpointV1,
+    CompactionCheckpointV2,
+    CompactionRecord,
+    ContextSummary,
+    RollingContextState,
+    TranscriptCursor,
+)
 from lumen.events import RunStarted, TextDelta, TimelineEventRecord
 from lumen.plan import PlanState, PlanStep, StepStatus
 from lumen.sessions import SCHEMA_VERSION, SessionCorruptError, SessionRepository
@@ -38,10 +48,10 @@ def test_session_round_trip_preserves_model_messages(tmp_path: Path) -> None:
     assert loaded.full_history == loaded.history
     assert loaded.turns[0].user_input == "hello"
     assert loaded.plan == PlanState()
-    assert SCHEMA_VERSION == 4
+    assert SCHEMA_VERSION == 5
 
 
-def test_session_v4_round_trip_preserves_timeline_events(tmp_path: Path) -> None:
+def test_session_v5_round_trip_preserves_timeline_events(tmp_path: Path) -> None:
     repository = SessionRepository(tmp_path)
     session = repository.create(agent_name="test-agent", model_id="test")
     records = [
@@ -141,7 +151,15 @@ def test_session_persists_plan_diagnostics_and_compaction(tmp_path: Path) -> Non
         failures_and_approvals=[],
         outstanding=[],
     )
-    record = CompactionRecord(summary, [], 5, {"input_tokens": 7})
+    checkpoint = CompactionCheckpointV1(
+        checkpoint_id="cp-one",
+        source_start=0,
+        source_end=5,
+        source_digest="sha256:abc",
+        created_at=datetime.now(UTC),
+    )
+    compacted: list[ModelMessage] = [ModelRequest(parts=[SystemPromptPart(content="Prior summary")])]
+    record = CompactionRecord(summary, compacted, 5, {"input_tokens": 7}, checkpoint)
     new_messages = [ModelResponse(parts=[TextPart(content="ok")])]
 
     repository.append_turn(
@@ -161,6 +179,13 @@ def test_session_persists_plan_diagnostics_and_compaction(tmp_path: Path) -> Non
     assert loaded.turns[0].diagnostics == diagnostics
     assert loaded.turns[0].compaction is not None
     assert loaded.turns[0].compaction["source_message_count"] == 5
+    # V1's active-prefix count is mapped to the absolute raw transcript
+    # boundary available when the record is loaded.
+    assert loaded.latest_compaction_checkpoint == checkpoint.model_copy(
+        update={"source_start": 0, "source_end": 0}
+    )
+    assert loaded.compacted_prefix_length == 1
+    assert loaded.compacted_source_end == 0
 
 
 def test_session_restores_latest_compacted_active_history(tmp_path: Path) -> None:
@@ -210,6 +235,81 @@ def test_session_restores_latest_compacted_active_history(tmp_path: Path) -> Non
     assert loaded.plan == plan
     assert loaded.history == record.active_history + new_messages
     assert loaded.full_history == old_messages + new_messages
+
+
+def test_corrupt_v2_checkpoint_falls_back_to_raw_transcript(tmp_path: Path) -> None:
+    repository = SessionRepository(tmp_path)
+    session = repository.create(agent_name="test", model_id="test")
+    source: list[ModelMessage] = [
+        ModelRequest(parts=[UserPromptPart(content="old question")]),
+        ModelResponse(parts=[TextPart(content="old answer")]),
+    ]
+    summary = ContextSummary(goals=["continue safely"])
+    source_payload = json.dumps(
+        ModelMessagesTypeAdapter.dump_python(source, mode="json"),
+        ensure_ascii=False,
+        sort_keys=True,
+        default=str,
+    )
+    last_payload = json.dumps(
+        ModelMessagesTypeAdapter.dump_python([source[-1]], mode="json"),
+        ensure_ascii=False,
+        sort_keys=True,
+        default=str,
+    )
+    last_digest = hashlib.sha256(b"1:" + last_payload.encode()).hexdigest()[:16]
+    rolling_state = RollingContextState(goals=("continue safely",))
+    checkpoint = CompactionCheckpointV2(
+        checkpoint_id="cp-v2",
+        source_start=0,
+        source_end=2,
+        source_digest=f"sha256:{hashlib.sha256(source_payload.encode()).hexdigest()}",
+        created_at=datetime.now(UTC),
+        source_start_cursor=TranscriptCursor(sequence=0, message_id="session-origin"),
+        source_end_cursor=TranscriptCursor(sequence=2, message_id=f"msg-{last_digest}"),
+        full_history_length=2,
+        rolling_state=rolling_state,
+        state_digest=(
+            f"sha256:{hashlib.sha256(rolling_state.model_dump_json().encode()).hexdigest()}"
+        ),
+    )
+    compacted = [ModelRequest(parts=[SystemPromptPart(content="Prior summary")])]
+    repository.append_turn(
+        session.id,
+        user_input="old",
+        messages=source,
+        approvals=[],
+        usage={},
+        status="completed",
+    )
+    repository.append_turn(
+        session.id,
+        user_input="next",
+        messages=[ModelResponse(parts=[TextPart(content="new answer")])],
+        approvals=[],
+        usage={},
+        status="completed",
+        compaction=CompactionRecord(summary, compacted, 2, {}, checkpoint),
+    )
+    assert repository.load(session.id).latest_compaction_checkpoint == checkpoint
+
+    lines = session.path.read_text(encoding="utf-8").splitlines()
+    changed_projection = json.loads(lines[2])
+    changed_projection["compaction"]["summary"]["goals"] = ["untrusted stale projection"]
+    lines[2] = json.dumps(changed_projection, ensure_ascii=False, separators=(",", ":"))
+    session.path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    restored = repository.load(session.id)
+    assert restored.latest_compaction_summary.goals == ["continue safely"]
+
+    damaged = json.loads(lines[2])
+    damaged["compaction"]["checkpoint"]["source_digest"] = "sha256:damaged"
+    lines[2] = json.dumps(damaged, ensure_ascii=False, separators=(",", ":"))
+    session.path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    recovered = repository.load(session.id)
+    assert recovered.latest_compaction_checkpoint is None
+    assert recovered.history == recovered.full_history
 
 
 def test_session_restores_latest_compaction_summary(tmp_path: Path) -> None:

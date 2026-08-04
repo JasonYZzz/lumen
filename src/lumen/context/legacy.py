@@ -30,9 +30,9 @@ import math
 import warnings
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import asdict, dataclass, field
-from typing import Any
+from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 from pydantic_ai import Agent, UsageLimits
 from pydantic_ai.messages import (
     ModelMessage,
@@ -48,6 +48,7 @@ from pydantic_ai.settings import ModelSettings
 from pydantic_ai.usage import RunUsage
 
 from lumen.config import ContextConfig
+from lumen.context.rendering import render_history_summary
 from lumen.events import (
     ContextCompactionCompleted,
     ContextCompactionFailed,
@@ -57,6 +58,35 @@ from lumen.events import (
 from lumen.plan import PlanState
 
 EventSink = Callable[[RunEvent], Awaitable[None]]
+
+
+class ContextStateChange(BaseModel):
+    """Explicit revocation/supersession applied during rolling-state merge."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    field: Literal[
+        "goals",
+        "constraints",
+        "current_plan",
+        "important_files",
+        "key_facts",
+        "failures_and_approvals",
+        "outstanding",
+        "exact_literals",
+    ]
+    action: Literal["revoke", "supersede"]
+    target: str = Field(min_length=1)
+    replacement: str | None = None
+    reason: str = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def validate_replacement(self) -> ContextStateChange:
+        if self.action == "supersede" and not self.replacement:
+            raise ValueError("supersede state change requires a replacement")
+        if self.action == "revoke" and self.replacement is not None:
+            raise ValueError("revoke state change cannot include a replacement")
+        return self
 
 
 class ContextSummary(BaseModel):
@@ -78,6 +108,75 @@ class ContextSummary(BaseModel):
     key_facts: list[str] = Field(default_factory=list)
     failures_and_approvals: list[str] = Field(default_factory=list)
     outstanding: list[str] = Field(default_factory=list)
+    state_changes: list[ContextStateChange] = Field(default_factory=list)
+
+
+def _stable_union(previous: Sequence[str], current: Sequence[str]) -> list[str]:
+    return list(dict.fromkeys([*previous, *current]))
+
+
+def merge_context_summary(
+    previous: ContextSummary | None,
+    candidate: ContextSummary,
+) -> ContextSummary:
+    """Deterministically protect rolling-state evidence from silent deletion.
+
+    The summarizer may add or supersede state, but absence in a generated
+    response is not evidence of completion or revocation. Protected facts are
+    therefore merged forward; outstanding items disappear only when the same
+    literal appears in ``completed``. This is the local validator/fallback used
+    before a checkpoint can become authoritative.
+    """
+
+    if previous is None:
+        return candidate.model_copy(update={"state_changes": []})
+    merged_fields = {
+        "goals": _stable_union(previous.goals, candidate.goals),
+        "constraints": _stable_union(previous.constraints, candidate.constraints),
+        "current_plan": _stable_union(previous.current_plan, candidate.current_plan),
+        "important_files": _stable_union(previous.important_files, candidate.important_files),
+        "key_facts": _stable_union(previous.key_facts, candidate.key_facts),
+        "failures_and_approvals": _stable_union(
+            previous.failures_and_approvals,
+            candidate.failures_and_approvals,
+        ),
+        "outstanding": _stable_union(previous.outstanding, candidate.outstanding),
+    }
+    for change in candidate.state_changes:
+        field = "key_facts" if change.field == "exact_literals" else change.field
+        values = merged_fields[field]
+        if change.field == "exact_literals":
+            values = [
+                item
+                for item in values
+                if item != change.target and not item.endswith(f": {change.target}")
+            ]
+        else:
+            values = [item for item in values if item != change.target]
+        if change.replacement is not None:
+            values = _stable_union(values, [change.replacement])
+        merged_fields[field] = values
+
+    completed = _stable_union(previous.completed, candidate.completed)
+    outstanding = [
+        item
+        for item in merged_fields["outstanding"]
+        if item not in completed
+    ]
+    return ContextSummary(
+        goals=merged_fields["goals"],
+        constraints=merged_fields["constraints"],
+        completed=completed,
+        current_plan=merged_fields["current_plan"],
+        important_files=merged_fields["important_files"],
+        key_facts=merged_fields["key_facts"],
+        failures_and_approvals=merged_fields["failures_and_approvals"],
+        outstanding=outstanding,
+        # Preserve this delta's explicit change audit in the persisted
+        # compatibility projection. The next rolling merge starts from the V2
+        # checkpoint state, so these operations are not re-applied.
+        state_changes=list(candidate.state_changes),
+    )
 
 
 class ContextBudgetExceeded(ValueError):
@@ -140,6 +239,19 @@ class CompactionRecord:
     summary: ContextSummary
     active_history: list[ModelMessage]
     source_message_count: int
+    usage: dict[str, Any]
+    checkpoint: Any = None
+
+
+@dataclass(frozen=True, slots=True)
+class SummaryTaskState:
+    plan: PlanState
+    diagnostics: tuple[dict[str, Any], ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class SummaryResult:
+    summary: ContextSummary
     usage: dict[str, Any]
 
 
@@ -382,6 +494,22 @@ class ContextManager:
                 stacklevel=2,
             )
 
+    async def summarize(
+        self,
+        delta: Sequence[ModelMessage],
+        previous_state: ContextSummary | None,
+        task_state: SummaryTaskState,
+    ) -> SummaryResult:
+        """Generate and validate one rolling-state delta; no budget decisions."""
+
+        summary, usage = await self._summarize(
+            delta,
+            task_state.plan,
+            task_state.diagnostics,
+            previous_state,
+        )
+        return SummaryResult(merge_context_summary(previous_state, summary), usage)
+
     async def prepare(
         self,
         history: Sequence[ModelMessage],
@@ -395,6 +523,9 @@ class ContextManager:
         instructions_estimate: int = 0,
         tool_schema_estimate: int = 0,
         force_compaction: bool = False,
+        compaction_required: bool | None = None,
+        target_tokens: int | None = None,
+        keep_recent_tokens: int | None = None,
     ) -> PreparedContext:
         """Return the history the next run should use, compacting if needed.
 
@@ -425,7 +556,7 @@ class ContextManager:
         elif current_prompt is not None or instructions_estimate or tool_schema_estimate:
             raise ValueError("pass reservation or legacy reservation arguments, not both")
 
-        if reservation.total_tokens > self.config.soft_token_limit:
+        if compaction_required is None and reservation.total_tokens > self.config.soft_token_limit:
             raise ContextBudgetExceeded(
                 "request footprint exceeds context.soft_token_limit before history is added: "
                 f"{reservation.total_tokens} > {self.config.soft_token_limit} tokens"
@@ -435,12 +566,19 @@ class ContextManager:
             return PreparedContext(history=list(history), compaction=None)
 
         estimate = estimate_message_tokens(history)
-        if not force_compaction and estimate + reservation.total_tokens < self.config.soft_token_limit:
+        if compaction_required is False and not force_compaction:
+            return PreparedContext(history=list(history), compaction=None)
+        if (
+            compaction_required is None
+            and not force_compaction
+            and estimate + reservation.total_tokens < self.config.soft_token_limit
+        ):
             return PreparedContext(history=list(history), compaction=None)
 
         await emit(ContextCompactionStarted(source_message_count=len(history)))
         try:
             summary, summary_usage = await self._summarize(history, plan, diagnostics, previous_summary)
+            summary = merge_context_summary(previous_summary, summary)
         except Exception as error:
             await emit(ContextCompactionFailed(message=str(error)))
             return PreparedContext(history=list(history), compaction=None)
@@ -449,6 +587,8 @@ class ContextManager:
             history,
             summary,
             reservation=reservation,
+            target_tokens=target_tokens,
+            keep_recent_tokens=keep_recent_tokens,
         )
         invariant_errors = validate_active_history(active_history)
         if invariant_errors:
@@ -483,10 +623,13 @@ class ContextManager:
             deps_type=type(None),
             system_prompt=instructions,
             model_settings=ModelSettings(max_tokens=self.config.summary_max_tokens),
-            retries=0,
+            # One structured-output repair attempt. The engine still treats a
+            # second failure as non-authoritative and enters deterministic
+            # degradation/cooldown without advancing a checkpoint.
+            retries=1,
         )
         serialised = self._serialize_for_summary(history)
-        result = await agent.run(serialised, usage_limits=UsageLimits(request_limit=1))
+        result = await agent.run(serialised, usage_limits=UsageLimits(request_limit=2))
         usage: RunUsage = result.usage
         return result.output, asdict(usage)
 
@@ -520,7 +663,10 @@ class ContextManager:
                 "This is an UPDATE. PRESERVE all existing entries from the previous "
                 "summary unless contradicted by the new conversation. ADD new progress, "
                 "decisions, and context. Move completed items from outstanding/current "
-                "into completed."
+                "into completed. Never drop a prior constraint, approval, file, exact "
+                "literal, or fact by omission. If the new conversation explicitly revokes "
+                "or replaces one, add a state_changes entry with its exact prior text, "
+                "action, replacement when superseding, and a short evidence-based reason."
             )
         return base
 
@@ -564,9 +710,14 @@ class ContextManager:
         current_prompt: str | None = None,
         instructions_estimate: int = 0,
         tool_schema_estimate: int = 0,
+        target_tokens: int | None = None,
+        keep_recent_tokens: int | None = None,
     ) -> list[ModelMessage]:
-        summary_text = self._format_summary(summary)
-        prefix = ModelRequest(parts=[SystemPromptPart(content=summary_text)])
+        summary_text = render_history_summary(self._format_summary(summary))
+        prefix = ModelRequest(
+            parts=[SystemPromptPart(content=summary_text)],
+            metadata={"lumen_context_zone": "history_summary", "lumen_summary_version": 1},
+        )
         # Reserve tokens for the upcoming request's own footprint so the
         # compacted window + new prompt + instructions + tool schema respects
         # the budget. Without this, a large new prompt could push the total
@@ -583,8 +734,10 @@ class ContextManager:
                 tool_schema_tokens=max(0, tool_schema_estimate),
             )
         summary_tokens = estimate_message_tokens([prefix])
-        available = self.config.soft_token_limit - reservation.total_tokens - summary_tokens
-        keep_tokens = max(0, min(self.config.keep_recent_tokens, available))
+        budget_limit = target_tokens or self.config.soft_token_limit
+        available = budget_limit - reservation.total_tokens - summary_tokens
+        recent_cap = keep_recent_tokens or self.config.keep_recent_tokens
+        keep_tokens = max(0, min(recent_cap, available))
         # Token-budgeted cut: keeps a predictable-size recent window regardless
         # of turn granularity, and never orphans a tool result from its call.
         recent = retain_recent_tokens(history, keep_tokens)
@@ -615,9 +768,12 @@ __all__ = [
     "ContextConfig",
     "ContextManager",
     "ContextReservation",
+    "ContextStateChange",
     "ContextSummary",
     "PreparedContext",
     "RequestBudgetEstimator",
+    "SummaryResult",
+    "SummaryTaskState",
     "estimate_message_tokens",
     "retain_recent_tokens",
     "retain_recent_turns",

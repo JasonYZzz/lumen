@@ -109,3 +109,26 @@ def test_tool_risks_read_is_auto_approved_in_auto_mode(tmp_path: Path) -> None:
         policy.decide("remote_search", undeclared_bundle.risk_for("remote_search"))
         is PermissionDecision.CONFIRM
     )
+
+
+def test_mcp_tools_are_deferred_by_default_with_explicit_always_load_exceptions() -> None:
+    config = McpServerConfig(
+        transport="streamable_http",
+        url="https://example.test/mcp",
+        always_load_tools=["status"],
+    )
+    bundle = build_mcp_toolset("remote", config, PermissionPolicy(PermissionsConfig()), timeout=20)
+
+    assert bundle.is_deferred("remote_search") is True
+    assert bundle.is_deferred("remote_status") is False
+
+
+def test_mcp_deferred_loading_can_be_disabled_per_server() -> None:
+    config = McpServerConfig(
+        transport="streamable_http",
+        url="https://example.test/mcp",
+        defer_tools=False,
+    )
+    bundle = build_mcp_toolset("remote", config, PermissionPolicy(PermissionsConfig()), timeout=20)
+
+    assert bundle.is_deferred("remote_search") is False

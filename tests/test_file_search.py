@@ -65,6 +65,16 @@ def test_git_directory_is_excluded(workspace: Path) -> None:
     assert search_files("@config", workspace) == []
 
 
+def test_symlink_targets_outside_workspace_are_not_suggested(tmp_path: Path) -> None:
+    outside = tmp_path.parent / f"{tmp_path.name}-outside"
+    outside.mkdir()
+    (outside / "secret.txt").write_text("secret", encoding="utf-8")
+    (tmp_path / "external").symlink_to(outside, target_is_directory=True)
+
+    assert search_files("@secret", tmp_path) == []
+    assert search_files("@external/", tmp_path) == []
+
+
 def test_empty_query_returns_everything_sorted(workspace: Path) -> None:
     """``@`` alone lists the whole tree (directories first by score)."""
 

@@ -3,6 +3,7 @@ from pathlib import Path
 import pytest
 
 from lumen.config import AppConfig, ConfigLoadError, load_config
+from lumen.context import resolve_context_policy
 
 
 def write_config(path: Path, body: str) -> Path:
@@ -346,10 +347,27 @@ def test_repo_example_config_loads_without_drift(monkeypatch: pytest.MonkeyPatch
     assert example.is_file(), f"agent.example.yaml not found at {example}"
     # The example references real provider env vars; stub them so schema
     # validation is what's under test, not key availability.
-    for name in ("DEEPSEEK_API_KEY", "DASHSCOPE_API_KEY", "TYC_TOKEN", "EXA_API_KEY"):
+    for name in (
+        "DEEPSEEK_API_KEY",
+        "DASHSCOPE_API_KEY",
+        "KIMI_API_KEY",
+        "OPENAI_API_KEY",
+        "TYC_TOKEN",
+        "EXA_API_KEY",
+    ):
         monkeypatch.setenv(name, "stub")
     config = load_config(example)
     assert config.version == 1
+    # Prove that the example's real model fields survive YAML validation and
+    # feed the same resolved policy used by ContextEngine at startup.
+    flash = config.agent.models["deepseek-v4-flash"]
+    assert flash.context.profile == "deepseek-v4-flash"
+    assert flash.settings["max_tokens"] == 65_536
+    policy = resolve_context_policy(flash, config.context)
+    assert policy.profile_id == "deepseek-v4-flash"
+    assert policy.context_window_tokens == 1_000_000
+    assert policy.architectural_max_output_tokens == 384_000
+    assert policy.output_reserve_tokens == 65_536
     # The example demonstrates tool_risks on optional remote servers.
     tyc = config.mcp_servers["tyc-mcp"]
     assert tyc.tool_risks.get("search_companies") == "read"

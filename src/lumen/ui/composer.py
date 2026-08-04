@@ -368,7 +368,7 @@ class PromptEditor(TextArea):
         cursor and check whether it begins with ``@`` or ``/``.
 
         Both ``@`` and ``/`` trigger at any token boundary (after whitespace
-        or at line start) — not just at column 0. This makes ``/quit`` work
+        or at line start) — not just at column 0. This makes ``/exit`` work
         mid-line (e.g. after indentation) and keeps ``@`` and ``/`` behaviour
         symmetric.
         """

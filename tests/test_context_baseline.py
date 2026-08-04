@@ -19,6 +19,7 @@ Two kinds of assertion:
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from pathlib import Path
 
 import context_fixtures as cf
@@ -96,10 +97,12 @@ def test_legacy_session_fixtures_resume_without_rewrite(tmp_path: Path, version:
     [cf.load_long_shell_history, cf.load_chinese_history, cf.load_tool_error_history],
     ids=["long_shell", "chinese", "tool_error"],
 )
-def test_retain_recent_always_keeps_newest_and_stays_valid(loader: object) -> None:
+def test_retain_recent_always_keeps_newest_and_stays_valid(
+    loader: Callable[[], list[ModelMessage]],
+) -> None:
     """The safe cut never drops the newest message and never breaks pairing."""
 
-    messages = loader()  # type: ignore[operator]
+    messages = loader()
     kept = retain_recent_tokens(messages, keep_tokens=2000)
     assert kept, "retained window must not be empty"
     assert kept[-1] is messages[-1]
@@ -111,10 +114,12 @@ def test_retain_recent_always_keeps_newest_and_stays_valid(loader: object) -> No
     [cf.load_long_shell_history, cf.load_chinese_history, cf.load_tool_error_history],
     ids=["long_shell", "chinese", "tool_error"],
 )
-async def test_compaction_produces_valid_history_under_pressure(loader: object) -> None:
+async def test_compaction_produces_valid_history_under_pressure(
+    loader: Callable[[], list[ModelMessage]],
+) -> None:
     """Under a tiny soft limit compaction triggers and the result is still valid."""
 
-    messages = loader()  # type: ignore[operator]
+    messages = loader()
     manager = ContextManager(
         ContextConfig(enabled=True, soft_token_limit=50, keep_recent_tokens=2000, summary_max_tokens=2000),
         model=_summary_model(),
@@ -162,10 +167,10 @@ _TOKEN_BASELINE: dict[str, dict[str, int]] = {
     ],
     ids=["long_shell", "chinese", "tool_error"],
 )
-def test_token_estimate_baseline(loader: object, expected: dict[str, int]) -> None:
+def test_token_estimate_baseline(loader: Callable[[], list[ModelMessage]], expected: dict[str, int]) -> None:
     """Lock the byte/4 token estimate for each fixture (updated in M2)."""
 
-    messages = loader()  # type: ignore[operator]
+    messages = loader()
     assert estimate_message_tokens(messages) == expected["full_tokens"]
     kept = retain_recent_tokens(messages, keep_tokens=2000)
     assert estimate_message_tokens(kept) == expected["retained_tokens_2k"]

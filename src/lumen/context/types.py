@@ -1,4 +1,4 @@
-"""Data contracts for the structured context engine (M0).
+"""Stable contracts for context budgeting, provenance, and provider preflight.
 
 These are the frozen, round-trip-stable domain types the context engine v2
 will be built on:
@@ -10,8 +10,8 @@ will be built on:
   (plan §8, §14.1).
 * :class:`ToolReceipt` - the content-addressed receipt that replaces bulky tool
   outputs in active history (plan §9.3).
-* :class:`CompactionCheckpointV1` - the versioned, source-ranged, exact-literal
-  checkpoint that supersedes the free-text ``ContextSummary`` (plan §10).
+* :class:`CompactionCheckpointV2` - the cursor-validated checkpoint whose
+  rolling state supersedes the free-text ``ContextSummary`` as durable truth.
 
 This module is deliberately contract-only: it defines the types and their
 JSON-schema validation, but wires nothing into the running engine yet. M1
@@ -60,6 +60,7 @@ class ContextZone(StrEnum):
     MEMORY_INDEX = "memory_index"
     CAPABILITY_CATALOG = "capability_catalog"
     TASK_STATE = "task_state"
+    ACTIVE_SKILLS = "active_skills"
     HISTORY_SUMMARY = "history_summary"
     RECENT_HISTORY = "recent_history"
     RECALLED_MEMORY = "recalled_memory"
@@ -87,6 +88,7 @@ class TrustLevel(StrEnum):
     POLICY = "policy"
     DURABLE = "durable"
     RECALLED = "recalled"
+    USER = "user"
     UNTRUSTED_EXTERNAL = "untrusted_external"
 
 
@@ -183,8 +185,8 @@ class ContextBlock(_Contract):
 class ModelContextSpec(_Contract):
     """Resolved per-model context capabilities (plan §8.1).
 
-    Resolution order (handled in M2, not here): explicit model config >
-    provider/model profile > known-model table > conservative default. This type
+    Resolution order: explicit model config > explicit profile > exact model
+    slug alias > conservative default. This type
     is the *result* of that resolution; ``tokenizer`` identifies which
     :class:`TokenCounter` adapter applies.
     """
@@ -229,6 +231,29 @@ class ContextBudgetReport(_Contract):
     estimated: bool = False
     zones: tuple[ZoneUsage, ...] = Field(default_factory=tuple)
     pressure: tuple[PressureItem, ...] = Field(default_factory=tuple)
+
+
+class ProviderRequestSnapshot(_Contract):
+    """Provider-bound request footprint observed immediately before a model call.
+
+    The count includes Lumen-visible instructions, messages, function-tool
+    schemas, and the reserved output budget. Provider-private framing remains
+    outside this estimate and is therefore never presented as an exact billable
+    token count.
+    """
+
+    session_id: str
+    model_step: int = Field(ge=0)
+    instructions_tokens: int = Field(ge=0)
+    messages_tokens: int = Field(ge=0)
+    tools_tokens: int = Field(ge=0)
+    output_reserve_tokens: int = Field(ge=0)
+    total_tokens: int = Field(ge=0)
+    context_window_tokens: int = Field(gt=0)
+    hard_limit_tokens: int = Field(gt=0)
+    visible_tools: tuple[str, ...] = Field(default_factory=tuple)
+    visible_tool_digest: str
+    estimated: bool = True
 
 
 # --------------------------------------------------------------------------- #
@@ -339,12 +364,12 @@ class MemoryCandidateRef(_Contract):
 class CompactionCheckpointV1(_Contract):
     """Versioned, source-ranged compaction checkpoint (plan §10.1).
 
-    Replaces the eight free-text lists of :class:`ContextSummary` with a
-    structured, source-tracked, exact-literal-preserving snapshot. The
-    ``source_start``/``source_end`` range is a *continuous, non-overlapping*
-    slice of the transcript event sequence; a new checkpoint references its
-    ``parent_checkpoint_id`` so the delta to summarise is always well-defined
-    (plan §9.2 step 5, §10.2).
+    The current engine populates checkpoint identity, parent, message range,
+    digest, focus and objective while retaining :class:`ContextSummary` as the
+    summary payload. The optional structured sections stay in schema V1 for
+    persisted-record compatibility but remain empty until event provenance and
+    exact-literal extraction land. Persisted event-sequence ranges remain an
+    M8 migration.
     """
 
     schema_version: Literal[1] = 1
@@ -373,7 +398,7 @@ class CompactionCheckpointV1(_Contract):
 
     @model_validator(mode="after")
     def _validate_source_range(self) -> CompactionCheckpointV1:
-        """A checkpoint covers a continuous, non-negative event range."""
+        """A checkpoint covers a continuous, non-negative source range."""
 
         if self.source_end < self.source_start:
             raise ValueError(
@@ -382,9 +407,57 @@ class CompactionCheckpointV1(_Contract):
         return self
 
 
+class TranscriptCursor(_Contract):
+    """Absolute boundary in the append-only raw transcript.
+
+    ``sequence`` is an exclusive message ordinal. ``message_id`` identifies
+    the message immediately before that boundary (or the session origin), so a
+    cursor cannot be silently reused against a different transcript.
+    """
+
+    sequence: int = Field(ge=0)
+    message_id: str
+
+
+class RollingContextState(_Contract):
+    """Authoritative structured state carried by a V2 checkpoint."""
+
+    goals: tuple[str, ...] = Field(default_factory=tuple)
+    constraints: tuple[str, ...] = Field(default_factory=tuple)
+    completed: tuple[str, ...] = Field(default_factory=tuple)
+    current_plan: tuple[str, ...] = Field(default_factory=tuple)
+    important_files: tuple[str, ...] = Field(default_factory=tuple)
+    key_facts: tuple[str, ...] = Field(default_factory=tuple)
+    failures_and_approvals: tuple[str, ...] = Field(default_factory=tuple)
+    outstanding: tuple[str, ...] = Field(default_factory=tuple)
+    exact_literals: tuple[ExactLiteral, ...] = Field(default_factory=tuple)
+
+
+class CompactionCheckpointV2(CompactionCheckpointV1):
+    """Checkpoint whose authoritative delta boundary is a transcript cursor."""
+
+    schema_version: Literal[2] = 2
+    source_start_cursor: TranscriptCursor
+    source_end_cursor: TranscriptCursor
+    full_history_length: int = Field(ge=0)
+    rolling_state: RollingContextState
+    state_digest: str
+
+    @model_validator(mode="after")
+    def _validate_cursors(self) -> CompactionCheckpointV2:
+        if self.source_start_cursor.sequence != self.source_start:
+            raise ValueError("source_start must match source_start_cursor.sequence")
+        if self.source_end_cursor.sequence != self.source_end:
+            raise ValueError("source_end must match source_end_cursor.sequence")
+        if self.full_history_length != self.source_end:
+            raise ValueError("full_history_length must equal the compacted source end")
+        return self
+
+
 __all__ = [
     "CheckpointItem",
     "CompactionCheckpointV1",
+    "CompactionCheckpointV2",
     "ContextBlock",
     "ContextBudgetReport",
     "ContextPayload",
@@ -398,9 +471,12 @@ __all__ = [
     "ModelContextSpec",
     "ObservationState",
     "PressureItem",
+    "ProviderRequestSnapshot",
     "RetentionPolicy",
+    "RollingContextState",
     "SourceKind",
     "ToolReceipt",
+    "TranscriptCursor",
     "TrustLevel",
     "ZoneUsage",
 ]

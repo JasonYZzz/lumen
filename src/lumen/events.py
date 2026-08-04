@@ -100,6 +100,15 @@ class ToolApprovalPending:
 
 
 @dataclass(frozen=True, slots=True)
+class ToolApprovalBatchPending:
+    """One model turn produced several approval-gated tool calls."""
+
+    batch_id: str
+    requests: tuple[ApprovalRequest, ...]
+    risk_summary: str
+
+
+@dataclass(frozen=True, slots=True)
 class ToolApprovalResolved:
     call_id: str
     approved: bool
@@ -156,6 +165,21 @@ class RunCompleted:
 
 
 @dataclass(frozen=True, slots=True)
+class ClarificationRequested:
+    question_id: str
+    question: str
+    choices: tuple[str, ...] = ()
+    related_plan_step: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class RunWaitingForUser:
+    question_id: str
+    question: str
+    choices: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
 class RunFailed:
     message: str
 
@@ -197,6 +221,7 @@ RunEvent: TypeAlias = (
     | ToolCallStarted
     | ToolCallFinished
     | ToolApprovalPending
+    | ToolApprovalBatchPending
     | ToolApprovalResolved
     | ApprovalRequested
     | UsageUpdated
@@ -204,6 +229,8 @@ RunEvent: TypeAlias = (
     | ContextCompactionCompleted
     | ContextCompactionFailed
     | RunCompleted
+    | ClarificationRequested
+    | RunWaitingForUser
     | RunFailed
     | RunCancelled
     | InputQueued
@@ -243,6 +270,8 @@ class TimelineEventRecord:
         data = dict(self.data)
         if event_type in {PlanCreated, PlanUpdated}:
             data["plan"] = PlanState.model_validate(data["plan"])
+        elif event_type is ToolApprovalBatchPending:
+            data["requests"] = tuple(ApprovalRequest(**item) for item in data["requests"])
         elif event_type is ApprovalRequested:
             data["request"] = ApprovalRequest(**data["request"])
         return event_type(**data)
@@ -274,6 +303,7 @@ _EVENT_TYPES: dict[str, type[Any]] = {
         ToolCallStarted,
         ToolCallFinished,
         ToolApprovalPending,
+        ToolApprovalBatchPending,
         ToolApprovalResolved,
         ApprovalRequested,
         UsageUpdated,
@@ -281,6 +311,8 @@ _EVENT_TYPES: dict[str, type[Any]] = {
         ContextCompactionCompleted,
         ContextCompactionFailed,
         RunCompleted,
+        ClarificationRequested,
+        RunWaitingForUser,
         RunFailed,
         RunCancelled,
         InputQueued,

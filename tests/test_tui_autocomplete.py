@@ -10,6 +10,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from rich.text import Text
+
 from lumen.config import load_config
 from lumen.resources import ResourceManager
 from lumen.ui.app import LumenApp, PromptEditor
@@ -140,7 +142,7 @@ async def test_slash_trigger_opens_command_dropdown(tmp_path: Path) -> None:
         # Built-in commands are listed.
         assert "/help" in labels
         assert "/model" in labels
-        assert "/quit" in labels
+        assert "/exit" in labels
 
 
 async def test_slash_prefix_filters_commands(tmp_path: Path) -> None:
@@ -165,14 +167,22 @@ async def test_single_slash_match_has_visible_content_row(tmp_path: Path) -> Non
     app = _make_app(tmp_path)
     async with app.run_test(size=(120, 30)) as pilot:
         editor = await _focus_editor(pilot)
-        for ch in "/qu":
+        for ch in "/ex":
             await pilot.press(ch)
         await pilot.pause()
         dropdown = app.query_one(CompletionDropdown)
 
-        assert [suggestion.label for suggestion in dropdown.suggestions] == ["/quit"]
+        assert [suggestion.label for suggestion in dropdown.suggestions] == ["/exit"]
         assert dropdown.region.height >= 3
-        assert dropdown.region.width >= int(editor.region.width * 0.75)
+        assert dropdown.region.x == editor.region.x
+        assert dropdown.region.width == editor.region.width
+        assert dropdown.border_title == "Commands"
+        assert "Enter select" in str(dropdown.border_subtitle)
+        assert dropdown.styles.border_left[0] == "round"
+
+        prompt = dropdown.get_option_at_index(0).prompt
+        assert isinstance(prompt, Text)
+        assert "bold #F0A24A" in {str(span.style) for span in prompt.spans}
 
 
 async def test_model_and_mode_completions_show_current_values(tmp_path: Path) -> None:
@@ -432,7 +442,7 @@ async def test_slash_triggers_after_whitespace(tmp_path: Path) -> None:
     """``/`` triggers completion at any token boundary, not just col 0.
 
     Regression for the old ``idx < 0`` constraint that restricted slash
-    completion to column 0. Now ``/quit`` typed after whitespace (or even
+    completion to column 0. Now ``/exit`` typed after whitespace (or even
     mid-line after other text) should still pop the command dropdown,
     matching ``@`` behaviour.
     """
@@ -440,19 +450,19 @@ async def test_slash_triggers_after_whitespace(tmp_path: Path) -> None:
     app = _make_app(tmp_path)
     async with app.run_test(size=(100, 30)) as pilot:
         await _focus_editor(pilot)
-        # Type some text, then a space, then /q — / should still trigger.
-        for ch in "run /q":
+        # Type some text, then a space, then /e — / should still trigger.
+        for ch in "run /e":
             await pilot.press(ch)
         await pilot.pause()
         await pilot.pause()
         dropdown = app.query_one(CompletionDropdown)
         assert dropdown.is_open
         labels = [s.label for s in dropdown.suggestions]
-        assert "/quit" in labels
+        assert "/exit" in labels
 
 
 async def test_slash_enter_accepts_completion_not_literal(tmp_path: Path) -> None:
-    """``/q`` + Enter accepts the ``/quit`` completion, doesn't submit ``/q``.
+    """``/e`` + Enter accepts the ``/exit`` completion, doesn't submit ``/e``.
 
     This is the core race-fix test: the old code checked the asynchronously-
     updated ``dropdown_open`` flag, which was often still False when Enter
@@ -469,20 +479,20 @@ async def test_slash_enter_accepts_completion_not_literal(tmp_path: Path) -> Non
     async with app.run_test(size=(100, 30)) as pilot:
         editor = await _focus_editor(pilot)
         app.handle_input = capture  # type: ignore[assignment]
-        # Type /q then immediately press Enter — simulating fast typing.
-        for ch in "/q":
+        # Type /e then immediately press Enter — simulating fast typing.
+        for ch in "/e":
             await pilot.press(ch)
         await pilot.pause()
-        # Dropdown should be open with /quit highlighted.
+        # Dropdown should be open with /exit highlighted.
         dropdown = app.query_one(CompletionDropdown)
         assert dropdown.is_open
-        assert "/quit" in [s.label for s in dropdown.suggestions]
+        assert "/exit" in [s.label for s in dropdown.suggestions]
         # Press Enter to accept the completion.
         await pilot.press("enter")
         await pilot.pause()
-        # The editor should now contain /quit (the accepted completion),
-        # NOT have been submitted as a literal /q command.
-        assert editor.text.startswith("/quit")
+        # The editor should now contain /exit (the accepted completion),
+        # NOT have been submitted as a literal /e command.
+        assert editor.text.startswith("/exit")
         # And no command was run (Enter accepted the completion, not submitted).
         assert commands_run == []
 

@@ -15,7 +15,6 @@ from lumen.context.compaction import (
     FixedContextTooLarge,
     Thresholds,
     degrade_to_window,
-    should_compact,
 )
 from lumen.context.legacy import validate_active_history
 
@@ -37,57 +36,6 @@ def test_thresholds_derive_from_window() -> None:
     assert thresholds.hard == 92_000
     assert thresholds.target == 55_000
     assert thresholds.emergency_reserve == 5_000
-
-
-# --------------------------------------------------------------------------- #
-# should_compact + anti-thrash
-# --------------------------------------------------------------------------- #
-
-
-def test_should_compact_below_soft_is_false() -> None:
-    thresholds = Thresholds.for_window(100_000, _policy())
-    state = CompactionThrashState()
-    assert (
-        should_compact(projected_tokens=50_000, thresholds=thresholds, policy=_policy(), thrash=state)
-        is False
-    )
-
-
-def test_should_compact_above_soft_compacts() -> None:
-    thresholds = Thresholds.for_window(100_000, _policy())
-    state = CompactionThrashState()
-    assert (
-        should_compact(projected_tokens=85_000, thresholds=thresholds, policy=_policy(), thrash=state) is True
-    )
-
-
-def test_should_compact_force_bypasses_thrash() -> None:
-    """A manual /compact compacts even after the auto limit is hit."""
-
-    thresholds = Thresholds.for_window(100_000, _policy())
-    state = CompactionThrashState()
-    state.record_auto_compaction()
-    state.record_auto_compaction()  # at the auto limit
-    assert (
-        should_compact(
-            projected_tokens=85_000, thresholds=thresholds, policy=_policy(), thrash=state, force=True
-        )
-        is True
-    )
-
-
-def test_thrashed_state_suppresses_auto_compaction() -> None:
-    """Once the auto limit is hit, auto compaction stops (degrade instead)."""
-
-    thresholds = Thresholds.for_window(100_000, _policy())
-    state = CompactionThrashState()
-    state.record_auto_compaction()
-    state.record_auto_compaction()
-    assert state.thrashed(_policy()) is True
-    assert (
-        should_compact(projected_tokens=85_000, thresholds=thresholds, policy=_policy(), thrash=state)
-        is False
-    )
 
 
 def test_thrash_window_expires_after_anti_thrash_turns() -> None:

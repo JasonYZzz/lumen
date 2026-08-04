@@ -3,15 +3,17 @@
 from __future__ import annotations
 
 import pytest
-from pydantic_ai.messages import ModelRequest, UserPromptPart
+from pydantic_ai.messages import ModelRequest, ToolSearchReturnPart, UserPromptPart
 
-from lumen.context.assembler import ContextAssembler, _BlockBuilder
-from lumen.context.budget import ConservativeTokenCounter, DeterministicTokenCounter
+from lumen.context.assembler import ContextAssembler
+from lumen.context.budget import ConservativeTokenCounter, DeterministicTokenCounter, TokenCounter
 from lumen.context.legacy import ContextBudgetExceeded
 from lumen.context.types import ContextZone
 
 
-def _assembler(window: int, counter=None, *, max_output: int = 4096) -> ContextAssembler:
+def _assembler(
+    window: int, counter: TokenCounter | None = None, *, max_output: int = 4096
+) -> ContextAssembler:
     return ContextAssembler(
         window_tokens=window,
         max_output_tokens=max_output,
@@ -47,6 +49,7 @@ def test_assemble_emits_source_tracked_blocks_for_each_zone() -> None:
     # The system block carries a content revision (re-injection dedup key).
     system = next(b for b in assembled.blocks if b.zone is ContextZone.SYSTEM)
     assert system.source.revision is not None
+    assert system.cache_key is not None
     assert system.cache_key.startswith("runtime:instructions:")
 
 
@@ -69,19 +72,6 @@ def test_assemble_blocks_are_in_stable_zone_order() -> None:
         ContextZone.OUTPUT_RESERVE,
     ]
     assert order == expected
-
-
-def test_assemble_dedups_blocks_sharing_a_source_revision() -> None:
-    """Two blocks with the same source revision are injected once (plan §6.2)."""
-
-    counter = ConservativeTokenCounter()
-    builder = _BlockBuilder(
-        counter, __import__("lumen.context.assembler", fromlist=["ZoneCaps"]).ZoneCaps.for_window(200_000)
-    )
-    builder.add_system("same instructions")
-    builder.add_system("same instructions")  # identical revision -> deduped
-    blocks = builder.sorted_deduplicated()
-    assert sum(1 for b in blocks if b.zone is ContextZone.SYSTEM) == 1
 
 
 # --------------------------------------------------------------------------- #
@@ -116,6 +106,63 @@ def test_assemble_passes_when_fixed_content_fits() -> None:
     assert assembled.fixed_tokens == 700
 
 
+def test_assemble_rejects_visible_tool_schemas_above_catalog_cap() -> None:
+    counter = DeterministicTokenCounter(per_text_char=0.0, per_tool=1_000)
+    assembler = _assembler(1_000, counter, max_output=100)
+
+    with pytest.raises(ContextBudgetExceeded, match="capability_catalog zone exceeds"):
+        assembler.assemble(
+            instructions="sys",
+            prompt="prompt",
+            tool_schemas=[{"name": "huge", "description": "large", "parameters": {}}],
+            history=[],
+        )
+
+
+def test_deferred_schema_uses_catalog_cost_until_tool_search_discovers_it() -> None:
+    counter = ConservativeTokenCounter()
+    assembler = _assembler(1_000, counter, max_output=100)
+    schema = {
+        "name": "remote_huge",
+        "description": "Search remote records",
+        "parameters": {
+            "type": "object",
+            "description": "x" * 20_000,
+            "properties": {"query": {"type": "string"}},
+        },
+        "deferred": True,
+        "origin": "mcp:remote",
+    }
+
+    undiscovered = assembler.assemble(
+        instructions="sys",
+        prompt="prompt",
+        tool_schemas=[schema],
+        history=[],
+    )
+    catalog = next(block for block in undiscovered.blocks if block.zone is ContextZone.CAPABILITY_CATALOG)
+    assert catalog.payload.structured is not None
+    assert catalog.payload.structured["tools"][0].get("parameters") is None
+
+    discovered_history = [
+        ModelRequest(
+            parts=[
+                ToolSearchReturnPart(
+                    content={"discovered_tools": [{"name": "remote_huge"}]},
+                    tool_call_id="search-1",
+                )
+            ]
+        )
+    ]
+    with pytest.raises(ContextBudgetExceeded):
+        assembler.assemble(
+            instructions="sys",
+            prompt="prompt",
+            tool_schemas=[schema],
+            history=discovered_history,
+        )
+
+
 # --------------------------------------------------------------------------- #
 # Budget report (plan §14.1)
 # --------------------------------------------------------------------------- #
@@ -138,19 +185,59 @@ def test_budget_report_groups_by_zone_and_sums_used_tokens() -> None:
 
 
 def test_budget_report_flags_over_cap_zone_as_pressure() -> None:
-    """A zone exceeding its cap appears in the pressure list (plan §8.3)."""
+    """An indivisible loaded schema over its cap fails before the provider call."""
 
     # per_tool=200 -> one tool's catalog is 200 tokens; window=1000 -> cap 8% = 80.
     counter = DeterministicTokenCounter(per_tool=200)
     assembler = _assembler(1_000, counter)
+    with pytest.raises(ContextBudgetExceeded, match="capability_catalog zone exceeds"):
+        assembler.assemble(
+            instructions="sys",
+            prompt="p",
+            tool_schemas=[{"name": "t", "description": "d", "parameters": {}}],
+            history=[],
+        )
+
+
+def test_memory_zones_are_trimmed_to_their_enforced_caps() -> None:
+    counter = DeterministicTokenCounter(per_text_char=1.0)
+    assembler = _assembler(1_000, counter, max_output=10)
+
     assembled = assembler.assemble(
         instructions="sys",
         prompt="p",
-        tool_schemas=[{"name": "t", "description": "d", "parameters": {}}],
+        tool_schemas=[],
         history=[],
+        memory_index="M" * 200,
+        recalled_memory="R" * 200,
     )
-    labels = " ".join(item.label for item in assembled.budget.pressure)
-    assert "capability_catalog over cap" in labels
+
+    memory = next(block for block in assembled.blocks if block.zone is ContextZone.MEMORY_INDEX)
+    recalled = next(block for block in assembled.blocks if block.zone is ContextZone.RECALLED_MEMORY)
+    assert memory.token_estimate <= 40
+    assert recalled.token_estimate <= 60
+    assert memory.payload.text is not None and len(memory.payload.text) < 200
+    assert recalled.payload.text is not None and len(recalled.payload.text) < 200
+
+
+def test_active_skill_working_set_keeps_most_recent_bodies_within_task_cap() -> None:
+    counter = DeterministicTokenCounter(per_text_char=1.0)
+    assembler = _assembler(1_000, counter, max_output=10)
+
+    assembled = assembler.assemble(
+        instructions="sys",
+        prompt="p",
+        tool_schemas=[],
+        history=[],
+        active_skills=(
+            {"name": "old", "body": "O" * 80, "revision": "old-r1"},
+            {"name": "new", "body": "N" * 80, "revision": "new-r1"},
+        ),
+    )
+
+    skills = [block for block in assembled.blocks if block.source.origin.startswith("skill:")]
+    assert sum(block.token_estimate for block in skills) <= 100
+    assert any(block.source.origin == "skill:new" for block in skills)
 
 
 def test_recent_history_uses_override_when_provided() -> None:

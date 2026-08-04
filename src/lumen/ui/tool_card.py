@@ -9,7 +9,6 @@ and follows the same vertical arrow-key vocabulary.
 
 from __future__ import annotations
 
-import difflib
 import json
 from typing import Any, ClassVar, cast
 
@@ -20,6 +19,8 @@ from textual.message import Message
 from textual.widgets import Static
 
 from lumen.events import ToolApprovalPending
+from lumen.ui.diff_view import style_diff_lines, unified_diff_lines
+from lumen.ui.themes import theme_color
 
 _STATUS_GLYPHS = {
     "running": "●",
@@ -48,31 +49,23 @@ class ToolCard(Vertical):
     DEFAULT_CSS = """
     ToolCard {
         height: auto;
-        margin: 1 2;
-        padding: 0 1;
-        border: round $primary 20%;
-        background: $surface 40%;
+        margin: 1 1;
+        padding: 0 1 0 1;
+        background: $background;
     }
-    /* Error state: red border to signal failure at a glance. */
     ToolCard.is-error {
-        border: round $error 60%;
         background: $error 5%;
     }
-    /* Pending approval: amber border + subtle bg to draw attention. */
     ToolCard.is-pending {
-        border: round $warning 60%;
         background: $warning 5%;
     }
-    /* Header: tool name in accent, bold while running for liveliness. */
-    .tool-header { text-style: bold; color: $accent; }
-    /* Args block: muted, indented, code-like feel (no text-style). */
+    .tool-header { color: $text; }
     .tool-args {
         color: $text-muted;
-        padding: 0 1;
-        background: $surface 80%;
+        padding: 0 2;
+        background: $background;
     }
-    /* Result: default text colour, indented to align with args. */
-    .tool-result { padding: 0 1; color: $text; }
+    .tool-result { padding: 0 2; color: $text-muted; }
     .tool-result.is-error { color: $error; }
     /* Approval row: amber, bold to draw the eye to the pending decision. */
     .tool-approval {
@@ -244,7 +237,10 @@ class ToolCard(Vertical):
 
         self._status = "pending"
         self._args = request.args
-        self._compact = False
+        # The stable composer-adjacent ApprovalPanel owns the full preview.
+        # Keep only a one-line audit marker in the timeline to avoid rendering
+        # the same command or file content twice.
+        self._compact = True
         self.add_class("is-pending")
         self._refresh_header()
         self._refresh_body()
@@ -337,16 +333,31 @@ class ToolCard(Vertical):
         if self._exit_code is not None:
             meta_bits.append(f"exit={self._exit_code}")
         meta = " · ".join(meta_bits)
-        header = Text(f"{glyph} ")
-        header.append(self.tool_name, style="bold")
+        tool_color = self._theme_variable("tool", "#C7ACE8")
+        glyph_token = {
+            "ok": "success",
+            "approved": "success",
+            "error": "error",
+            "denied": "error",
+            "pending": "warning",
+        }.get(self._status, "tool")
+        glyph_color = self._theme_variable(glyph_token, tool_color)
+        meta_color = self._theme_variable("activity-meta", "#948A80")
+        header = Text(f"{glyph} ", style=f"bold {glyph_color}")
+        header.append(self.tool_name, style=f"bold {tool_color}")
         if meta:
-            header.append(f"  ({meta})", style="dim")
+            header.append(f"  ({meta})", style=meta_color)
         self._header.update(header)
+
+    def _theme_variable(self, token: str, fallback: str) -> str:
+        return theme_color(cast(App[object], self.app), token, fallback)  # type: ignore[reportUnknownMemberType]
 
     def _refresh_body(self) -> None:
         if self._args is None or self._compact:
             self._body.update("")
+            self._body.display = False
             return
+        self._body.display = True
         # edit_file: render a find -> replace diff instead of raw JSON args.
         # A diff communicates the change far more compactly than dumping both
         # strings, and gives the Claude-Code "see exactly what changed"
@@ -378,19 +389,13 @@ class ToolCard(Vertical):
     def _render_edit_diff(self, find: str, replace: str) -> Text:
         """Render a compact line-level diff of edit_file's find -> replace.
 
-        Uses stdlib :mod:`difflib` (no new dependency). Removed lines are red,
-        added lines green, context and ``@@`` hunk markers dim - the universal
-        diff convention. Collapsed state shows a one-line change summary plus a
-        preview of the first changed line; expanded shows the full unified diff
-        so the user can inspect exactly what changed.
+        Diff generation and coloring are shared with the approval panel via
+        :mod:`lumen.ui.diff_view`. Collapsed state shows a one-line change
+        summary plus a preview of the first changed line; expanded shows the
+        full unified diff so the user can inspect exactly what changed.
         """
 
-        # unified_diff yields bare lines (lineterm=""); we re-add newlines when
-        # styling so each line is a separately coloured Text segment.
-        raw = list(difflib.unified_diff(find.splitlines(), replace.splitlines(), n=1, lineterm=""))
-        # Drop the ---/+++ file headers: they carry no useful info for an
-        # in-place edit and add visual noise to a compact card.
-        body_lines = [line for line in raw if not line.startswith("---") and not line.startswith("+++")]
+        body_lines = unified_diff_lines(find, replace, context_lines=1)
         add_color = self._diff_color("success", "green")
         del_color = self._diff_color("error", "red")
 
@@ -421,22 +426,14 @@ class ToolCard(Vertical):
             text.append("  [E to expand]", style="dim")
             return text
 
-        text = Text()
-        for line in body_lines:
-            if line.startswith("@@"):
-                text.append(line + "\n", style="dim italic")
-            elif line.startswith("+"):
-                text.append(line + "\n", style=add_color)
-            elif line.startswith("-"):
-                text.append(line + "\n", style=del_color)
-            else:
-                text.append(line + "\n", style="dim")
-        return text
+        return style_diff_lines(body_lines, add_color=add_color, del_color=del_color)
 
     def _refresh_result(self) -> None:
         if self._result is None or self._compact:
             self._result_widget.update("")
+            self._result_widget.display = False
             return
+        self._result_widget.display = True
         if self._expanded:
             rendered = self._result
         else:

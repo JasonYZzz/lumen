@@ -13,6 +13,8 @@ from pydantic_ai.messages import (
 
 from lumen.events import (
     CommentaryDelta,
+    PlanCreated,
+    PlanUpdated,
     ProgressReported,
     RunFailed,
     RunStarted,
@@ -22,6 +24,7 @@ from lumen.events import (
     ToolCallFinished,
     ToolCallStarted,
 )
+from lumen.plan import PlanState, PlanStep, StepStatus
 from lumen.sessions import SessionRepository
 from lumen.timeline import (
     InMemoryTimelineAdapter,
@@ -77,6 +80,53 @@ def test_timeline_coalesces_stream_and_tool_lifecycle() -> None:
     assert items[2].result == "the complete result"
     assert items[2].preview == "short result"
     assert items[2].status == "ok"
+
+
+def test_timeline_keeps_each_plan_with_its_user_turn() -> None:
+    store = TimelineStore(InMemoryTimelineAdapter())
+    first = PlanState(steps=[PlanStep(id="inspect", title="Inspect")])
+    completed = PlanState(
+        revision=1,
+        steps=[PlanStep(id="inspect", title="Inspect", status=StepStatus.COMPLETED)],
+    )
+    second = PlanState(steps=[PlanStep(id="test", title="Test")])
+
+    store.apply(RunStarted("first request"))
+    store.apply(PlanCreated(first))
+    store.apply(PlanUpdated(completed))
+    store.apply(TextDelta("first answer"))
+    store.apply(RunStarted("second request"))
+    store.apply(PlanCreated(second))
+
+    items = store.window()
+    assert [item.kind for item in items] == [
+        TimelineKind.USER,
+        TimelineKind.PLAN,
+        TimelineKind.ASSISTANT,
+        TimelineKind.USER,
+        TimelineKind.PLAN,
+    ]
+    assert items[1].plan == completed.model_dump(mode="json")
+    assert items[4].plan == second.model_dump(mode="json")
+
+
+def test_timeline_hides_control_tools_behind_plan_and_progress_components() -> None:
+    store = TimelineStore(InMemoryTimelineAdapter())
+    plan = PlanState(steps=[PlanStep(id="inspect", title="Inspect")])
+
+    store.apply(RunStarted("inspect"))
+    store.apply(ToolCallStarted("control-1", "set_plan", {}, "control", "read"))
+    store.apply(PlanCreated(plan))
+    store.apply(ToolCallFinished("control-1", "set_plan", "Plan updated.", False))
+    store.apply(ProgressReported(summary="**Step 1:** inspect"))
+
+    items = store.window()
+    assert [item.kind for item in items] == [
+        TimelineKind.USER,
+        TimelineKind.PLAN,
+        TimelineKind.PROGRESS,
+    ]
+    assert all(item.tool_name != "set_plan" for item in items)
 
 
 def test_timeline_reclassifies_provisional_stream_as_commentary() -> None:
@@ -230,3 +280,67 @@ def test_repository_adapter_replays_v4_events_in_original_order(tmp_path: Path) 
     ]
     assert page.items[1].text == "before tool"
     assert page.items[3].text == "after tool"
+
+
+def test_repository_adapter_does_not_attach_inherited_plan_to_eventful_turn(tmp_path: Path) -> None:
+    repository = SessionRepository(tmp_path)
+    session = repository.create(agent_name="agent", model_id="test")
+    plan = PlanState(steps=[PlanStep(id="inspect", title="Inspect")])
+    repository.append_turn(
+        session.id,
+        user_input="inspect this",
+        messages=[],
+        approvals=[],
+        usage={},
+        status="completed",
+        plan=plan,
+        timeline_events=[
+            TimelineEventRecord.from_event(RunStarted("inspect this"), sequence=1),
+            TimelineEventRecord.from_event(TextDelta("done"), sequence=2),
+        ],
+    )
+
+    store = TimelineStore(RepositoryTimelineAdapter(repository, session.id))
+    page = store.load_older(limit=20)
+
+    assert [item.kind for item in page.items] == [
+        TimelineKind.USER,
+        TimelineKind.ASSISTANT,
+    ]
+
+
+def test_repository_adapter_keeps_explicit_plan_on_original_turn_after_refresh(tmp_path: Path) -> None:
+    repository = SessionRepository(tmp_path)
+    session = repository.create(agent_name="agent", model_id="test")
+    plan = PlanState(steps=[PlanStep(id="report", title="Write report")])
+    first_events = [RunStarted("write a report"), PlanCreated(plan), TextDelta("done")]
+    second_events = [RunStarted("what is its ranking?"), TextDelta("ranked answer")]
+    for prompt, events in (
+        ("write a report", first_events),
+        ("what is its ranking?", second_events),
+    ):
+        repository.append_turn(
+            session.id,
+            user_input=prompt,
+            messages=[],
+            approvals=[],
+            usage={},
+            status="completed",
+            plan=plan,
+            timeline_events=[
+                TimelineEventRecord.from_event(event, sequence=index)
+                for index, event in enumerate(events, 1)
+            ],
+        )
+
+    store = TimelineStore(RepositoryTimelineAdapter(repository, session.id))
+    page = store.load_older(limit=20)
+
+    assert [item.kind for item in page.items] == [
+        TimelineKind.USER,
+        TimelineKind.PLAN,
+        TimelineKind.ASSISTANT,
+        TimelineKind.USER,
+        TimelineKind.ASSISTANT,
+    ]
+    assert sum(item.kind is TimelineKind.PLAN for item in page.items) == 1

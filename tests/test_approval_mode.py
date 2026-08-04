@@ -8,6 +8,7 @@ the panel.
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 
 import pytest
@@ -18,6 +19,7 @@ from lumen.events import ApprovalRequest
 from lumen.plan import PlanState
 from lumen.resources import ResourceManager
 from lumen.ui.app import LumenApp
+from lumen.ui.approval_panel import ApprovalPanel
 
 
 def _make_app(tmp_path: Path, *, default_mode: str = "ask") -> LumenApp:
@@ -57,11 +59,12 @@ def _request(risk: str, call_id: str = "call-1") -> ApprovalRequest:
 # ---------------------------------------------------------------------------
 
 
-async def test_ask_mode_never_auto_approves(tmp_path: Path) -> None:
+async def test_manual_mode_allows_reads_but_confirms_risky_actions(tmp_path: Path) -> None:
     app = _make_app(tmp_path, default_mode="ask")
     async with app.run_test() as pilot:
         await pilot.pause()
-        for risk in ("read", "write", "execute", "external"):
+        assert app._should_auto_approve("read") is True  # type: ignore[reportPrivateUsage]
+        for risk in ("write", "execute", "external"):
             assert app._should_auto_approve(risk) is False  # type: ignore[reportPrivateUsage]
 
 
@@ -114,15 +117,13 @@ async def test_auto_mode_short_circuits_write_without_card(tmp_path: Path) -> No
         assert pending_cards == []
 
 
-async def test_ask_mode_always_mounts_card(tmp_path: Path) -> None:
-    """In manual mode, every CONFIRM request mounts the card."""
+async def test_manual_mode_mounts_card_for_risky_action(tmp_path: Path) -> None:
+    """In manual mode, a write request mounts the card."""
 
     app = _make_app(tmp_path, default_mode="ask")
     async with app.run_test() as pilot:
         await pilot.pause()
-        import asyncio
-
-        task = asyncio.create_task(app._await_inline_approval(_request("read")))  # type: ignore[reportPrivateUsage]
+        task = asyncio.create_task(app._await_inline_approval(_request("write")))  # type: ignore[reportPrivateUsage]
         await pilot.pause()
         await asyncio.sleep(0)
         await pilot.pause()
@@ -133,8 +134,23 @@ async def test_ask_mode_always_mounts_card(tmp_path: Path) -> None:
         await task
 
 
+async def test_manual_session_rule_skips_repeated_capability_prompt(tmp_path: Path) -> None:
+    app = _make_app(tmp_path, default_mode="ask")
+    async with app.run_test() as pilot:
+        first = asyncio.create_task(app._await_inline_approval(_request("write", "first")))  # type: ignore[reportPrivateUsage]
+        await pilot.pause()
+        await pilot.press("2")
+        await pilot.pause()
+        assert (await first).approved
+
+        second = await app._await_inline_approval(_request("write", "second"))  # type: ignore[reportPrivateUsage]
+        assert second.approved
+        assert "user_session" in second.message
+        assert app.query_one(ApprovalPanel).pending_count == 0
+
+
 # ---------------------------------------------------------------------------
-# Mode toggle: /mode command + Ctrl+M
+# Mode switching: /mode command + Shift+Tab
 # ---------------------------------------------------------------------------
 
 
@@ -146,7 +162,7 @@ async def test_mode_command_reports_current(tmp_path: Path) -> None:
         await pilot.pause()
         text = "\n".join(str(w.content) for w in app.query("#messages Static").results(Static))
         assert "manual" in text
-        assert "confirming every risky tool call" in text
+        assert "allowing reads; confirming edits" in text
 
 
 async def test_mode_command_switches_to_auto(tmp_path: Path) -> None:
@@ -155,13 +171,11 @@ async def test_mode_command_switches_to_auto(tmp_path: Path) -> None:
         await pilot.pause()
         await app.handle_input("/mode auto")
         await pilot.pause()
-        assert app.approval_mode == "manual"
-        await pilot.press("y")
-        await pilot.pause()
         assert app.approval_mode == "auto"
-        # Topbar reflects the new mode.
+        assert "auto mode on" in str(app.query_one("#status", Static).content)
+        # Mode belongs to the composer footer, not the global top bar.
         topbar = str(app.query_one("#topbar", Static).content)
-        assert "AUTO" in topbar
+        assert "auto" not in topbar.lower()
 
 
 async def test_mode_command_rejects_unknown(tmp_path: Path) -> None:
@@ -176,23 +190,45 @@ async def test_mode_command_rejects_unknown(tmp_path: Path) -> None:
         assert "Unknown mode" in text
 
 
-async def test_ctrl_m_toggles_mode(tmp_path: Path) -> None:
+async def test_ctrl_m_does_not_create_a_second_mode_cycle(tmp_path: Path) -> None:
     app = _make_app(tmp_path, default_mode="ask")
     async with app.run_test() as pilot:
         await pilot.pause()
         assert app.approval_mode == "manual"
         await pilot.press("ctrl+m")
         await pilot.pause()
-        assert app.approval_mode == "accept_edits"
-        await pilot.press("ctrl+m")
-        await pilot.pause()
-        assert app.approval_mode == "accept_edits"
-        await pilot.press("y")
-        await pilot.pause()
-        assert app.approval_mode == "auto"
-        await pilot.press("ctrl+m")
-        await pilot.pause()
         assert app.approval_mode == "manual"
+
+
+async def test_plan_mode_blocks_mutations_without_mounting_approval(tmp_path: Path) -> None:
+    app = _make_app(tmp_path, default_mode="plan")
+    async with app.run_test() as pilot:
+        decision = await app._await_inline_approval(  # type: ignore[reportPrivateUsage]
+            _request("write")
+        )
+        await pilot.pause()
+
+        assert decision.approved is False
+        assert "blocked in plan mode" in decision.message
+        assert list(app.query(".is-pending")) == []
+
+
+async def test_mode_context_tells_model_when_plan_starts_and_ends(tmp_path: Path) -> None:
+    app = _make_app(tmp_path)
+    async with app.run_test():
+        app.set_approval_mode("plan")
+        plan_prompt = app._apply_permission_mode_context(  # type: ignore[reportPrivateUsage]
+            "inspect this"
+        )
+        assert 'name="plan"' in plan_prompt
+        assert "Work read-only" in plan_prompt
+
+        app.set_approval_mode("auto")
+        auto_prompt = app._apply_permission_mode_context(  # type: ignore[reportPrivateUsage]
+            "implement this"
+        )
+        assert 'name="auto"' in auto_prompt
+        assert "Plan mode is off" in auto_prompt
 
 
 def test_set_approval_mode_validates(tmp_path: Path) -> None:

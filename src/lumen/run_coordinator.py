@@ -8,12 +8,13 @@ from dataclasses import dataclass, field
 
 from pydantic_ai.messages import ModelMessage
 
-from lumen.context import ContextSummary
+from lumen.context import CompactionCheckpointV1, CompactionCheckpointV2, ContextSummary
 from lumen.events import InputDequeued, InputQueued, RunEvent, RunStarted, TimelineEventRecord
 from lumen.interactive_queue import QueuedMessage, QueueMode
 from lumen.plan import PlanState
 from lumen.runtime import (
     AgentRuntime,
+    ApprovalBatchHandler,
     ApprovalHandler,
     EventSink,
     RunOutcome,
@@ -26,15 +27,21 @@ from lumen.sessions import SessionMetadata, SessionRepository
 class CoordinatorState:
     session: SessionMetadata
     history: list[ModelMessage] = field(default_factory=list[ModelMessage])
+    full_history: list[ModelMessage] = field(default_factory=list[ModelMessage])
     plan: PlanState = field(default_factory=PlanState)
     compaction_summary: ContextSummary | None = None
+    compaction_checkpoint: CompactionCheckpointV1 | CompactionCheckpointV2 | None = None
+    compacted_prefix_length: int = 0
+    compacted_source_end: int = 0
     last_user_input: str | None = None
+    last_recovery_receipts: tuple[dict[str, object], ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
 class RunInput:
     display_text: str
     model_prompt: str
+    is_retry: bool = False
 
 
 class RunCoordinator:
@@ -72,9 +79,21 @@ class RunCoordinator:
         self._state = CoordinatorState(
             session=loaded.metadata,
             history=list(loaded.history),
+            full_history=list(loaded.full_history),
             plan=loaded.plan,
             compaction_summary=summary if isinstance(summary, ContextSummary) else None,
+            compaction_checkpoint=(
+                loaded.latest_compaction_checkpoint
+                if isinstance(
+                    loaded.latest_compaction_checkpoint,
+                    (CompactionCheckpointV1, CompactionCheckpointV2),
+                )
+                else None
+            ),
+            compacted_prefix_length=loaded.compacted_prefix_length,
+            compacted_source_end=loaded.compacted_source_end,
             last_user_input=loaded.turns[-1].user_input if loaded.turns else None,
+            last_recovery_receipts=(tuple(loaded.turns[-1].recovery_receipts) if loaded.turns else ()),
         )
         return self._state
 
@@ -83,6 +102,7 @@ class RunCoordinator:
         run_input: RunInput | str,
         emit: EventSink,
         approve: ApprovalHandler,
+        approve_batch: ApprovalBatchHandler | None = None,
     ) -> RunOutcome | None:
         if isinstance(run_input, str):
             run_input = RunInput(run_input, run_input)
@@ -108,9 +128,19 @@ class RunCoordinator:
                 state.history,
                 record_and_emit,
                 approve,
+                approve_batch,
                 plan=state.plan,
                 previous_summary=state.compaction_summary,
+                previous_checkpoint=state.compaction_checkpoint,
+                compacted_prefix_length=state.compacted_prefix_length,
+                source_offset=state.compacted_source_end,
+                source_history=state.full_history,
+                episode_documents=self._repository.retrieve_checkpoint_episodes(
+                    state.session.id,
+                    run_input.model_prompt,
+                ),
                 session_id=state.session.id,
+                recovery_receipts=state.last_recovery_receipts if run_input.is_retry else (),
             )
         except asyncio.CancelledError as error:
             self._append_partial(run_input, error, status="cancelled", timeline_events=timeline_events)
@@ -122,27 +152,63 @@ class RunCoordinator:
             self._active_emit = None
 
         summary = state.compaction_summary
+        checkpoint = state.compaction_checkpoint
+        compacted_prefix_length = state.compacted_prefix_length
+        compacted_source_end = state.compacted_source_end
         if outcome.compaction is not None:
             summary = outcome.compaction.summary
-        self._state = CoordinatorState(
+            candidate = getattr(outcome.compaction, "checkpoint", None)
+            if isinstance(candidate, (CompactionCheckpointV1, CompactionCheckpointV2)):
+                checkpoint = candidate
+                compacted_source_end = candidate.source_end
+            else:
+                compacted_source_end += outcome.compaction.source_message_count
+            compacted_prefix_length = len(outcome.compaction.active_history)
+        next_state = CoordinatorState(
             session=state.session,
             history=list(outcome.active_history),
+            full_history=[*state.full_history, *outcome.new_messages],
             plan=outcome.plan,
             compaction_summary=summary,
+            compaction_checkpoint=checkpoint,
+            compacted_prefix_length=compacted_prefix_length,
+            compacted_source_end=compacted_source_end,
             last_user_input=run_input.display_text,
+            last_recovery_receipts=tuple(outcome.recovery_receipts),
         )
-        self._repository.append_turn(
-            state.session.id,
-            user_input=run_input.display_text,
-            messages=outcome.new_messages,
-            approvals=outcome.approvals,
-            usage=outcome.usage,
-            status="completed",
-            plan=outcome.plan,
-            diagnostics=outcome.diagnostics,
-            compaction=outcome.compaction,
-            timeline_events=timeline_events,
-        )
+        # Publish the in-memory transition only after the append-only record is
+        # durable. A failed append therefore cannot move the session cursor or
+        # checkpoint ahead of JSONL.
+        try:
+            self._repository.append_turn(
+                state.session.id,
+                user_input=run_input.display_text,
+                messages=outcome.new_messages,
+                approvals=outcome.approvals,
+                usage=outcome.usage,
+                status=outcome.status,
+                plan=outcome.plan,
+                diagnostics=outcome.diagnostics,
+                compaction=outcome.compaction,
+                timeline_events=timeline_events,
+                recovery_receipts=outcome.recovery_receipts,
+            )
+        except BaseException:
+            if runtime.context_engine is not None and outcome.context_fingerprint is not None:
+                runtime.context_engine.discard_unpersisted(
+                    state.session.id,
+                    outcome.context_fingerprint,
+                )
+            raise
+        if runtime.context_engine is not None and outcome.context_fingerprint is not None:
+            runtime.context_engine.confirm_persisted(
+                state.session.id,
+                outcome.context_fingerprint,
+                outcome.new_messages,
+            )
+        self._state = next_state
+        if runtime.context_engine is not None and runtime.context_engine.memory is not None:
+            runtime.context_engine.memory.schedule_session(state.session.id)
         return outcome
 
     async def enqueue_interactive(self, run_input: RunInput, mode: QueueMode) -> QueuedMessage:
@@ -178,12 +244,19 @@ class RunCoordinator:
         state = self.state
         partial = get_partial_outcome(error)
         latest_plan = partial.plan if partial is not None else state.plan
-        self._state = CoordinatorState(
+        next_state = CoordinatorState(
             session=state.session,
             history=list(state.history),
+            full_history=list(state.full_history),
             plan=latest_plan,
             compaction_summary=state.compaction_summary,
+            compaction_checkpoint=state.compaction_checkpoint,
+            compacted_prefix_length=state.compacted_prefix_length,
+            compacted_source_end=state.compacted_source_end,
             last_user_input=run_input.display_text,
+            last_recovery_receipts=(
+                tuple(partial.recovery_receipts) if partial is not None else state.last_recovery_receipts
+            ),
         )
         self._repository.append_turn(
             state.session.id,
@@ -198,7 +271,9 @@ class RunCoordinator:
             partial_text=partial.partial_text if partial is not None else None,
             retryable=partial.retryable if partial is not None else False,
             timeline_events=timeline_events,
+            recovery_receipts=partial.recovery_receipts if partial is not None else (),
         )
+        self._state = next_state
 
 
 __all__ = ["CoordinatorState", "RunCoordinator", "RunInput"]

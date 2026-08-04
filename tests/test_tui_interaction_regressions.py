@@ -9,6 +9,7 @@ from textual.widgets import Static
 from lumen.config import load_config
 from lumen.events import (
     ApprovalRequest,
+    PlanCreated,
     RunCompleted,
     RunFailed,
     RunStarted,
@@ -18,10 +19,12 @@ from lumen.events import (
     UsageUpdated,
 )
 from lumen.interactive_queue import QueueMode
+from lumen.plan import PlanState, PlanStep
 from lumen.resources import ResourceManager
 from lumen.run_coordinator import RunInput
 from lumen.ui.app import LumenApp, PromptEditor
 from lumen.ui.approval_panel import ApprovalPanel
+from lumen.ui.plan_review_panel import PlanReviewPanel
 from lumen.ui.streaming_markdown import AssistantMarkdown
 from lumen.ui.tool_card import ToolCard
 
@@ -104,7 +107,7 @@ async def test_switching_to_auto_keeps_unclassified_remote_approval_visible(tmp_
         await pilot.pause()
         await pilot.press("shift+tab")
         await pilot.pause()
-        await pilot.press("shift+tab", "y")
+        await pilot.press("shift+tab", "shift+tab")
         await pilot.pause()
 
         assert app.approval_mode == "auto"
@@ -148,6 +151,66 @@ async def test_final_text_segment_is_mounted_after_tool_cards(tmp_path: Path) ->
         tool_index = next(i for i, child in enumerate(new_children) if isinstance(child, ToolCard))
         answer_index = max(i for i, child in enumerate(new_children) if isinstance(child, AssistantMarkdown))
         assert tool_index < answer_index
+
+
+async def test_completed_plan_opens_execution_mode_review(tmp_path: Path) -> None:
+    app = _app(tmp_path)
+    async with app.run_test() as pilot:
+        app.set_approval_mode("plan")
+        await app.render_event(
+            PlanCreated(PlanState(revision=1, steps=[PlanStep(id="inspect", title="Inspect code")]))
+        )
+        await app.render_event(TextDelta("Proposed implementation plan."))
+        await app.render_event(RunCompleted("Proposed implementation plan."))
+        await pilot.pause()
+
+        panel = app.query_one(PlanReviewPanel)
+        assert panel.has_class("visible")
+        assert panel.region.y + panel.region.height <= app.query_one("#prompt").region.y
+
+        await pilot.press("4")
+        await pilot.pause()
+        assert app.approval_mode == "plan"
+        assert not panel.has_class("visible")
+
+
+async def test_approving_plan_switches_mode_and_continues_execution(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    app = _app(tmp_path)
+    submitted: list[tuple[str, str | None]] = []
+
+    async def capture_input(text: str, **kwargs: object) -> None:
+        model_prompt = kwargs.get("model_prompt")
+        submitted.append((text, model_prompt if isinstance(model_prompt, str) else None))
+
+    monkeypatch.setattr(app, "handle_input", capture_input)
+    async with app.run_test() as pilot:
+        app.set_approval_mode("plan")
+        await app.render_event(TextDelta("Plan proposal"))
+        await app.render_event(RunCompleted("Plan proposal"))
+        await pilot.pause()
+
+        await pilot.press("2")
+        await pilot.pause()
+
+        assert app.approval_mode == "accept_edits"
+        assert submitted[0][0] == "Implement the approved plan."
+        assert "approved the proposed plan" in (submitted[0][1] or "")
+
+
+async def test_copy_latest_response_uses_textual_clipboard(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    app = _app(tmp_path)
+    monkeypatch.setattr("lumen.ui.app.subprocess.run", lambda *args, **kwargs: None)
+    async with app.run_test() as pilot:
+        await app.render_event(RunCompleted("完整输出\n```python\nprint('ok')\n```"))
+        await pilot.pause()
+
+        app.action_copy_last_response()
+
+        assert app.clipboard == "完整输出\n```python\nprint('ok')\n```"
 
 
 async def test_stream_growth_keeps_tail_visible_when_following(tmp_path: Path) -> None:
@@ -199,7 +262,10 @@ async def test_long_markdown_answer_keeps_one_top_level_widget(tmp_path: Path) -
 
         documents = list(app.query(AssistantMarkdown).results(AssistantMarkdown))
         assert len(documents) == 1
-        assert not documents[0].children
+        # Frozen blocks live inside the one document widget, not as siblings
+        # in the timeline; the full source remains available on the document.
+        assert documents[0].children
+        assert documents[0].source.endswith("paragraph 249")
 
 
 async def test_footer_keeps_last_usage_after_run_completed(tmp_path: Path) -> None:
@@ -234,7 +300,7 @@ async def test_responsive_status_and_cjk_emoji_rendering(tmp_path: Path, width: 
 
         status = str(app.query_one("#status", Static).content)
         documents = list(app.query(AssistantMarkdown).results(AssistantMarkdown))
-        assert status.startswith("◆ manual mode  ·  Ready")
+        assert status.startswith("⏸ manual mode on")
         assert documents[-1].source.endswith("中文内容 😀")
 
 

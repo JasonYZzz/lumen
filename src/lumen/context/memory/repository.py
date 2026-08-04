@@ -14,6 +14,7 @@ than silently overwriting it.
 
 from __future__ import annotations
 
+import os
 import sqlite3
 import threading
 from datetime import UTC, datetime
@@ -42,10 +43,14 @@ class MemoryRepository(Protocol):
     def get(self, record_id: str) -> MemoryRecord | None: ...
 
     def list(
-        self, scope: MemoryScope | None = None, *, include_forgotten: bool = False
+        self,
+        scope: MemoryScope | None = None,
+        *,
+        include_forgotten: bool = False,
+        project_id: str | None = None,
     ) -> list[MemoryRecord]: ...
 
-    def index(self) -> list[MemoryRecord]: ...
+    def index(self, *, project_id: str | None = None) -> list[MemoryRecord]: ...
 
     def query(
         self,
@@ -53,6 +58,7 @@ class MemoryRepository(Protocol):
         *,
         scope: MemoryScope | None = None,
         path: str | None = None,
+        project_id: str | None = None,
         limit: int = 20,
     ) -> list[MemoryRecord]: ...
 
@@ -75,6 +81,12 @@ def _is_active_for_index(record: MemoryRecord, now: datetime) -> bool:
     return True
 
 
+def _is_recallable(record: MemoryRecord, now: datetime) -> bool:
+    if record.status is not MemoryStatus.ACTIVE:
+        return False
+    return record.valid_until is None or record.valid_until >= now
+
+
 def _rank(record: MemoryRecord, text: str) -> float:
     """A simple lexical-relevance rank for recall (plan §11.5 ordering sketch).
 
@@ -90,13 +102,34 @@ def _rank(record: MemoryRecord, text: str) -> float:
     return explicit + relevance + recency + (record.use_count * 0.1)
 
 
-class InMemoryMemoryRepository:
-    """Process-local memory store for tests and ephemeral sessions.
+def _visible_in_project(record: MemoryRecord, project_id: str | None) -> bool:
+    """USER memories are global; all other scopes stay repository-local."""
 
-    Conflict detection is conservative: two active records in the same scope
-    whose content shares a topic phrase are both marked ``conflicted`` so
-    neither enters the default index until the user resolves them.
-    """
+    if project_id is None or record.scope is MemoryScope.USER:
+        return True
+    return record.project_id == project_id
+
+
+def _merge_active_record(record: MemoryRecord, existing: MemoryRecord | None) -> MemoryRecord:
+    """Preserve lifecycle metadata when an active record is updated in place."""
+
+    if existing is None or existing.status is not MemoryStatus.ACTIVE:
+        return record
+    return record.model_copy(
+        update={
+            "created_at": existing.created_at,
+            "source_session_ids": tuple(
+                dict.fromkeys((*existing.source_session_ids, *record.source_session_ids))
+            ),
+            "source_event_ids": tuple(dict.fromkeys((*existing.source_event_ids, *record.source_event_ids))),
+            "use_count": existing.use_count,
+            "last_used_at": existing.last_used_at,
+        }
+    )
+
+
+class InMemoryMemoryRepository:
+    """Process-local memory store for tests and ephemeral sessions."""
 
     def __init__(self) -> None:
         self._records: dict[str, MemoryRecord] = {}
@@ -108,11 +141,8 @@ class InMemoryMemoryRepository:
             if existing is not None and existing.status is MemoryStatus.FORGOTTEN:
                 # Tombstone: a forgotten fact must not be resurrected (plan §11.6).
                 return existing
-            stored = record
-            if existing is not None and existing.status is MemoryStatus.ACTIVE:
-                stored = record.model_copy(update={"supersedes": (*record.supersedes, existing.id)})
+            stored = _merge_active_record(record, existing)
             self._records[record.id] = stored
-            self._mark_conflicts(stored)
             return stored
 
     def forget(self, record_id: str) -> bool:
@@ -128,7 +158,11 @@ class InMemoryMemoryRepository:
             return self._records.get(record_id)
 
     def list(
-        self, scope: MemoryScope | None = None, *, include_forgotten: bool = False
+        self,
+        scope: MemoryScope | None = None,
+        *,
+        include_forgotten: bool = False,
+        project_id: str | None = None,
     ) -> list[MemoryRecord]:
         with self._lock:
             rows = list(self._records.values())
@@ -136,17 +170,19 @@ class InMemoryMemoryRepository:
         for record in rows:
             if scope is not None and record.scope is not scope:
                 continue
+            if not _visible_in_project(record, project_id):
+                continue
             if not include_forgotten and record.status is MemoryStatus.FORGOTTEN:
                 continue
             result.append(record)
         return result
 
-    def index(self) -> list[MemoryRecord]:
+    def index(self, *, project_id: str | None = None) -> list[MemoryRecord]:
         now = _now()
         with self._lock:
             rows = list(self._records.values())
         return sorted(
-            (r for r in rows if _is_active_for_index(r, now)),
+            (r for r in rows if _is_active_for_index(r, now) and _visible_in_project(r, project_id)),
             key=lambda r: (-r.confidence, r.created_at),
         )
 
@@ -156,6 +192,7 @@ class InMemoryMemoryRepository:
         *,
         scope: MemoryScope | None = None,
         path: str | None = None,
+        project_id: str | None = None,
         limit: int = 20,
     ) -> list[MemoryRecord]:
         now = _now()
@@ -164,7 +201,8 @@ class InMemoryMemoryRepository:
         candidates = [
             r
             for r in rows
-            if _is_active_for_index(r, now)
+            if _is_recallable(r, now)
+            and _visible_in_project(r, project_id)
             and (scope is None or r.scope is scope)
             and (path is None or r.path_glob is None or _glob_matches(r.path_glob, path))
         ]
@@ -182,26 +220,6 @@ class InMemoryMemoryRepository:
                     "use_count": record.use_count + 1,
                 }
             )
-
-    def _mark_conflicts(self, record: MemoryRecord) -> None:
-        """Mark same-scope active records sharing a topic token as conflicted."""
-
-        if record.status is not MemoryStatus.ACTIVE:
-            return
-        topic_tokens = {t.lower() for t in record.content.split() if len(t) > 3}
-        if not topic_tokens:
-            return
-        for other in list(self._records.values()):
-            if other.id == record.id or other.scope is not record.scope:
-                continue
-            if other.status is not MemoryStatus.ACTIVE:
-                continue
-            other_tokens = {t.lower() for t in other.content.split() if len(t) > 3}
-            if topic_tokens & other_tokens:
-                self._records[other.id] = other.model_copy(update={"status": MemoryStatus.CONFLICTED})
-                self._records[record.id] = self._records[record.id].model_copy(
-                    update={"status": MemoryStatus.CONFLICTED}
-                )
 
 
 def _glob_matches(glob: str, path: str) -> bool:
@@ -261,7 +279,9 @@ class SQLiteMemoryRepository:
 
         if self._conn is None:
             self._path.parent.mkdir(parents=True, exist_ok=True)
+            os.chmod(self._path.parent, 0o700)
             self._conn = sqlite3.connect(str(self._path), check_same_thread=False)
+            os.chmod(self._path, 0o600)
             self._conn.row_factory = sqlite3.Row
             self._conn.executescript(self.schema)
             self._conn.commit()
@@ -277,9 +297,7 @@ class SQLiteMemoryRepository:
             existing = self.get(record.id)
             if existing is not None and existing.status is MemoryStatus.FORGOTTEN:
                 return existing
-            stored = record
-            if existing is not None and existing.status is MemoryStatus.ACTIVE:
-                stored = record.model_copy(update={"supersedes": (*record.supersedes, existing.id)})
+            stored = _merge_active_record(record, existing)
             self._db().execute(
                 "INSERT OR REPLACE INTO memory (id, scope, kind, content, record_json, status, "
                 "confidence, path_glob, valid_until) VALUES (?,?,?,?,?,?,?,?,?)",
@@ -296,7 +314,7 @@ class SQLiteMemoryRepository:
                 ),
             )
             self._db().commit()
-            return stored
+            return self.get(stored.id) or stored
 
     def forget(self, record_id: str) -> bool:
         with self._lock:
@@ -317,7 +335,11 @@ class SQLiteMemoryRepository:
         return MemoryRecord.model_validate_json(row["record_json"]) if row else None
 
     def list(
-        self, scope: MemoryScope | None = None, *, include_forgotten: bool = False
+        self,
+        scope: MemoryScope | None = None,
+        *,
+        include_forgotten: bool = False,
+        project_id: str | None = None,
     ) -> list[MemoryRecord]:
         with self._lock:
             if scope is None:
@@ -331,11 +353,11 @@ class SQLiteMemoryRepository:
         records = [MemoryRecord.model_validate_json(r["record_json"]) for r in rows]
         if not include_forgotten:
             records = [r for r in records if r.status is not MemoryStatus.FORGOTTEN]
-        return records
+        return [r for r in records if _visible_in_project(r, project_id)]
 
-    def index(self) -> list[MemoryRecord]:
+    def index(self, *, project_id: str | None = None) -> list[MemoryRecord]:
         now = _now()
-        records = self.list()
+        records = self.list(project_id=project_id)
         return sorted(
             (r for r in records if _is_active_for_index(r, now)),
             key=lambda r: (-r.confidence, r.created_at),
@@ -347,14 +369,15 @@ class SQLiteMemoryRepository:
         *,
         scope: MemoryScope | None = None,
         path: str | None = None,
+        project_id: str | None = None,
         limit: int = 20,
     ) -> list[MemoryRecord]:
         now = _now()
-        records = self.list(scope=scope)
+        records = self.list(scope=scope, project_id=project_id)
         candidates = [
             r
             for r in records
-            if _is_active_for_index(r, now)
+            if _is_recallable(r, now)
             and (path is None or r.path_glob is None or _glob_matches(r.path_glob or "", path))
         ]
         # FTS5 match on content; fall back to all candidates when the query has

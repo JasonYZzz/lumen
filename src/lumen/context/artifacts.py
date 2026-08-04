@@ -13,9 +13,9 @@ Security (plan §19):
   symlinks (resolved path must stay under the root).
 * A tool may declare ``artifact_policy="never"`` (secret-bearing outputs) so
   the body is never written to disk; only a redacted receipt is kept.
-* Cleanup is refcount-based: an artifact is removed only when its last holder
-  releases it, never by broad glob. Holds are tracked per holder id (session id,
-  checkpoint id) so a crash-and-replay can re-add the same hold idempotently.
+* Runtime holds support local ownership tracking, while durable cleanup uses a
+  mark-and-sweep pass over session/checkpoint references. This avoids treating
+  an incomplete in-memory refcount as authoritative after process restart.
 """
 
 from __future__ import annotations
@@ -155,6 +155,25 @@ class ArtifactStore:
     def hold_count(self, ref: str) -> int:
         return len(self._holds.get(ref, set()))
 
+    def mark_and_sweep(self, live_refs: set[str]) -> tuple[str, ...]:
+        """Delete only valid artifact objects absent from a durable live set."""
+
+        if not self.root.is_dir():
+            return ()
+        removed: list[str] = []
+        for path in self.root.iterdir():
+            if not path.is_file() or len(path.name) != 64:
+                continue
+            ref = f"sha256:{path.name}"
+            try:
+                resolved = self._artifact_path(ref)
+            except ArtifactStoreError:
+                continue
+            if ref not in live_refs:
+                resolved.unlink()
+                removed.append(ref)
+        return tuple(sorted(removed))
+
     def spill(self, content: bytes | str, *, artifact_policy: ArtifactPolicy = "auto") -> str | None:
         """Store ``content`` when it is large and policy allows; return the ref.
 
@@ -264,6 +283,7 @@ def _receipt_text(
         lines.append("content: <redacted: artifact_policy=never>")
     elif artifact_ref is not None:
         lines.append(f"artifact: {artifact_ref}")
+        lines.append(f'retrieve: read_artifact(ref="{artifact_ref}") to read the full body')
         if head:
             lines.append(f"head: {head}")
         if tail:

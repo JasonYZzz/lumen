@@ -36,7 +36,9 @@ def test_retry_and_skill_are_queued() -> None:
     assert classify_command("/skill:tdd write a test") is CommandPolicy.QUEUE
 
 
-def test_quit_cancels_then_runs() -> None:
+def test_exit_cancels_then_runs() -> None:
+    assert classify_command("/exit") is CommandPolicy.CANCEL_THEN_RUN
+    # /quit stays as a hidden alias with the same policy.
     assert classify_command("/quit") is CommandPolicy.CANCEL_THEN_RUN
 
 

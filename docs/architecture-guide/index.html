@@ -1,0 +1,475 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Lumen coding-agent framework architecture handbook">
+  <title>Lumen · 架构与核心实现</title>
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div class="ambient" aria-hidden="true"></div>
+  <div class="noise" aria-hidden="true"></div>
+
+  <header class="topbar glass">
+    <a class="brand" href="#overview" aria-label="返回总览">
+      <span class="brand-mark">L</span>
+      <span><strong>Lumen</strong><small>Architecture Atlas</small></span>
+    </a>
+    <label class="search glass-inset">
+      <span aria-hidden="true">⌕</span>
+      <input id="search" type="search" placeholder="搜索 module、流程或源码…" autocomplete="off">
+      <kbd>/</kbd>
+    </label>
+    <div class="top-actions">
+      <span class="build-state"><i></i> Implementation map · 2026.07</span>
+    </div>
+  </header>
+
+  <div class="shell">
+    <aside class="sidebar glass">
+      <div class="nav-label">阅读地图</div>
+      <nav id="toc">
+        <a class="active" href="#overview"><span>01</span>系统全景</a>
+        <a href="#modules"><span>02</span>核心 Modules</a>
+        <a href="#agent-flow"><span>03</span>Agent 主循环</a>
+        <a href="#context"><span>04</span>上下文引擎</a>
+        <a href="#tools"><span>05</span>工具与安全</a>
+        <a href="#sessions"><span>06</span>会话与事件</a>
+        <a href="#extensions"><span>07</span>扩展与委派</a>
+        <a href="#mcp-skills"><span>08</span>MCP 与 Skills</a>
+        <a href="#configuration"><span>09</span>配置与生命周期</a>
+        <a href="#navigation"><span>10</span>源码导航</a>
+      </nav>
+      <div class="legend glass-inset">
+        <p><i class="dot cyan"></i>核心运行路径</p>
+        <p><i class="dot coral"></i>审批 / 失败分支</p>
+        <p><i class="dot mint"></i>持久化 / 完成</p>
+        <p><i class="dot violet"></i>外部能力</p>
+      </div>
+      <p class="sidebar-note">精确图层由 HTML/CSS 绘制，可复制文字、缩放、打印和离线阅读。</p>
+    </aside>
+
+    <main id="content">
+      <section id="overview" class="hero searchable" data-title="系统全景 architecture overview">
+        <div class="hero-copy">
+          <p class="kicker">LUMEN ATLAS · 实现全景</p>
+          <h1>从一次 Prompt，理解整个 Agent 系统。</h1>
+          <p class="hero-lede">面向维护者的完整实现地图：应用层、模型循环、上下文、工具安全、事件持久化与扩展 seam。</p>
+          <div class="hero-actions">
+            <a class="primary-button" href="#agent-flow">进入主流程 <span>↓</span></a>
+            <a class="secondary-button" href="README.md">查看 Markdown 源</a>
+          </div>
+        </div>
+        <div class="hero-metrics glass">
+          <div><strong>1</strong><span>Workspace<br>当前主运行</span></div>
+          <div><strong>5</strong><span>工具风险<br>分类</span></div>
+          <div><strong>12</strong><span>预算 / 保留<br>分区 Zones</span></div>
+          <div><strong>3</strong><span>客户端 / 运行时<br>核心边界</span></div>
+        </div>
+      </section>
+
+      <section class="searchable" data-title="系统全景 分层 topology WorkspaceHost AgentRuntime ContextEngine">
+        <header class="section-heading">
+          <div><span class="section-index">01</span><h2>系统全景</h2></div>
+          <p>客户端只负责交互；权威状态集中在应用层，模型循环与上下文各自形成深 module。</p>
+        </header>
+        <figure class="diagram glass diagram-system" aria-labelledby="system-caption">
+          <figcaption id="system-caption">
+            <strong>端到端拓扑</strong>
+            <span>箭头代表运行时依赖和数据方向；双箭头表示持续读写。</span>
+          </figcaption>
+          <div class="system-map">
+            <div class="layer clients">
+              <div class="layer-name">CLIENT ADAPTERS · 客户端适配层</div>
+              <div class="node cyan"><b>Textual TUI</b><small>终端交互 · ui/app.py</small></div>
+              <div class="node cyan"><b>Next.js Web</b><small>浏览器界面 · src/web</small></div>
+              <div class="node cyan"><b>FastAPI + SSE</b><small>接口与事件流 · api/app.py</small></div>
+            </div>
+            <div class="v-arrow">↓ 客户端命令 commands · ↑ 运行事件 RunEvent</div>
+            <div class="layer application">
+              <div class="layer-name">APPLICATION SEAM · 应用层边界</div>
+              <div class="node hero-node"><b>WorkspaceHost.dispatch()</b><small>run 互斥 · 幂等 · 审批 future · 事件订阅</small></div>
+              <div class="h-arrow">→</div>
+              <div class="node"><b>RunCoordinator</b><small>会话状态 · 恢复 · 追加 turn</small></div>
+            </div>
+            <div class="v-arrow">↓ 运行输入 RunInput / 会话状态 state</div>
+            <div class="layer runtime">
+              <div class="layer-name">AGENT CORE · Agent 执行核心</div>
+              <div class="node hero-node"><b>AgentRuntime.run()</b><small>模型 ↔ 工具循环 · 流输出 · 重试</small></div>
+              <div class="double-link">↔</div>
+              <div class="node"><b>ContextEngine</b><small>装配 prepare · 提交 commit · 控制 control</small></div>
+              <div class="double-link">↔</div>
+              <div class="node violet"><b>Pydantic AI</b><small>模型供应商适配层</small></div>
+            </div>
+            <div class="v-arrow">↓ 能力调用 capabilities · ↑ 工具观察结果 observations</div>
+            <div class="layer foundations">
+              <div class="layer-name">CAPABILITIES &amp; STATE · 能力与持久状态</div>
+              <div class="node"><b>Local Tools</b><small>工作区范围约束</small></div>
+              <div class="node violet"><b>MCP / Skills / Hooks</b><small>外部能力适配器</small></div>
+              <div class="node mint"><b>SessionRepository</b><small>只追加的 JSONL 会话事实</small></div>
+              <div class="node mint"><b>Memory + Artifacts</b><small>SQLite 记忆 / 内容寻址制品</small></div>
+            </div>
+          </div>
+        </figure>
+        <div class="callout-row">
+          <article class="callout glass"><b>单一状态权威</b><p>TUI 与 Web 不各自保存 Agent 状态，全部跨越 WorkspaceHost seam。</p></article>
+          <article class="callout glass"><b>事实与上下文分离</b><p>JSONL 保留完整事实；模型只收到 token 预算内的 active history。</p></article>
+          <article class="callout glass"><b>权限不等于沙箱</b><p>审批决定是否执行；操作系统隔离仍需外部 sandbox adapter。</p></article>
+        </div>
+      </section>
+
+      <section id="modules" class="searchable" data-title="核心 modules interface seam deep module">
+        <header class="section-heading">
+          <div><span class="section-index">02</span><h2>核心 Modules</h2></div>
+          <p>用最小 interface 隐藏最大实现复杂度，是 Lumen 当前架构的主要组织方式。</p>
+        </header>
+        <div class="module-deck">
+          <article class="module-card glass featured">
+            <div class="module-top"><span>APPLICATION · 应用层</span><code>dispatch(command)</code></div>
+            <h3>WorkspaceHost</h3>
+            <p>统一客户端命令、workspace 单 run 规则、事件 journal、审批状态和模型切换。</p>
+            <ul><li>输入：WorkspaceCommand</li><li>输出：CommandResult / EventEnvelope</li><li>不变量：一个 workspace 至多一个 active run</li></ul>
+            <a href="../../src/lumen/application/host.py">application/host.py ↗</a>
+          </article>
+          <article class="module-card glass">
+            <div class="module-top"><span>SESSION · 会话层</span><code>run(input)</code></div>
+            <h3>RunCoordinator</h3>
+            <p>拥有可恢复 session 状态，把 runtime outcome 原子投影为下一状态与持久化 turn。</p>
+            <ul><li>active history + checkpoint</li><li>plan + 恢复边界</li><li>完整历史属于 Repository；交互队列属于 Runtime</li></ul>
+            <a href="../../src/lumen/run_coordinator.py">run_coordinator.py ↗</a>
+          </article>
+          <article class="module-card glass">
+            <div class="module-top"><span>EXECUTION · 执行层</span><code>run(...) → RunOutcome</code></div>
+            <h3>AgentRuntime</h3>
+            <p>把 provider 流事件翻译为稳定 RunEvent，并封装模型与工具的循环。</p>
+            <ul><li>流式文本回撤</li><li>工具审批与并发</li><li>provider retry + partial outcome</li></ul>
+            <a href="../../src/lumen/runtime.py">runtime.py ↗</a>
+          </article>
+          <article class="module-card glass">
+            <div class="module-top"><span>CONTEXT · 上下文层</span><code>prepare / commit / control</code></div>
+            <h3>ContextEngine</h3>
+            <p>管理 zone 预算、压缩 checkpoint、memory recall 和 active history。</p>
+            <ul><li>fingerprint 防错配</li><li>安全 cut point</li><li>raw history 永不因压缩删除</li></ul>
+            <a href="../../src/lumen/context/engine.py">context/engine.py ↗</a>
+          </article>
+        </div>
+      </section>
+
+      <section id="agent-flow" class="searchable" data-title="Agent 主循环 prompt planning context model tool approval observation final">
+        <header class="section-heading">
+          <div><span class="section-index">03</span><h2>Agent 主循环</h2></div>
+          <p>一条 prompt 从 UI 进入后，跨越应用、会话、上下文和工具四个 seam，直到形成可审计结果。</p>
+        </header>
+        <figure class="diagram glass" aria-labelledby="run-sequence-caption">
+          <figcaption id="run-sequence-caption"><strong>完整运行时序</strong><span>实线：同步推进；虚线：持续事件流。</span></figcaption>
+          <div class="sequence" role="img" aria-label="用户到模型和工具的运行时序">
+            <div class="seq-head"><span>用户 / 客户端</span><span>应用主机<br>WorkspaceHost</span><span>会话协调器<br>RunCoordinator</span><span>Agent 执行器<br>AgentRuntime</span><span>上下文引擎<br>ContextEngine</span><span>模型 / 工具</span></div>
+            <div class="seq-row"><i>1</i><b style="--from:1;--to:2">启动运行 StartRun(prompt) →</b><em>幂等检查 · 获取 run 锁</em></div>
+            <div class="seq-row"><i>2</i><b style="--from:2;--to:3">构造运行输入 RunInput →</b><em>恢复会话状态</em></div>
+            <div class="seq-row"><i>3</i><b style="--from:3;--to:4">历史 + 计划 history + plan →</b><em>创建 runtime run</em></div>
+            <div class="seq-row"><i>4</i><b style="--from:4;--to:5">装配上下文 prepare(...) →</b><em>生成有界 ContextEnvelope</em></div>
+            <div class="seq-row accent"><i>5</i><b style="--from:4;--to:6">请求模型 model request →</b><em>返回文本或工具调用</em></div>
+            <div class="seq-row warning"><i>6</i><b style="--from:4;--to:6">Hook → 审批 → 执行工具 ↻</b><em>观察结果回到模型</em></div>
+            <div class="seq-row accent"><i>7</i><b style="--from:4;--to:5">提交新消息 commit(...) →</b><em>构造候选 active history</em></div>
+            <div class="seq-row"><i>8</i><b style="--from:4;--to:3">运行结果 RunOutcome ←</b><em>append + fsync 后发布 checkpoint</em></div>
+            <div class="seq-row success"><i>9</i><b style="--from:3;--to:1">事件流 + 最终结果 ←</b><em>发布 CoordinatorState</em></div>
+          </div>
+        </figure>
+
+        <div class="split-diagrams">
+          <figure class="diagram glass compact">
+            <figcaption><strong>单轮模型响应状态机</strong><span>处理“先输出文字、后调用工具”。</span></figcaption>
+            <div class="response-flow">
+              <div class="flow-state cyan"><b>缓冲模型文本</b><small>Buffering Text · 同步发送 TextDelta</small></div>
+              <div class="flow-arrow">↓</div>
+              <div class="flow-decision"><b>是否出现工具调用？</b><small>本轮模型响应中是否包含 tool call</small></div>
+              <div class="branch-labels"><span class="yes">是 · YES ↓</span><span class="no">否 · NO ↓</span></div>
+              <div class="branch-columns">
+                <div class="branch-panel yes">
+                  <strong>进入工具执行路径</strong>
+                  <div><b>撤回暂定文本</b><small>TextRetracted</small></div><i>↓</i>
+                  <div><b>转为过程说明</b><small>CommentaryDelta</small></div><i>↓</i>
+                  <div><b>执行工具</b><small>Tool Running · 结果返回模型</small></div>
+                </div>
+                <div class="branch-panel no">
+                  <strong>直接完成本轮响应</strong>
+                  <div><b>保留已输出文本</b><small>无需回撤或调用工具</small></div><i>↓</i>
+                  <div><b>形成最终回答</b><small>Final Answer</small></div>
+                </div>
+              </div>
+            </div>
+          </figure>
+          <figure class="diagram glass compact">
+            <figcaption><strong>失败与重试策略</strong><span>一旦产生公开事件，就不再 provider retry。</span></figcaption>
+            <div class="retry-flow">
+              <div class="flow-state coral"><b>模型供应商报错</b><small>Provider error</small></div>
+              <div class="flow-arrow">↓</div>
+              <div class="flow-decision"><b>是否已经发布公开事件？</b><small>客户端是否已看到 TextDelta / Tool 事件</small></div>
+              <div class="branch-labels"><span class="no">否 · NO ↓</span><span class="yes">是 · YES ↓</span></div>
+              <div class="branch-columns">
+                <div class="branch-panel no">
+                  <strong>尚未对用户产生可见影响</strong>
+                  <div><b>判断是否为瞬时错误</b><small>Transient provider error?</small></div><i>↓</i>
+                  <div><b>指数退避重试</b><small>等待 1s → 2s → 4s</small></div>
+                </div>
+                <div class="branch-panel yes">
+                  <strong>禁止 Provider Retry</strong>
+                  <div><b>生成部分运行结果</b><small>PartialRunOutcome</small></div><i>↓</i>
+                  <div><b>持久化失败事实</b><small>保存已发生事件，避免重复输出</small></div>
+                </div>
+              </div>
+            </div>
+          </figure>
+        </div>
+      </section>
+
+      <section id="context" class="searchable" data-title="ContextEngine 上下文 token zone compaction checkpoint memory artifact">
+        <header class="section-heading">
+          <div><span class="section-index">04</span><h2>上下文引擎</h2></div>
+          <p>完整历史是事实，active history 是预算内投影。模型 profile 与传输协议解耦；Checkpoint V2 只增量处理新 transcript 区间。</p>
+        </header>
+        <figure class="diagram glass context-board">
+          <figcaption><strong>ContextEnvelope · 12 个预算 Zone</strong><span>Zone 解释成本、来源、信任和保留，不等于 12 条 provider message。</span></figcaption>
+          <div class="token-ruler"><span>0 tokens</span><div><i style="width:76%"></i></div><strong>模型上下文窗口</strong></div>
+          <div class="zone-stack">
+            <div class="zone z-system"><b>SYSTEM</b><small>系统身份与运行指令</small><em>固定保留 PINNED</em></div>
+            <div class="zone z-system"><b>POLICY</b><small>行为规则与安全策略</small><em>每轮注入 REINJECT</em></div>
+            <div class="zone z-memory"><b>MEMORY_<wbr>INDEX</b><small>长期记忆索引</small><em>每轮注入 · 4%</em></div>
+            <div class="zone z-tools"><b>CAPABILITY_<wbr>CATALOG</b><small>工具与能力 Schema</small><em>每轮注入 · 8%</em></div>
+            <div class="zone z-skill"><b>TASK_<wbr>STATE</b><small>计划、进度与任务状态</small><em>每轮注入 · 10%</em></div>
+            <div class="zone z-skill"><b>ACTIVE_<wbr>SKILLS</b><small>当前 Session 的 Skill 快照</small><em>每轮注入 · 10%</em></div>
+            <div class="zone z-memory"><b>HISTORY_<wbr>SUMMARY</b><small>历史压缩 Checkpoint</small><em>摘要保留 · 5%</em></div>
+            <div class="zone z-history"><b>RECENT_<wbr>HISTORY</b><small>安全边界后的近期消息</small><em>弹性预算 PINNED</em></div>
+            <div class="zone z-memory"><b>RECALLED_<wbr>MEMORY</b><small>本轮召回的相关事实</small><em>临时注入 · 6%</em></div>
+            <div class="zone z-retrieved"><b>RETRIEVED_<wbr>CONTEXT</b><small>MCP 检索与外部内容</small><em>可裁剪 · 20%</em></div>
+            <div class="zone z-input"><b>CURRENT_<wbr>INPUT</b><small>展开后的当前用户输入</small><em>固定保留 PINNED</em></div>
+            <div class="zone z-output"><b>OUTPUT_<wbr>RESERVE</b><small>模型回答预留空间</small><em>只预留 RESERVE</em></div>
+          </div>
+        </figure>
+        <figure class="diagram glass">
+          <figcaption><strong>真实 Provider Request 分层</strong><span>Pydantic AI 在每个模型步骤动态确定 instructions 与最终工具 Schema；Lumen 在发送前获取快照并执行硬预检。</span></figcaption>
+          <div class="pipeline long">
+            <div class="step"><i>01</i><b>Instructions</b><small>Pydantic AI native</small></div><span>→</span>
+            <div class="step"><i>02</i><b>Function Tools</b><small>该步骤最终 schema</small></div><span>→</span>
+            <div class="step"><i>03</i><b>System Policy</b><small>Plan + active Skills</small></div><span>→</span>
+            <div class="step"><i>04</i><b>Canonical History</b><small>summary + recent turns</small></div><span>→</span>
+            <div class="step"><i>05</i><b>User Context Data</b><small>Memory + MCP resources</small></div><span>→</span>
+            <div class="step success"><i>06</i><b>Current Input</b><small>由 Pydantic AI 追加</small></div>
+          </div>
+        </figure>
+        <figure class="diagram glass">
+          <figcaption><strong>Delta 压缩与 Checkpoint</strong><span>失败不会推进 source range，也不会吞掉未摘要历史。</span></figcaption>
+          <div class="pipeline long">
+            <div class="step"><i>01</i><b>Token 压力触发</b><small>已用 token ≥ soft limit</small></div><span>→</span>
+            <div class="step"><i>02</i><b>选择安全切点</b><small>对齐完整的 user request</small></div><span>→</span>
+            <div class="step"><i>03</i><b>只处理新增区间</b><small>从 previous checkpoint 之后开始</small></div><span>→</span>
+            <div class="step"><i>04</i><b>生成结构化摘要</b><small>使用禁用工具的 summarizer</small></div><span>→</span>
+            <div class="step"><i>05</i><b>创建 Checkpoint V2</b><small>cursor + rolling state + digest</small></div><span>→</span>
+            <div class="step success"><i>06</i><b>持久化后发布</b><small>append + fsync 后推进 cursor</small></div>
+          </div>
+          <div class="invariant-strip"><span>✓ tool call / result 不分离</span><span>✓ 每个 tool result 独立截断</span><span>✓ raw JSONL 永远追加</span><span>✓ fingerprint 防错配</span></div>
+        </figure>
+        <div class="three-cols">
+          <article class="info-panel glass"><h3>Model Policy</h3><p>显式覆盖 → profile → 精确 slug → 80k fallback；协议前缀不决定窗口或 tokenizer。</p><code>context/profiles.py</code></article>
+          <article class="info-panel glass"><h3>Artifact</h3><p>巨型工具结果进入内容寻址存储；上下文只保留预览、digest 与 reference。</p><code>context/artifacts.py</code></article>
+          <article class="info-panel glass"><h3>Durable Memory</h3><p>SQLite 是权威库，Markdown 是审计投影；事实必须携带 provenance。</p><code>context/memory/</code></article>
+          <article class="info-panel glass"><h3>Trust</h3><p>MCP 外部内容不能单独提升为长期事实；自动学习默认关闭。</p><code>memory.learn: false</code></article>
+        </div>
+      </section>
+
+      <section id="tools" class="searchable" data-title="工具 权限 security ToolSpec Risk approval Hook workspace run_command">
+        <header class="section-heading">
+          <div><span class="section-index">05</span><h2>工具、权限与安全</h2></div>
+          <p>工具先被描述和分类，再经过策略、Hook 与审批。执行安全由多层机制共同形成。</p>
+        </header>
+        <figure class="diagram glass">
+          <figcaption><strong>工具调用安全管线 · Tool Call Guardrail</strong><span>模型请求和执行结果都必须穿过统一 seam。</span></figcaption>
+          <div class="security-flow">
+            <div class="security-node"><i>1</i><b>工具定义 ToolSpec</b><small>名称 · 参数 Schema · 超时</small></div><span>→</span>
+            <div class="security-node"><i>2</i><b>风险分类 Risk</b><small>读取 / 写入 / 执行 / 外部</small></div><span>→</span>
+            <div class="security-node"><i>3</i><b>执行前 Hook</b><small>拒绝调用或修改参数</small></div><span>→</span>
+            <div class="security-node gate"><i>4</i><b>用户审批 Gate</b><small>manual / edits / auto 策略</small></div><span>→</span>
+            <div class="security-node"><i>5</i><b>执行 Execute</b><small>限制在 workspace 范围</small></div><span>→</span>
+            <div class="security-node"><i>6</i><b>执行后 Hook</b><small>审计或变换工具结果</small></div><span>→</span>
+            <div class="security-node success"><i>7</i><b>观察结果 Observation</b><small>发布 ToolCallFinished</small></div>
+          </div>
+        </figure>
+        <div class="risk-grid">
+          <article class="risk glass read"><span>READ</span><b>本地无副作用读取</b><p>read_file · search_text</p><em>默认允许</em></article>
+          <article class="risk glass write"><span>WRITE</span><b>修改 workspace</b><p>write_file · edit_file</p><em>按模式审批</em></article>
+          <article class="risk glass execute"><span>EXECUTE</span><b>启动进程或代码</b><p>run_command · skill script</p><em>默认确认</em></article>
+          <article class="risk glass external"><span>EXTERNAL</span><b>已分类远端操作</b><p>configured MCP risk</p><em>依策略决定</em></article>
+          <article class="risk glass unknown"><span>UNKNOWN</span><b>语义未知的远端能力</b><p>external_unknown</p><em>auto 仍确认</em></article>
+        </div>
+        <div class="boundary-note glass">
+          <div><b>审批</b><span>是否允许此次操作</span></div><div class="plus">+</div>
+          <div><b>Confinement</b><span>文件工具能访问哪里</span></div><div class="not-equal">≠</div>
+          <div><b>OS Sandbox</b><span>进程真实系统与网络权限</span></div>
+          <p>Lumen 当前实现前两项；不可信仓库应在容器、Seatbelt 或 bubblewrap 中运行。</p>
+        </div>
+      </section>
+
+      <section id="sessions" class="searchable" data-title="会话 事件 EventJournal SSE JSONL TUI Web session resume">
+        <header class="section-heading"><div><span class="section-index">06</span><h2>会话、事件与客户端</h2></div><p>所有用户可见状态都由类型化事件驱动，同一事件流同时服务实时 UI、重连和审计。</p></header>
+        <figure class="diagram glass event-board">
+          <figcaption><strong>事件溯源交互 · Event-Sourced Interaction</strong><span>sequence 是实时订阅、SSE 重连与 timeline 恢复的共同坐标。</span></figcaption>
+          <div class="event-top"><div class="node cyan">Textual TUI</div><div class="node cyan">FastAPI / SSE</div><div class="node cyan">Next.js Web</div></div>
+          <div class="event-connectors"><span>↑ 实时订阅 live subscribe</span><span>↑ 按序号断线续传 after_sequence</span></div>
+          <div class="event-track">
+            <div class="event"><i>01</i><b>运行开始</b><small>RunStarted</small></div><div class="event"><i>02</i><b>文本增量</b><small>TextDelta</small></div><div class="event"><i>03</i><b>工具开始</b><small>ToolCallStarted</small></div><div class="event coral"><i>04</i><b>等待审批</b><small>ToolApprovalPending</small></div><div class="event"><i>05</i><b>工具完成</b><small>ToolCallFinished</small></div><div class="event mint"><i>06</i><b>运行完成</b><small>RunCompleted</small></div>
+          </div>
+          <div class="event-bottom"><div class="node">EventJournal<small>内存有序事件流</small></div><span>→</span><div class="node mint">SessionRepository<small>只追加的 JSONL turn</small></div><span>→</span><div class="node">恢复 resume()<small>消息 · 计划 · checkpoint</small></div></div>
+        </figure>
+        <div class="data-record glass">
+          <div><span>TurnRecord</span><code>user_input</code><code>status</code><code>messages</code><code>timeline_events</code></div>
+          <div><span>Audit</span><code>approvals</code><code>usage</code><code>diagnostics</code><code>partial_text</code></div>
+          <div><span>Recovery</span><code>active_prefix</code><code>summary</code><code>checkpoint</code><code>plan</code></div>
+        </div>
+      </section>
+
+      <section id="extensions" class="searchable" data-title="MCP Skills Hooks plugins delegation subagent OAuth extension">
+        <header class="section-heading"><div><span class="section-index">07</span><h2>扩展体系与子 Agent</h2></div><p>能力从多个 adapter 接入，但最终都进入同一个 runtime 工具和上下文模型。</p></header>
+        <figure class="diagram glass ecosystem">
+          <figcaption><strong>能力扩展生态 · Capability Ecosystem</strong><span>紫色为外部 adapter；绿色内容需显式激活后进入 context。</span></figcaption>
+          <div class="eco-ring">
+            <div class="eco-item local"><b>内置工具 Built-in</b><small>读取 · 写入 · 命令执行</small></div>
+            <div class="eco-item"><b>Python 插件</b><small>注册 list[ToolSpec]</small></div>
+            <div class="eco-item violet"><b>MCP 工具集</b><small>延迟 Schema · 风险分类</small></div>
+            <div class="eco-center"><b>AgentRuntime</b><small>统一的执行边界 execution seam</small></div>
+            <div class="eco-item violet"><b>MCP 内容</b><small>资源 · Prompt · OAuth</small></div>
+            <div class="eco-item"><b>Agent Skills</b><small>目录 · 工作集 · 脚本</small></div>
+            <div class="eco-item"><b>HookBus 事件钩子</b><small>执行前 · 执行后 · 停止</small></div>
+          </div>
+        </figure>
+        <figure class="diagram glass delegation-board">
+          <figcaption><strong>单层子 Agent 委派 · Depth-One Delegation</strong><span>子 Agent 是隔离的只读调研者，不是共享任务列表的 Agent team。</span></figcaption>
+          <div class="parent-agent"><b>主 Agent · Parent</b><small>delegate_task（独立调研任务）</small></div>
+          <div class="fanout"><span>↙</span><span>↓</span><span>↘</span></div>
+          <div class="children">
+            <div class="child"><b>子 Agent A</b><small>隔离的上下文</small><em>只允许只读工具</em></div>
+            <div class="child"><b>子 Agent B</b><small>隔离的上下文</small><em>只允许只读工具</em></div>
+            <div class="child"><b>子 Agent C</b><small>隔离的上下文</small><em>只允许只读工具</em></div>
+          </div>
+          <div class="return-flow">精简调研结果 ↑ · 受并发数 / 请求数 / 工具数 / 超时共同限制</div>
+          <div class="denied-strip"><span>× 禁止写入</span><span>× 禁止执行</span><span>× 禁止 MCP</span><span>× 禁止递归委派</span></div>
+        </figure>
+      </section>
+
+      <section id="mcp-skills" class="searchable" data-title="MCP Skills 协议 工具 资源 Prompt OAuth SKILL.md working set progressive disclosure">
+        <header class="section-heading">
+          <div><span class="section-index">08</span><h2>MCP 与 Skills 深入说明</h2></div>
+          <p>二者都扩展 Agent，但抽象完全不同：MCP 连接外部能力，Skill 为模型提供按需加载的专业操作方法。</p>
+        </header>
+
+        <div class="capability-compare">
+          <article class="capability-card glass mcp-card">
+            <div class="capability-title"><span>M</span><div><small>MODEL CONTEXT PROTOCOL</small><h3>MCP：连接外部系统</h3></div></div>
+            <p>通过标准协议接入远端或本地 Server，把工具、资源和 Prompt 暴露给 Lumen。</p>
+            <dl>
+              <div><dt>本质</dt><dd>协议连接与能力适配器</dd></div>
+              <div><dt>传输</dt><dd>stdio / streamable HTTP</dd></div>
+              <div><dt>进入 Runtime</dt><dd>MCPToolset + Context documents</dd></div>
+              <div><dt>默认信任</dt><dd>未分类工具 = external_unknown</dd></div>
+            </dl>
+            <a href="../../src/lumen/mcp_tools.py">mcp_tools.py ↗</a>
+          </article>
+          <article class="capability-card glass skill-card">
+            <div class="capability-title"><span>S</span><div><small>AGENT SKILLS</small><h3>Skill：提供专业方法</h3></div></div>
+            <p>本地目录中的指令包。它不是工具；模型先看到精简目录，匹配任务后再加载完整 SKILL.md。</p>
+            <dl>
+              <div><dt>本质</dt><dd>指令、参考资料与声明脚本</dd></div>
+              <div><dt>来源</dt><dd>builtin ＜ user ＜ project</dd></div>
+              <div><dt>进入 Context</dt><dd>catalog + session artifact snapshot</dd></div>
+              <div><dt>默认信任</dt><dd>受发现根目录与相对路径约束</dd></div>
+            </dl>
+            <a href="../../src/lumen/skills.py">skills.py ↗</a>
+          </article>
+        </div>
+
+        <figure class="diagram glass knowledge-diagram">
+          <figcaption><strong>MCP 完整接入链路</strong><span>连接成功不等于自动授权；工具、资源、Prompt 分别经过不同入口。</span></figcaption>
+          <div class="knowledge-flow mcp-flow">
+            <div class="knowledge-step"><i>01</i><b>读取 Server 配置</b><small>transport · required · source scope</small></div><span>→</span>
+            <div class="knowledge-step"><i>02</i><b>信任与指纹检查</b><small>definition fingerprint · approval</small></div><span>→</span>
+            <div class="knowledge-step"><i>03</i><b>建立连接</b><small>stdio 或 HTTP + OAuth</small></div><span>→</span>
+            <div class="knowledge-step"><i>04</i><b>名称隔离</b><small>&lt;server&gt;_&lt;tool&gt; 前缀</small></div><span>→</span>
+            <div class="knowledge-step"><i>05</i><b>风险与可见性</b><small>deny filter · risk · deferred schema</small></div><span>→</span>
+            <div class="knowledge-step"><i>06</i><b>审批后执行</b><small>PermissionPolicy + HookBus</small></div><span>→</span>
+            <div class="knowledge-step"><i>07</i><b>传输韧性</b><small>断线重连一次 · 失败转为模型可见错误</small></div><span>→</span>
+            <div class="knowledge-step success"><i>08</i><b>返回 Observation</b><small>结果进入模型与工具循环</small></div>
+          </div>
+          <div class="mcp-surfaces">
+            <article><b>Tools · 工具</b><p>默认延迟完整 Schema；名称和描述仍可被搜索。<code>always_load_tools</code> 可声明常驻工具。</p></article>
+            <article><b>Resources · 资源</b><p>启动时只发现目录；显式激活后保存当前 Session 的 artifact snapshot，并以 user-role 不可信数据进入 <code>RETRIEVED_CONTEXT</code>。</p></article>
+            <article><b>Prompts · 提示模板</b><p>显式调用时才向 Server 渲染，并包装为不可信外部模板；模板正文不能授予权限。</p></article>
+          </div>
+        </figure>
+
+        <figure class="diagram glass knowledge-diagram">
+          <figcaption><strong>Skill 渐进式披露链路</strong><span>始终只携带小目录；激活正文固定为当前 Session 的精确 revision。</span></figcaption>
+          <div class="knowledge-flow skill-flow">
+            <div class="knowledge-step"><i>01</i><b>扫描技能目录</b><small>.lumen/skills · user · builtin</small></div><span>→</span>
+            <div class="knowledge-step"><i>02</i><b>解析 SKILL.md</b><small>frontmatter + Markdown body</small></div><span>→</span>
+            <div class="knowledge-step"><i>03</i><b>注入精简 Catalog</b><small>name · description · location</small></div><span>→</span>
+            <div class="knowledge-step"><i>04</i><b>按需激活</b><small>load_skill 或 /skill:name</small></div><span>→</span>
+            <div class="knowledge-step"><i>05</i><b>保存 Artifact</b><small>0600 · content addressed</small></div><span>→</span>
+            <div class="knowledge-step"><i>06</i><b>Session 重注入</b><small>resume 同一 revision</small></div><span>→</span>
+            <div class="knowledge-step success"><i>07</i><b>读取资源 / 脚本</b><small>限定相对路径与声明清单</small></div>
+          </div>
+          <div class="skill-anatomy">
+            <div class="skill-file"><code>skill-name/</code><code>├── SKILL.md</code><code>├── references/</code><code>└── scripts/</code></div>
+            <div class="skill-contract"><span>frontmatter</span><b>name + description</b><p><code>disable-model-invocation</code> 可让 Skill 仅允许手动调用。</p></div>
+            <div class="skill-contract"><span>resources</span><b>read_skill_resource</b><p>只能读取该 Skill 根目录中的 UTF-8 文本，解析后再次检查路径包含关系。</p></div>
+            <div class="skill-contract"><span>scripts</span><b>run_skill_script</b><p>只运行声明的 py/sh/bash 文件；清理环境、限制超时，并按 EXECUTE 风险审批。</p></div>
+          </div>
+        </figure>
+
+        <div class="guardrail-grid">
+          <article class="glass"><span>01 · MCP</span><b>远端内容默认不可信</b><p>资源正文不能单独提升为长期事实；未声明 risk 的工具始终需要确认。</p></article>
+          <article class="glass"><span>02 · OAuth</span><b>凭证与运行数据分离</b><p>OAuth 仅支持 streamable HTTP；本地凭证文件使用权限收紧的持久化存储。</p></article>
+          <article class="glass"><span>03 · Skill</span><b>Skill 不是任意文件读取</b><p>模型只能按已发现的名称加载 Skill，并且无法用相对路径逃逸其 base directory。</p></article>
+          <article class="glass"><span>04 · Context</span><b>扩展必须服从 Token 预算</b><p>延迟 MCP Schema、Session Skill snapshot 和 Zone cap 共同控制上下文膨胀。</p></article>
+        </div>
+      </section>
+
+      <section id="configuration" class="searchable" data-title="配置 ConfigResolver AppConfig ResourceManager lifecycle model switch">
+        <header class="section-heading"><div><span class="section-index">09</span><h2>配置与资源生命周期</h2></div><p>分层配置先解析来源与信任，再由 StrictModel 验证；运行资源按事务式生命周期打开和切换。</p></header>
+        <div class="split-diagrams">
+          <figure class="diagram glass compact"><figcaption><strong>配置解析</strong><span>后层覆盖前层，路径按声明位置解析。</span></figcaption><div class="config-flow"><div><b>全局 Global</b><small>~/.lumen</small></div><div><b>项目 Project</b><small>.lumen/agent.yaml</small></div><div><b>本地 Local</b><small>agent.local.yaml</small></div><span>→</span><div class="merge"><b>配置合并器</b><small>来源 · 信任 · fingerprint</small></div><span>→</span><div class="validated"><b>AppConfig</b><small>严格校验 · 禁止未知字段</small></div></div></figure>
+          <figure class="diagram glass compact"><figcaption><strong>ResourceManager 生命周期</strong><span>模型切换先构建候选 runtime，成功后才关闭旧实例。</span></figcaption><div class="lifecycle"><div>已构造<br>Constructed</div><span>打开 open()</span><div>MCP 已连接</div><span>构建 build</span><div class="active">Runtime 就绪</div><span>事务切换</span><div>新模型生效</div><span>关闭 close()</span><div>已关闭</div></div></figure>
+        </div>
+        <div class="config-matrix glass">
+          <div><b>agent</b><span>model profiles · overrides · limits · skills</span></div><div><b>tools</b><span>builtin · Python plugins</span></div><div><b>mcp_servers</b><span>transport · risk · OAuth</span></div><div><b>permissions</b><span>mode · always allow/deny</span></div><div><b>context</b><span>ratio policy · recent · summary · background</span></div><div><b>memory</b><span>recall · learn · work queue</span></div><div><b>delegation</b><span>concurrency · child limits</span></div><div><b>hooks</b><span>events · matcher · adapter</span></div>
+        </div>
+      </section>
+
+      <section id="navigation" class="searchable" data-title="源码导航 debug tests quality gate code map">
+        <header class="section-heading"><div><span class="section-index">10</span><h2>源码导航与调试</h2></div><p>按问题进入正确 seam，避免从 UI 或 provider 细节反向猜测状态。</p></header>
+        <div class="code-map glass">
+          <div class="code-chain"><a href="../../src/lumen/cli.py">cli.py</a><span>→</span><a href="../../src/lumen/resources.py">resources.py</a><span>→</span><a href="../../src/lumen/application/host.py">WorkspaceHost</a><span>→</span><a href="../../src/lumen/run_coordinator.py">RunCoordinator</a><span>→</span><a href="../../src/lumen/runtime.py">AgentRuntime</a></div>
+          <div class="code-branches"><a href="../../src/lumen/context/engine.py">ContextEngine</a><a href="../../src/lumen/tools/registry.py">Tools / Permissions</a><a href="../../src/lumen/mcp_tools.py">MCP</a><a href="../../src/lumen/sessions.py">SessionRepository</a><a href="../../src/lumen/events.py">RunEvent</a></div>
+        </div>
+        <div class="debug-grid">
+          <article class="glass"><h3>模型没继续调用工具</h3><p><code>runtime.py</code> → <code>tools/execution.py</code></p></article>
+          <article class="glass"><h3>TUI / Web 状态不一致</h3><p><code>application/host.py</code> → <code>application/events.py</code></p></article>
+          <article class="glass"><h3>Resume 上下文错误</h3><p><code>run_coordinator.py</code> → <code>sessions.py</code></p></article>
+          <article class="glass"><h3>压缩或 token 异常</h3><p><code>context/engine.py</code> → <code>assembler.py</code></p></article>
+          <article class="glass"><h3>审批或越权</h3><p><code>tools/registry.py</code> → <code>approval.py</code> → <code>hooks.py</code></p></article>
+          <article class="glass"><h3>长期记忆污染</h3><p><code>memory/manager.py</code> → <code>redaction.py</code></p></article>
+        </div>
+        <div class="quality-gate glass"><div><span>ruff</span><b>lint</b></div><div><span>pyright</span><b>strict types</b></div><div><span>pytest</span><b>644 tests</b></div><div><span>snapshots</span><b>52 TUI</b></div><div><span>web</span><b>test + typecheck</b></div><div><span>uv build</span><b>wheel + sdist</b></div></div>
+      </section>
+
+      <section id="no-results" class="no-results glass" hidden><h2>没有匹配的章节</h2><p>尝试搜索“ContextEngine”“审批”“MCP”或“session”。</p></section>
+
+      <footer>
+        <div><strong>Lumen Architecture Atlas</strong><span>Implementation-grounded · Offline-ready · Liquid Glass approximation</span></div>
+        <a href="#overview">回到顶部 ↑</a>
+      </footer>
+    </main>
+  </div>
+  <script src="app.js"></script>
+</body>
+</html>

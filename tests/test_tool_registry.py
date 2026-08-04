@@ -29,6 +29,14 @@ def test_plugin_factory_must_return_tool_specs(monkeypatch: pytest.MonkeyPatch) 
         load_plugin_specs(PluginConfig(module="bad_plugin"))
 
 
+def test_missing_plugin_reports_module_and_search_path(tmp_path: Path) -> None:
+    with pytest.raises(
+        RuntimeError,
+        match=rf"plugin 'missing_tools' was not found under {tmp_path}",
+    ):
+        load_plugin_specs(PluginConfig(module="missing_tools"), search_path=tmp_path)
+
+
 def test_registry_rejects_duplicate_names(tmp_path: Path) -> None:
     registry = ToolRegistry(tmp_path)
     spec = ToolSpec(sample_tool, risk=Risk.READ, name="same")
