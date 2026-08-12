@@ -5,6 +5,10 @@ messages, debounced file search, and slash-command suggestions. ``LumenApp``
 is only imported under ``TYPE_CHECKING`` to avoid a circular import.
 """
 
+# Cooperative Textual mixin; see approval_controller.py for why these two
+# diagnostics are disabled locally rather than weakening project-wide strictness.
+# pyright: reportGeneralTypeIssues=false, reportPrivateUsage=false
+
 from __future__ import annotations
 
 import asyncio

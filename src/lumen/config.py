@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 import re
 from pathlib import Path
-from typing import Any, Literal, cast
+from typing import Annotated, Any, Literal, cast
 
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
@@ -94,7 +94,26 @@ class DelegationConfig(StrictModel):
     """
 
     enabled: bool = False
+    research_enabled: bool = True
+    worktree_enabled: bool = False
+    worktree_root: Path = Path("~/.lumen/worktrees")
     max_concurrency: int = Field(default=3, ge=1, le=8)
+    request_count: int = Field(default=10, ge=1, le=50)
+    tool_calls: int = Field(default=20, ge=0, le=100)
+    timeout_seconds: float = Field(default=180.0, gt=0, le=1800)
+
+
+class AgentsConfig(StrictModel):
+    """Native, session-scoped multi-agent orchestration policy."""
+
+    enabled: bool = True
+    autonomy: Literal["adaptive", "explicit", "disabled"] = "adaptive"
+    max_depth: Literal[1] = 1
+    max_concurrency: int = Field(default=3, ge=1, le=8)
+    max_agents_per_run: int = Field(default=8, ge=1, le=32)
+    default_agent: str = Field(default="default", pattern=r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
+    recovery: Literal["safe"] = "safe"
+    worktree_root: Path = Path("~/.lumen/worktrees")
     request_count: int = Field(default=10, ge=1, le=50)
     tool_calls: int = Field(default=20, ge=0, le=100)
     timeout_seconds: float = Field(default=180.0, gt=0, le=1800)
@@ -246,6 +265,13 @@ class McpServerConfig(StrictModel):
     tool_risks: dict[str, Literal["read", "write", "execute"]] = Field(
         default_factory=dict[str, Literal["read", "write", "execute"]]
     )
+    #: Independent effect declarations used for sequencing and verification.
+    #: Undeclared remote tools remain ``unknown`` even when their approval risk
+    #: is explicitly configured.
+    tool_effects: dict[
+        str,
+        Literal["observe", "mutation", "execution", "external_action", "unknown"],
+    ] = Field(default_factory=dict)
     required: bool = True
     #: Hide MCP schemas until tool search discovers them. Names/descriptions
     #: remain searchable; listed exceptions stay fully visible.
@@ -280,19 +306,11 @@ class McpServerConfig(StrictModel):
 class PermissionsConfig(StrictModel):
     always_allow: list[str] = Field(default_factory=list)
     always_deny: list[str] = Field(default_factory=list)
-    #: Session approval mode. ``manual`` confirms every tool that the permission
-    #: policy routes to CONFIRM; ``accept_edits`` only auto-approves builtin
-    #: write/edit tools; ``plan`` allows reads but blocks mutations; ``auto``
-    #: approves every explicitly classified risk.
+    #: Session approval mode. Collaboration/Plan is configured separately.
     #: Undeclared remote (MCP) tools default to ``external_unknown`` and always
     #: prompt. Toggle live via ``/mode`` or ``Shift+Tab`` without rebuilding
     #: the runtime.
-    default_mode: Literal["manual", "accept_edits", "plan", "auto"] = "manual"
-
-    @field_validator("default_mode", mode="before")
-    @classmethod
-    def normalize_legacy_mode(cls, value: object) -> object:
-        return "manual" if value == "ask" else value
+    default_mode: Literal["manual", "accept_edits", "auto"] = "manual"
 
     @model_validator(mode="after")
     def ensure_disjoint(self) -> PermissionsConfig:
@@ -361,6 +379,14 @@ class UiConfig(StrictModel):
     #: Active Textual theme at startup. Must be one of the builtin themes
     #: registered by :mod:`lumen.ui.themes`; switch live via ``/theme``.
     theme: str = "lumen-dark"
+    transcript_density: Literal["normal", "verbose"] = "normal"
+    animations: bool = True
+    terminal_title: bool = True
+    notifications: bool = True
+    vim_mode: bool = False
+    status_line: list[Literal["mode", "state", "model", "usage", "workspace", "keymap"]] = Field(
+        default_factory=lambda: ["mode", "state", "model", "usage", "keymap"]
+    )
 
     @field_validator("theme")
     @classmethod
@@ -374,16 +400,126 @@ class UiConfig(StrictModel):
         return value
 
 
+class CollaborationConfig(StrictModel):
+    default_mode: Literal["default", "plan"] = "default"
+
+
+class SandboxConfig(StrictModel):
+    mode: Literal["workspace_write", "disabled"] = "workspace_write"
+    network: bool = False
+    extra_read_paths: list[Path] = Field(default_factory=list[Path])
+    extra_write_paths: list[Path] = Field(default_factory=list[Path])
+    env_allow: list[str] = Field(default_factory=lambda: ["PATH", "LANG", "LC_ALL", "TERM", "TMPDIR"])
+
+
+class WorkProductsConfig(StrictModel):
+    enabled: bool = True
+    auto_attach: bool = True
+    strict: bool = True
+    max_context_items: int = Field(default=8, ge=1, le=100)
+
+
+class LiveTurnDetectionConfig(StrictModel):
+    type: Literal["server_vad", "semantic_vad"] = "semantic_vad"
+    eagerness: Literal["low", "medium", "high", "auto"] = "auto"
+    interrupt_response: bool = True
+
+
+class LiveTranscriptionConfig(StrictModel):
+    enabled: bool = True
+    model: str | None = "gpt-4o-mini-transcribe"
+    language: str | None = "zh"
+
+
+class LiveRouteBase(StrictModel):
+    model: str
+    api_key_env: str
+    api_key: str | None = Field(default=None, exclude=True, repr=False)
+    voice: str
+
+
+class OpenAILiveRouteConfig(LiveRouteBase):
+    provider: Literal["openai"] = "openai"
+    model: str = "gpt-realtime-2.1"
+    api_key_env: str = "OPENAI_API_KEY"
+    base_url: str = "https://api.openai.com"
+    voice: str = "marin"
+    completion_control: Literal["native_required_tool"] = "native_required_tool"
+
+
+class BailianLiveRouteConfig(LiveRouteBase):
+    provider: Literal["bailian"] = "bailian"
+    model: str = "qwen3.5-omni-plus-realtime"
+    api_key_env: str = "DASHSCOPE_API_KEY"
+    workspace_id_env: str = "DASHSCOPE_WORKSPACE_ID"
+    workspace_id: str | None = Field(default=None, exclude=True, repr=False)
+    region: Literal["cn-beijing", "ap-southeast-1"] = "cn-beijing"
+    base_url: str | None = None
+    voice: str = "Tina"
+    completion_control: Literal["host_gated_synthesis", "advisory_only"] = (
+        "host_gated_synthesis"
+    )
+
+
+LiveRouteConfig = Annotated[
+    OpenAILiveRouteConfig | BailianLiveRouteConfig,
+    Field(discriminator="provider"),
+]
+
+
+class LiveConfig(StrictModel):
+    """Optional browser Realtime voice transport and policy."""
+
+    enabled: bool = False
+    provider: Literal["openai"] = "openai"
+    model: str = "gpt-realtime-2.1"
+    api_key_env: str = "OPENAI_API_KEY"
+    api_key: str | None = Field(default=None, exclude=True, repr=False)
+    base_url: str = "https://api.openai.com"
+    voice: str = "marin"
+    reasoning_effort: Literal["low", "medium", "high"] = "low"
+    turn_detection: LiveTurnDetectionConfig = Field(default_factory=LiveTurnDetectionConfig)
+    input_transcription: LiveTranscriptionConfig = Field(default_factory=LiveTranscriptionConfig)
+    strict_completion: bool = True
+    max_sessions: int = Field(default=1, ge=1, le=8)
+    rollover_seconds: int = Field(default=3300, ge=60, le=3540)
+    persist_audio: Literal[False] = False
+    max_context_items: int = Field(default=24, ge=1, le=100)
+    default_route: str | None = None
+    fallback_routes: list[str] = Field(default_factory=list[str])
+    routes: dict[str, LiveRouteConfig] = Field(default_factory=dict[str, LiveRouteConfig])
+
+    @model_validator(mode="after")
+    def validate_routes(self) -> LiveConfig:
+        if not self.routes:
+            if self.default_route is not None or self.fallback_routes:
+                raise ValueError("live.default_route/fallback_routes require live.routes")
+            return self
+        if self.default_route is None:
+            raise ValueError("live.default_route is required when live.routes are configured")
+        if self.default_route not in self.routes:
+            raise ValueError(f"live.default_route is not configured: {self.default_route}")
+        missing = [name for name in self.fallback_routes if name not in self.routes]
+        if missing:
+            raise ValueError(f"live fallback routes are not configured: {', '.join(missing)}")
+        return self
+
+
 class AppConfig(StrictModel):
-    version: Literal[1]
+    version: Literal[2]
     agent: AgentSection
     ui: UiConfig = Field(default_factory=UiConfig)
     tools: ToolsConfig = Field(default_factory=ToolsConfig)
     mcp_servers: dict[str, McpServerConfig] = Field(default_factory=dict)
     permissions: PermissionsConfig = Field(default_factory=PermissionsConfig)
+    collaboration: CollaborationConfig = Field(default_factory=CollaborationConfig)
+    sandbox: SandboxConfig = Field(default_factory=SandboxConfig)
+    work_products: WorkProductsConfig = Field(default_factory=WorkProductsConfig)
+    live: LiveConfig = Field(default_factory=LiveConfig)
     sessions: SessionsConfig = Field(default_factory=SessionsConfig)
     context: ContextConfig = Field(default_factory=ContextConfig)
     memory: MemoryConfig = Field(default_factory=MemoryConfig)
+    agents: AgentsConfig = Field(default_factory=AgentsConfig)
     delegation: DelegationConfig = Field(default_factory=DelegationConfig)
     hooks: list[HookConfig] = Field(default_factory=list[HookConfig])
     config_path: Path = Field(exclude=True)
@@ -433,6 +569,33 @@ def validate_config_data(
     config_path = config_path.expanduser().resolve()
     workspace = workspace.expanduser().resolve()
     warnings = list(config_warnings)
+    raw = dict(raw)
+    if raw.get("version") == 1:
+        # V1 is a strict subset of V2. Migrate it only in memory so existing
+        # user configuration keeps working without silently rewriting a file
+        # that may contain credentials or local comments.
+        raw["version"] = 2
+        raw_permissions = raw.get("permissions")
+        if isinstance(raw_permissions, dict):
+            legacy_permissions = cast(dict[str, Any], raw_permissions)
+            if legacy_permissions.get("default_mode") == "ask":
+                raw["permissions"] = {**legacy_permissions, "default_mode": "manual"}
+        warnings.append("configuration version 1 was migrated in memory; update the file to version 2")
+    raw_agents = raw.get("agents")
+    raw_delegation = raw.get("delegation")
+    if raw_agents is None and isinstance(raw_delegation, dict):
+        legacy = cast(dict[str, Any], raw_delegation)
+        raw["agents"] = {
+            "enabled": bool(legacy.get("enabled", False)),
+            "max_concurrency": legacy.get("max_concurrency", 3),
+            "worktree_root": legacy.get("worktree_root", "~/.lumen/worktrees"),
+            "request_count": legacy.get("request_count", 10),
+            "tool_calls": legacy.get("tool_calls", 20),
+            "timeout_seconds": legacy.get("timeout_seconds", 180.0),
+        }
+        warnings.append("delegation is deprecated; use agents")
+    elif raw_agents is not None and raw_delegation is not None:
+        warnings.append("both agents and delegation are configured; agents takes precedence")
     raw_context = raw.get("context")
     if isinstance(raw_context, dict):
         if "soft_token_limit" in raw_context:
@@ -483,6 +646,29 @@ def validate_config_data(
 
     resolved_single = resolve_model(config.agent.model) if config.agent.model is not None else None
     resolved_models = {name: resolve_model(model_cfg) for name, model_cfg in config.agent.models.items()}
+    resolved_live = config.live
+    if config.live.enabled:
+        if config.live.routes:
+            resolved_routes: dict[str, LiveRouteConfig] = {}
+            for route_name, route in config.live.routes.items():
+                live_key = os.environ.get(route.api_key_env)
+                if live_key is None:
+                    raise ConfigLoadError(f"environment variable {route.api_key_env} is not set")
+                updates: dict[str, Any] = {"api_key": live_key}
+                if isinstance(route, BailianLiveRouteConfig):
+                    workspace_id = os.environ.get(route.workspace_id_env)
+                    if workspace_id is None:
+                        raise ConfigLoadError(
+                            f"environment variable {route.workspace_id_env} is not set"
+                        )
+                    updates["workspace_id"] = workspace_id
+                resolved_routes[route_name] = route.model_copy(update=updates)
+            resolved_live = config.live.model_copy(update={"routes": resolved_routes})
+        else:
+            live_key = os.environ.get(config.live.api_key_env)
+            if live_key is None:
+                raise ConfigLoadError(f"environment variable {config.live.api_key_env} is not set")
+            resolved_live = config.live.model_copy(update={"api_key": live_key})
 
     resolved_servers: dict[str, McpServerConfig] = {}
     variables = dict(os.environ)
@@ -558,6 +744,10 @@ def validate_config_data(
                 }
             ),
             "mcp_servers": resolved_servers,
+            "agents": config.agents.model_copy(
+                update={"worktree_root": config.agents.worktree_root.expanduser().resolve()}
+            ),
+            "live": resolved_live,
             "sessions": config.sessions.model_copy(update={"directory": session_directory.resolve()}),
         }
     )

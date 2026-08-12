@@ -20,7 +20,7 @@ def _multi_model_config(tmp_path: Path) -> Path:
     config_path = tmp_path / "agent.yaml"
     config_path.write_text(
         """
-version: 1
+version: 2
 agent:
   default_model: alpha
   models:
@@ -60,6 +60,7 @@ async def test_select_model_rebuilds_runtime_and_switches_active(tmp_path: Path)
     manager = ResourceManager(config, workspace=tmp_path)
     async with manager:
         first_runtime = manager.runtime
+        orchestrator = manager.agent_orchestrator
         assert first_runtime is not None
         await manager.select_model("beta")
         # The runtime instance changes because the Agent is rebuilt with the
@@ -68,6 +69,7 @@ async def test_select_model_rebuilds_runtime_and_switches_active(tmp_path: Path)
         assert manager.runtime is not None
         assert manager.active_model_name() == "beta"
         assert manager.active_model_config().api_key == "k-beta"
+        assert manager.agent_orchestrator is orchestrator
 
 
 async def test_select_model_unknown_name_raises_keyerror(tmp_path: Path) -> None:
@@ -119,7 +121,7 @@ async def test_single_model_form_loads_into_registry(tmp_path: Path) -> None:
     config_path = tmp_path / "agent.yaml"
     config_path.write_text(
         """
-version: 1
+version: 2
 agent:
   model: {id: test, api_key: k-single}
 tools: {builtins: []}

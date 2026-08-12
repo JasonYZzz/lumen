@@ -64,9 +64,41 @@ class PlanUpdated:
 
 
 @dataclass(frozen=True, slots=True)
+class PlanReviewPending:
+    plan: PlanState
+    revision: int
+
+
+@dataclass(frozen=True, slots=True)
+class PlanReviewResolved:
+    revision: int
+    approved: bool
+    feedback: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class ProgressReported:
     summary: str
     next_action: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class WorkProductChanged:
+    phase: str
+    work_product_id: str | None
+    resource: str | None
+    effect_id: str | None
+    status: str
+    summary: str = ""
+
+
+@dataclass(frozen=True, slots=True)
+class AgentLifecycleChanged:
+    agent_id: str
+    path: str
+    phase: str
+    status: str
+    summary: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -217,7 +249,11 @@ RunEvent: TypeAlias = (
     | CommentaryDelta
     | PlanCreated
     | PlanUpdated
+    | PlanReviewPending
+    | PlanReviewResolved
     | ProgressReported
+    | WorkProductChanged
+    | AgentLifecycleChanged
     | ToolCallStarted
     | ToolCallFinished
     | ToolApprovalPending
@@ -268,7 +304,7 @@ class TimelineEventRecord:
         if event_type is None:
             raise ValueError(f"unknown timeline event type: {self.type}")
         data = dict(self.data)
-        if event_type in {PlanCreated, PlanUpdated}:
+        if event_type in {PlanCreated, PlanUpdated, PlanReviewPending}:
             data["plan"] = PlanState.model_validate(data["plan"])
         elif event_type is ToolApprovalBatchPending:
             data["requests"] = tuple(ApprovalRequest(**item) for item in data["requests"])
@@ -299,7 +335,11 @@ _EVENT_TYPES: dict[str, type[Any]] = {
         CommentaryDelta,
         PlanCreated,
         PlanUpdated,
+        PlanReviewPending,
+        PlanReviewResolved,
         ProgressReported,
+        WorkProductChanged,
+        AgentLifecycleChanged,
         ToolCallStarted,
         ToolCallFinished,
         ToolApprovalPending,

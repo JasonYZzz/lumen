@@ -6,6 +6,10 @@ session is created, resumed, or cleared. ``LumenApp`` is only imported under
 ``TYPE_CHECKING`` to avoid a circular import.
 """
 
+# Cooperative Textual mixin; see approval_controller.py for the intersection-
+# self limitation behind these local suppressions.
+# pyright: reportGeneralTypeIssues=false, reportPrivateUsage=false
+
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
@@ -26,6 +30,7 @@ from lumen.ui.plan_panel import PlanPanel
 from lumen.ui.plan_review_panel import PlanReviewPanel
 from lumen.ui.streaming_markdown import AssistantMarkdown
 from lumen.ui.tool_card import ToolCard
+from lumen.ui.transcript_blocks import CommentaryBlock
 from lumen.ui.welcome import WelcomePanel
 
 if TYPE_CHECKING:
@@ -66,6 +71,8 @@ class SessionRestoreMixin:
         self.session = state.session
         self.history = list(state.history)
         self.plan = state.plan
+        session_data = self.resources.session_repository.load(state.session.id)
+        self._transcript_density = session_data.settings.transcript_density
         self.last_prompt = state.last_user_input
         # Restore THIS session's compaction summary so iterative compaction
         # continues from it — never a stale App-level value carried over from
@@ -129,12 +136,15 @@ class SessionRestoreMixin:
         if item.kind is TimelineKind.PLAN and item.plan is not None:
             return PlanPanel(PlanState.model_validate(item.plan))
         if item.kind is TimelineKind.COMMENTARY:
-            return Lazy(Static(item.text, classes="commentary-block", markup=False))
+            block = CommentaryBlock(expanded=self._transcript_density == "verbose")
+            block.append(item.text)
+            return Lazy(block)
         if item.kind is TimelineKind.PROGRESS:
             return Lazy(AssistantMarkdown(f"↳ {item.text}", classes="progress-block"))
         if item.kind is TimelineKind.TOOL and item.call_id and item.tool_name:
             card = ToolCard(item.call_id, item.tool_name)
             card.start(args=item.args or {}, origin="session", risk="recorded")
+            card.set_density(self._transcript_density)
             if item.result is not None:
                 card.update_result(
                     result=item.result,

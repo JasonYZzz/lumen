@@ -28,7 +28,7 @@ def _make_app(tmp_path: Path) -> LumenApp:
     config_path = tmp_path / "agent.yaml"
     config_path.write_text(
         """
-version: 1
+version: 2
 agent:
   name: tui-test
   model: {id: test}

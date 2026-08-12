@@ -8,6 +8,10 @@ unchanged. ``LumenApp`` is only imported under ``TYPE_CHECKING`` to avoid a
 circular import.
 """
 
+# Cooperative Textual mixin; see approval_controller.py for the intersection-
+# self limitation behind these local suppressions.
+# pyright: reportGeneralTypeIssues=false, reportPrivateUsage=false
+
 from __future__ import annotations
 
 import json
@@ -16,7 +20,9 @@ from typing import TYPE_CHECKING, Any, cast
 
 from textual.widgets import Static
 
+from lumen.application import CancelClarification, SelectModel
 from lumen.approval import ApprovalMode
+from lumen.collaboration import CollaborationMode
 from lumen.context import (
     ContextCompactCommand,
     ContextEngine,
@@ -233,7 +239,7 @@ class SlashHandlersMixin:
         if self.session is None:
             await self._append_system("No active session.")
             return
-        self.resources.clear_clarification(self.session.id)
+        await self.workspace_host.dispatch(CancelClarification(self.session.id))
         await self._append_system("Cancelled the pending clarification.")
 
     async def _cmd_help(self: LumenApp, parts: list[str], raw: str) -> None:
@@ -259,7 +265,7 @@ class SlashHandlersMixin:
         # Clearing here is the isolation boundary: no App-level state
         # crosses the /new seam.
         self._clear_compaction_row()
-        await self._apply_coordinator_state(self.coordinator.new_session())
+        await self._apply_coordinator_state(await self.coordinator.new_session())
         assert self.session is not None
         await self._append_system(f"Started new session {self.session.id}")
         self._refresh_topbar()
@@ -291,7 +297,7 @@ class SlashHandlersMixin:
             await self._append_system(f"Already on {target}.")
             return
         try:
-            await self.resources.select_model(target)
+            await self.workspace_host.dispatch(SelectModel(target))
         except Exception as error:
             await self._append_system(f"Failed to switch model: {error}")
             return
@@ -305,13 +311,14 @@ class SlashHandlersMixin:
         if len(parts) == 1:
             # Report the current mode and what it means, so the user knows what
             # they're toggling without having to read the README.
+            is_plan = self._collaboration_mode is CollaborationMode.PLAN
             current = self._approval_mode
             behaviour = (
                 "auto-approving classified tools (unknown remote tools still require confirmation)"
                 if current is ApprovalMode.AUTO
                 else (
                     "read-only exploration; file changes and commands are blocked"
-                    if current is ApprovalMode.PLAN
+                    if is_plan
                     else (
                         "auto-approving builtin file edits; confirming commands and remote writes"
                         if current is ApprovalMode.ACCEPT_EDITS
@@ -320,20 +327,54 @@ class SlashHandlersMixin:
                 )
             )
             await self._append_system(
-                f"Approval mode: {current.value} ({behaviour}). Press Shift+Tab to cycle, or use "
-                "/mode manual|accept_edits|plan|auto."
+                f"Mode: {'plan' if is_plan else current.value} ({behaviour}). "
+                "Press Shift+Tab to cycle, or use /mode manual|accept_edits|plan|auto."
             )
             return
         if len(parts) != 2:
             await self._unknown_command(parts[0].lower())
             return
         target_mode = parts[1].lower()
-        if target_mode not in {"ask", "manual", "accept_edits", "plan", "auto"}:
+        if target_mode not in {"manual", "accept_edits", "plan", "auto"}:
             await self._append_system(
                 f"Unknown mode {parts[1]!r}. Use 'manual', 'accept_edits', 'plan', or 'auto'."
             )
             return
         self._request_approval_mode(target_mode)
+
+    async def _cmd_status(self: LumenApp, parts: list[str], raw: str) -> None:
+        """``/status`` — detailed context moved out of the idle welcome panel."""
+
+        if len(parts) != 1:
+            await self._append_system("Usage: /status")
+            return
+        session_id = self.session.id if self.session is not None else "starting"
+        mode = (
+            "plan"
+            if self._collaboration_mode is CollaborationMode.PLAN
+            else self._approval_mode.value
+        )
+        lines = [
+            f"Agent: {self.config.agent.name}",
+            f"Model: {self._model_display()}",
+            f"Session: {session_id}",
+            f"Workspace: {self.resources.workspace}",
+            f"Mode: {mode}",
+            f"Sandbox: {self.config.sandbox.mode} · network {'on' if self.config.sandbox.network else 'off'}",
+            f"Transcript: {self._transcript_density} · "
+            f"animations {'on' if self.config.ui.animations else 'off'}",
+            f"Resources: {len(self.resources.tool_metadata)} tools · "
+            f"{len(self.resources.skills)} skills · MCP {self._mcp_summary()}",
+        ]
+        await self._append_system("\n".join(lines))
+
+    async def _cmd_transcript(self: LumenApp, parts: list[str], raw: str) -> None:
+        """``/transcript`` — open searchable structured transcript."""
+
+        if len(parts) != 1:
+            await self._append_system("Usage: /transcript")
+            return
+        self.action_show_transcript()
 
     async def _cmd_theme(self: LumenApp, parts: list[str], raw: str) -> None:
         """``/theme [name]`` — list builtin themes, or switch the active one."""
@@ -379,6 +420,70 @@ class SlashHandlersMixin:
             return
         await self._list_sessions()
 
+    async def _cmd_children(self: LumenApp, parts: list[str], raw: str) -> None:
+        """``/agents`` (or legacy ``/children``) — inspect or interrupt Agents."""
+
+        if len(parts) == 1:
+            self.action_show_children()
+            return
+        if len(parts) == 3 and parts[1].lower() in {"cancel", "interrupt"}:
+            try:
+                child = await self.coordinator.cancel_child_run(parts[2])
+            except Exception as error:
+                await self._append_system(f"Cannot interrupt Agent: {error}")
+            else:
+                await self._append_system(
+                    f"Agent {child.get('id', parts[2])}: {child.get('status', 'interrupted')}"
+                )
+            return
+        if len(parts) >= 4 and parts[1].lower() in {"message", "continue"}:
+            content = raw.split(maxsplit=3)[3]
+            try:
+                if parts[1].lower() == "message":
+                    await self.coordinator.send_agent_message(parts[2], content)
+                    outcome = "message queued"
+                else:
+                    await self.coordinator.continue_agent(parts[2], content)
+                    outcome = "follow-up started"
+            except Exception as error:
+                await self._append_system(f"Agent action failed: {error}")
+            else:
+                await self._append_system(f"Agent {parts[2]}: {outcome}")
+            return
+        if len(parts) == 3 and parts[1].lower() in {"import", "reject"}:
+            try:
+                if parts[1].lower() == "import":
+                    await self.coordinator.approve_agent_import(parts[2])
+                    outcome = "import handled"
+                else:
+                    await self.coordinator.reject_agent_import(parts[2])
+                    outcome = "changes rejected"
+            except Exception as error:
+                await self._append_system(f"Agent action failed: {error}")
+            else:
+                await self._append_system(f"Agent {parts[2]}: {outcome}")
+            return
+        if len(parts) >= 4 and parts[1].lower() == "close":
+            reason = raw.split(maxsplit=3)[3]
+            try:
+                await self.coordinator.close_agent(parts[2], reason)
+            except Exception as error:
+                await self._append_system(f"Agent action failed: {error}")
+            else:
+                await self._append_system(f"Agent {parts[2]}: closed")
+            return
+        await self._append_system(
+            "Usage: /agents [interrupt|message|continue|import|reject|close] <id> [text]"
+        )
+
+    async def _cmd_checkpoints(self: LumenApp, parts: list[str], raw: str) -> None:
+        """``/checkpoints`` — safely branch session context at an earlier turn."""
+
+        if len(parts) != 1:
+            await self._append_system("Usage: /checkpoints")
+            return
+        self.action_show_checkpoints()
+
     async def _cmd_resume(self: LumenApp, parts: list[str], raw: str) -> None:
         """``/resume <id>`` — resume a session by id (bare form lists sessions)."""
 
@@ -389,7 +494,7 @@ class SlashHandlersMixin:
             await self._unknown_command(parts[0].lower())
             return
         try:
-            state = self.coordinator.resume(parts[1])
+            state = await self.coordinator.resume(parts[1])
         except Exception as error:
             await self._append_system(f"Cannot resume session: {error}")
         else:

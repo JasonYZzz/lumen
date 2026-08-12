@@ -27,6 +27,7 @@ class StartRun:
     session_id: str
     input: str
     client_request_id: str
+    model_prompt: str | None = None
     type: Literal["start_run"] = "start_run"
 
 
@@ -37,10 +38,32 @@ class CancelRun:
 
 
 @dataclass(frozen=True, slots=True)
+class StartLiveSession:
+    session_id: str
+    client_request_id: str
+    sdp: str | None = None
+    route: str | None = None
+    type: Literal["start_live_session"] = "start_live_session"
+
+
+@dataclass(frozen=True, slots=True)
+class InterruptLiveSession:
+    live_session_id: str
+    type: Literal["interrupt_live_session"] = "interrupt_live_session"
+
+
+@dataclass(frozen=True, slots=True)
+class EndLiveSession:
+    live_session_id: str
+    type: Literal["end_live_session"] = "end_live_session"
+
+
+@dataclass(frozen=True, slots=True)
 class DecideApproval:
     run_id: str
     call_id: str
     approved: bool
+    scope: Literal["once", "session"] = "once"
     type: Literal["decide_approval"] = "decide_approval"
 
 
@@ -49,14 +72,149 @@ class QueueRunInput:
     run_id: str
     text: str
     mode: Literal["steer", "follow_up"]
+    model_prompt: str | None = None
     type: Literal["queue_input"] = "queue_input"
 
 
 @dataclass(frozen=True, slots=True)
+class DequeueRunInputs:
+    run_id: str
+    type: Literal["dequeue_run_inputs"] = "dequeue_run_inputs"
+
+
+@dataclass(frozen=True, slots=True)
 class SetApprovalMode:
-    mode: Literal["manual", "accept_edits", "plan", "auto"]
-    confirmed: bool = False
+    session_id: str
+    mode: Literal["manual", "accept_edits", "auto"]
     type: Literal["set_approval_mode"] = "set_approval_mode"
+
+
+@dataclass(frozen=True, slots=True)
+class SetCollaborationMode:
+    session_id: str
+    mode: Literal["default", "plan"]
+    type: Literal["set_collaboration_mode"] = "set_collaboration_mode"
+
+
+@dataclass(frozen=True, slots=True)
+class SetTranscriptDensity:
+    session_id: str
+    density: Literal["normal", "verbose"]
+    type: Literal["set_transcript_density"] = "set_transcript_density"
+
+
+@dataclass(frozen=True, slots=True)
+class ApprovePlan:
+    session_id: str
+    revision: int
+    client_request_id: str
+    type: Literal["approve_plan"] = "approve_plan"
+
+
+@dataclass(frozen=True, slots=True)
+class RejectPlan:
+    session_id: str
+    revision: int
+    feedback: str
+    client_request_id: str
+    type: Literal["reject_plan"] = "reject_plan"
+
+
+@dataclass(frozen=True, slots=True)
+class WaivePlanVerification:
+    session_id: str
+    scope: tuple[str, ...]
+    reason: str
+    type: Literal["waive_plan_verification"] = "waive_plan_verification"
+
+
+@dataclass(frozen=True, slots=True)
+class ListChildRuns:
+    session_id: str
+    type: Literal["list_child_runs"] = "list_child_runs"
+
+
+@dataclass(frozen=True, slots=True)
+class ListAgents:
+    session_id: str
+    type: Literal["list_agents"] = "list_agents"
+
+
+@dataclass(frozen=True, slots=True)
+class SendAgentMessage:
+    agent_id: str
+    message: str
+    type: Literal["send_agent_message"] = "send_agent_message"
+
+
+@dataclass(frozen=True, slots=True)
+class ContinueAgent:
+    agent_id: str
+    task: str
+    type: Literal["continue_agent"] = "continue_agent"
+
+
+@dataclass(frozen=True, slots=True)
+class InterruptAgent:
+    agent_id: str
+    type: Literal["interrupt_agent"] = "interrupt_agent"
+
+
+@dataclass(frozen=True, slots=True)
+class CloseAgent:
+    agent_id: str
+    resolution: str | None = None
+    reason: str | None = None
+    type: Literal["close_agent"] = "close_agent"
+
+
+@dataclass(frozen=True, slots=True)
+class ApproveAgentImport:
+    agent_id: str
+    type: Literal["approve_agent_import"] = "approve_agent_import"
+
+
+@dataclass(frozen=True, slots=True)
+class RejectAgentImport:
+    agent_id: str
+    type: Literal["reject_agent_import"] = "reject_agent_import"
+
+
+@dataclass(frozen=True, slots=True)
+class ListCheckpoints:
+    session_id: str
+    type: Literal["list_checkpoints"] = "list_checkpoints"
+
+
+@dataclass(frozen=True, slots=True)
+class ForkSessionAtTurn:
+    session_id: str
+    through_turn: int
+    type: Literal["fork_session_at_turn"] = "fork_session_at_turn"
+
+
+@dataclass(frozen=True, slots=True)
+class CancelChildRun:
+    child_id: str
+    type: Literal["cancel_child_run"] = "cancel_child_run"
+
+
+@dataclass(frozen=True, slots=True)
+class ApproveChildImport:
+    child_id: str
+    type: Literal["approve_child_import"] = "approve_child_import"
+
+
+@dataclass(frozen=True, slots=True)
+class RejectChildImport:
+    child_id: str
+    type: Literal["reject_child_import"] = "reject_child_import"
+
+
+@dataclass(frozen=True, slots=True)
+class CloseChildRun:
+    child_id: str
+    type: Literal["close_child_run"] = "close_child_run"
 
 
 @dataclass(frozen=True, slots=True)
@@ -138,9 +296,32 @@ WorkspaceCommand: TypeAlias = (
     | ListSessions
     | StartRun
     | CancelRun
+    | StartLiveSession
+    | InterruptLiveSession
+    | EndLiveSession
     | DecideApproval
     | QueueRunInput
+    | DequeueRunInputs
     | SetApprovalMode
+    | SetCollaborationMode
+    | SetTranscriptDensity
+    | ApprovePlan
+    | RejectPlan
+    | WaivePlanVerification
+    | ListChildRuns
+    | ListAgents
+    | SendAgentMessage
+    | ContinueAgent
+    | InterruptAgent
+    | CloseAgent
+    | ApproveAgentImport
+    | RejectAgentImport
+    | ListCheckpoints
+    | ForkSessionAtTurn
+    | CancelChildRun
+    | ApproveChildImport
+    | RejectChildImport
+    | CloseChildRun
     | SelectModel
     | RetryRun
     | InvokeSkill
@@ -167,6 +348,15 @@ class RunStartedResult:
 
 
 @dataclass(frozen=True, slots=True)
+class LiveStartedResult:
+    live_session_id: str
+    session_id: str
+    media: dict[str, Any]
+    answer_sdp: str | None
+    state: dict[str, Any]
+
+
+@dataclass(frozen=True, slots=True)
 class CommandAcknowledged:
     status: str
     data: dict[str, Any] = field(default_factory=dict[str, Any])
@@ -180,11 +370,13 @@ class WorkspaceBootstrap:
     model_id: str
     available_models: list[str]
     approval_mode: str
+    collaboration_mode: str
     tools: list[dict[str, str]]
     mcp: list[dict[str, object]]
     skills: list[dict[str, str]]
     warnings: list[str]
     active_run_id: str | None
+    live_enabled: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -201,7 +393,12 @@ class SessionList:
 
 
 CommandResult: TypeAlias = (
-    SessionCreated | RunStartedResult | CommandAcknowledged | WorkspaceBootstrap | SessionList
+    SessionCreated
+    | RunStartedResult
+    | LiveStartedResult
+    | CommandAcknowledged
+    | WorkspaceBootstrap
+    | SessionList
 )
 
 
@@ -225,7 +422,17 @@ class SessionSnapshot:
     timeline: list[TimelineItem]
     last_user_input: str | None
     active_run_id: str | None
+    approval_mode: str = "manual"
+    collaboration_mode: str = "default"
+    plan_review_status: str = "none"
+    transcript_density: str = "normal"
     pending_clarification: dict[str, Any] | None = None
+    work_products: list[dict[str, Any]] = field(default_factory=list[dict[str, Any]])
+    pending_effects: list[dict[str, Any]] = field(default_factory=list[dict[str, Any]])
+    recoverable_effects: list[dict[str, Any]] = field(default_factory=list[dict[str, Any]])
+    agents: list[dict[str, Any]] = field(default_factory=list[dict[str, Any]])
+    agent_usage: dict[str, Any] = field(default_factory=dict[str, Any])
+    live_sessions: list[dict[str, Any]] = field(default_factory=list[dict[str, Any]])
 
 
 class WorkspaceHostError(RuntimeError):

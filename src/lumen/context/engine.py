@@ -109,17 +109,6 @@ def _messages_digest(messages: Sequence[ModelMessage]) -> str:
     return f"sha256:{hashlib.sha256(payload.encode('utf-8')).hexdigest()}"
 
 
-def _transcript_cursor(history: Sequence[ModelMessage], sequence: int) -> TranscriptCursor:
-    """Build an exclusive absolute cursor bound to the preceding message."""
-
-    if sequence <= 0:
-        return TranscriptCursor(sequence=0, message_id="session-origin")
-    return TranscriptCursor(
-        sequence=sequence,
-        message_id=_message_id(history[sequence - 1], sequence - 1),
-    )
-
-
 def _checkpoint_item(kind: str, value: str, evidence: tuple[str, ...]) -> CheckpointItem:
     digest = hashlib.sha256(f"{kind}\0{value}".encode()).hexdigest()[:16]
     return CheckpointItem(
@@ -262,6 +251,7 @@ class RuntimeContextSnapshot:
     tool_schema_documents: tuple[dict[str, Any], ...] = ()
     active_skill_documents: tuple[dict[str, Any], ...] = ()
     retrieved_context_documents: tuple[dict[str, Any], ...] = ()
+    work_product_documents: tuple[dict[str, Any], ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -713,7 +703,9 @@ class ContextEngine:
             recalled_memory=recalled_memory,
             active_skills=request.runtime.active_skill_documents,
             retrieved_context=request.runtime.retrieved_context_documents,
-            task_state=_render_task_state(request.task.plan),
+            task_state=_render_task_state(
+                request.task.plan, request.runtime.work_product_documents
+            ),
         )
         # Per-zone caps are necessary but not sufficient: their sum plus the
         # recent history and output reserve can still overfill the model. Use
@@ -745,7 +737,9 @@ class ContextEngine:
                 recalled_memory=recalled_memory,
                 active_skills=request.runtime.active_skill_documents,
                 retrieved_context=request.runtime.retrieved_context_documents,
-                task_state=_render_task_state(request.task.plan),
+                task_state=_render_task_state(
+                    request.task.plan, request.runtime.work_product_documents
+                ),
             )
         policy_message = self._policy_message(assembled.blocks)
         context_data_message = self._context_data_message(assembled.blocks)
@@ -1308,6 +1302,7 @@ class ContextEngine:
                 "tool_schemas": request.runtime.tool_schema_documents,
                 "active_skills": request.runtime.active_skill_documents,
                 "retrieved_context": request.runtime.retrieved_context_documents,
+                "work_products": request.runtime.work_product_documents,
                 "previous_checkpoint": (
                     request.previous_checkpoint.model_dump(mode="json")
                     if request.previous_checkpoint is not None
@@ -1629,15 +1624,21 @@ def _parse_scope(value: object) -> MemoryScope:
     return MemoryScope.PROJECT
 
 
-def _render_task_state(plan: PlanState) -> str:
+def _render_task_state(
+    plan: PlanState,
+    work_product_documents: Sequence[dict[str, Any]] = (),
+) -> str:
     """Render the current plan without inventing state outside the controller."""
 
-    if not plan.steps:
-        return ""
-    lines = [f"Plan revision: {plan.revision}"]
-    for step in plan.steps:
-        note = f" — {step.note}" if step.note else ""
-        lines.append(f"- [{step.status.value}] `{step.id}` {step.title}{note}")
+    lines: list[str] = []
+    if plan.steps:
+        lines.append(f"Plan revision: {plan.revision}")
+        for step in plan.steps:
+            note = f" — {step.note}" if step.note else ""
+            lines.append(f"- [{step.status.value}] `{step.id}` {step.title}{note}")
+    if work_product_documents:
+        lines.append("Active work products and recent effects:")
+        lines.append(json.dumps(list(work_product_documents), ensure_ascii=False, sort_keys=True))
     return "\n".join(lines)
 
 

@@ -6,6 +6,10 @@ usage + keymap hints). ``LumenApp`` is only imported under ``TYPE_CHECKING``
 to avoid a circular import.
 """
 
+# Cooperative Textual mixin; see approval_controller.py for the intersection-
+# self limitation behind these local suppressions.
+# pyright: reportGeneralTypeIssues=false, reportPrivateUsage=false
+
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, cast
@@ -16,6 +20,7 @@ from textual.widgets import Static
 
 from lumen.approval import ApprovalMode
 from lumen.branding import product_label
+from lumen.collaboration import CollaborationMode
 from lumen.events import UsageUpdated
 from lumen.ui.themes import theme_color
 from lumen.ui.welcome import WelcomePanel
@@ -36,13 +41,10 @@ class StatusBarMixin:
     """Render topbar, welcome panel, and the composed status line."""
 
     def _refresh_topbar(self: LumenApp) -> None:
-        session_id = self.session.id[:8] if self.session else "none"
         # MCP status: only shown when there are servers AND some are unhealthy.
         # A fully-healthy or zero-MCP config stays silent to reduce noise.
         mcp_segment = self._mcp_warning_segment()
-        topbar = (
-            f"◆ {product_label(self.config.agent.name)}  ·  {self.resources.workspace.name}  ·  {session_id}"
-        )
+        topbar = f"◆ {product_label(self.config.agent.name)}  ·  {self.resources.workspace.name}"
         if mcp_segment:
             topbar += f"  ·  {mcp_segment}"
         self.query_one("#topbar", Static).update(topbar)
@@ -75,7 +77,11 @@ class StatusBarMixin:
         welcome.update_context(
             agent_name=self.config.agent.name,
             model=self._model_display(),
-            mode=self._approval_mode.value,
+            mode=(
+                "plan"
+                if self._collaboration_mode is CollaborationMode.PLAN
+                else self._approval_mode.value
+            ),
             session_id=self.session.id[:8] if self.session is not None else "starting",
             workspace=self.resources.workspace,
             tool_count=len(self.resources.tool_metadata),
@@ -119,11 +125,18 @@ class StatusBarMixin:
         """
 
         width = self.size.width if self.is_running else 120
-        parts = [self._model_display()]
-        if width >= 120:
-            parts.append("/ commands · @ files · Alt+C copy")
-        elif width >= 80:
-            parts.append("/ · @")
+        configured = set(self.config.ui.status_line)
+        parts: list[str] = []
+        if "model" in configured:
+            parts.append(self._model_display())
+        if "workspace" in configured:
+            parts.append(self.resources.workspace.name)
+        if "keymap" in configured and width >= 120:
+            parts.append("/ · @ · Ctrl+T transcript · Ctrl+R history")
+        elif "keymap" in configured and width >= 80:
+            parts.append("/ · @ · Ctrl+T")
+        if not parts:
+            return ""
         return "  │  " + "  │  ".join(parts)
 
     def _status(self: LumenApp, state: str) -> Text:
@@ -134,12 +147,15 @@ class StatusBarMixin:
         never disappears during a run.
         """
 
-        mode_text, mode_token = {
-            ApprovalMode.MANUAL: ("⏸ manual mode on", "mode-manual"),
-            ApprovalMode.ACCEPT_EDITS: ("⏵⏵ accept edits on", "mode-edit"),
-            ApprovalMode.PLAN: ("⏸ plan mode on", "mode-plan"),
-            ApprovalMode.AUTO: ("⏵⏵ auto mode on", "mode-auto"),
-        }[self._approval_mode]
+        configured = set(self.config.ui.status_line)
+        if self._collaboration_mode is CollaborationMode.PLAN:
+            mode_text, mode_token = ("⏸ plan mode on", "mode-plan")
+        else:
+            mode_text, mode_token = {
+                ApprovalMode.MANUAL: ("⏸ manual mode on", "mode-manual"),
+                ApprovalMode.ACCEPT_EDITS: ("⏵⏵ accept edits on", "mode-edit"),
+                ApprovalMode.AUTO: ("⏵⏵ auto mode on", "mode-auto"),
+            }[self._approval_mode]
         routine_state = (
             state in {"Ready", "Thinking…"}
             or state.startswith("Running ")
@@ -150,9 +166,10 @@ class StatusBarMixin:
         mode_color = theme_color(app, mode_token, "#948A80")
         meta_color = theme_color(app, "activity-meta", "#948A80")
         rendered = Text()
-        rendered.append(mode_text, style=f"bold {mode_color}")
-        rendered.append(" (shift+tab to cycle)", style=meta_color)
-        if not routine_state:
+        if "mode" in configured:
+            rendered.append(mode_text, style=f"bold {mode_color}")
+            rendered.append(" (shift+tab)", style=meta_color)
+        if "state" in configured and not routine_state:
             state_token = (
                 "error"
                 if state in {"Denied", "Run failed", "Startup error"}
@@ -161,9 +178,10 @@ class StatusBarMixin:
                 else "foreground"
             )
             state_color = theme_color(app, state_token, "#ECE9E4")
-            rendered.append(" · ", style=meta_color)
+            if rendered:
+                rendered.append(" · ", style=meta_color)
             rendered.append(state, style=state_color)
-        if usage and self.size.width >= 80:
+        if "usage" in configured and usage and self.size.width >= 80:
             rendered.append(f" · {usage}", style=meta_color)
         rendered.append(self._status_suffix(), style=meta_color)
         return rendered
@@ -188,5 +206,5 @@ class StatusBarMixin:
 
     def _refresh_mode_classes(self: LumenApp, status: Static) -> None:
         status.set_class(self._approval_mode is ApprovalMode.ACCEPT_EDITS, "mode-accept")
-        status.set_class(self._approval_mode is ApprovalMode.PLAN, "mode-plan")
+        status.set_class(self._collaboration_mode is CollaborationMode.PLAN, "mode-plan")
         status.set_class(self._approval_mode is ApprovalMode.AUTO, "mode-auto")

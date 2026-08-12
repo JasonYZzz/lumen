@@ -29,7 +29,7 @@ async def test_stdio_mcp_server_is_discovered(tmp_path: Path) -> None:
     config_path = tmp_path / "agent.yaml"
     config_path.write_text(
         f"""
-version: 1
+version: 2
 agent:
   model:
     id: test
@@ -88,7 +88,7 @@ async def test_unknown_tool_risk_name_is_rejected_at_startup(tmp_path: Path) -> 
     config_path = tmp_path / "agent.yaml"
     config_path.write_text(
         f"""
-version: 1
+version: 2
 agent:
   model:
     id: test
@@ -115,7 +115,7 @@ async def test_unclassified_mcp_tools_emit_actionable_warning(tmp_path: Path) ->
     config_path = tmp_path / "agent.yaml"
     config_path.write_text(
         f"""
-version: 1
+version: 2
 agent:
   model:
     id: test
@@ -169,7 +169,7 @@ async def test_streamable_http_mcp_server_is_discovered(tmp_path: Path) -> None:
         config_path = tmp_path / "agent.yaml"
         config_path.write_text(
             f"""
-version: 1
+version: 2
 agent:
   model:
     id: test
@@ -202,7 +202,7 @@ async def test_server_side_tool_error_feeds_back_to_model(tmp_path: Path) -> Non
     config_path = tmp_path / "agent.yaml"
     config_path.write_text(
         f"""
-version: 1
+version: 2
 agent:
   model:
     id: test
@@ -263,7 +263,7 @@ async def test_session_close_tolerates_reconnect_drained_client(tmp_path: Path) 
     config_path = tmp_path / "agent.yaml"
     config_path.write_text(
         f"""
-version: 1
+version: 2
 agent:
   model:
     id: test

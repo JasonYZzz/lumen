@@ -9,6 +9,7 @@ from typing import Any, Protocol
 from pydantic_ai.messages import ModelResponse, TextPart, ToolCallPart, ToolReturnPart
 
 from lumen.events import (
+    AgentLifecycleChanged,
     ClarificationRequested,
     CommentaryDelta,
     ContextCompactionCompleted,
@@ -30,6 +31,7 @@ from lumen.events import (
     ToolApprovalResolved,
     ToolCallFinished,
     ToolCallStarted,
+    WorkProductChanged,
 )
 from lumen.sessions import SessionRepository, TurnRecord
 
@@ -48,6 +50,8 @@ class TimelineKind(StrEnum):
     SYSTEM = "system"
     ERROR = "error"
     COMPACTION = "compaction"
+    WORK_PRODUCT = "work_product"
+    AGENT = "agent"
 
 
 @dataclass(frozen=True, slots=True)
@@ -114,6 +118,12 @@ class TimelineStore:
     def next_cursor(self) -> int | None:
         return self._next_cursor
 
+    @property
+    def items(self) -> tuple[TimelineItem, ...]:
+        """Immutable snapshot used by transcript/search UI adapters."""
+
+        return tuple(self._items)
+
     def apply(self, event: RunEvent) -> TimelineItem | None:
         item: TimelineItem | None = None
         if isinstance(event, RunStarted):
@@ -155,6 +165,21 @@ class TimelineStore:
         elif isinstance(event, ProgressReported):
             text = event.summary + (f"\n{event.next_action}" if event.next_action else "")
             item = self._new(TimelineKind.PROGRESS, text=text)
+        elif isinstance(event, WorkProductChanged):
+            resource = f" — {event.resource}" if event.resource else ""
+            detail = event.summary or event.status
+            item = self._new(
+                TimelineKind.WORK_PRODUCT,
+                text=f"{event.phase}{resource}: {detail}",
+                status=event.status,
+            )
+        elif isinstance(event, AgentLifecycleChanged):
+            detail = event.summary or event.status
+            item = self._new(
+                TimelineKind.AGENT,
+                text=f"{event.path} · {event.phase}: {detail}",
+                status=event.status,
+            )
         elif isinstance(event, ToolCallStarted):
             if event.origin == "control" or event.name in _CONTROL_TOOL_NAMES:
                 return None

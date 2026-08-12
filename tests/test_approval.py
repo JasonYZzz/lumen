@@ -22,7 +22,7 @@ def _request(
     )
 
 
-def test_approval_policy_supports_manual_accept_edits_plan_and_auto() -> None:
+def test_approval_policy_supports_manual_accept_edits_and_auto() -> None:
     policy = ApprovalPolicy()
     edit = _request("edit_file", "write")
     command = _request("run_command", "execute")
@@ -34,24 +34,19 @@ def test_approval_policy_supports_manual_accept_edits_plan_and_auto() -> None:
     assert policy.decide(edit, ApprovalMode.ACCEPT_EDITS).approved
     assert policy.decide(command, ApprovalMode.ACCEPT_EDITS).requires_confirmation
     assert policy.decide(mcp_write, ApprovalMode.ACCEPT_EDITS).requires_confirmation
-    assert policy.decide(_request("read_file", "read"), ApprovalMode.PLAN).approved
-    plan_write = policy.decide(edit, ApprovalMode.PLAN)
-    assert plan_write.approved is False
-    assert plan_write.requires_confirmation is False
-    assert "blocked in plan mode" in plan_write.message
     assert policy.decide(command, ApprovalMode.AUTO).approved
     assert policy.decide(unknown, ApprovalMode.AUTO).requires_confirmation
 
 
-def test_approval_policy_matches_plan_and_accept_edits_command_boundaries() -> None:
+def test_approval_policy_classifies_plan_reads_and_accept_edits_boundaries() -> None:
     policy = ApprovalPolicy()
     inspect = _request("run_command", "execute", args={"argv": ["git", "diff", "--stat"]})
     mutate = _request("run_command", "execute", args={"argv": ["git", "reset", "--hard"]})
     local_mkdir = _request("run_command", "execute", args={"argv": ["mkdir", "outputs"]})
     escaping_mkdir = _request("run_command", "execute", args={"argv": ["mkdir", "../outside"]})
 
-    assert policy.decide(inspect, ApprovalMode.PLAN).approved
-    assert not policy.decide(mutate, ApprovalMode.PLAN).approved
+    assert policy.is_read_only(inspect)
+    assert not policy.is_read_only(mutate)
     assert policy.decide(local_mkdir, ApprovalMode.ACCEPT_EDITS).approved
     assert policy.decide(escaping_mkdir, ApprovalMode.ACCEPT_EDITS).requires_confirmation
 
@@ -63,6 +58,16 @@ def test_auto_keeps_protected_configuration_edits_approval_gated() -> None:
     )
 
     assert decision.requires_confirmation
+
+
+def test_auto_cannot_bypass_writable_child_spawn_approval() -> None:
+    decision = ApprovalPolicy().decide(
+        _request("spawn_child", "execute", args={"task": "edit", "kind": "worktree"}),
+        ApprovalMode.AUTO,
+    )
+
+    assert decision.requires_confirmation
+    assert "always require" in decision.message
 
 
 def test_approval_presenter_exposes_command_before_cwd() -> None:

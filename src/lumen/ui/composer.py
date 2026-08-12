@@ -15,6 +15,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, ClassVar, cast
 
+from rich.cells import cell_len
 from textual.app import App
 from textual.binding import BindingType
 from textual.message import Message
@@ -175,6 +176,15 @@ class PromptEditor(TextArea):
         # ``@README.md ``) still starts with ``@``. We set this before the
         # replacement and clear it on the next change event.
         self._suppress_completion = False
+        self._vim_enabled = False
+        self._vim_insert = True
+
+    def configure_vim(self, enabled: bool) -> None:
+        """Enable a small, predictable Vim navigation layer for terminal users."""
+
+        self._vim_enabled = enabled
+        self._vim_insert = True
+        self.set_class(enabled, "vim-enabled")
 
     def expanded_text(self) -> str:
         """Return model-facing text with compact paste markers expanded."""
@@ -225,6 +235,37 @@ class PromptEditor(TextArea):
         """
 
         key = getattr(event, "key", "")
+
+        if self._vim_enabled:
+            if key == "escape" and self._vim_insert:
+                self._vim_insert = False
+                self.notify("Vim: NORMAL", timeout=1)
+                event.prevent_default()
+                event.stop()
+                return
+            if not self._vim_insert:
+                if key in {"i", "a"}:
+                    if key == "a":
+                        self.action_cursor_right()
+                    self._vim_insert = True
+                    self.notify("Vim: INSERT", timeout=1)
+                elif key == "h":
+                    self.action_cursor_left()
+                elif key == "j":
+                    self.action_cursor_down()
+                elif key == "k":
+                    self.action_cursor_up()
+                elif key == "l":
+                    self.action_cursor_right()
+                elif key == "x":
+                    self.action_delete_right()
+                else:
+                    event.prevent_default()
+                    event.stop()
+                    return
+                event.prevent_default()
+                event.stop()
+                return
 
         # --- completion dropdown takes over navigation when open ----------
         # We check the trigger token synchronously instead of relying on the
@@ -355,7 +396,10 @@ class PromptEditor(TextArea):
         """Grow with wrapped visual rows, capped at 30% of the terminal."""
 
         available = max(1, self.size.width - 4)
-        visual_rows = sum(max(1, (len(line) + available - 1) // available) for line in self.text.split("\n"))
+        visual_rows = sum(
+            max(1, (cell_len(line) + available - 1) // available)
+            for line in self.text.split("\n")
+        )
         app = cast(App[object], self.app)  # type: ignore[reportUnknownMemberType]
         screen_height = app.size.height if self.is_attached else 24
         self.styles.height = min(max(3, visual_rows + 2), max(3, int(screen_height * 0.3)))
@@ -395,36 +439,38 @@ class PromptEditor(TextArea):
                 self._dropdown.hide()
 
     async def _open_external_editor(self) -> None:
-        command = os.environ.get("VISUAL") or os.environ.get("EDITOR")
-        if not command:
+        updated = await edit_text_external(self.expanded_text())
+        if updated is None:
             self.notify("Set $VISUAL or $EDITOR to use Ctrl+G", severity="warning")
             return
-
         original_cursor = self.cursor_location
-
-        def edit() -> str:
-            path: Path | None = None
-            try:
-                with tempfile.NamedTemporaryFile(
-                    mode="w", suffix=".md", encoding="utf-8", delete=False
-                ) as handle:
-                    handle.write(self.expanded_text())
-                    path = Path(handle.name)
-                completed = subprocess.run(
-                    [*shlex.split(command), str(path)],
-                    check=False,
-                )
-                if completed.returncode != 0:
-                    return self.text
-                return path.read_text(encoding="utf-8")
-            finally:
-                if path is not None:
-                    path.unlink(missing_ok=True)
-
-        updated = await asyncio.to_thread(edit)
         self.text = updated
         end_row, end_col = self.document.end
         self.cursor_location = (min(original_cursor[0], end_row), min(original_cursor[1], end_col))
+
+
+async def edit_text_external(value: str, *, suffix: str = ".md") -> str | None:
+    """Round-trip text through the configured editor without invoking a shell."""
+
+    command = os.environ.get("VISUAL") or os.environ.get("EDITOR")
+    if not command:
+        return None
+
+    def edit() -> str:
+        path: Path | None = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                mode="w", suffix=suffix, encoding="utf-8", delete=False
+            ) as handle:
+                handle.write(value)
+                path = Path(handle.name)
+            completed = subprocess.run([*shlex.split(command), str(path)], check=False)
+            return value if completed.returncode != 0 else path.read_text(encoding="utf-8")
+        finally:
+            if path is not None:
+                path.unlink(missing_ok=True)
+
+    return await asyncio.to_thread(edit)
 
 
 __all__ = [
@@ -432,5 +478,6 @@ __all__ = [
     "ComposerState",
     "HistoryResult",
     "PromptEditor",
+    "edit_text_external",
     "is_large_paste",
 ]

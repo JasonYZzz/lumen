@@ -9,13 +9,15 @@ flowchart LR
     Core --> MCP["MCP toolsets"]
     Core --> Skills["Agent Skills"]
     Core --> Hooks["Lifecycle hooks"]
-    Core --> Delegate["DelegationManager"]
+    Host["WorkspaceHost"] --> Orchestrator["AgentOrchestrator"]
+    Orchestrator --> Factory["AgentRuntimeFactory"]
+    Factory --> Core
 
     MCP --> Resources["Resources"]
     MCP --> Prompts["Prompts"]
     MCP --> OAuth["OAuth PKCE"]
     Skills --> Scripts["Declared scripts"]
-    Delegate --> Child["Read-only child Agent"]
+    Orchestrator --> Thread["Persistent Agent Threads"]
 ```
 
 ## 6.2 MCP
@@ -48,34 +50,37 @@ Skill 发现优先级为 builtin < user < project。`SKILL.md` frontmatter 描�
 
 Python tool plugin 返回 `list[ToolSpec]`，适合增加模型可调用能力。Hook 面向生命周期拦截，适合策略、审计、格式化和通知。二者不是同一抽象：plugin 提供“做什么”，hook 改变“何时允许以及前后发生什么”。
 
-## 6.5 子 Agent 委派
+## 6.5 原生多 Agent Runtime
 
 ```mermaid
 sequenceDiagram
-    participant Parent as Parent Agent
-    participant DM as DelegationManager
-    participant Child as Child Agent
-    participant Read as READ tools
+    participant Parent as Root Agent
+    participant AO as AgentOrchestrator
+    participant SR as Session v8 Journal
+    participant Child as Isolated AgentRuntime
 
-    Parent->>DM: delegate_task(independent research)
-    DM->>DM: acquire concurrency slot
-    DM->>Child: new isolated conversation
-    loop bounded child loop
-        Child->>Read: inspect files/search
-        Read-->>Child: evidence
-    end
-    Child-->>DM: concise result
-    DM-->>Parent: normal tool observation
+    Parent->>AO: spawn_agent(task, profile, plan targets)
+    AO->>SR: append thread + spawned event
+    AO-->>Parent: AgentThreadRef
+    AO->>Child: bounded runtime with narrowed config snapshot
+    Child-->>AO: result + artifacts + evidence + optional commit
+    AO->>SR: append result + terminal event
+    Parent->>AO: wait_agent / followup_task / close_agent
+    AO-->>Parent: semantic state and result summary
 ```
 
-当前约束是有意设计的：
+`AgentOrchestrator` 由 `WorkspaceHost` 按根 Session 生命周期持有，是 Agent 状态、消息和调度的唯一权威；模型工具只是薄 Adapter。`AgentRuntimeFactory` 复用正常的 `AgentRuntime` 创建隔离 child runtime，并在创建时固化实际生效的模型、工具、审批、sandbox、cwd 与限额快照。
 
-- 默认关闭，避免意外模型费用；
-- 每个 child 使用新的 conversation；
-- 只获得 `risk=read` 的本地工具；
-- 不获得 MCP、write、execute 或 `delegate_task`；
-- 委派深度固定为一层；
-- 独立限制 concurrency、request、tool call 与 timeout；
-- child 只返回结果，不直接向 UI 写事件或修改 session。
+当前 V1 约束：
 
-这适合并行代码检索、竞争假设和模块审查，不适合需要多 Agent 协作编辑、共享任务列表或长生命周期通信的场景。
+- 默认 `adaptive`；用户、项目指令或 Skill 明确要求并行时必须委派；
+- 最大深度一层，child 不获得任何多 Agent 控制工具；
+- `explorer` 只获得父级有效工具中的 `EffectKind.observe` 交集；
+- `default` 与 `worker` 在独立 Git worktree 中执行写操作；
+- 角色只能收窄父级模型、工具、审批与 sandbox 能力，不能扩大；
+- Session 级并发、每 Run Agent 数、request、tool call 与 timeout 均有独立上限；
+- 消息、事件、结果和不可伪造 evidence 追加写入 Session v8，大正文进入 ArtifactStore；
+- worktree 导入先检查父工作区 dirty path 和三方冲突，重叠时进入协调状态；
+- 活动、待审批、未送达结果、未处理失败、待导入、冲突或未通过证据都会阻止根 Agent 完成。
+
+旧 `spawn_child`、`wait_children`、`cancel_child` 与 Child Run Host API 由兼容 Adapter 转发，不再作为新运行时的状态权威。完整设计决策见 [10-native-multi-agent-runtime.md](10-native-multi-agent-runtime.md)。

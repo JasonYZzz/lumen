@@ -6,6 +6,10 @@ row helpers it drives. ``LumenApp`` is only imported under ``TYPE_CHECKING``
 to avoid a circular import.
 """
 
+# Cooperative Textual mixin; see approval_controller.py for the intersection-
+# self limitation behind these local suppressions.
+# pyright: reportGeneralTypeIssues=false, reportPrivateUsage=false
+
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
@@ -13,8 +17,9 @@ from typing import TYPE_CHECKING
 from textual.containers import VerticalScroll
 from textual.widgets import Static
 
-from lumen.approval import ApprovalMode
+from lumen.collaboration import CollaborationMode
 from lumen.events import (
+    AgentLifecycleChanged,
     ClarificationRequested,
     CommentaryDelta,
     ContextCompactionCompleted,
@@ -24,6 +29,8 @@ from lumen.events import (
     InputDequeued,
     InputQueued,
     PlanCreated,
+    PlanReviewPending,
+    PlanReviewResolved,
     PlanUpdated,
     ProgressReported,
     RunCancelled,
@@ -40,15 +47,20 @@ from lumen.events import (
     ToolCallFinished,
     ToolCallStarted,
     UsageUpdated,
+    WorkProductChanged,
 )
 from lumen.resources import CONTROL_TOOL_NAMES
-from lumen.ui.activity_indicator import RunActivityIndicator
+from lumen.ui.activity_indicator import (
+    RunActivityIndicator,
+    tool_activity_presentation,
+)
 from lumen.ui.approval_panel import ApprovalPanel
 from lumen.ui.composer import PromptEditor
 from lumen.ui.plan_panel import PlanPanel
 from lumen.ui.plan_review_panel import PlanReviewPanel
 from lumen.ui.streaming_markdown import AssistantMarkdown, StreamingMarkdownController
 from lumen.ui.tool_card import ToolCard
+from lumen.ui.transcript_blocks import ReadToolGroup
 
 if TYPE_CHECKING:
     from lumen.ui.app import LumenApp
@@ -66,24 +78,34 @@ class EventRendererMixin:
         messages = self.query_one("#messages", VerticalScroll)
         follow = self._capture_timeline_follow(messages)
         self.timeline_store.apply(event)
+        # Welcome is a zero-state, not part of the conversation. Any event
+        # that represents real run activity removes it before timeline layout
+        # is measured. Usage and queue bookkeeping may occur while the app is
+        # still idle, so those events deliberately leave it in place.
+        if not isinstance(event, UsageUpdated | InputQueued | InputDelivered | InputDequeued):
+            await self._dismiss_welcome()
         status = self.query_one("#status", Static)
         activity = self.query_one(RunActivityIndicator)
         if not isinstance(event, CommentaryDelta):
             self._close_commentary_segment()
+        if not isinstance(event, ToolCallStarted | ToolCallFinished):
+            self._current_read_group = None
         if isinstance(event, InputQueued | InputDelivered | InputDequeued):
             self._refresh_interactive_queue()
         elif isinstance(event, RunStarted):
             await self._close_assistant_segment()
+            self.query_one("#prompt", PromptEditor).placeholder = "Ask Lumen…"
             self._active_plan_panel = None
             self.query_one(PlanReviewPanel).hide()
             status.update(self._status("Thinking…"))
             activity.start("Thinking")
+            if self.config.ui.terminal_title:
+                self.title = f"Lumen · working · {self.resources.workspace.name}"
         elif isinstance(event, TextDelta):
             await self._ensure_assistant_segment(messages)
             assert self._assistant_stream is not None
             self._assistant_stream.append(event.text)
-            if activity.label != "Writing response":
-                activity.describe("Writing response")
+            activity.suspend("Writing response")
         elif isinstance(event, TextRetracted):
             document = self._assistant_container
             await self._close_assistant_segment()
@@ -92,7 +114,7 @@ class EventRendererMixin:
         elif isinstance(event, CommentaryDelta):
             await self._close_assistant_segment()
             await self._append_commentary(event.text)
-            activity.describe("Thinking", "reviewing intermediate results")
+            activity.stop()
         elif isinstance(event, PlanCreated | PlanUpdated):
             self.plan = event.plan
             await self._close_assistant_segment()
@@ -103,15 +125,41 @@ class EventRendererMixin:
                 await messages.mount(panel)
             else:
                 panel.update_plan(event.plan)
-            active_step = next(
-                (step.title for step in event.plan.steps if step.status.value == "in_progress"),
-                None,
-            )
-            activity.describe("Updating tasks", active_step, tone="mode-plan")
+            activity.stop()
         elif isinstance(event, ProgressReported):
             await self._close_assistant_segment()
             await self._append_progress(event.summary, event.next_action)
-            activity.describe("Working", event.next_action or event.summary)
+            activity.stop()
+        elif isinstance(event, WorkProductChanged):
+            await self._close_assistant_segment()
+            resource = f" — {event.resource}" if event.resource else ""
+            detail = event.summary or event.status
+            await self._append_system(f"Work product {event.phase}{resource}: {detail}")
+            activity.stop()
+        elif isinstance(event, AgentLifecycleChanged):
+            await self._close_assistant_segment()
+            detail = event.summary or event.status
+            await self._append_system(f"Agent {event.path} · {event.phase}: {detail}")
+            activity.stop()
+        elif isinstance(event, PlanReviewPending):
+            self.plan = event.plan
+            self._plan_review_revision = event.revision
+            self.query_one(PlanReviewPanel).show(
+                step_count=len(event.plan.steps),
+                current_mode=self._approval_mode.value,
+                revision=event.revision,
+            )
+            status.update(self._status("Plan ready for review"))
+            activity.stop()
+            if self.config.ui.terminal_title:
+                self.title = f"Lumen · review plan · {self.resources.workspace.name}"
+            if self.config.ui.notifications:
+                self.notify(f"Plan revision {event.revision} is ready for review", timeout=4)
+        elif isinstance(event, PlanReviewResolved):
+            self.query_one(PlanReviewPanel).hide()
+            if event.approved:
+                self._collaboration_mode = CollaborationMode.DEFAULT
+            status.update(self._status("Executing approved plan" if event.approved else "Replanning"))
         elif isinstance(event, ToolCallStarted):
             if event.origin == "control" or event.name in CONTROL_TOOL_NAMES:
                 await self._finish_timeline_update(messages, follow)
@@ -120,6 +168,34 @@ class EventRendererMixin:
             # segment. Any later TextDelta gets a new Markdown widget after
             # this card, preserving the actual event order.
             await self._close_assistant_segment()
+            presentation = tool_activity_presentation(
+                event.name,
+                event.args,
+                origin=event.origin,
+                risk=event.risk,
+            )
+            use_activity_group = presentation.groupable and self._transcript_density == "normal"
+            if use_activity_group:
+                group = self._current_read_group
+                if (
+                    group is None
+                    or group.parent is None
+                    or not group.is_compatible(presentation)
+                ):
+                    group = ReadToolGroup()
+                    self._current_read_group = group
+                    await messages.mount(group)
+                group.start_call(event.call_id, event.name, presentation)
+                self._read_tool_groups[event.call_id] = group
+                status.update(self._status(f"Running {event.name}…"))
+                activity.suspend(
+                    presentation.active_verb,
+                    presentation.detail,
+                    tone=presentation.tone,
+                )
+                await self._finish_timeline_update(messages, follow)
+                return
+            self._current_read_group = None
             card = self._tool_cards.get(event.call_id)
             if card is None:
                 card = ToolCard(event.call_id, event.name)
@@ -138,10 +214,21 @@ class EventRendererMixin:
                         if len(self._tool_cards) <= self._TOOL_CARD_MAX:
                             break
             card.start(args=event.args, origin=event.origin, risk=event.risk, started_at=event.started_at)
+            card.set_density(self._transcript_density)
             status.update(self._status(f"Running {event.name}…"))
-            activity.describe_tool(event.name, event.args)
+            activity.suspend(
+                presentation.active_verb,
+                presentation.detail,
+                tone=presentation.tone,
+            )
         elif isinstance(event, ToolCallFinished):
             if event.name in CONTROL_TOOL_NAMES:
+                await self._finish_timeline_update(messages, follow)
+                return
+            group = self._read_tool_groups.pop(event.call_id, None)
+            if group is not None:
+                group.finish_call(event.call_id, is_error=event.is_error)
+                activity.start("Thinking")
                 await self._finish_timeline_update(messages, follow)
                 return
             card = self._tool_cards.get(event.call_id)
@@ -153,7 +240,7 @@ class EventRendererMixin:
                     elapsed_seconds=event.elapsed_seconds,
                     exit_code=event.exit_code,
                 )
-            activity.describe("Reviewing result", event.name.replace("_", " "), tone="tool")
+            activity.start("Thinking")
         elif isinstance(event, ToolApprovalPending):
             card = self._tool_cards.get(event.call_id)
             if card is None:
@@ -161,9 +248,14 @@ class EventRendererMixin:
                 self._tool_cards[event.call_id] = card
                 await messages.mount(card)
             card.mark_approval_pending(event)
+            card.set_density(self._transcript_density)
             self.query_one(ApprovalPanel).enqueue(event)
             status.update(self._status(f"Approval required: {event.name}"))
-            activity.describe("Waiting for approval", event.name.replace("_", " "))
+            activity.stop()
+            if self.config.ui.terminal_title:
+                self.title = f"Lumen · approval required · {self.resources.workspace.name}"
+            if self.config.ui.notifications:
+                self.notify(f"Approval required: {event.name}", severity="warning", timeout=5)
         elif isinstance(event, ToolApprovalBatchPending):
             for request in event.requests:
                 pending = ToolApprovalPending(
@@ -181,7 +273,7 @@ class EventRendererMixin:
                 card.mark_approval_pending(pending)
             self.query_one(ApprovalPanel).enqueue_batch(event)
             status.update(self._status(f"Approval required: {event.risk_summary}"))
-            activity.describe("Waiting for batch approval", event.risk_summary)
+            activity.stop()
         elif isinstance(event, ToolApprovalResolved):
             approval_panel = self.query_one(ApprovalPanel)
             approval_panel.resolve(event.call_id)
@@ -191,7 +283,7 @@ class EventRendererMixin:
             status.update(self._status("Ready" if event.approved else "Denied"))
             if approval_panel.active_request is None:
                 self.query_one("#prompt", PromptEditor).focus()
-            activity.describe("Continuing", "tool approved" if event.approved else "tool denied")
+            activity.start("Thinking")
         elif isinstance(event, ContextCompactionStarted):
             await self._close_assistant_segment()
             await self._update_compaction_row("Compacting context…")
@@ -211,14 +303,18 @@ class EventRendererMixin:
             self._last_assistant_output = event.output
             status.update(self._status("Ready"))
             activity.stop()
-            if self._approval_mode is ApprovalMode.PLAN and event.output.strip():
-                self.query_one(PlanReviewPanel).show(step_count=len(self.plan.steps))
+            if self.config.ui.terminal_title:
+                self.title = f"Lumen · ready · {self.resources.workspace.name}"
         elif isinstance(event, ClarificationRequested):
             await self._close_assistant_segment()
             choices = "\n".join(f"- {choice}" for choice in event.choices)
             await self._append_system(event.question + (f"\n{choices}" if choices else ""))
             status.update(self._status("Waiting for your answer"))
             activity.describe("Waiting for input", event.question)
+            if self.config.ui.terminal_title:
+                self.title = f"Lumen · input required · {self.resources.workspace.name}"
+            if self.config.ui.notifications:
+                self.notify("Agent needs your input", severity="warning", timeout=5)
         elif isinstance(event, RunWaitingForUser):
             await self._close_assistant_segment()
             status.update(self._status("Waiting for your answer"))
@@ -229,6 +325,10 @@ class EventRendererMixin:
             await self._append_system(f"Run failed: {event.message}")
             status.update(self._status("Run failed"))
             activity.stop()
+            if self.config.ui.terminal_title:
+                self.title = f"Lumen · failed · {self.resources.workspace.name}"
+            if self.config.ui.notifications:
+                self.notify(f"Agent run failed: {event.message}", severity="error", timeout=5)
         elif isinstance(event, RunCancelled):
             await self._close_assistant_segment()
             await self._append_system("Run cancelled.")

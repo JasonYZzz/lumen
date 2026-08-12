@@ -1,4 +1,5 @@
 import type {
+  AgentRecord,
   EventEnvelope,
   PlanState,
   SessionSnapshot,
@@ -15,19 +16,35 @@ const CONTROL_TOOL_NAMES = new Set([
 export interface RunState {
   timeline: TimelineEntry[]
   plan: PlanState | null
+  planReviewStatus: string | null
+  planReviewRevision: number | null
   runId: string | null
   status: 'idle' | 'running' | 'waiting_for_user' | 'completed' | 'failed' | 'cancelled'
   usage: Record<string, unknown> | null
   queuedInputs: Array<{ id: string; text: string; mode: string }>
+  transcriptDensity: 'normal' | 'verbose'
+  workProducts: Array<Record<string, unknown>>
+  pendingEffects: Array<Record<string, unknown>>
+  recoverableEffects: Array<Record<string, unknown>>
+  agents: AgentRecord[]
+  agentUsage: Record<string, unknown>
 }
 
 export const initialRunState: RunState = {
   timeline: [],
   plan: null,
+  planReviewStatus: null,
+  planReviewRevision: null,
   runId: null,
   status: 'idle',
   usage: null,
   queuedInputs: [],
+  transcriptDensity: 'normal',
+  workProducts: [],
+  pendingEffects: [],
+  recoverableEffects: [],
+  agents: [],
+  agentUsage: {},
 }
 
 export type RunAction =
@@ -38,6 +55,14 @@ export type RunAction =
   | { type: 'reset' }
   | { type: 'local-message'; message: string }
   | { type: 'local-error'; message: string }
+  | { type: 'agents-refreshed'; agents: AgentRecord[] }
+  | { type: 'transcript-density'; density: 'normal' | 'verbose' }
+  | {
+      type: 'work-state-refreshed'
+      workProducts: Array<Record<string, unknown>>
+      pendingEffects: Array<Record<string, unknown>>
+      recoverableEffects: Array<Record<string, unknown>>
+    }
 
 function string(value: unknown, fallback = '') {
   return typeof value === 'string' ? value : fallback
@@ -106,6 +131,18 @@ function snapshotTimeline(items: Array<Record<string, unknown>>): TimelineEntry[
 
 export function runReducer(state: RunState, action: RunAction): RunState {
   if (action.type === 'reset') return initialRunState
+  if (action.type === 'agents-refreshed') return { ...state, agents: action.agents }
+  if (action.type === 'transcript-density') {
+    return { ...state, transcriptDensity: action.density }
+  }
+  if (action.type === 'work-state-refreshed') {
+    return {
+      ...state,
+      workProducts: action.workProducts,
+      pendingEffects: action.pendingEffects,
+      recoverableEffects: action.recoverableEffects,
+    }
+  }
   if (action.type === 'clear-visible') return { ...state, timeline: [] }
   if (action.type === 'local-message') {
     return {
@@ -134,8 +171,16 @@ export function runReducer(state: RunState, action: RunAction): RunState {
       ...initialRunState,
       timeline: snapshotTimeline(action.snapshot.timeline),
       plan: action.snapshot.plan,
+      planReviewStatus: action.snapshot.planReviewStatus,
+      planReviewRevision: action.snapshot.plan.revision || null,
       runId: action.snapshot.activeRunId,
       status: action.snapshot.activeRunId ? 'running' : 'idle',
+      transcriptDensity: action.snapshot.transcriptDensity,
+      workProducts: action.snapshot.workProducts,
+      pendingEffects: action.snapshot.pendingEffects,
+      recoverableEffects: action.snapshot.recoverableEffects,
+      agents: action.snapshot.agents,
+      agentUsage: action.snapshot.agentUsage,
     }
   }
 
@@ -186,12 +231,48 @@ export function runReducer(state: RunState, action: RunAction): RunState {
     const plan = data.plan as unknown as PlanState
     return { ...state, plan, timeline: upsertPlan(state.timeline, plan, event.sequence) }
   }
+  if (event.type === 'plan.review_pending') {
+    const plan = data.plan as unknown as PlanState
+    const revision = typeof data.revision === 'number' ? data.revision : plan.revision
+    return {
+      ...state,
+      plan,
+      planReviewStatus: 'review_pending',
+      planReviewRevision: revision,
+      timeline: upsertPlan(state.timeline, plan, event.sequence),
+    }
+  }
+  if (event.type === 'plan.review_resolved') {
+    return {
+      ...state,
+      planReviewStatus: boolean(data.approved) ? 'approved' : 'rejected',
+      planReviewRevision: typeof data.revision === 'number' ? data.revision : state.planReviewRevision,
+    }
+  }
   if (event.type === 'progress.reported') {
     const next = string(data.next_action)
     const text = `${string(data.summary)}${next ? `\n${next}` : ''}`
     return {
       ...state,
       timeline: [...state.timeline, { id: `progress-${event.sequence}`, kind: 'progress', text }],
+    }
+  }
+  if (event.type === 'work_product.changed') {
+    const resource = string(data.resource)
+    const phase = string(data.phase, 'updated')
+    const detail = string(data.summary, string(data.status))
+    const text = `${phase}${resource ? ` — ${resource}` : ''}: ${detail}`
+    return {
+      ...state,
+      timeline: [
+        ...state.timeline,
+        {
+          id: `work-product-${event.sequence}`,
+          kind: 'work_product',
+          text,
+          status: string(data.status) || null,
+        },
+      ],
     }
   }
   if (event.type === 'tool.started') {
@@ -243,6 +324,59 @@ export function runReducer(state: RunState, action: RunAction): RunState {
               ...entry,
             },
           ],
+    }
+  }
+  if (event.type === 'approval.batch_pending') {
+    const requests = Array.isArray(data.requests) ? data.requests : []
+    const presentations = Array.isArray(data.presentations) ? data.presentations : []
+    let timeline = state.timeline
+    requests.forEach((rawRequest, index) => {
+      const request = object(rawRequest)
+      const presentation = object(presentations[index])
+      const callId = string(request.call_id)
+      const entry: TimelineEntry = {
+        id: `tool-${event.sequence}-${index}`,
+        kind: 'tool',
+        text: '',
+        callId,
+        toolName: string(request.name),
+        args: object(request.args),
+        pendingApproval: true,
+        status: 'pending',
+        presentation: {
+          title: string(presentation.title),
+          preview: string(presentation.preview),
+          full_text: string(presentation.full_text),
+        },
+      }
+      timeline = timeline.some((item) => item.callId === callId)
+        ? replaceTool(timeline, callId, (item) => ({ ...item, ...entry, id: item.id }))
+        : [...timeline, entry]
+    })
+    return { ...state, timeline }
+  }
+  if (event.type === 'agent.lifecycle') {
+    const agentId = string(data.agent_id)
+    const existing = state.agents.find((agent) => agent.id === agentId)
+    const updated: AgentRecord = {
+      ...(existing ?? { id: agentId }),
+      id: agentId,
+      path: string(data.path, existing?.path),
+      status: string(data.status, existing?.status ?? 'unknown'),
+      result_summary: string(data.summary, existing?.result_summary ?? ''),
+    }
+    const agents = existing
+      ? state.agents.map((agent) => (agent.id === agentId ? updated : agent))
+      : [...state.agents, updated]
+    const text = `${string(data.path, agentId)} · ${string(data.phase)} · ${updated.status}`
+      + (updated.result_summary ? ` — ${updated.result_summary}` : '')
+    return {
+      ...state,
+      agents,
+      timeline: [
+        ...state.timeline,
+        { id: `agent-${event.sequence}`, kind: 'agent', text, status: updated.status },
+      ],
     }
   }
   if (event.type === 'approval.resolved') {

@@ -6,6 +6,12 @@ messages that resolve those futures. ``LumenApp`` is only imported under
 ``TYPE_CHECKING`` to avoid a circular import.
 """
 
+# Textual discovers handlers through MessagePump's metaclass, while these
+# cooperative mixins deliberately type ``self`` as the final LumenApp.
+# Pyright cannot express that intersection type and otherwise reports every
+# cross-mixin member as private plus an invalid explicit-self type.
+# pyright: reportGeneralTypeIssues=false, reportPrivateUsage=false
+
 from __future__ import annotations
 
 import asyncio
@@ -16,11 +22,12 @@ from textual import on
 from textual.message_pump import MessagePump
 from textual.widgets import Static
 
-from lumen.approval import ApprovalMode
+from lumen.approval import ApprovalDecision, ApprovalMode, ApprovalPolicy
+from lumen.collaboration import CollaborationMode
 from lumen.events import ApprovalRequest, ToolApprovalBatchPending, ToolApprovalPending
 from lumen.runtime import ToolApproval
 from lumen.ui.approval_panel import ApprovalPanel
-from lumen.ui.composer import PromptEditor
+from lumen.ui.composer import PromptEditor, edit_text_external
 from lumen.ui.plan_review_panel import PlanReviewPanel
 from lumen.ui.tool_card import ToolCard
 
@@ -45,7 +52,7 @@ class ApprovalControllerMixin(MessagePump):
         """
 
         if (
-            self._approval_mode is not ApprovalMode.PLAN
+            self._collaboration_mode is not CollaborationMode.PLAN
             and self._approval_scope_key(request) in self._session_approval_keys
         ):
             return ToolApproval(
@@ -55,7 +62,7 @@ class ApprovalControllerMixin(MessagePump):
                     f"(mode={self._approval_mode.value}, decision_source=user_session)"
                 ),
             )
-        policy_decision = self._approval_policy.decide(request, self._approval_mode)
+        policy_decision = self._decide_for_modes(request)
         if not policy_decision.requires_confirmation:
             return ToolApproval(
                 approved=policy_decision.approved,
@@ -83,7 +90,7 @@ class ApprovalControllerMixin(MessagePump):
         pending: list[ApprovalRequest] = []
         for request in requests:
             if (
-                self._approval_mode is not ApprovalMode.PLAN
+                self._collaboration_mode is not CollaborationMode.PLAN
                 and self._approval_scope_key(request) in self._session_approval_keys
             ):
                 results[request.call_id] = ToolApproval(
@@ -92,7 +99,7 @@ class ApprovalControllerMixin(MessagePump):
                     f"(mode={self._approval_mode.value}, decision_source=user_session)",
                 )
                 continue
-            policy_decision = self._approval_policy.decide(request, self._approval_mode)
+            policy_decision = self._decide_for_modes(request)
             if not policy_decision.requires_confirmation:
                 results[request.call_id] = ToolApproval(policy_decision.approved, policy_decision.message)
                 continue
@@ -149,11 +156,27 @@ class ApprovalControllerMixin(MessagePump):
         not classified. This is the single choke point for local and MCP tools.
         """
 
-        decision = self._approval_policy.decide(
-            ApprovalRequest(call_id="policy-check", name=name, args={}, origin=origin, risk=risk),
-            self._approval_mode,
+        decision = self._decide_for_modes(
+            ApprovalRequest(call_id="policy-check", name=name, args={}, origin=origin, risk=risk)
         )
         return decision.approved and not decision.requires_confirmation
+
+    def _decide_for_modes(self: LumenApp, request: ApprovalRequest) -> ApprovalDecision:
+        if self._collaboration_mode is CollaborationMode.PLAN:
+            if ApprovalPolicy.is_read_only(request):
+                return ApprovalDecision(
+                    approved=True,
+                    requires_confirmation=False,
+                    source="collaboration_policy",
+                    message="allowed in plan collaboration mode",
+                )
+            return ApprovalDecision(
+                approved=False,
+                requires_confirmation=False,
+                source="collaboration_policy",
+                message="blocked in plan collaboration mode",
+            )
+        return self._approval_policy.decide(request, self._approval_mode)
 
     def _resolve_all_pending_approvals(self: LumenApp, *, approved: bool, message: str) -> None:
         audit_message = f"{message} (mode={self._approval_mode.value}, decision_source=system)"
@@ -199,7 +222,9 @@ class ApprovalControllerMixin(MessagePump):
         message = (
             f"The user {action} this tool call (mode={self._approval_mode.value}, decision_source={source})."
         )
-        future.set_result(ToolApproval(approved=event.approved, message=message))
+        future.set_result(
+            ToolApproval(approved=event.approved, message=message, remember=event.remember)
+        )
         if panel.active_request is None:
             self.query_one("#prompt", PromptEditor).focus()
 
@@ -224,15 +249,35 @@ class ApprovalControllerMixin(MessagePump):
         panel.hide()
         if event.mode is None:
             self.query_one("#status", Static).update(self._status("Plan ready for feedback"))
-            self.query_one("#prompt", PromptEditor).focus()
+            editor = self.query_one("#prompt", PromptEditor)
+            editor.placeholder = f"What should change in revision {self._plan_review_revision}?"
+            editor.focus()
             return
 
-        self.set_approval_mode(event.mode)
-        model_prompt = (
-            "<plan-approval>\n"
-            f"The user approved the proposed plan and selected {event.mode!r} permission mode. "
-            "Implement the approved plan now. Keep the structured task list current as work "
-            "progresses.\n"
-            "</plan-approval>"
+        self._approval_mode = ApprovalMode.parse(event.mode)
+        self._collaboration_mode = CollaborationMode.DEFAULT
+        self.current_worker = self.run_worker(
+            self._run_approved_plan(),
+            name="approved-plan-run",
+            exclusive=True,
         )
-        await self.handle_input("Implement the approved plan.", model_prompt=model_prompt)
+
+    @on(PlanReviewPanel.EditRequested)
+    async def _handle_plan_edit_requested(self: LumenApp) -> None:
+        """Edit the proposal externally, then send the result through RejectPlan/replan."""
+
+        edited = await edit_text_external(self.plan.model_dump_json(indent=2), suffix=".json")
+        if edited is None:
+            self.notify("Set $VISUAL or $EDITOR to edit the plan", severity="warning")
+            return
+        if edited.strip() == self.plan.model_dump_json(indent=2).strip():
+            self.notify("Plan unchanged", timeout=2)
+            return
+        self.query_one(PlanReviewPanel).hide()
+        feedback = (
+            "Revise the pending plan to match this user-edited proposal. Preserve valid IDs and "
+            "acceptance criteria, and return a new revision for review:\n\n" + edited
+        )
+        self.current_worker = self.run_worker(
+            self._run_rejected_plan(feedback), name="edited-plan-run", exclusive=True
+        )

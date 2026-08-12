@@ -57,7 +57,7 @@ def test_api_alias_openai_completions_maps_to_chat() -> None:
 
     model = build_model(
         ModelSettingsConfig(
-            id="openai:deepseek-v4-pro",
+            id="openai:deepseek-v4-flash",
             api_key="token",
             base_url="https://api.deepseek.com/v1",
             api="openai-completions",
@@ -69,7 +69,7 @@ def test_api_alias_openai_completions_maps_to_chat() -> None:
 def test_api_alias_chat_completions_maps_to_chat() -> None:
     model = build_model(
         ModelSettingsConfig(
-            id="openai:deepseek-v4-pro",
+            id="openai:deepseek-v4-flash",
             api_key="token",
             base_url="https://api.deepseek.com/v1",
             api="chat-completions",

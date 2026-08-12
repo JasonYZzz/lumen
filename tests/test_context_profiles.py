@@ -11,7 +11,7 @@ from lumen.context.legacy import ContextStateChange, ContextSummary, merge_conte
     ("model_id", "profile", "window", "counter"),
     [
         ("openai:gpt-5.6", "openai-gpt-5.6", 1_050_000, "tiktoken"),
-        ("openai:deepseek-v4-pro", "deepseek-v4-pro", 1_000_000, "conservative"),
+        ("openai:deepseek-v4-flash", "deepseek-v4-flash", 1_000_000, "conservative"),
         ("openai:kimi-k3", "kimi-k3", 1_000_000, "conservative"),
         ("openai:glm-5.2", "glm-5.2", 1_000_000, "conservative"),
         ("openai:unknown-vendor", "conservative-fallback", 80_000, "conservative"),

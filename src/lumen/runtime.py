@@ -5,8 +5,10 @@ import hashlib
 import json
 import time
 from collections.abc import Awaitable, Callable, Mapping, Sequence
+from contextvars import ContextVar
 from dataclasses import asdict, dataclass, field
 from typing import Any, cast
+from uuid import uuid4
 from xml.sax.saxutils import escape
 
 from pydantic_ai import (
@@ -14,9 +16,12 @@ from pydantic_ai import (
     AgentRunResultEvent,
     DeferredToolRequests,
     DeferredToolResults,
+    FinalResultEvent,
     FunctionToolCallEvent,
     FunctionToolResultEvent,
+    ModelRetry,
     PartDeltaEvent,
+    PartEndEvent,
     PartStartEvent,
     Tool,
     ToolApproved,
@@ -24,7 +29,7 @@ from pydantic_ai import (
     UsageLimits,
 )
 from pydantic_ai.capabilities import AbstractCapability, HandleDeferredToolCalls
-from pydantic_ai.exceptions import IncompleteToolCall, UsageLimitExceeded
+from pydantic_ai.exceptions import IncompleteToolCall, UnexpectedModelBehavior, UsageLimitExceeded
 from pydantic_ai.messages import (
     ModelMessage,
     TextPart,
@@ -36,6 +41,7 @@ from pydantic_ai.tools import DeferredToolApprovalResult
 from pydantic_ai.toolsets import AbstractToolset
 from pydantic_ai.usage import RunUsage
 
+from lumen.completion import CompletionGate, CompletionPolicy
 from lumen.config import LimitsConfig
 from lumen.context import (
     AgentRef,
@@ -53,6 +59,7 @@ from lumen.events import (
     ApprovalRequest,
     ClarificationRequested,
     CommentaryDelta,
+    PlanUpdated,
     RunCancelled,
     RunCompleted,
     RunEvent,
@@ -66,12 +73,15 @@ from lumen.events import (
     ToolCallStarted,
     ToolExecutionDiagnostic,
     UsageUpdated,
+    WorkProductChanged,
 )
 from lumen.hooks import HookBus, HookedFunctionToolset, HookedToolset, HookEvent
 from lumen.interactive_queue import InteractiveInputCapability, InteractiveMessageQueue
-from lumen.plan import PlanState
+from lumen.plan import EvidenceKind, EvidenceReceipt, PlanState
 from lumen.task_control import TaskController
 from lumen.tools.execution import RecoverableToolErrors
+from lumen.tools.spec import EffectKind
+from lumen.work_products.types import WorkProductEvent
 
 EventSink = Callable[[RunEvent], Awaitable[None]]
 ClarificationLoader = Callable[[str], PendingClarification | None]
@@ -157,7 +167,6 @@ class ClarificationGate:
             pending = self.setter(self.session_id, question, normalized, related_plan_step)
         else:
             from datetime import UTC, datetime
-            from uuid import uuid4
 
             pending = PendingClarification(
                 id=f"clarify-{uuid4().hex[:12]}",
@@ -290,6 +299,7 @@ def _render_tool_content(content: object) -> str:
 class ToolApproval:
     approved: bool
     message: str = "The user denied this tool call."
+    remember: bool = False
 
 
 ApprovalHandler = Callable[[ApprovalRequest], Awaitable[ToolApproval]]
@@ -426,6 +436,7 @@ def _control_tool(name: str, controller: TaskController) -> Tool[None]:
     method_map: dict[str, Callable[..., Awaitable[str]]] = {
         "set_plan": controller.set_plan,
         "update_step": controller.update_step,
+        "link_evidence": controller.link_evidence,
         "report_progress": controller.report_progress,
     }
     method = method_map[name]
@@ -552,6 +563,11 @@ class AgentRuntime:
         tool_schema_documents: Sequence[dict[str, Any]] = (),
         active_skill_documents: Callable[[str], Sequence[dict[str, object]]] | None = None,
         retrieved_context_documents: Callable[[str], Sequence[dict[str, object]]] | None = None,
+        active_work_product_documents: Callable[[str], Sequence[dict[str, object]]] | None = None,
+        work_completion_issues: Callable[[str], Sequence[str]] | None = None,
+        usage_enricher: Callable[[str, dict[str, Any]], dict[str, Any]] | None = None,
+        effect_recorder: Callable[..., object] | None = None,
+        work_event_drain: Callable[[str], Sequence[WorkProductEvent]] | None = None,
         bind_session_context: Callable[[str], None] | None = None,
         clarification_loader: ClarificationLoader | None = None,
         clarification_setter: ClarificationSetter | None = None,
@@ -566,6 +582,9 @@ class AgentRuntime:
         self.system_instructions = system_instructions or instructions
         self.policy_instructions = policy_instructions
         self.controller = TaskController()
+        self._completion_policy = CompletionPolicy()
+        self._completion_gate = CompletionGate(work_completion_issues)
+        self._last_completion_gate_issues: list[str] = []
         self.context_engine = context_engine
         self.interactive_queue = InteractiveMessageQueue()
         self.hooks = hooks
@@ -584,7 +603,8 @@ class AgentRuntime:
             metadata={"origin": "control", "risk": "read", "control": "true"},
         )
         control_tools = [
-            _control_tool(name, self.controller) for name in ("set_plan", "update_step", "report_progress")
+            _control_tool(name, self.controller)
+            for name in ("set_plan", "update_step", "link_evidence", "report_progress")
         ] + [clarification_tool]
         self.tool_schema_documents = [
             *(_tool_schema_document(tool) for tool in [*control_tools, *tools]),
@@ -595,6 +615,16 @@ class AgentRuntime:
         )
         self._retrieved_context_documents: Callable[[str], Sequence[dict[str, object]]] = (
             retrieved_context_documents or _empty_context_documents
+        )
+        self._active_work_product_documents: Callable[[str], Sequence[dict[str, object]]] = (
+            active_work_product_documents or _empty_context_documents
+        )
+        self._usage_enricher = usage_enricher
+        self._effect_recorder = effect_recorder
+        self._work_event_drain = work_event_drain
+        self._active_session_id: ContextVar[str] = ContextVar(
+            "lumen_runtime_session_id",
+            default="default",
         )
         self._bind_session_context = bind_session_context
         runtime_toolsets: list[AbstractToolset[None]] = list(toolsets)
@@ -608,7 +638,17 @@ class AgentRuntime:
             toolsets=runtime_toolsets,
             model_settings=model_settings,
             tool_timeout=limits.tool_timeout_seconds,
+            retries={"output": CompletionPolicy().max_retries},
         )
+
+        def validate_completion(output: str) -> str:
+            issues = self._completion_gate_issues()
+            self._last_completion_gate_issues = issues
+            if issues:
+                raise ModelRetry("completion_gate_failed: " + "; ".join(issues))
+            return output
+
+        self.agent.output_validator(validate_completion)
         if hooks is not None and hooks.hooks:
             self.agent._function_toolset = HookedFunctionToolset(  # type: ignore[reportPrivateUsage]
                 [*control_tools, *tools], hooks
@@ -633,9 +673,11 @@ class AgentRuntime:
         focus: str | None = None,
         force_compaction: bool = False,
         recovery_receipts: Sequence[Mapping[str, object]] = (),
+        completion_policy: CompletionPolicy | None = None,
     ) -> RunOutcome:
         await emit(RunStarted(prompt))
         resolved_session_id = session_id or "default"
+        self._active_session_id.set(resolved_session_id)
         previous_clarification = (
             self._clarification_loader(resolved_session_id)
             if self._clarification_loader is not None
@@ -661,6 +703,8 @@ class AgentRuntime:
                 f"{escape(prompt)}\n</clarification-answer>"
             )
         self.controller.start(plan or PlanState(), emit)
+        self._completion_policy = completion_policy or CompletionPolicy()
+        self._last_completion_gate_issues = []
 
         approval_log: list[dict[str, Any]] = []
         diagnostics: list[dict[str, Any]] = []
@@ -705,6 +749,10 @@ class AgentRuntime:
                             ),
                             *(dict(document) for document in episode_documents),
                         ]
+                    ),
+                    work_product_documents=tuple(
+                        dict(document)
+                        for document in self._active_work_product_documents(resolved_session_id)
                     ),
                 ),
                 history=tuple(history),
@@ -823,6 +871,7 @@ class AgentRuntime:
         response_text_buffer: list[str] = []
         response_has_tool_call = False
         response_finished_with_tool = False
+        candidate_output_complete = False
         # Accumulates the final-answer text across the whole run for the partial
         # outcome, so a failed/cancelled run still records what was produced.
         partial_text_parts: list[str] = []
@@ -849,6 +898,16 @@ class AgentRuntime:
                     await emit(CommentaryDelta(joined))
                 else:
                     partial_text_parts.append(joined)
+
+        async def _discard_retried_output() -> None:
+            nonlocal response_text_buffer, candidate_output_complete
+            if not candidate_output_complete:
+                return
+            joined = "".join(response_text_buffer)
+            response_text_buffer = []
+            candidate_output_complete = False
+            if joined:
+                await emit(TextRetracted(len(joined)))
 
         def _build_partial(status: str, message: str, *, retryable: bool) -> PartialRunOutcome:
             """Assemble the partial audit record from accumulated run state."""
@@ -914,6 +973,7 @@ class AgentRuntime:
                             async for event in stream:
                                 stream_started = True
                                 if isinstance(event, PartStartEvent) and isinstance(event.part, TextPart):
+                                    await _discard_retried_output()
                                     # Starting a new text part signals the next model
                                     # response. If we just finished a tool, flush the
                                     # previous (commentary) buffer first.
@@ -936,7 +996,13 @@ class AgentRuntime:
                                         else:
                                             response_text_buffer.append(event.delta.content_delta)
                                             await emit(TextDelta(event.delta.content_delta))
+                                elif (
+                                    isinstance(event, PartEndEvent)
+                                    and event.next_part_kind == "tool-call"
+                                ):
+                                    candidate_output_complete = False
                                 elif isinstance(event, FunctionToolCallEvent):
+                                    await _discard_retried_output()
                                     # Any text accumulated in this response is commentary.
                                     response_has_tool_call = True
                                     await _flush_response_text(as_final=False)
@@ -948,6 +1014,7 @@ class AgentRuntime:
                                     is_control_tool = event.part.tool_name in {
                                         "set_plan",
                                         "update_step",
+                                        "link_evidence",
                                         "report_progress",
                                     }
                                     await emit(
@@ -997,6 +1064,67 @@ class AgentRuntime:
                                             message=preview if is_error else None,
                                         ).to_dict()
                                     )
+                                    tool_name = part.tool_name or tool_names.get(call_id, "<unknown>")
+                                    metadata = self.tool_metadata.get(tool_name, {})
+                                    if (
+                                        self._effect_recorder is not None
+                                        and tool_name not in {
+                                            "write_file",
+                                            "edit_file",
+                                            "open_work_product",
+                                            "inspect_work_product",
+                                            "change_work_product",
+                                            "restore_work_product",
+                                        }
+                                        and metadata.get("control") != "true"
+                                    ):
+                                        try:
+                                            effect_kind = EffectKind(
+                                                metadata.get("effect", EffectKind.UNKNOWN.value)
+                                            )
+                                        except ValueError:
+                                            effect_kind = EffectKind.UNKNOWN
+                                        self._effect_recorder(
+                                            tool_name=tool_name,
+                                            effect_kind=effect_kind,
+                                            success=not is_error and exit_code in {None, 0},
+                                            summary=(
+                                                f"{tool_name} succeeded"
+                                                if not is_error
+                                                else f"{tool_name} failed: {preview}"
+                                            ),
+                                        )
+                                    if self._work_event_drain is not None:
+                                        for work_event in self._work_event_drain(resolved_session_id):
+                                            await emit(WorkProductChanged(**work_event))
+                                    if tool_name not in {
+                                        "set_plan",
+                                        "update_step",
+                                        "link_evidence",
+                                        "report_progress",
+                                        "request_clarification",
+                                    }:
+                                        kind = (
+                                            EvidenceKind.COMMAND
+                                            if tool_name in {"run_command", "run_skill_script"}
+                                            else EvidenceKind.DIFF
+                                            if tool_name in {"write_file", "edit_file"}
+                                            else EvidenceKind.TOOL
+                                        )
+                                        receipt = EvidenceReceipt(
+                                            id=f"e{uuid4().hex[:16]}",
+                                            kind=kind,
+                                            source_id=call_id,
+                                            summary=(
+                                                f"{tool_name} succeeded"
+                                                if not is_error
+                                                else f"{tool_name} failed: {preview}"
+                                            ),
+                                            passed=not is_error and exit_code in {None, 0},
+                                            sequence=tool_call_count,
+                                        )
+                                        self.controller.record_evidence(receipt)
+                                        await emit(PlanUpdated(self.controller.snapshot()))
                                     await emit(
                                         ToolCallFinished(
                                             call_id=call_id,
@@ -1015,6 +1143,8 @@ class AgentRuntime:
                                     # commentary (this is the user-facing answer).
                                     await _flush_response_text(as_final=True)
                                     final_result = event
+                                elif isinstance(event, FinalResultEvent):
+                                    candidate_output_complete = event.tool_name is None
                     break  # stream completed successfully — exit retry loop
                 except Exception as retry_error:
                     # Only retry transient errors that occurred BEFORE any event
@@ -1035,6 +1165,8 @@ class AgentRuntime:
             )
             if self.context_engine is not None:
                 self.context_engine.observe_provider_usage(resolved_session_id, provider_usage)
+            if self._usage_enricher is not None:
+                usage = self._usage_enricher(resolved_session_id, usage)
             output = str(result.output)
             if self.hooks is not None:
                 await self.hooks.dispatch(
@@ -1061,10 +1193,16 @@ class AgentRuntime:
                 )
                 run_status = "waiting_for_user"
             else:
-                await emit(RunCompleted(output, usage))
-                run_status = "completed"
-                if previous_clarification is not None and self._clarification_clearer is not None:
-                    self._clarification_clearer(resolved_session_id)
+                plan = self.controller.snapshot()
+                gate_issues = self._completion_gate_issues(plan)
+                if gate_issues:
+                    await emit(RunFailed("completion_gate_failed: " + "; ".join(gate_issues)))
+                    run_status = "failed"
+                else:
+                    await emit(RunCompleted(output, usage))
+                    run_status = "completed"
+                    if previous_clarification is not None and self._clarification_clearer is not None:
+                        self._clarification_clearer(resolved_session_id)
             # Commit the run's new messages through the engine: it verifies the
             # envelope fingerprint (idempotent for a repeat) and returns the next
             # active history (the model-consumed envelope plus the new messages).
@@ -1160,8 +1298,23 @@ class AgentRuntime:
         except Exception as error:
             # Flush buffered text so the user sees whatever the model produced
             # before the failure — a half-streamed answer is better than none.
-            await _flush_response_text(as_final=False)
-            await emit(RunFailed(str(error)))
+            if isinstance(error, UnexpectedModelBehavior) and self._last_completion_gate_issues:
+                await _discard_retried_output()
+            else:
+                await _flush_response_text(as_final=False)
+            message = str(error)
+            if isinstance(error, UnexpectedModelBehavior) and self._last_completion_gate_issues:
+                message = "completion_gate_failed: " + "; ".join(
+                    self._last_completion_gate_issues
+                )
+            await emit(RunFailed(message))
             raise attach_partial_outcome(
-                error, _build_partial("failed", str(error), retryable=False)
+                error, _build_partial("failed", message, retryable=False)
             ) from None
+
+    def _completion_gate_issues(self, plan: PlanState | None = None) -> list[str]:
+        return self._completion_gate.evaluate(
+            session_id=self._active_session_id.get(),
+            plan=plan or self.controller.snapshot(),
+            policy=self._completion_policy,
+        )

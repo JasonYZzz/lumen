@@ -108,7 +108,9 @@ class ContextSummary(BaseModel):
     key_facts: list[str] = Field(default_factory=list)
     failures_and_approvals: list[str] = Field(default_factory=list)
     outstanding: list[str] = Field(default_factory=list)
-    state_changes: list[ContextStateChange] = Field(default_factory=list)
+    state_changes: list[ContextStateChange] = Field(
+        default_factory=list[ContextStateChange]
+    )
 
 
 def _stable_union(previous: Sequence[str], current: Sequence[str]) -> list[str]:

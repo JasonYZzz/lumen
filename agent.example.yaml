@@ -1,4 +1,4 @@
-version: 1
+version: 2
 
 agent:
   name: lumen
@@ -80,15 +80,87 @@ tools:
     - edit_file
     - run_command
 
-# Optional depth-one subagents for parallel research. Each child has an
-# isolated context and receives only tools classified as read; it cannot write,
-# execute commands, or spawn another subagent.
-delegation:
-  enabled: false
+# Native session-scoped depth-one Agent Threads. Explicit user/project/Skill
+# instructions require delegation; otherwise the root Agent delegates only
+# when parallel work materially improves speed, isolation, or verification.
+agents:
+  enabled: true
+  autonomy: adaptive
+  max_depth: 1
+  worktree_root: ~/.lumen/worktrees
   max_concurrency: 3
+  max_agents_per_run: 8
+  default_agent: default
+  recovery: safe
   request_count: 10
   tool_calls: 20
   timeout_seconds: 180
+
+collaboration:
+  default_mode: default
+
+ui:
+  theme: lumen-dark
+  transcript_density: normal   # normal | verbose; Ctrl+O toggles live
+  animations: true             # false freezes the activity glyph (reduced motion)
+  terminal_title: true
+  notifications: true
+  vim_mode: false
+  status_line: [mode, state, model, usage, keymap]
+
+sandbox:
+  mode: workspace_write
+  network: false
+  extra_read_paths: []
+  extra_write_paths: []
+  env_allow: [PATH, LANG, LC_ALL, TERM, TMPDIR]
+
+# Durable, session-scoped work products. Existing write_file/edit_file calls
+# keep their interface and are automatically journaled through this module.
+work_products:
+  enabled: true
+  auto_attach: true
+  strict: true
+  max_context_items: 8
+
+# Browser realtime voice. The Router selects a Provider Profile once per call.
+# Bailian uses a Host-controlled PCM WebSocket so Provider events, tools and
+# credentials never pass through the browser. Requires `lumen-agent[live]`.
+live:
+  enabled: false
+  default_route: cn-primary
+  fallback_routes: [cn-fast]
+  routes:
+    cn-primary:
+      provider: bailian
+      model: qwen3.5-omni-plus-realtime
+      region: cn-beijing
+      api_key_env: DASHSCOPE_API_KEY
+      workspace_id_env: DASHSCOPE_WORKSPACE_ID
+      voice: Tina
+      completion_control: host_gated_synthesis
+    cn-fast:
+      provider: bailian
+      model: qwen3.5-omni-flash-realtime
+      region: cn-beijing
+      api_key_env: DASHSCOPE_API_KEY
+      workspace_id_env: DASHSCOPE_WORKSPACE_ID
+      voice: Tina
+      completion_control: host_gated_synthesis
+  reasoning_effort: low
+  turn_detection:
+    type: semantic_vad
+    eagerness: auto
+    interrupt_response: true
+  input_transcription:
+    enabled: true
+    model: qwen3-asr-flash-realtime
+    language: zh
+  strict_completion: true
+  max_sessions: 1
+  rollover_seconds: 3300
+  persist_audio: false
+  max_context_items: 24
 
 mcp_servers:
   # Two optional Streamable HTTP examples. Set `required: false` so a
@@ -120,6 +192,11 @@ mcp_servers:
       search_listed_companies: read
       search_patents: read
       search_trademarks: read
+    tool_effects:
+      call_tool: unknown
+      call_tools_batch: unknown
+      get_company_basic_profile: observe
+      search_companies: observe
     required: false
   exa:
     transport: streamable_http
@@ -130,6 +207,9 @@ mcp_servers:
     tool_risks:
       web_fetch_exa: read
       web_search_exa: read
+    tool_effects:
+      web_fetch_exa: observe
+      web_search_exa: observe
     required: false
     load_resources: true
     load_prompts: true
@@ -145,6 +225,8 @@ mcp_servers:
   #     credential_file: mcp_oauth/github.json
   #   tool_risks:
   #     search_code: read
+  #   tool_effects:
+  #     search_code: observe
   #   required: false
 
 # Hooks run without a shell. Context is JSON on stdin; exit 0 allows, exit 2
@@ -159,7 +241,8 @@ mcp_servers:
 #     factory: hook
 
 permissions:
-  # manual | accept_edits | plan | auto (legacy "ask" is accepted as manual)
+  # Side-effect approval is orthogonal to collaboration mode.
+  # manual | accept_edits | auto
   default_mode: manual
   always_allow: []
   always_deny: []

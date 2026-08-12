@@ -23,6 +23,7 @@ from lumen.events import (
     TimelineEventRecord,
     ToolCallFinished,
     ToolCallStarted,
+    WorkProductChanged,
 )
 from lumen.plan import PlanState, PlanStep, StepStatus
 from lumen.sessions import SessionRepository
@@ -80,6 +81,25 @@ def test_timeline_coalesces_stream_and_tool_lifecycle() -> None:
     assert items[2].result == "the complete result"
     assert items[2].preview == "short result"
     assert items[2].status == "ok"
+
+
+def test_timeline_renders_work_product_lifecycle_event() -> None:
+    store = TimelineStore(InMemoryTimelineAdapter())
+    event = WorkProductChanged(
+        phase="verified",
+        work_product_id="work:1",
+        resource="report.md",
+        effect_id="effect:1",
+        status="verified",
+        summary="target changed; non-target content unchanged",
+    )
+    store.apply(event)
+
+    item = store.window()[0]
+    assert item.kind is TimelineKind.WORK_PRODUCT
+    assert item.status == "verified"
+    assert "report.md" in item.text
+    assert TimelineEventRecord.from_event(event, sequence=1).to_event() == event
 
 
 def test_timeline_keeps_each_plan_with_its_user_turn() -> None:

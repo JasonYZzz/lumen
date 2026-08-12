@@ -5,12 +5,16 @@ import os
 import re
 from collections.abc import Iterator
 from pathlib import Path
-from typing import TypeAlias
+from typing import TYPE_CHECKING, TypeAlias
 
+from lumen.config import SandboxConfig
 from lumen.constants import IGNORED_DIRS
 from lumen.tools.capability import build_capability_specs
 from lumen.tools.spec import Risk, ToolSpec
 from lumen.tools.workspace import Workspace, WorkspaceViolation
+
+if TYPE_CHECKING:
+    from lumen.work_products import TaskWorkspace
 
 MAX_OUTPUT_BYTES = 64 * 1024
 _BINARY_SAMPLE_BYTES = 8 * 1024
@@ -49,7 +53,13 @@ def _iter_search_files(base: Path, glob: str) -> Iterator[Path]:
     yield from sorted(candidates)
 
 
-def build_builtin_specs(root: str | Path, *, max_timeout: float = 60.0) -> list[ToolSpec]:
+def build_builtin_specs(
+    root: str | Path,
+    *,
+    max_timeout: float = 60.0,
+    sandbox_config: SandboxConfig | None = None,
+    task_workspace: TaskWorkspace | None = None,
+) -> list[ToolSpec]:
     """Return the read-only builtins followed by the capability tools.
 
     Read tools are unconditional; the capability tools (write/edit/run) join the
@@ -231,4 +241,12 @@ def build_builtin_specs(root: str | Path, *, max_timeout: float = 60.0) -> list[
         ToolSpec(list_directory, risk=Risk.READ),
         ToolSpec(search_text, risk=Risk.READ),
     ]
-    return [*read_specs, *build_capability_specs(root, max_timeout=max_timeout)]
+    return [
+        *read_specs,
+        *build_capability_specs(
+            root,
+            max_timeout=max_timeout,
+            sandbox_config=sandbox_config,
+            task_workspace=task_workspace,
+        ),
+    ]

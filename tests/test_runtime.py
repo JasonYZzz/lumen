@@ -30,6 +30,7 @@ from lumen.events import (
 )
 from lumen.plan import PlanState, PlanStep, PlanStepInput, StepStatus
 from lumen.runtime import AgentRuntime, PartialRunOutcome, ToolApproval, get_partial_outcome
+from lumen.tools.spec import EffectKind
 
 
 def last_tool_return(messages: Sequence[ModelMessage]) -> ToolReturnPart | None:
@@ -131,6 +132,71 @@ async def test_runtime_executes_tool_loop_and_emits_events() -> None:
     assert any(isinstance(event, ToolCallFinished) and event.name == "echo" for event in events)
     assert any(isinstance(event, TextDelta) and "final:" in event.text for event in events)
     assert isinstance(events[-1], RunCompleted)
+
+
+async def test_runtime_records_declared_non_observe_effect() -> None:
+    def execute() -> str:
+        return "done"
+
+    async def model_function(messages: list[ModelMessage], _info: AgentInfo):  # type: ignore[no-untyped-def]
+        if last_tool_return(messages) is None:
+            yield {0: DeltaToolCall("execute", "{}", tool_call_id="effect-1")}
+        else:
+            yield "complete"
+
+    recorded: list[dict[str, object]] = []
+
+    def record_effect(**values: object) -> None:
+        recorded.append(values)
+
+    runtime = AgentRuntime(
+        model=FunctionModel(stream_function=model_function),
+        tools=[Tool(execute, sequential=True)],
+        toolsets=[],
+        instructions="Use tools.",
+        limits=LimitsConfig(),
+        tool_metadata={
+            "execute": {
+                "origin": "test",
+                "risk": "execute",
+                "effect": EffectKind.EXECUTION.value,
+            }
+        },
+        effect_recorder=record_effect,
+    )
+
+    async def emit(_event: RunEvent) -> None:
+        return None
+
+    async def approve(_request: Any) -> ToolApproval:
+        raise AssertionError("tool should not request approval")
+
+    await runtime.run("go", [], emit, approve, session_id="effect-session")
+
+    assert recorded == [
+        {
+            "tool_name": "execute",
+            "effect_kind": EffectKind.EXECUTION,
+            "success": True,
+            "summary": "execute succeeded",
+        }
+    ]
+
+
+def test_work_completion_gate_applies_without_an_approved_plan() -> None:
+    runtime = AgentRuntime(
+        model="test",
+        tools=[],
+        toolsets=[],
+        instructions="Answer.",
+        limits=LimitsConfig(),
+        tool_metadata={},
+        work_completion_issues=lambda _session_id: ["effect pending"],
+    )
+
+    assert runtime._completion_gate_issues() == [  # pyright: ignore[reportPrivateUsage]
+        "effect pending"
+    ]
 
 
 async def test_real_request_snapshot_updates_for_each_model_step() -> None:
@@ -477,10 +543,107 @@ async def test_runtime_emits_structured_plan_and_progress() -> None:
     event_order = [
         type(event) for event in events if isinstance(event, (PlanCreated, ProgressReported, PlanUpdated))
     ]
-    assert event_order == [PlanCreated, ProgressReported, PlanUpdated]
+    assert event_order[:2] == [PlanCreated, ProgressReported]
+    assert event_order[-1] is PlanUpdated
+    assert len(outcome.plan.evidence) == 1
     assert outcome.plan.steps[0].status is StepStatus.COMPLETED
     assert outcome.plan.steps[0].id == "inspect"
     assert outcome.active_history == outcome.new_messages
+
+
+async def test_completion_gate_retries_visible_observation_then_allows_fix() -> None:
+    attempt = 0
+
+    async def model_function(messages: list[ModelMessage], _info: AgentInfo):  # type: ignore[no-untyped-def]
+        nonlocal attempt
+        attempt += 1
+        if attempt == 1:
+            yield "premature"
+        elif attempt == 2:
+            retry = last_retry_prompt(messages)
+            assert retry is not None
+            assert "completion_gate_failed" in str(retry.content)
+            yield update_step_delta(
+                "finish-after-gate",
+                step_id="implement",
+                status=StepStatus.COMPLETED,
+            )
+        else:
+            yield "done"
+
+    runtime = AgentRuntime(
+        model=FunctionModel(stream_function=model_function),
+        tools=[],
+        toolsets=[],
+        instructions="help",
+        limits=LimitsConfig(),
+        tool_metadata={},
+    )
+    events: list[RunEvent] = []
+
+    async def emit(event: RunEvent) -> None:
+        events.append(event)
+
+    outcome = await runtime.run(
+        "execute",
+        [],
+        emit,
+        lambda _request: pytest.fail("approval should not be requested"),  # type: ignore[arg-type]
+        plan=PlanState(
+            revision=1,
+            approved_revision=1,
+            steps=[PlanStep(id="implement", title="Implement")],
+        ),
+    )
+
+    assert outcome.status == "completed"
+    assert outcome.output == "done"
+    assert attempt == 3
+    assert projected_assistant_text(events) == "done"
+    assert any(isinstance(event, TextRetracted) for event in events)
+
+
+async def test_completion_gate_fails_after_two_retries() -> None:
+    attempts = 0
+
+    async def model_function(_messages: list[ModelMessage], _info: AgentInfo):  # type: ignore[no-untyped-def]
+        nonlocal attempts
+        attempts += 1
+        yield "still premature"
+
+    runtime = AgentRuntime(
+        model=FunctionModel(stream_function=model_function),
+        tools=[],
+        toolsets=[],
+        instructions="help",
+        limits=LimitsConfig(),
+        tool_metadata={},
+    )
+    events: list[RunEvent] = []
+
+    async def emit(event: RunEvent) -> None:
+        events.append(event)
+
+    async def approve(_request: Any) -> ToolApproval:
+        raise AssertionError("approval should not be requested")
+
+    with pytest.raises(Exception, match="maximum output retries"):
+        await runtime.run(
+            "execute",
+            [],
+            emit,
+            approve,
+            plan=PlanState(
+                revision=1,
+                approved_revision=1,
+                steps=[PlanStep(id="implement", title="Implement")],
+            ),
+        )
+
+    assert attempts == 3
+    assert isinstance(events[-1], RunFailed)
+    assert "completion_gate_failed" in events[-1].message
+    assert projected_assistant_text(events) == ""
 
 
 def test_control_tools_are_sequential_and_visible() -> None:

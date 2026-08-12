@@ -377,7 +377,7 @@ def _config_with_skills(tmp_path: Path) -> object:
     config_path = tmp_path / "agent.yaml"
     config_path.write_text(
         """
-version: 1
+version: 2
 agent:
   name: skill-test
   model:

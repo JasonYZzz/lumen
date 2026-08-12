@@ -12,12 +12,21 @@ from lumen.tools.registry import (
     ToolRegistry,
     load_plugin_specs,
 )
-from lumen.tools.spec import Risk, ToolSpec
+from lumen.tools.spec import EffectKind, Risk, ToolSpec
 
 
 def sample_tool(value: str) -> str:
     """Return the supplied value."""
     return value
+
+
+def test_tool_spec_keeps_legacy_positional_field_order() -> None:
+    spec = ToolSpec(sample_tool, Risk.READ, "legacy", "description", 3.0)
+
+    assert spec.name == "legacy"
+    assert spec.description == "description"
+    assert spec.timeout == 3.0
+    assert spec.effect is EffectKind.OBSERVE
 
 
 def test_plugin_factory_must_return_tool_specs(monkeypatch: pytest.MonkeyPatch) -> None:

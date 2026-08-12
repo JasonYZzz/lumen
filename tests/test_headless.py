@@ -4,7 +4,9 @@ import io
 import json
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 
+import pytest
 from pydantic_ai import Tool
 from pydantic_ai.messages import ModelMessage, ModelRequest, ToolReturnPart
 from pydantic_ai.models.function import AgentInfo, DeltaToolCall, FunctionModel
@@ -25,7 +27,7 @@ class LocalResources:
     def __init__(self, root: Path, runtime: AgentRuntime) -> None:
         self.workspace = root
         self.session_repository = SessionRepository(root / "sessions")
-        self.runtime = runtime
+        self.runtime: AgentRuntime | None = runtime
         self.config = SimpleNamespace(
             agent=SimpleNamespace(name="test-agent"),
             permissions=SimpleNamespace(default_mode="manual"),
@@ -33,6 +35,7 @@ class LocalResources:
         self.tool_metadata: dict[str, dict[str, str]] = {}
         self.warnings: list[str] = []
         self.skills: list[object] = []
+        self.agent_orchestrator: Any = None
 
     async def open(self) -> LocalResources:
         return self
@@ -52,12 +55,26 @@ class LocalResources:
     def mcp_summary(self) -> list[dict[str, object]]:
         return []
 
+    def context_source_summary(self, session_id: str) -> list[dict[str, str]]:
+        del session_id
+        return []
+
+    def mcp_prompt_summary(self) -> list[dict[str, object]]:
+        return []
+
+    async def render_mcp_prompt(self, reference: str, arguments: dict[str, str]) -> str:
+        del reference, arguments
+        return ""
+
+    def hook_summary(self) -> list[dict[str, object]]:
+        return []
+
     def summary(self) -> dict[str, object]:
         return {"agent": "test-agent", "model": "test-model"}
 
 
 def _runtime(
-    stream,
+    stream: Any,
     *,
     tools: list[Tool] | None = None,
     tool_metadata: dict[str, dict[str, str]] | None = None,
@@ -221,7 +238,7 @@ async def test_headless_json_reports_errors_in_the_document(tmp_path: Path) -> N
 
 
 def _minimal_config() -> str:
-    return """version: 1
+    return """version: 2
 agent:
   name: cli-test
   model:
@@ -245,16 +262,19 @@ def test_cli_output_format_requires_print(tmp_path: Path) -> None:
     assert "require --print" in result.output
 
 
-def test_cli_rejects_unknown_permission_mode(tmp_path: Path) -> None:
+@pytest.mark.parametrize("mode", ["plan", "yolo"])
+def test_cli_rejects_non_approval_mode(tmp_path: Path, mode: str) -> None:
     result = CliRunner().invoke(
-        app, ["--print", "hi", "--permission-mode", "yolo", "--cwd", str(tmp_path)]
+        app, ["--print", "hi", "--permission-mode", mode, "--cwd", str(tmp_path)]
     )
 
     assert result.exit_code == 1
-    assert "--permission-mode must be one of" in result.output
+    assert "--permission-mode must be one of: manual, accept_edits, auto" in result.output
 
 
-def test_cli_print_exits_nonzero_and_reports_errors(tmp_path: Path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+def test_cli_print_exits_nonzero_and_reports_errors(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     config = tmp_path / "agent.yaml"
     config.write_text(_minimal_config(), encoding="utf-8")
 

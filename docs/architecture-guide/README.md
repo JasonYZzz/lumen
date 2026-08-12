@@ -11,10 +11,12 @@
 3. [上下文、压缩与记忆](03-context-and-memory.md)：上下文预算、checkpoint、artifact 与长期记忆。
 4. [工具、权限与安全](04-tools-permissions-security.md)：工具发现、风险分类、审批、hook 与执行约束。
 5. [会话、事件与客户端](05-sessions-events-clients.md)：TUI/Web 如何共享同一运行内核。
-6. [扩展体系与子 Agent](06-extensions-and-delegation.md)：MCP、Skill、插件、Hook 和只读委派。
+6. [扩展体系与子 Agent](06-extensions-and-delegation.md)：MCP、Skill、插件、Hook 和原生 Agent Thread。
 7. [MCP 与 Agent Skills 深入说明](09-mcp-and-skills.md)：两类扩展的接入、上下文、权限与安全边界。
 8. [配置、数据与生命周期](07-configuration-and-data.md)：配置合并、持久化格式和资源启动顺序。
 9. [源码导航与调试指南](08-code-navigation.md)：修改功能时应该从哪里进入、如何验证。
+10. [原生多 Agent Runtime 决策记录](10-native-multi-agent-runtime.md)：控制面、Runtime Factory、安全恢复与兼容性不变量。
+11. [Web Realtime 语音 Runtime 决策记录](11-realtime-voice-runtime.md)：WebRTC、sideband、能力网关、恢复与完成门禁。
 
 ## 一句话架构
 
@@ -35,6 +37,7 @@ Lumen 是一个本地优先、事件驱动的 coding-agent 框架：`WorkspaceHo
 
 - 单个 workspace 同时只允许一个主 Agent run。
 - 本地 `run_command` 有工作区约束、超时和有界输出，但不是 OS 级沙箱。
-- 子 Agent 当前是单层、只读、短生命周期委派，不是可持续通信的 Agent team。
+- 子 Agent 当前是 Session 内持久化的单层 Agent Thread；读任务共享只读工作区，写任务使用隔离 worktree，并由根 Agent 负责协调和综合。
 - TUI 与 Web 共用运行逻辑，但 UI 渲染分别由 Textual 和 Next.js 实现。
+- Realtime 语音是可选 Web transport；它共用 Host 能力和 Session，但原始音频默认不持久化，进程重启后也不会自动重放未确认的远端动作。
 - MCP 工具可以延迟暴露 schema；MCP resource 和 prompt 只有显式激活后才进入上下文。

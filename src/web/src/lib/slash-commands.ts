@@ -7,6 +7,10 @@ export interface SlashCommand {
 export const baseSlashCommands: SlashCommand[] = [
   { value: '/new', description: '新建任务', keywords: 'session task' },
   { value: '/retry', description: '重试上次任务', keywords: 'again run' },
+  { value: '/agents', description: '查看和协调子 Agent', keywords: 'subagent worker' },
+  { value: '/checkpoints', description: '查看 Session checkpoints', keywords: 'rewind fork' },
+  { value: '/transcript', description: '搜索结构化 transcript', keywords: 'audit history' },
+  { value: '/dequeue', description: '撤回尚未执行的排队输入', keywords: 'queue restore' },
   { value: '/clear', description: '清空当前显示', keywords: 'timeline' },
   { value: '/model ', description: '切换模型' },
   { value: '/mode ', description: '切换审批模式', keywords: 'approval' },

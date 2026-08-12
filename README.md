@@ -22,16 +22,17 @@ flowchart LR
 - OpenAI、Anthropic、Google、Ollama 及 OpenAI-compatible 模型。
 - YAML 配置模型、提示词、限制、本地插件和多个 MCP 服务。
 - **三种一致入口**：全屏 TUI、本机单工作区 Web 客户端，以及适合脚本/CI 的 `lumen -p` headless 模式；共用会话、审批、上下文、记忆、Skill 和 MCP 运行内核。
+- **Web 实时语音**：通过 capability-aware Router 支持 OpenAI Realtime 与阿里云百炼 Qwen Realtime；API Key、工具执行、审批和完成门禁始终留在 Lumen Host。语音与文字 turn 共用 Session v9、工作对象、MCP 和 Agent 能力。
 - stdio 与 Streamable HTTP MCP；工具统一使用 `<server>_<tool>` 名称，默认通过 tool search 延迟加载完整 schema，并可用 `/mcp` 查看连接与工作集。传输层断线自动重连一次并重试，仍失败则把"server 不可用"反馈给模型继续对话，不会中断整个 run。
 - 内置只读工具 `read_file`、`list_directory`、`search_text`，严格限制在 `--cwd` 工作区内。
 - 可选启用的工作区能力工具 `write_file`、`edit_file`、`run_command`，默认需要审批。
 - 计划与公开进度：模型在动手前调用 `set_plan`，过程中通过 `report_progress` 输出简短、公开的进度说明。
 - **Agent Skills**：扫描 `.lumen/skills/` 和 `~/.lumen/skills/` 发现 `SKILL.md` 技能包，模型自主按需加载或用户手动 `/skill:<name>` 触发；精确正文以内容寻址 artifact 固定在当前 session，resume 恢复同一 revision。
 - **风险分级并行编排**：`parallel_safe` 只并行 READ 工具，`parallel` 放开全部工具；同轮审批聚合展示。
-- **有界只读子 Agent**：可选 `delegate_task` 把独立调研交给隔离上下文；子 Agent 只获得 READ 工具，不能递归委派，并受独立并发、请求、工具与超时上限约束。
+- **原生多 Agent Runtime**：`AgentOrchestrator` 持久化 depth-one Agent Thread，统一提供并行调度、消息路由、权限收窄、隔离 worktree、证据、恢复与完成门禁；旧 child 工具仅作为弃用兼容入口。
 - **生命周期钩子**：command/Python 钩子覆盖 prompt、工具前后与 stop，本地和 MCP 工具共用同一执行 seam。
 - **MCP resources/prompts/OAuth**：资源显式激活为当前 session 的 retrieved-context snapshot，prompt 按需渲染并标记外部来源；OAuth 使用 PKCE、刷新令牌与 0600 本地凭证。
-- 时间线 TUI:lumen-dark 柔和深色主题、**固定顶部 Todo 面板**(执行区独立滚动)、语义化 loading、Lazy 消息渲染、流式 Markdown 节流、工具卡片、固定队列式审批、上下文压缩状态、请求/工具/token/耗时度量。
+- 时间线 TUI：默认 Normal 信息密度会折叠 commentary，并按读取、搜索、本地探索、Web、MCP 等可见意图分别聚合低风险活动；命令、修改、失败和审批保持独立。进行态/完成态使用 `Reading/Read`、`Searching/Searched` 等明确文案，可用 `Ctrl+O` 切到 Verbose 审计视图。还提供语义化 loading、Lazy 消息渲染、流式 Markdown、工具专用卡片、固定队列式审批、可搜索 transcript、Agent 面板和请求/工具/token/耗时度量。
 - 结构化上下文：system、memory、Skill、MCP catalog、历史和当前输入分区计费并执行硬上限；超过软阈值时只摘要上一 checkpoint 之后的 delta，完整 JSONL 历史仍追加持久化。
 - 大工具输出 receipt 化：旧轮次的超大工具结果只留摘要与 head/tail，正文写入 0600 内容寻址 artifact；模型追问细节时可用 `read_artifact` 按 ref 分页读回全文，涉密输出（`artifact_policy="never"`）永不落盘也不可回读。
 - 持久记忆：显式记忆默认可用，自动学习默认关闭；可审计 SQLite/Markdown 投影、项目隔离、敏感信息过滤、崩溃恢复与 incognito 开关。
@@ -61,7 +62,7 @@ tools:
     - run_command
 ```
 
-命令执行权限模型：**审批不是沙箱**。`run_command` 仍以启动 Lumen 的用户身份运行；不受信的工具应放在容器或沙箱中执行。
+命令执行同时经过审批策略和 OS 沙箱。默认 `workspace_write`：macOS 使用 Seatbelt、Linux 使用 bubblewrap，网络关闭，隔离 `HOME/TMPDIR`，环境变量按 allowlist 构建；适配器缺失时 fail closed。只有显式配置 `sandbox.mode: disabled` 才放弃隔离。
 
 ## 计划与时间线符号
 
@@ -77,13 +78,13 @@ tools:
 - `↑` / `↓` 移动，`Enter` 选择，也可直接按数字；单个请求支持“仅允许一次 / 本会话始终允许 / 拒绝”，批量请求支持“全部允许 / 逐个查看 / 全部拒绝”。确认后焦点自动回到输入框。`Esc` 取消运行会把所有待审请求一并置为拒绝。
 - `always_allow` / `always_deny` 仍然支持,可让特定工具跳过或永远隐藏。
 
-### 权限模式（manual / accept_edits / plan / auto）
+### 协作模式与权限模式
 
-`permissions.default_mode` 控制会话启动时的默认策略，可在运行时通过 `Shift+Tab`、`/mode` 或命令面板（`Ctrl+P` → "approval: Switch to …"）切换，**不重建 runtime，不重启会话**。
+两种 mode 正交且都按 session 持久化：`collaboration.default_mode` 为 `default | plan`；`permissions.default_mode` 为 `manual | accept_edits | auto`。Plan 只决定可否规划/执行，审批模式只决定执行阶段的副作用是否需要确认。
 
 - **`manual`（默认）** —— 读取直接放行；文件修改、命令和外部动作显示确认列表。
 - **`accept_edits`** —— 自动批准工作区内置 `write_file` / `edit_file` 以及路径不逃逸工作区的 `mkdir` / `touch` / `mv` / `cp`；其余命令、插件与 MCP 写操作仍需确认。
-- **`plan`** —— 自动放行读取和严格白名单内的只读检查命令；写入、变更命令与外部操作直接阻止。计划生成后显示执行审批列表，可选择 Auto、accept edits、逐项确认或继续给反馈；批准后退出 Plan 并自动进入实施。
+- **`collaboration: plan`** —— 自动放行读取和严格白名单内的只读检查命令；写入、变更命令与外部操作直接阻止。非空且全 pending 的计划进入 revision review；批准记录持久化后才以新 turn 执行。
 - **`auto`** —— 自动批准已明确分类为 `read` / `write` / `execute` / `external` 的操作。未声明风险的远端能力归类为 `external_unknown`，始终需要确认。
 
 `Shift+Tab` 按 `manual → accept_edits → plan → auto` 循环，切到 `auto` 立即生效，不弹确认框或成功提示。模式切换不会追溯批准已经显示的 pending 请求。MCP 工具默认 risk=`external_unknown`；只有显式声明风险后才可能在 auto 下自动放行。
@@ -92,10 +93,30 @@ tools:
 
 ```yaml
 permissions:
-  default_mode: manual   # manual | accept_edits | plan | auto；旧 ask 映射为 manual
+  default_mode: manual   # manual | accept_edits | auto
   always_allow: []
   always_deny: []
+collaboration:
+  default_mode: default  # default | plan
+sandbox:
+  mode: workspace_write  # workspace_write | disabled
+  network: false
+work_products:
+  enabled: true          # 持久化当前工作对象、目标与副作用回执
+  auto_attach: true      # write_file/edit_file 自动挂接文件
+  strict: true           # 未验证 mutation/unknown effect 阻止虚假完成
+  max_context_items: 8   # 每轮只注入有界的最近状态
 ```
+
+`TaskWorkspace` 是跨 Skill 通用的持续工作对象层，不保存整份正文到 Session。模型可用
+`open_work_product`、`inspect_work_product`、`change_work_product`、`restore_work_product`
+处理 UTF-8 文本、JSON 和 YAML；正文快照与变更载荷进入内容寻址 ArtifactStore，Session
+只持久化 revision/ref、目标、effect receipt 和验证摘要。文本支持标题路径、唯一 anchor、
+明确行区间；JSON/YAML 使用 JSON Pointer。零匹配或多匹配只返回候选，不执行修改。
+现有 `write_file` / `edit_file` 接口不变并自动接入相同 journal；`run_command` 只记录
+execution receipt，不声称完整发现命令内部任意文件副作用。
+
+配置格式为 `version: 2`。历史 v1 配置会在内存中迁移并给出升级警告（原文件不会被改写，v1 的 `ask` 映射为 `manual`）；v2 中继续使用 `ask` 或 `permissions.default_mode: plan` 会明确校验失败。
 
 ## 上下文压缩
 
@@ -116,10 +137,10 @@ context:
 ```yaml
 agent:
   models:
-    deepseek-v4-pro:
-      id: openai:deepseek-v4-pro
+    deepseek-v4-flash:
+      id: openai:deepseek-v4-flash
       context:
-        profile: deepseek-v4-pro
+        profile: deepseek-v4-flash
         # window_tokens / max_output_tokens / tokenizer 均可按部署显式覆盖
 ```
 
@@ -136,23 +157,26 @@ agent:
 - **逐步骤真实预检**：Pydantic AI 完成动态 instructions/tool schema 解析后，`before_model_request` 重新计数实际 messages/tools；必要时只裁剪旧 canonical history，仍超 hard limit 时在 provider I/O 前失败。
 - **Prompt 分层**：native role/message 是语义边界；Plan/Skill 使用 system-role `<session-policy-context>`，Memory/MCP 使用 user-role `<context-data>`，标签内正文保留 Markdown 并统一 XML 转义。
 
-## 子 Agent 委派
+## 原生多 Agent Runtime
 
-子 Agent 默认关闭，因为每个委派都会产生额外模型请求。启用后，父 Agent 可调用
-`delegate_task(task)` 并行处理相互独立的代码检索或分析任务：
+多 Agent 能力默认以 `adaptive` 策略启用。用户、项目指令或 Skill 明确要求并行 Agent 时必须委派；其他场景仅在并行调查、上下文隔离或独立验证有明显收益时使用。根 Agent 通过 `spawn_agent`、`send_message`、`followup_task`、`wait_agent`、`interrupt_agent`、`list_agents`、`close_agent` 管理 Session 内持久化的 depth-one Agent Thread：
 
 ```yaml
-delegation:
+agents:
   enabled: true
+  autonomy: adaptive
+  max_depth: 1
   max_concurrency: 3
+  max_agents_per_run: 8
+  default_agent: default
+  recovery: safe
+  worktree_root: ~/.lumen/worktrees
   request_count: 10
   tool_calls: 20
   timeout_seconds: 180
 ```
 
-每个子 Agent 使用全新的对话上下文，只获得风险分类为 `read` 的本地工具；不会继承
-写入、命令、MCP 或 `delegate_task` 本身，因此委派深度固定为一层。结果以普通工具结果
-返回父 Agent，由父 Agent 负责交叉验证与综合。该能力适合并行探索，不适合需要修改文件的任务。
+内置 `explorer` 只继承父 Agent 已启用工具中的 `observe` 交集；`default` / `worker` 在独立 Git worktree 中执行本地修改。项目可在 `.lumen/agents/*.md`、用户可在 `~/.lumen/agents/*.md` 定义角色，项目角色仅在项目已信任时加载，并且角色只能收窄父 Agent 的工具和权限。远程动作仍通过根 Host 的审批通道；worktree 导入前做三方预检和 dirty path 重叠检查，绝不覆盖用户未提交修改。旧 `delegation` 配置与 child 工具仍作为弃用兼容入口。
 
 ## 运行限制（usage limits）
 
@@ -187,6 +211,9 @@ agent:
 
 ```bash
 uv sync
+
+# 需要 Web Live 语音时安装可选传输依赖
+uv sync --extra live
 ```
 
 ### 2. 准备配置文件
@@ -223,7 +250,7 @@ uv run lumen --model glm-5.2
 uv run lumen -m qwen3.7-max      # -m 是 --model 的简写
 ```
 
-启动后进入全屏 TUI:`Enter` 发送,`Shift+Enter` 换行,`Esc` 上下文感知(关闭补全→取消运行→清空输入),`Ctrl+C` 运行中取消/空闲时退出。
+启动后进入全屏 TUI：`Enter` 发送，`Shift+Enter` 换行，`Esc` 上下文感知（关闭补全→取消运行→清空输入），`Ctrl+C` 运行中取消/空闲时退出。输入 `! command args` 可直接通过同一 OS 沙箱执行 argv（Plan 模式和 Agent 运行期间禁用，不经过 shell 展开）。
 
 ### 3.1 启动 Web 客户端
 
@@ -238,6 +265,56 @@ lumen web --cwd . --stop
 ```
 
 服务默认只监听 `127.0.0.1:8765`，并通过一次性启动链接换取本机 `HttpOnly` cookie；当前版本主动拒绝非 loopback 监听。Web 与 TUI 共用 JSONL 会话、运行时、工具审批、context、memory、Skill 和 MCP 配置，同一工作区同时只允许一个 Agent run，但运行期间仍可浏览其他会话。浏览器刷新会按 SSE sequence 重连，不会取消后台 run。
+
+#### Web Live 实时语音
+
+先安装 `live` extra，并在合并后的 Lumen 配置中显式启用。密钥只从 Host 环境读取，不会通过 bootstrap、SDP、SSE 或浏览器 bundle 下发：
+
+```bash
+export DASHSCOPE_API_KEY="sk-..."
+export DASHSCOPE_WORKSPACE_ID="your-workspace-id"
+```
+
+```yaml
+live:
+  enabled: true
+  default_route: cn-primary
+  fallback_routes: [cn-fast]
+  routes:
+    cn-primary:
+      provider: bailian
+      model: qwen3.5-omni-plus-realtime
+      region: cn-beijing
+      api_key_env: DASHSCOPE_API_KEY
+      workspace_id_env: DASHSCOPE_WORKSPACE_ID
+      voice: Tina
+      completion_control: host_gated_synthesis
+    cn-fast:
+      provider: bailian
+      model: qwen3.5-omni-flash-realtime
+      region: cn-beijing
+      api_key_env: DASHSCOPE_API_KEY
+      workspace_id_env: DASHSCOPE_WORKSPACE_ID
+      voice: Tina
+      completion_control: host_gated_synthesis
+  reasoning_effort: low
+  turn_detection:
+    type: semantic_vad
+    eagerness: auto
+    interrupt_response: true
+  input_transcription:
+    enabled: true
+    model: qwen3-asr-flash-realtime
+    language: zh
+  strict_completion: true
+  max_sessions: 1
+  rollover_seconds: 3300
+  persist_audio: false
+```
+
+启动 Web 后，在输入框旁点击麦克风并授权浏览器即可对讲。控件支持静音、按住说话、打断、输入设备切换、实时字幕、工具审批和结束会话。OpenAI Route 保留 direct WebRTC + sideband；百炼 Route 由浏览器 AudioWorklet 将 16 kHz PCM 发给 Lumen，Host 再连接百炼原生 WebSocket，Provider 凭据和工具事件不经过浏览器。接近 Route 时限时会发出安全续接事件。
+
+Live 不是一套旁路 Agent：`CapabilityGateway` 把本地工具、工作对象、原生 Agent 控制工具和已连接 MCP 工具投影为同一能力目录，仍执行参数校验、Risk 审批、EffectKind receipt、超时和幂等。OpenAI 使用原生 required-tool completion；百炼严格模式先生成文本，经共享 `CompletionGate` 通过后才由浏览器合成语音。TaskWorkspace、AgentOrchestrator 或 Plan 仍有待处理项时不会播放完成声明。只持久化转写、usage、Route snapshot 和 Provider item ID，默认不保存原始音频。
 
 `--background` 在 macOS/Linux 上将服务放到后台，并把进程状态和日志写入工作区的 `.lumen/web.json`、`.lumen/web.log`。使用 `--status` 查看，使用 `--stop` 优雅停止。默认不记录逐请求 access log，因此浏览器缓存产生的正常 `304 Not Modified` 不会刷屏；排查 HTTP 请求时可显式添加 `--access-log`。
 
@@ -264,10 +341,14 @@ LUMEN_API_URL=http://127.0.0.1:8765 pnpm --dir src/web dev
 | `Esc` | **上下文感知**:补全打开→关闭补全;有运行→取消运行;有文本→清空输入;空闲→无操作 |
 | `Ctrl+C` | 运行中→取消运行;空闲→退出应用 |
 | `Ctrl+P` | 打开命令面板 |
-| `Shift+Tab` | 按 manual → accept_edits → plan → auto 循环权限模式 |
+| `Ctrl+T` | 打开可搜索 transcript（展开、Raw、复制、逐匹配导航） |
+| `Ctrl+R` | 反向搜索并恢复 prompt 历史 |
+| `Ctrl+B` | 打开持久化 Agent 面板（状态、角色、时长、中断） |
+| `Ctrl+O` | 切换 Normal / Verbose transcript 密度 |
+| `Shift+Tab` | 按 manual → accept_edits → Plan → auto 循环会话工作模式；Plan 是独立 collaboration mode |
 | `Alt+C` | 复制最近一条完整助手回复（也可用 `/copy`） |
 | `↑` / `↓` | 编辑器首行首列时:浏览 prompt 历史 |
-| `Ctrl+↑` / `Ctrl+↓` | 任意位置浏览 prompt 历史(Emacs 风格) |
+| `Ctrl+↑` / `Ctrl+↓` | 任意位置浏览 prompt 历史（Emacs 风格） |
 | `Tab` | 接受补全建议 |
 | `Y` / `N` | 明确允许 / 拒绝待审批工具 |
 | `E` | 展开 / 收起已完成工具的完整参数与结果 |
@@ -312,7 +393,7 @@ uv run lumen -p "继续总结" --resume <session-uuid>
 
 - **退出码**:成功为 0;模型错误、usage limit 等失败会把错误写到 stderr 并以非 0 退出。
 - **`--output-format text|json`**(默认 `text`):`text` 模式把助手文本增量直接流式写到 stdout;`json` 模式在结束后一次性输出单个 JSON 文档(含 `result`、`session_id`、`model`、`usage`、`num_turns`、`is_error`、`error` 等字段),失败时同样输出 JSON 且 `is_error: true`。
-- **审批策略**:headless 无交互,凡是权限策略仍需人工确认的工具调用一律自动拒绝(模型收到拒绝结果后继续)。可用 `--permission-mode accept_edits|plan|auto` 放宽(默认 `manual` 即全拒),语义与 TUI 的 Shift+Tab 模式一致。
+- **审批策略**:headless 无交互,凡是权限策略仍需人工确认的工具调用一律自动拒绝(模型收到拒绝结果后继续)。可用 `--permission-mode accept_edits|auto` 放宽(默认 `manual` 即全拒)。Plan 是独立的 session collaboration mode，可通过 `collaboration.default_mode: plan` 启动。
 - 会话与 TUI 一致持久化到 `.lumen/sessions/`,`-p` 产生的 session 可以被 `--resume` 接续;`-p` 与 `--check-config` 互斥。
 
 ### 4. 仅校验配置(不进 TUI,不调用模型)
@@ -347,7 +428,7 @@ uv run lumen --resume <session-uuid>
 | `--check-config` | — | `false` | 校验配置 + 发现工具后立即退出,不进 TUI |
 | `--print` | `-p` | — | headless 单次执行:跑一轮后把最终回答写到 stdout 并退出(与 `--check-config` 互斥) |
 | `--output-format` | — | `text` | 配合 `-p`:`text` 流式输出正文,`json` 输出单个结构化结果文档 |
-| `--permission-mode` | — | `manual` | 配合 `-p` 的审批模式:`manual`(全拒)/`accept_edits`/`plan`/`auto` |
+| `--permission-mode` | — | `manual` | 配合 `-p` 的副作用审批模式:`manual`(全拒)/`accept_edits`/`auto`；不承载 Plan collaboration mode |
 | `--version` | `-V` | — | 打印版本号并退出 |
 | `--install-completion` | — | — | 为当前 shell 安装 Typer 补全 |
 | `--show-completion` | — | — | 输出当前 shell 的补全脚本 |
@@ -395,9 +476,10 @@ Lumen 将发行包名、Python 包名和终端命令分开：
 | Python 包 | `lumen` | `import lumen` |
 | CLI 命令 | `lumen` | 由 `pyproject.toml` 的 `[project.scripts]` 注册 |
 
-从当前源码仓库安装为全局工具：
+从当前源码仓库安装为全局工具（该命令中的 `.` 是 shell 当前目录，必须先进入 Lumen 源码根目录）：
 
 ```bash
+cd /path/to/lumen
 uv tool install .
 ```
 
@@ -441,13 +523,20 @@ lumen --cwd .
 
 uv 只是开发、构建和可选的全局安装工具；安装完成后的配置发现与 Lumen 运行时不依赖 `uv run`。也可使用下面的 `pipx` 安装方式。
 
-开发 Lumen 本身时，希望源码修改立即对全局命令生效，可以使用 editable 安装：
+开发 Lumen 本身时，希望源码修改立即对全局命令生效，可以使用 editable 安装。直接调用 `uv` 时同样必须位于 Lumen 源码根目录：
 
 ```bash
+cd /path/to/lumen
 uv tool install --editable .
 
 # 已安装普通版本时，用 editable 版本替换它
 uv tool install --editable --force .
+```
+
+如果终端或 IDE 的当前目录不确定，请使用仓库自带的安装入口。它根据脚本位置定位源码根目录，因此可以从任意目录执行：
+
+```bash
+python3 /absolute/path/to/lumen/scripts/install_editable.py
 ```
 
 也可以使用 pipx：
@@ -610,10 +699,10 @@ agent:
 
 ```yaml
 agent:
-  default_model: deepseek-v4-pro
+  default_model: deepseek-v4-flash
   models:
-    deepseek-v4-pro:
-      id: openai:deepseek-v4-pro
+    deepseek-v4-flash:
+      id: openai:deepseek-v4-flash
       api_key_env: DEEPSEEK_API_KEY           # 或 api_key: sk-...(明文,仅本地)
       base_url: https://api.deepseek.com/v1
       settings: {max_tokens: 4096}
@@ -656,8 +745,8 @@ OpenAI 兼容端点有两条等价路径,用 `api` 字段显式选择:
 ```yaml
 agent:
   models:
-    deepseek-v4-pro:
-      id: openai:deepseek-v4-pro
+    deepseek-v4-flash:
+      id: openai:deepseek-v4-flash
       base_url: https://api.deepseek.com/v1
       api: chat                # 显式(可省略,有 base_url 默认就是 chat)
     qwen3-max-via-responses:
@@ -672,7 +761,7 @@ agent:
 
 两者都是 OpenAI 兼容端点,直接用 `openai:` 前缀 + `base_url` 即可:
 
-- **DeepSeek V4 Pro**:`id: openai:deepseek-v4-pro`,`base_url: https://api.deepseek.com/v1`,`api: chat`([官方文档](https://api-docs.deepseek.com/))。
+- **DeepSeek V4 Flash**:`id: openai:deepseek-v4-flash`,`base_url: https://api.deepseek.com/v1`,`api: chat`([官方文档](https://api-docs.deepseek.com/))。
 - **阿里云百炼 GLM-5.2 / Qwen**:`base_url: https://dashscope.aliyuncs.com/compatible-mode/v1`,`api: chat`(默认)或 `api: responses`([Chat Completions 文档](https://help.aliyun.com/zh/model-studio/compatibility-of-openai-with-dashscope) / [Responses API 文档](https://help.aliyun.com/zh/model-studio/compatibility-with-openai-responses-api))。已验证的合法 model id:`glm-5.2`、`qwen3.7-max`、`qwen3-max` 等。
 
 模型必须原生支持 function/tool calling,才能自主使用工具。
@@ -698,6 +787,10 @@ mcp_servers:
     # 需要确认。
     tool_risks:
       lookup: read
+    # effect 与审批 risk 正交：用于并发、回执和完成验证。未声明默认为
+    # unknown；strict 模式下成功返回也需要重新检查或用户 waiver。
+    tool_effects:
+      lookup: observe
     # 默认 true：完整 JSON Schema 经 tool search 命中后才进入活动上下文。
     defer_tools: true
     # 少量核心工具可以始终加载；名称不带 server 前缀。

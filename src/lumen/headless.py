@@ -22,11 +22,13 @@ from lumen.application import (
     CreateSession,
     DecideApproval,
     SetApprovalMode,
+    SetCollaborationMode,
     StartRun,
     WorkspaceHost,
     WorkspaceResources,
 )
 from lumen.approval import ApprovalMode
+from lumen.collaboration import CollaborationMode
 
 _OUTPUT_FORMATS = frozenset({"text", "json"})
 
@@ -68,6 +70,7 @@ async def run_headless(
     *,
     resume_id: str | None = None,
     permission_mode: ApprovalMode | None = None,
+    collaboration_mode: CollaborationMode | None = None,
     output_format: str = "text",
     stdout: TextIO | None = None,
 ) -> HeadlessResult:
@@ -95,13 +98,15 @@ async def run_headless(
     host = WorkspaceHost(resources)
     await host.open()
     try:
-        if permission_mode is not None:
-            await host.dispatch(SetApprovalMode(permission_mode.value, confirmed=True))
         if resume_id is not None:
             session_id = resume_id
         else:
             created = await host.dispatch(CreateSession())
             session_id = created.session_id
+        if permission_mode is not None:
+            await host.dispatch(SetApprovalMode(session_id, permission_mode.value))
+        if collaboration_mode is not None:
+            await host.dispatch(SetCollaborationMode(session_id, collaboration_mode.value))
         result.session_id = session_id
         started = await host.dispatch(StartRun(session_id, prompt, str(uuid4())))
 

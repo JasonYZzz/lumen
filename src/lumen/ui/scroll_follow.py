@@ -9,6 +9,10 @@ of the God Object. ``LumenApp`` is only imported under ``TYPE_CHECKING`` to
 avoid a circular import.
 """
 
+# Cooperative Textual mixin; see approval_controller.py for the intersection-
+# self limitation behind these local suppressions.
+# pyright: reportGeneralTypeIssues=false, reportPrivateUsage=false
+
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
@@ -78,11 +82,25 @@ class ScrollFollowMixin:
 
         self._tail_follow_generation += 1
         generation = self._tail_follow_generation
-        # Textual's native anchor tracks later Rich/Markdown layout growth;
-        # repeated scroll_end callbacks alone can run before final measurement.
-        container.anchor(True)
-        container.scroll_end(animate=False)
-        self._last_tail_scroll_y = max(float(container.scroll_y), float(container.scroll_target_y))
+
+        def follow_reachable_tail() -> None:
+            # Textual's anchor intentionally bottom-aligns content shorter than
+            # the viewport. That is useful once a transcript overflows, but it
+            # made the first user turn appear at the bottom of an otherwise
+            # empty screen. Short transcripts start at the top; anchoring is
+            # enabled only when there is an actual scroll range to follow.
+            if container.max_scroll_y <= 0:
+                container.anchor(False)
+                container.scroll_home(animate=False, force=True, immediate=True)
+                self._last_tail_scroll_y = 0.0
+                return
+            container.anchor(True)
+            container.scroll_end(animate=False, force=True, immediate=True)
+            self._last_tail_scroll_y = max(
+                float(container.scroll_y), float(container.scroll_target_y)
+            )
+
+        follow_reachable_tail()
 
         def after_layout() -> None:
             if generation != self._tail_follow_generation or not self._follow_tail:
@@ -91,12 +109,11 @@ class ScrollFollowMixin:
             if float(container.scroll_target_y) < reachable_last_tail:
                 self._follow_tail = False
                 return
-            container.scroll_end(animate=False, force=True, immediate=True)
-            self._last_tail_scroll_y = max(float(container.scroll_y), float(container.scroll_target_y))
+            follow_reachable_tail()
 
             def settle_markdown_layout() -> None:
                 if generation == self._tail_follow_generation and self._follow_tail:
-                    container.scroll_end(animate=False, force=True, immediate=True)
+                    follow_reachable_tail()
 
             self.call_after_refresh(settle_markdown_layout)
 
@@ -141,6 +158,15 @@ class ScrollFollowMixin:
         messages = self.query_one("#messages", VerticalScroll)
         if messages.max_scroll_y <= 0 or messages.scroll_y > 0:
             return
+        if self._follow_tail and self._last_tail_scroll_y <= 0:
+            # Restored Lazy widgets can acquire their height one frame after
+            # the initial tail-settling callbacks. During that frame the view
+            # looks like an intentional scroll-to-top even though the user has
+            # not moved. Settle the newly reachable tail first; a later real
+            # scroll home will have a non-zero last-tail marker and page as
+            # expected.
+            self._scroll_timeline_end(messages)
+            return
         self._loading_older = True
         try:
             anchor = messages.children[0] if messages.children else None
@@ -155,9 +181,30 @@ class ScrollFollowMixin:
                     await messages.mount(*widgets, before=anchor)
                     await self._prune_timeline_widgets(messages, remove_oldest=False)
 
+                    # Paging only starts while the viewport is at its top, so
+                    # the former first widget is the stable visual anchor.
+                    # Session restore previously enabled Textual's tail
+                    # anchor; release it before prepending or a later layout
+                    # pass can discard the compensating relative scroll.
+                    messages.anchor(False)
+                    messages.scroll_to_widget(
+                        anchor,
+                        top=True,
+                        animate=False,
+                        force=True,
+                        immediate=True,
+                    )
+
                     def restore_anchor() -> None:
                         delta = anchor.virtual_region.y - anchor_y
-                        messages.scroll_relative(y=delta, animate=False)
+                        if abs(anchor.region.y - messages.region.y) <= 1:
+                            return
+                        messages.scroll_relative(
+                            y=delta,
+                            animate=False,
+                            force=True,
+                            immediate=True,
+                        )
 
                     self.call_after_refresh(restore_anchor)
         finally:

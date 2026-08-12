@@ -10,6 +10,7 @@ from lumen.config import load_config
 from lumen.events import (
     ApprovalRequest,
     PlanCreated,
+    PlanReviewPending,
     RunCompleted,
     RunFailed,
     RunStarted,
@@ -27,13 +28,14 @@ from lumen.ui.approval_panel import ApprovalPanel
 from lumen.ui.plan_review_panel import PlanReviewPanel
 from lumen.ui.streaming_markdown import AssistantMarkdown
 from lumen.ui.tool_card import ToolCard
+from lumen.ui.welcome import WelcomePanel
 
 
 def _app(tmp_path: Path) -> LumenApp:
     config_path = tmp_path / "agent.yaml"
     config_path.write_text(
         """
-version: 1
+version: 2
 agent:
   name: interaction-test
   model: {id: test}
@@ -44,6 +46,57 @@ sessions: {directory: sessions}
     )
     config = load_config(config_path)
     return LumenApp(config, ResourceManager(config, workspace=tmp_path))
+
+
+async def test_first_timeline_content_replaces_welcome_without_layout_residue(
+    tmp_path: Path,
+) -> None:
+    app = _app(tmp_path)
+
+    async with app.run_test(size=(100, 30)) as pilot:
+        assert len(list(app.query(WelcomePanel))) == 1
+
+        await app._append_user("Inspect the current layout")  # type: ignore[reportPrivateUsage]
+        await pilot.pause()
+
+        messages = app.query_one("#messages", VerticalScroll)
+        user_row = app.query_one(".user-message", Static)
+        assert list(app.query(WelcomePanel)) == []
+        assert len(messages.children) == 1
+        assert "Inspect the current layout" in str(user_row.content)
+        assert user_row.region.y - messages.content_region.y <= 2
+
+
+async def test_run_started_dismisses_welcome_when_no_user_row_was_mounted(
+    tmp_path: Path,
+) -> None:
+    app = _app(tmp_path)
+
+    async with app.run_test() as pilot:
+        await app.render_event(RunStarted("resume approved plan"))
+        await pilot.pause()
+
+        assert list(app.query(WelcomePanel)) == []
+
+
+async def test_successful_foreground_run_does_not_mount_completion_toast(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    app = _app(tmp_path)
+    notifications: list[str] = []
+
+    def capture_notification(message: str, **_kwargs: object) -> None:
+        notifications.append(message)
+
+    monkeypatch.setattr(app, "notify", capture_notification)
+
+    async with app.run_test() as pilot:
+        await app.render_event(RunStarted("answer"))
+        await app.render_event(TextDelta("Done."))
+        await app.render_event(RunCompleted("Done."))
+        await pilot.pause()
+
+        assert notifications == []
 
 
 async def test_auto_mode_does_not_prompt_for_classified_write_or_execute(tmp_path: Path) -> None:
@@ -123,8 +176,8 @@ async def test_final_text_segment_is_mounted_after_tool_cards(tmp_path: Path) ->
     app = _app(tmp_path)
     async with app.run_test() as pilot:
         messages = app.query_one("#messages", VerticalScroll)
-        baseline = len(messages.children)
         await app.render_event(RunStarted("build report"))
+        baseline = len(messages.children)
         await app.render_event(
             ToolCallStarted(
                 "write-1",
@@ -158,9 +211,16 @@ async def test_completed_plan_opens_execution_mode_review(tmp_path: Path) -> Non
     async with app.run_test() as pilot:
         app.set_approval_mode("plan")
         await app.render_event(
-            PlanCreated(PlanState(revision=1, steps=[PlanStep(id="inspect", title="Inspect code")]))
+            PlanCreated(
+                PlanState(
+                    goal="Inspect safely",
+                    revision=1,
+                    steps=[PlanStep(id="inspect", title="Inspect code")],
+                )
+            )
         )
         await app.render_event(TextDelta("Proposed implementation plan."))
+        await app.render_event(PlanReviewPending(app.plan, 1))
         await app.render_event(RunCompleted("Proposed implementation plan."))
         await pilot.pause()
 
@@ -170,7 +230,7 @@ async def test_completed_plan_opens_execution_mode_review(tmp_path: Path) -> Non
 
         await pilot.press("4")
         await pilot.pause()
-        assert app.approval_mode == "plan"
+        assert app.collaboration_mode == "plan"
         assert not panel.has_class("visible")
 
 
@@ -178,16 +238,21 @@ async def test_approving_plan_switches_mode_and_continues_execution(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     app = _app(tmp_path)
-    submitted: list[tuple[str, str | None]] = []
+    submitted: list[str] = []
 
-    async def capture_input(text: str, **kwargs: object) -> None:
-        model_prompt = kwargs.get("model_prompt")
-        submitted.append((text, model_prompt if isinstance(model_prompt, str) else None))
+    async def capture_approval() -> None:
+        submitted.append("approved")
 
-    monkeypatch.setattr(app, "handle_input", capture_input)
+    monkeypatch.setattr(app, "_run_approved_plan", capture_approval)
     async with app.run_test() as pilot:
         app.set_approval_mode("plan")
         await app.render_event(TextDelta("Plan proposal"))
+        app.plan = PlanState(
+            goal="Implement",
+            revision=1,
+            steps=[PlanStep(id="implement", title="Implement")],
+        )
+        await app.render_event(PlanReviewPending(app.plan, 1))
         await app.render_event(RunCompleted("Plan proposal"))
         await pilot.pause()
 
@@ -195,15 +260,18 @@ async def test_approving_plan_switches_mode_and_continues_execution(
         await pilot.pause()
 
         assert app.approval_mode == "accept_edits"
-        assert submitted[0][0] == "Implement the approved plan."
-        assert "approved the proposed plan" in (submitted[0][1] or "")
+        assert submitted == ["approved"]
 
 
 async def test_copy_latest_response_uses_textual_clipboard(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     app = _app(tmp_path)
-    monkeypatch.setattr("lumen.ui.app.subprocess.run", lambda *args, **kwargs: None)
+
+    def ignore_pbcopy(*args: object, **kwargs: object) -> None:
+        del args, kwargs
+
+    monkeypatch.setattr("lumen.ui.app.subprocess.run", ignore_pbcopy)
     async with app.run_test() as pilot:
         await app.render_event(RunCompleted("完整输出\n```python\nprint('ok')\n```"))
         await pilot.pause()

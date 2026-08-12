@@ -6,13 +6,13 @@ import asyncio
 import json
 import secrets
 from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any, cast
 from urllib.parse import urlencode
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, RedirectResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -20,27 +20,51 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from lumen.application import (
     ApprovalStateError,
+    ApproveAgentImport,
+    ApproveChildImport,
+    ApprovePlan,
+    CancelChildRun,
     CancelClarification,
     CancelRun,
+    CloseAgent,
+    CloseChildRun,
+    CommandAcknowledged,
     ContextControl,
+    ContinueAgent,
     CreateSession,
     DecideApproval,
+    DequeueRunInputs,
+    EndLiveSession,
+    ForkSessionAtTurn,
     GetBootstrap,
+    InterruptAgent,
+    InterruptLiveSession,
     InvalidStateError,
     InvokePrompt,
     InvokeSkill,
+    ListAgents,
+    ListCheckpoints,
+    ListChildRuns,
     ListContextSources,
     ListHooks,
     ListMcpPrompts,
     ListSessions,
     QueueRunInput,
+    RejectAgentImport,
+    RejectChildImport,
+    RejectPlan,
     RetryRun,
     RunNotFoundError,
     SelectModel,
+    SendAgentMessage,
     SessionNotFoundError,
     SetApprovalMode,
+    SetCollaborationMode,
     SetContextSource,
+    SetTranscriptDensity,
+    StartLiveSession,
     StartRun,
+    WaivePlanVerification,
     WorkspaceBusyError,
     WorkspaceHost,
     WorkspaceHostError,
@@ -48,11 +72,18 @@ from lumen.application import (
 from lumen.files import search_files
 
 from .schemas import (
+    AgentActionBody,
     ApprovalBody,
+    ChildRunActionBody,
     ControlBody,
+    ForkSessionBody,
+    PlanReviewBody,
     QueueInputBody,
     RetryRunBody,
+    SessionSettingsBody,
+    StartLiveBody,
     StartRunBody,
+    VerificationWaiverBody,
     WorkspaceSettingsBody,
 )
 
@@ -77,6 +108,17 @@ def _camel_snapshot(value: Any) -> dict[str, Any]:
         "timeline": timeline,
         "lastUserInput": raw["last_user_input"],
         "activeRunId": raw["active_run_id"],
+        "approvalMode": raw["approval_mode"],
+        "collaborationMode": raw["collaboration_mode"],
+        "planReviewStatus": raw["plan_review_status"],
+        "transcriptDensity": raw["transcript_density"],
+        "pendingClarification": raw["pending_clarification"],
+        "workProducts": raw["work_products"],
+        "pendingEffects": raw["pending_effects"],
+        "recoverableEffects": raw["recoverable_effects"],
+        "agents": raw["agents"],
+        "agentUsage": raw["agent_usage"],
+        "liveSessions": raw["live_sessions"],
     }
 
 
@@ -177,11 +219,13 @@ def create_web_app(
             "modelId": raw["model_id"],
             "availableModels": raw["available_models"],
             "approvalMode": raw["approval_mode"],
+            "collaborationMode": raw["collaboration_mode"],
             "tools": raw["tools"],
             "mcp": raw["mcp"],
             "skills": raw["skills"],
             "warnings": raw["warnings"],
             "activeRunId": raw["active_run_id"],
+            "liveEnabled": raw["live_enabled"],
         }
 
     @app.patch("/api/v1/workspace/settings")
@@ -190,8 +234,19 @@ def create_web_app(
         if body.model is not None:
             result = await host.dispatch(SelectModel(body.model))
             changed.update(cast(Any, result).data)
+        return {"status": "updated", **changed}
+
+    @app.patch("/api/v1/sessions/{session_id}/settings")
+    async def update_session_settings(session_id: str, body: SessionSettingsBody) -> dict[str, Any]:
+        changed: dict[str, Any] = {}
         if body.approval_mode is not None:
-            result = await host.dispatch(SetApprovalMode(body.approval_mode, confirmed=body.confirmed))
+            result = await host.dispatch(SetApprovalMode(session_id, body.approval_mode))
+            changed.update(cast(Any, result).data)
+        if body.collaboration_mode is not None:
+            result = await host.dispatch(SetCollaborationMode(session_id, body.collaboration_mode))
+            changed.update(cast(Any, result).data)
+        if body.transcript_density is not None:
+            result = await host.dispatch(SetTranscriptDensity(session_id, body.transcript_density))
             changed.update(cast(Any, result).data)
         return {"status": "updated", **changed}
 
@@ -233,6 +288,120 @@ def create_web_app(
             "status": cast(Any, result).status,
         }
 
+    @app.post("/api/v1/sessions/{session_id}/live", status_code=201)
+    async def start_live(session_id: str, body: StartLiveBody) -> dict[str, Any]:
+        result = await host.dispatch(
+            StartLiveSession(session_id, body.client_request_id, body.sdp, body.route)
+        )
+        return {
+            "liveSessionId": result.live_session_id,
+            "sessionId": result.session_id,
+            "answerSdp": result.answer_sdp,
+            "media": result.media,
+            "state": result.state,
+        }
+
+    @app.get("/api/v1/live/{live_session_id}")
+    async def live_snapshot(live_session_id: str) -> dict[str, Any]:
+        return host.live_snapshot(live_session_id)
+
+    @app.get("/api/v1/live/{live_session_id}/events")
+    async def live_events(request: Request, live_session_id: str) -> StreamingResponse:
+        after_raw = request.headers.get("last-event-id") or request.query_params.get("after")
+        try:
+            after = int(after_raw) if after_raw else None
+        except ValueError as error:
+            raise InvalidStateError("Last-Event-ID must be an integer") from error
+        if after is not None and after < 0:
+            raise InvalidStateError("Last-Event-ID cannot be negative")
+
+        async def frames() -> AsyncIterator[str]:
+            async for event in host.subscribe_live(live_session_id, after):
+                payload = {
+                    "version": 1,
+                    "sequence": event.sequence,
+                    "sessionId": event.session_id,
+                    "liveSessionId": event.live_session_id,
+                    "type": event.kind.value,
+                    "createdAt": event.created_at,
+                    "data": event.data,
+                }
+                encoded = json.dumps(payload, ensure_ascii=False, separators=(",", ":"), default=str)
+                yield f"id: {event.sequence}\nevent: {event.kind.value}\ndata: {encoded}\n\n"
+
+        return StreamingResponse(
+            frames(),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
+
+    @app.websocket("/api/v1/live/{live_session_id}/media")
+    async def live_media(websocket: WebSocket, live_session_id: str) -> None:
+        host_header = websocket.headers.get("host", "")
+        cookie = websocket.cookies.get(_COOKIE, "")
+        origin = websocket.headers.get("origin", "")
+        expected_scheme = "https" if websocket.url.scheme == "wss" else "http"
+        expected_origin = f"{expected_scheme}://{host_header}"
+        if (
+            host_header not in accepted_hosts
+            or not secrets.compare_digest(cookie, session_secret)
+            or origin != expected_origin
+        ):
+            await websocket.close(code=1008, reason="Live media authentication failed")
+            return
+        try:
+            snapshot = host.live_snapshot(live_session_id)
+        except WorkspaceHostError:
+            await websocket.close(code=1008, reason="Live session not found")
+            return
+        if snapshot.get("media_kind") != "host_websocket":
+            await websocket.close(code=1008, reason="Live session does not use Host WebSocket media")
+            return
+
+        await websocket.accept()
+
+        async def send_audio() -> None:
+            async for audio in host.subscribe_live_audio(live_session_id):
+                await websocket.send_bytes(audio)
+
+        sender = asyncio.create_task(send_audio(), name=f"lumen-live-media-send-{live_session_id}")
+        try:
+            while True:
+                audio = await websocket.receive_bytes()
+                if not audio:
+                    continue
+                if len(audio) > 64 * 1024:
+                    await websocket.close(code=1009, reason="Live media frame is too large")
+                    return
+                await host.send_live_audio(live_session_id, audio)
+        except WebSocketDisconnect:
+            pass
+        finally:
+            sender.cancel()
+            with suppress(asyncio.CancelledError):
+                await sender
+            with suppress(WorkspaceHostError):
+                await host.dispatch(EndLiveSession(live_session_id))
+
+    @app.post("/api/v1/live/{live_session_id}/interrupt")
+    async def interrupt_live(live_session_id: str) -> dict[str, Any]:
+        result = await host.dispatch(InterruptLiveSession(live_session_id))
+        return {"status": cast(Any, result).status, **cast(Any, result).data}
+
+    @app.delete("/api/v1/live/{live_session_id}")
+    async def end_live(live_session_id: str) -> dict[str, Any]:
+        result = await host.dispatch(EndLiveSession(live_session_id))
+        return {"status": cast(Any, result).status, **cast(Any, result).data}
+
+    @app.post("/api/v1/live/{live_session_id}/approvals/{call_id}")
+    async def decide_live_approval(
+        live_session_id: str,
+        call_id: str,
+        body: ApprovalBody,
+    ) -> dict[str, str]:
+        result = await host.dispatch(DecideApproval(live_session_id, call_id, body.approved, body.scope))
+        return {"status": cast(Any, result).status}
+
     @app.post("/api/v1/sessions/{session_id}/retry", status_code=202)
     async def retry_run(session_id: str, body: RetryRunBody) -> dict[str, str]:
         result = await host.dispatch(RetryRun(session_id, body.client_request_id))
@@ -241,6 +410,82 @@ def create_web_app(
             "sessionId": cast(Any, result).session_id,
             "status": cast(Any, result).status,
         }
+
+    @app.post("/api/v1/sessions/{session_id}/plan-review", status_code=202)
+    async def review_plan(session_id: str, body: PlanReviewBody) -> dict[str, str]:
+        if body.action == "approve":
+            result = await host.dispatch(ApprovePlan(session_id, body.revision, body.client_request_id))
+        else:
+            result = await host.dispatch(
+                RejectPlan(
+                    session_id,
+                    body.revision,
+                    body.feedback,
+                    body.client_request_id,
+                )
+            )
+        return {
+            "runId": cast(Any, result).run_id,
+            "sessionId": cast(Any, result).session_id,
+            "status": cast(Any, result).status,
+        }
+
+    @app.get("/api/v1/sessions/{session_id}/children")
+    async def list_child_runs(session_id: str) -> dict[str, Any]:
+        result = await host.dispatch(ListChildRuns(session_id))
+        return {"items": cast(Any, result).data["items"]}
+
+    @app.get("/api/v1/sessions/{session_id}/agents")
+    async def list_agents(session_id: str) -> dict[str, Any]:
+        result = await host.dispatch(ListAgents(session_id))
+        return {"items": cast(Any, result).data["items"]}
+
+    @app.get("/api/v1/sessions/{session_id}/checkpoints")
+    async def list_checkpoints(session_id: str) -> dict[str, Any]:
+        result = await host.dispatch(ListCheckpoints(session_id))
+        return {"items": cast(Any, result).data["items"]}
+
+    @app.post("/api/v1/sessions/{session_id}/fork", status_code=201)
+    async def fork_session(session_id: str, body: ForkSessionBody) -> dict[str, str]:
+        result = await host.dispatch(ForkSessionAtTurn(session_id, body.through_turn))
+        return {"sessionId": result.session_id}
+
+    @app.post("/api/v1/agents/{agent_id}/actions")
+    async def agent_action(agent_id: str, body: AgentActionBody) -> dict[str, Any]:
+        if body.action == "send_message":
+            if not body.message:
+                raise InvalidStateError("send_message requires message")
+            command: Any = SendAgentMessage(agent_id, body.message)
+        elif body.action == "continue":
+            if not body.task:
+                raise InvalidStateError("continue requires task")
+            command = ContinueAgent(agent_id, body.task)
+        elif body.action == "interrupt":
+            command = InterruptAgent(agent_id)
+        elif body.action == "approve_import":
+            command = ApproveAgentImport(agent_id)
+        elif body.action == "reject_import":
+            command = RejectAgentImport(agent_id)
+        else:
+            command = CloseAgent(agent_id, body.resolution, body.reason)
+        result = cast(CommandAcknowledged, await host.dispatch(command))
+        return {"status": result.status, **result.data}
+
+    @app.post("/api/v1/children/{child_id}/actions")
+    async def child_run_action(child_id: str, body: ChildRunActionBody) -> dict[str, Any]:
+        command = {
+            "cancel": CancelChildRun(child_id),
+            "approve_import": ApproveChildImport(child_id),
+            "reject_import": RejectChildImport(child_id),
+            "close": CloseChildRun(child_id),
+        }[body.action]
+        result = await host.dispatch(command)
+        return {"status": cast(Any, result).status, **cast(Any, result).data}
+
+    @app.post("/api/v1/sessions/{session_id}/verification-waivers")
+    async def waive_verification(session_id: str, body: VerificationWaiverBody) -> dict[str, Any]:
+        result = await host.dispatch(WaivePlanVerification(session_id, tuple(body.scope), body.reason))
+        return {"status": cast(Any, result).status, **cast(Any, result).data}
 
     @app.get("/api/v1/runs/{run_id}/events")
     async def run_events(request: Request, run_id: str) -> StreamingResponse:
@@ -282,9 +527,14 @@ def create_web_app(
         result = await host.dispatch(QueueRunInput(run_id, body.text, body.mode))
         return {"status": cast(Any, result).status, **cast(Any, result).data}
 
+    @app.post("/api/v1/runs/{run_id}/input/dequeue")
+    async def dequeue_input(run_id: str) -> dict[str, Any]:
+        result = await host.dispatch(DequeueRunInputs(run_id))
+        return {"status": cast(Any, result).status, **cast(Any, result).data}
+
     @app.post("/api/v1/runs/{run_id}/approvals/{call_id}")
     async def decide_approval(run_id: str, call_id: str, body: ApprovalBody) -> dict[str, str]:
-        result = await host.dispatch(DecideApproval(run_id, call_id, body.approved))
+        result = await host.dispatch(DecideApproval(run_id, call_id, body.approved, body.scope))
         return {"status": cast(Any, result).status}
 
     @app.get("/api/v1/files/search")
@@ -342,14 +592,14 @@ def create_web_app(
             }
         if body.type == "invoke_prompt":
             raw_arguments = body.payload.get("arguments", {})
+            string_arguments = cast(dict[object, object], raw_arguments)
             if (
                 not body.name
                 or not body.arguments
                 or not body.client_request_id
                 or not isinstance(raw_arguments, dict)
                 or not all(
-                    isinstance(key, str) and isinstance(value, str)
-                    for key, value in raw_arguments.items()
+                    isinstance(key, str) and isinstance(value, str) for key, value in string_arguments.items()
                 )
             ):
                 raise InvalidStateError(

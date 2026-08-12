@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 import subprocess
 import sys
 from contextlib import AsyncExitStack
@@ -9,14 +8,20 @@ from importlib.resources import files
 from pathlib import Path
 from typing import Any, cast
 
-from pydantic_ai import Agent, Tool
+from pydantic_ai import Agent, RunContext, Tool
 from pydantic_ai.mcp import MCPToolset
 from pydantic_ai.messages import ModelResponse, TextPart
 from pydantic_ai.models import Model
 from pydantic_ai.settings import ModelSettings
 from pydantic_ai.toolsets import AbstractToolset
+from pydantic_ai.usage import RunUsage
 
+from lumen.agents.compat import LegacyChildRunAdapter
+from lumen.agents.orchestrator import AgentOrchestrator
+from lumen.agents.profiles import AgentProfileLoader
+from lumen.agents.runtime_factory import NativeAgentRuntimeFactory
 from lumen.branding import FRAMEWORK_NAME
+from lumen.completion import CompletionGate
 from lumen.config import AppConfig, ModelSettingsConfig
 from lumen.context import ArtifactStore, ArtifactStoreError, ContextEngine
 from lumen.context.memory import (
@@ -30,13 +35,16 @@ from lumen.context.memory import (
 from lumen.context.memory.redaction import redact_secrets
 from lumen.context.rendering import render_mcp_prompt
 from lumen.context.session_manager import SessionContextManager
-from lumen.delegation import DelegationManager
 from lumen.events import ToolCallFinished, ToolCallStarted
 from lumen.hooks import HookBus
+from lumen.live.factory import build_live_router
+from lumen.live.manager import LiveSessionManager
 from lumen.mcp_resources import McpContentRegistry
 from lumen.mcp_tools import McpToolsetBundle, build_mcp_toolset
 from lumen.models import build_model
+from lumen.plan import EvidenceReceipt, PlanState
 from lumen.runtime import CONTROL_INSTRUCTIONS, AgentRuntime
+from lumen.sandbox import SandboxRunner
 from lumen.sessions import SessionRepository
 from lumen.skills import (
     Skill,
@@ -46,10 +54,12 @@ from lumen.skills import (
     format_skills_for_prompt,
 )
 from lumen.tools.builtin import build_builtin_specs
+from lumen.tools.gateway import CapabilityDescriptor, CapabilityGateway
 from lumen.tools.registry import DuplicateToolError, PermissionPolicy, ToolRegistry, load_plugin_specs
-from lumen.tools.spec import Risk, ToolSpec
+from lumen.tools.spec import EffectKind, Risk, ToolSpec
 from lumen.tools.workspace import WorkspaceViolation
 from lumen.trust import canonical_project_identity
+from lumen.work_products import TaskWorkspace
 
 BASE_INSTRUCTIONS = f"""You are {FRAMEWORK_NAME}, an open-source agent framework.
 You run in the user's workspace.
@@ -62,6 +72,12 @@ Assess each request and use available tools only when they improve correctness o
 Use tool results as evidence, never invent a result, and recover gracefully when a tool fails or is denied.
 When the user requests a generated report, export, document, or other deliverable without an explicit path,
 write it under outputs/ with a descriptive filename. Keep source-code changes at their actual project paths.
+For multi-turn changes to an existing deliverable or structured file, open it as a work product,
+inspect the requested target, and use a constrained change so unrelated content is preserved and verified.
+Native Agent Threads are available when enabled. If the user, project instructions, or an active Skill
+explicitly requires subagents or parallel agents, delegate independent tasks, wait for every requested
+Agent, and synthesize their evidence before completing. Otherwise delegate adaptively only when parallel
+work materially improves speed, context isolation, or verification. Avoid overlapping writable tasks.
 Keep user-facing explanations concise. Do not reveal private chain-of-thought;
 provide only brief useful rationale.
 When the task is complete, answer the user directly.
@@ -70,18 +86,29 @@ When the task is complete, answer the user directly.
 # Names the runtime reserves for control tools; the resource manager refuses to
 # register any builtin/plugin/MCP tool that collides so a misconfigured plugin
 # cannot shadow the planning and progress channel.
-CONTROL_TOOL_NAMES = frozenset({"set_plan", "update_step", "report_progress", "request_clarification"})
-DELEGATION_TOOL_NAME = "delegate_task"
-RESERVED_TOOL_NAMES = CONTROL_TOOL_NAMES | {DELEGATION_TOOL_NAME}
+CONTROL_TOOL_NAMES = frozenset(
+    {"set_plan", "update_step", "link_evidence", "report_progress", "request_clarification"}
+)
+CHILD_TOOL_NAMES = frozenset({"spawn_child", "wait_children", "cancel_child"})
+AGENT_TOOL_NAMES = frozenset(
+    {
+        "spawn_agent",
+        "send_message",
+        "followup_task",
+        "wait_agent",
+        "interrupt_agent",
+        "list_agents",
+        "close_agent",
+    }
+)
+RESERVED_TOOL_NAMES = CONTROL_TOOL_NAMES | CHILD_TOOL_NAMES | AGENT_TOOL_NAMES
 
 
 class ResourceStartupError(RuntimeError):
     """Raised when configured runtime resources cannot be initialized."""
 
 
-async def _guarded_mcp_client_exit(
-    client: MCPToolset[None], *exc_info: object
-) -> None:
+async def _guarded_mcp_client_exit(client: MCPToolset[None], *_exc_info: object) -> None:
     """Close a persisted MCP client, tolerating a reconnect-drained count.
 
     The runtime reconnect path (``ResilientMcpToolset``) exits and re-enters
@@ -119,12 +146,45 @@ class ResourceManager:
             )
             self.skills = loader.discover()
             self.warnings.extend(loader.warnings)
+        profile_loader = AgentProfileLoader(
+            self.workspace,
+            include_project=config.project_trusted,
+        )
+        self.agent_profiles = profile_loader.discover()
+        self.warnings.extend(profile_loader.warnings)
         # Retained as a compatibility surface for callers that inspect the old
         # object; it is no longer the authority for active Skill bodies.
         self.skill_working_set = SkillWorkingSet()
         self.instructions = self._load_instructions()
+        self.sandbox_runner = SandboxRunner(self.workspace, config.sandbox)
         self.policy = PermissionPolicy(config.permissions)
         self.registry = ToolRegistry(self.workspace)
+        # TaskWorkspace and builtin write/edit tools share the same artifact
+        # store and repository. They are constructed before tool registration
+        # so legacy mutations can cross the same seam without changing their
+        # public interface.
+        self._artifact_store = ArtifactStore(Path.home() / ".lumen" / "artifacts")
+        self.session_repository = SessionRepository(config.sessions.directory)
+        self.task_workspace = TaskWorkspace(
+            self.workspace,
+            self._artifact_store,
+            self.session_repository,
+            enabled=config.work_products.enabled,
+            auto_attach=config.work_products.auto_attach,
+            strict=config.work_products.strict,
+            max_context_items=config.work_products.max_context_items,
+        )
+        if config.work_products.enabled:
+            for function, risk, effect in (
+                (self.task_workspace.open_work_product, Risk.READ, EffectKind.OBSERVE),
+                (self.task_workspace.inspect_work_product, Risk.READ, EffectKind.OBSERVE),
+                (self.task_workspace.change_work_product, Risk.WRITE, EffectKind.MUTATION),
+                (self.task_workspace.restore_work_product, Risk.WRITE, EffectKind.MUTATION),
+            ):
+                self.registry.add(
+                    ToolSpec(function, risk=risk, effect_kind=effect),
+                    origin="builtin:work_products",
+                )
         if any(not skill.disable_model_invocation for skill in self.skills):
             self.registry.add(
                 ToolSpec(
@@ -165,7 +225,10 @@ class ResourceManager:
         builtins = {
             spec.name: spec
             for spec in build_builtin_specs(
-                self.workspace, max_timeout=config.agent.limits.tool_timeout_seconds
+                self.workspace,
+                max_timeout=config.agent.limits.tool_timeout_seconds,
+                sandbox_config=config.sandbox,
+                task_workspace=self.task_workspace,
             )
         }
         for name in config.tools.builtins:
@@ -184,7 +247,6 @@ class ResourceManager:
         # Shared content-addressed store: the context engine spills bulky tool
         # outputs here (same root, so refs resolve identically), and the
         # ``read_artifact`` tool reads them back on demand.
-        self._artifact_store = ArtifactStore(Path.home() / ".lumen" / "artifacts")
         self.registry.add(
             ToolSpec(
                 self._read_artifact,
@@ -216,11 +278,11 @@ class ResourceManager:
                 timeout=config.agent.limits.tool_timeout_seconds,
                 credential_root=config.sessions.directory,
                 status_sink=self._set_mcp_status,
+                parallel_mode=config.agent.limits.parallel_tool_calls,
             )
             for name, server in config.mcp_servers.items()
         ]
         self.mcp_content = McpContentRegistry()
-        self.session_repository = SessionRepository(config.sessions.directory)
         self.session_context = SessionContextManager(
             repository=self.session_repository,
             artifacts=self._artifact_store,
@@ -231,25 +293,153 @@ class ResourceManager:
         self.project_id = canonical_project_identity(self.workspace)
         self.memory_manager = self._build_memory_manager()
         self.tool_metadata: dict[str, dict[str, str]] = {
-            name: {"origin": entry.origin, "risk": entry.spec.risk.value}
+            name: {
+                "origin": entry.origin,
+                "risk": entry.spec.risk.value,
+                "effect": entry.spec.effect.value,
+            }
             for name, entry in self.registry.entries.items()
             if name not in self.policy.always_deny
         }
         # Control tools are always visible, marked so the TUI can render them
         # distinctly, and excluded from the optional read-only class.
         for control_name in CONTROL_TOOL_NAMES:
-            self.tool_metadata[control_name] = {"origin": "control", "risk": "read", "control": "true"}
-        if config.delegation.enabled:
-            self.tool_metadata[DELEGATION_TOOL_NAME] = {
-                "origin": "control:delegation",
-                "risk": Risk.READ.value,
+            self.tool_metadata[control_name] = {
+                "origin": "control",
+                "risk": "read",
+                "effect": EffectKind.OBSERVE.value,
                 "control": "true",
             }
+        if config.agents.enabled:
+            for agent_tool in AGENT_TOOL_NAMES:
+                self.tool_metadata[agent_tool] = {
+                    "origin": "control:agents",
+                    "risk": Risk.READ.value,
+                    "effect": (
+                        EffectKind.EXECUTION.value
+                        if agent_tool in {"spawn_agent", "followup_task", "interrupt_agent"}
+                        else EffectKind.OBSERVE.value
+                    ),
+                    "control": "true",
+                }
+        if config.delegation.enabled:
+            for child_tool in CHILD_TOOL_NAMES:
+                self.tool_metadata[child_tool] = {
+                    "origin": "control:children",
+                    "risk": Risk.EXECUTE.value if child_tool == "spawn_child" else Risk.READ.value,
+                    "effect": (
+                        EffectKind.EXECUTION.value
+                        if child_tool == "spawn_child"
+                        else EffectKind.OBSERVE.value
+                    ),
+                    "control": "true",
+                }
         self.runtime: AgentRuntime | None = None
-        self.delegation_manager: DelegationManager | None = None
         # Model registry derived from agent.model (legacy) or agent.models.
         self.model_registry: dict[str, ModelSettingsConfig] = config.agent.model_registry()
         self._active_model_name: str = config.agent.default_model_name()
+        self.agent_runtime_factory = NativeAgentRuntimeFactory(
+            workspace=self.workspace,
+            config=config.agents,
+            limits=config.agent.limits,
+            sandbox=config.sandbox,
+            model_registry=self.model_registry,
+            active_model_name=lambda: self._active_model_name,
+            parent_tools=lambda: tuple(self.local_tools),
+            parent_tool_metadata=lambda: dict(self.tool_metadata),
+            parent_toolsets=lambda: tuple(self._active_toolsets),
+            enabled_builtins=config.tools.builtins,
+            artifacts=self._artifact_store,
+            task_workspace=self.task_workspace,
+        )
+        self.agent_orchestrator = AgentOrchestrator(
+            workspace=self.workspace,
+            config=config.agents,
+            profiles=self.agent_profiles,
+            repository=self.session_repository,
+            artifacts=self._artifact_store,
+            runtime_factory=self.agent_runtime_factory,
+            plan_provider=lambda: self.runtime.controller.snapshot() if self.runtime else PlanState(),
+            evidence_sink=self._record_agent_evidence,
+        )
+        self.child_run_manager: LegacyChildRunAdapter | None = (
+            LegacyChildRunAdapter(self.agent_orchestrator) if config.agents.enabled else None
+        )
+        live_registry = ToolRegistry(self.workspace)
+        for entry in self.registry.entries.values():
+            live_registry.add(entry.spec, origin=entry.origin)
+        if config.agents.enabled:
+            for function, name, risk, effect in (
+                (
+                    self.agent_orchestrator.spawn_agent,
+                    "spawn_agent",
+                    Risk.READ,
+                    EffectKind.EXECUTION,
+                ),
+                (
+                    self.agent_orchestrator.send_message,
+                    "send_message",
+                    Risk.READ,
+                    EffectKind.OBSERVE,
+                ),
+                (
+                    self.agent_orchestrator.followup_task,
+                    "followup_task",
+                    Risk.READ,
+                    EffectKind.EXECUTION,
+                ),
+                (
+                    self.agent_orchestrator.wait_agent,
+                    "wait_agent",
+                    Risk.READ,
+                    EffectKind.OBSERVE,
+                ),
+                (
+                    self.agent_orchestrator.interrupt_agent,
+                    "interrupt_agent",
+                    Risk.READ,
+                    EffectKind.EXECUTION,
+                ),
+                (
+                    self.agent_orchestrator.list_agents,
+                    "list_agents",
+                    Risk.READ,
+                    EffectKind.OBSERVE,
+                ),
+                (
+                    self.agent_orchestrator.close_agent,
+                    "close_agent",
+                    Risk.READ,
+                    EffectKind.OBSERVE,
+                ),
+            ):
+                live_registry.add(
+                    ToolSpec(function, name=name, risk=risk, effect_kind=effect),
+                    origin="control:agents",
+                )
+        self.capability_gateway = CapabilityGateway(
+            live_registry,
+            self.policy,
+            default_timeout=config.agent.limits.tool_timeout_seconds,
+            effect_recorder=self.task_workspace.record_tool_effect,
+        )
+        self.completion_gate = CompletionGate(self.completion_issues)
+        self.live_manager: LiveSessionManager | None = None
+        if config.live.enabled:
+            try:
+                live_router = build_live_router(config.live)
+            except (TypeError, ValueError) as error:
+                raise ResourceStartupError(f"Live configuration is invalid: {error}") from error
+            self.live_manager = LiveSessionManager(
+                config=config.live,
+                router=live_router,
+                repository=self.session_repository,
+                capability_gateway=self.capability_gateway,
+                completion_gate=self.completion_gate,
+                plan_provider=lambda session_id: self.session_repository.load(session_id).plan,
+                context_documents=self.live_context_documents,
+                bind_session=self.bind_live_session,
+            )
         self._active_toolsets: list[AbstractToolset[None]] = []
         self._remote_tool_schema_documents: list[dict[str, Any]] = []
         # MCP clients live on the outer stack so model switches can rebuild the
@@ -439,6 +629,8 @@ class ResourceManager:
         """Bind model-invoked context-source tools to the current main run."""
 
         self._active_session_id = session_id
+        if self.config.work_products.enabled:
+            self.task_workspace.bind_session(session_id)
 
     def activate_skill(self, session_id: str, name: str) -> Skill:
         skill = self.load_skill_by_name(name)
@@ -544,17 +736,16 @@ class ResourceManager:
         }.get(resolved.suffix.lower())
         if interpreter is None:
             return f"error: unsupported skill script interpreter: {resolved.suffix}"
-        environment = {
-            key: value
-            for key in ("PATH", "HOME", "LANG", "LC_ALL", "TERM", "TMPDIR")
-            if (value := os.environ.get(key)) is not None
-        }
-        environment["LUMEN_WORKSPACE"] = str(self.workspace)
+        prepared = self.sandbox_runner.prepare(
+            [*interpreter, str(resolved), *(args or [])],
+            cwd=base_dir,
+            read_paths=(base_dir,),
+        )
         try:
             completed = subprocess.run(
-                [*interpreter, str(resolved), *(args or [])],
+                prepared.argv,
                 cwd=base_dir,
-                env=environment,
+                env=prepared.env,
                 capture_output=True,
                 text=True,
                 timeout=self.config.agent.limits.skill_script_timeout_seconds,
@@ -565,6 +756,8 @@ class ResourceManager:
                 "error: skill script timed out after "
                 f"{self.config.agent.limits.skill_script_timeout_seconds:g}s"
             )
+        finally:
+            prepared.cleanup()
         output = completed.stdout.rstrip()
         error = completed.stderr.rstrip()
         lines = [f"exit_code: {completed.returncode}"]
@@ -627,21 +820,18 @@ class ResourceManager:
             raise RuntimeError("_rebuild_runtime_for requires the resource stack to be open")
         old_runtime = self.runtime
         old_runtime_stack = self._runtime_stack
-        old_delegation_manager = self.delegation_manager
         # Tentatively build the new runtime WITHOUT closing the old one first,
         # so a build failure can't leave us runtime-less. _build_runtime
         # refuses to run while a runtime stack is open, so temporarily detach
         # the bookkeeping references and restore them on failure.
         self._runtime_stack = None
         self.runtime = None
-        self.delegation_manager = None
         try:
             await self._build_runtime(for_name=name)
         except BaseException:
             # Restore the previous runtime exactly as it was.
             self._runtime_stack = old_runtime_stack
             self.runtime = old_runtime
-            self.delegation_manager = old_delegation_manager
             raise
         # Build succeeded: publish the new runtime, then close the old stack
         # (which is still referenced by old_runtime_stack) to avoid a leak.
@@ -721,6 +911,13 @@ class ResourceManager:
                         f"{sorted(unknown_tool_risks)}; use raw MCP tool names without the "
                         "server prefix"
                     )
+                unknown_tool_effects = set(bundle.config.tool_effects) - raw_names
+                if unknown_tool_effects:
+                    raise ResourceStartupError(
+                        f"MCP server {bundle.name!r} has unknown tool_effects: "
+                        f"{sorted(unknown_tool_effects)}; use raw MCP tool names without the "
+                        "server prefix"
+                    )
                 unknown_always_loaded = set(bundle.config.always_load_tools) - raw_names
                 if unknown_always_loaded:
                     raise ResourceStartupError(
@@ -747,6 +944,7 @@ class ResourceManager:
                         self.tool_metadata[public_name] = {
                             "origin": f"mcp:{bundle.name}",
                             "risk": bundle.risk_for(public_name).value,
+                            "effect": bundle.effect_for(public_name).value,
                         }
                     remote_tool = next(tool for tool in remote_tools if tool.name == raw_name)
                     self._remote_tool_schema_documents.append(
@@ -767,6 +965,25 @@ class ResourceManager:
                             "deferred": bundle.is_deferred(public_name),
                         }
                     )
+                    if public_name not in self.policy.always_deny:
+                        parameters = getattr(
+                            remote_tool,
+                            "inputSchema",
+                            getattr(remote_tool, "input_schema", {}),
+                        )
+                        self.capability_gateway.register(
+                            CapabilityDescriptor(
+                                name=public_name,
+                                description=getattr(remote_tool, "description", None) or "",
+                                parameters=cast(dict[str, Any], parameters),
+                                origin=f"mcp:{bundle.name}",
+                                risk=bundle.risk_for(public_name).value,
+                                effect_kind=bundle.effect_for(public_name),
+                                requires_approval=bundle.requires_approval(public_name),
+                                timeout_seconds=self.config.agent.limits.tool_timeout_seconds,
+                            ),
+                            partial(self._invoke_live_mcp, bundle, public_name),
+                        )
                 self._active_toolsets.append(bundle.toolset)
 
             configured_permissions = self.policy.always_allow | self.policy.always_deny
@@ -815,36 +1032,84 @@ class ResourceManager:
             self.memory_manager.configure_learning(extractor=self._memory_extractor(active_model))
             runtime_tools = list(self.local_tools)
             runtime_metadata = dict(self.tool_metadata)
-            self.delegation_manager = None
-            if self.config.delegation.enabled:
-                read_tools = [
-                    tool
-                    for tool in self.local_tools
-                    if self.tool_metadata.get(tool.name, {}).get("risk") == Risk.READ.value
-                ]
-                self.delegation_manager = DelegationManager(
-                    model=active_model,
-                    tools=read_tools,
-                    config=self.config.delegation,
-                    model_settings=cast(ModelSettings, model_cfg.settings),
-                )
-                runtime_tools.append(
-                    Tool(
-                        self.delegation_manager.delegate_task,
-                        name=DELEGATION_TOOL_NAME,
-                        description=(
-                            "Delegate one independent research task to an isolated subagent. "
-                            "The subagent can only use read tools and returns a concise result."
+            if self.config.agents.enabled:
+                runtime_tools.extend(
+                    [
+                        Tool(
+                            self.agent_orchestrator.spawn_agent,
+                            name="spawn_agent",
+                            description=(
+                                "Spawn a persistent depth-one Agent Thread and return immediately. "
+                                "Use explorer for read-only research and worker for isolated changes."
+                            ),
+                            sequential=True,
+                            requires_approval=False,
                         ),
-                        sequential=False,
-                        timeout=self.config.delegation.timeout_seconds,
-                    )
+                        Tool(
+                            self.agent_orchestrator.send_message,
+                            name="send_message",
+                            description="Queue context for an Agent without starting a new turn.",
+                            sequential=True,
+                        ),
+                        Tool(
+                            self.agent_orchestrator.followup_task,
+                            name="followup_task",
+                            description="Continue an existing Agent with its durable context.",
+                            sequential=True,
+                        ),
+                        Tool(
+                            self.agent_orchestrator.wait_agent,
+                            name="wait_agent",
+                            description="Wait for Agent progress, completion, failure, or coordination.",
+                            sequential=True,
+                        ),
+                        Tool(
+                            self.agent_orchestrator.interrupt_agent,
+                            name="interrupt_agent",
+                            description="Interrupt an active Agent while preserving its thread state.",
+                            sequential=True,
+                        ),
+                        Tool(
+                            self.agent_orchestrator.list_agents,
+                            name="list_agents",
+                            description="List durable Agent Threads in the current root Session.",
+                            sequential=True,
+                        ),
+                        Tool(
+                            self.agent_orchestrator.close_agent,
+                            name="close_agent",
+                            description="Resolve and close an Agent Thread after its work is handled.",
+                            sequential=True,
+                        ),
+                    ]
                 )
-                runtime_metadata[DELEGATION_TOOL_NAME] = {
-                    "origin": "control:delegation",
-                    "risk": Risk.READ.value,
-                    "control": "true",
-                }
+                for agent_tool in AGENT_TOOL_NAMES:
+                    runtime_metadata[agent_tool] = dict(self.tool_metadata[agent_tool])
+                if self.config.delegation.enabled and self.child_run_manager is not None:
+                    runtime_tools.extend(
+                        [
+                            Tool(
+                                self.child_run_manager.spawn_child,
+                                name="spawn_child",
+                                description="Deprecated alias for spawn_agent.",
+                                sequential=True,
+                            ),
+                            Tool(
+                                self.child_run_manager.wait_children,
+                                name="wait_children",
+                                description="Deprecated alias for wait_agent.",
+                                sequential=True,
+                            ),
+                            Tool(
+                                self.child_run_manager.cancel_child,
+                                name="cancel_child",
+                                description="Deprecated alias for interrupt_agent.",
+                                sequential=True,
+                            ),
+                        ]
+                    )
+                    for child_tool in CHILD_TOOL_NAMES:
+                        runtime_metadata[child_tool] = dict(self.tool_metadata[child_tool])
             self.runtime = AgentRuntime(
                 model=active_model,
                 tools=runtime_tools,
@@ -866,6 +1131,11 @@ class ResourceManager:
                 tool_schema_documents=self._remote_tool_schema_documents,
                 active_skill_documents=self.active_skill_documents,
                 retrieved_context_documents=self.retrieved_context_documents,
+                active_work_product_documents=self.active_work_product_documents,
+                work_completion_issues=self.completion_issues,
+                usage_enricher=self.enrich_usage,
+                effect_recorder=self.task_workspace.record_tool_effect,
+                work_event_drain=self.task_workspace.drain_events,
                 bind_session_context=self.bind_session_context,
                 clarification_loader=self.pending_clarification,
                 clarification_setter=self.request_clarification,
@@ -889,6 +1159,9 @@ class ResourceManager:
         self.runtime = None
 
     async def close(self) -> None:
+        if self.live_manager is not None:
+            await self.live_manager.close()
+        await self.agent_orchestrator.shutdown()
         if self._stack is not None:
             await self._close_runtime()
             await self._stack.aclose()
@@ -921,6 +1194,7 @@ class ResourceManager:
             "mcp_approvals": list(self.config.mcp_diagnostics),
             "warnings": [*self.config.config_warnings, *self.warnings],
             "hooks": self.hooks.summary(),
+            "live_enabled": self.config.live.enabled,
         }
 
     def hook_summary(self) -> list[dict[str, object]]:
@@ -970,6 +1244,132 @@ class ResourceManager:
 
     def retrieved_context_documents(self, session_id: str) -> tuple[dict[str, object], ...]:
         return self.session_context.resolve_documents(session_id).resource_documents
+
+    def active_work_product_documents(self, session_id: str) -> tuple[dict[str, object], ...]:
+        return (
+            *self.task_workspace.context_documents(session_id),
+            *self.agent_orchestrator.context_documents(session_id),
+        )
+
+    def live_context_documents(self, session_id: str) -> tuple[dict[str, object], ...]:
+        """Return a bounded canonical projection; never include raw audio or secrets."""
+
+        loaded = self.session_repository.load(session_id)
+
+        def assistant_text(turn: Any) -> str:
+            chunks: list[str] = []
+            for message in turn.messages:
+                if not isinstance(message, ModelResponse):
+                    continue
+                chunks.extend(part.content for part in message.parts if isinstance(part, TextPart))
+            return "".join(chunks) or turn.partial_text or ""
+
+        recent_turns = [
+            {
+                "kind": "conversation_turn",
+                "channel": turn.channel,
+                "user": turn.user_input,
+                "assistant": assistant_text(turn),
+                "status": turn.status,
+            }
+            for turn in loaded.turns[-8:]
+        ]
+        return tuple(
+            [
+                {
+                    "kind": "session",
+                    "plan": loaded.plan.model_dump(mode="json"),
+                    "recent_turns": recent_turns,
+                },
+                *self.active_skill_documents(session_id),
+                *self.retrieved_context_documents(session_id),
+                *self.active_work_product_documents(session_id),
+            ]
+        )
+
+    def bind_live_session(self, session_id: str, execution_id: str) -> None:
+        """Bind stateful tools to one short-lived Live execution."""
+
+        self.bind_session_context(session_id)
+        self.agent_orchestrator.bind_root_run(
+            session_id,
+            execution_id,
+            approval_mode=str(self.config.permissions.default_mode),
+        )
+
+    async def _invoke_live_mcp(
+        self,
+        bundle: McpToolsetBundle,
+        public_name: str,
+        arguments: dict[str, Any],
+    ) -> Any:
+        """Execute one MCP capability through its existing resilient Adapter."""
+
+        model = cast(Model, build_model(self.active_model_config()))
+        context = RunContext(
+            deps=None,
+            model=model,
+            usage=RunUsage(),
+            tool_call_approved=True,
+            tool_name=public_name,
+        )
+        tools = await bundle.toolset.get_tools(context)
+        tool = tools.get(public_name)
+        if tool is None:
+            raise RuntimeError(f"MCP capability is no longer available: {public_name}")
+        raw_validated = tool.args_validator.validate_python(arguments)
+        if not isinstance(raw_validated, dict):
+            raise TypeError("MCP capability arguments did not validate to an object")
+        validated = cast(dict[str, Any], raw_validated)
+        return await bundle.toolset.call_tool(public_name, validated, context, tool)
+
+    def completion_issues(self, session_id: str) -> tuple[str, ...]:
+        return tuple(
+            [
+                *self.task_workspace.completion_issues(session_id),
+                *self.agent_orchestrator.completion_issues(session_id),
+            ]
+        )
+
+    def enrich_usage(
+        self,
+        session_id: str,
+        usage: dict[str, Any],
+    ) -> dict[str, Any]:
+        summary = self.agent_orchestrator.usage_summary(
+            session_id,
+            self.agent_orchestrator.bound_root_run_id,
+        )
+        raw_totals = summary.get("total", {})
+        totals = cast(dict[str, object], raw_totals) if isinstance(raw_totals, dict) else {}
+        combined = dict(usage)
+        for key, value in totals.items():
+            old = combined.get(key, 0)
+            if (
+                not isinstance(value, bool)
+                and isinstance(value, int | float)
+                and not isinstance(old, bool)
+                and isinstance(old, int | float)
+            ):
+                combined[key] = old + value
+        combined["agents"] = summary.get("by_agent", {})
+        return combined
+
+    async def _record_agent_evidence(
+        self,
+        receipt: EvidenceReceipt,
+        plan_step_id: str | None,
+        criterion_ids: tuple[str, ...],
+    ) -> None:
+        if self.runtime is None:
+            return
+        self.runtime.controller.record_evidence(receipt)
+        if plan_step_id is not None:
+            await self.runtime.controller.attach_executor_evidence(
+                plan_step_id,
+                receipt.id,
+                list(criterion_ids),
+            )
 
     def pending_clarification(self, session_id: str) -> Any:
         return self.session_context.load(session_id).pending_clarification

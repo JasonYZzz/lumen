@@ -19,7 +19,7 @@ def test_four_layers_merge_with_special_rules(tmp_path: Path) -> None:
     workspace.mkdir()
     _write(
         home / ".lumen" / "agent.yaml",
-        """version: 1
+        """version: 2
 agent:
   name: user
   models:
@@ -102,7 +102,7 @@ def test_higher_single_model_clears_inherited_models(tmp_path: Path) -> None:
     workspace.mkdir()
     _write(
         home / ".lumen" / "agent.yaml",
-        """version: 1
+        """version: 2
 agent:
   models:
     first: {id: test}
@@ -128,8 +128,8 @@ def test_explicit_file_is_exclusive_and_cli_wins_environment(tmp_path: Path) -> 
     workspace.mkdir()
     environment_config = tmp_path / "environment.yaml"
     explicit_config = tmp_path / "explicit.yaml"
-    _write(environment_config, "version: 1\nagent: {name: env, model: {id: test}}\n")
-    _write(explicit_config, "version: 1\nagent: {name: cli, model: {id: test}}\n")
+    _write(environment_config, "version: 2\nagent: {name: env, model: {id: test}}\n")
+    _write(explicit_config, "version: 2\nagent: {name: cli, model: {id: test}}\n")
 
     resolver = ConfigResolver(
         workspace,
@@ -152,7 +152,7 @@ def test_relative_paths_and_mcp_environment_follow_declaring_source(
     workspace.mkdir()
     _write(
         home / ".lumen" / "agent.yaml",
-        """version: 1
+        """version: 2
 agent:
   model: {id: test}
   instructions_file: prompts/system.md

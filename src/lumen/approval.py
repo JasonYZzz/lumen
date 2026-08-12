@@ -17,12 +17,11 @@ from lumen.events import ApprovalRequest
 class ApprovalMode(StrEnum):
     MANUAL = "manual"
     ACCEPT_EDITS = "accept_edits"
-    PLAN = "plan"
     AUTO = "auto"
 
     @classmethod
     def parse(cls, value: str) -> ApprovalMode:
-        return cls.MANUAL if value == "ask" else cls(value)
+        return cls(value)
 
 
 @dataclass(frozen=True, slots=True)
@@ -69,17 +68,12 @@ class ApprovalPolicy:
 
     def decide(self, request: ApprovalRequest, mode: ApprovalMode | str) -> ApprovalDecision:
         parsed = mode if isinstance(mode, ApprovalMode) else ApprovalMode.parse(mode)
-        if parsed is ApprovalMode.PLAN:
-            if request.risk == "read" or self._is_read_only_command(request):
-                return self._auto_decision(parsed, request)
+        # Deprecated writable child calls preserve their historical explicit
+        # spawn approval. Native ``spawn_agent`` worktree creation is isolated
+        # and instead requires approval at import time.
+        if request.name == "spawn_child" and request.args.get("kind") == "worktree":
             return ApprovalDecision(
-                approved=False,
-                requires_confirmation=False,
-                source="policy",
-                message=(
-                    f"blocked in plan mode (tool={request.name}, risk={request.risk}); "
-                    "switch modes with Shift+Tab to make changes"
-                ),
+                message="writable child spawns always require explicit approval"
             )
         if request.risk == "read":
             return self._auto_decision(parsed, request)
@@ -112,6 +106,10 @@ class ApprovalPolicy:
         if command == "find":
             return not any(item in cls._FIND_MUTATING_FLAGS for item in args)
         return command in cls._READ_ONLY_COMMANDS
+
+    @classmethod
+    def is_read_only(cls, request: ApprovalRequest) -> bool:
+        return request.risk == "read" or cls._is_read_only_command(request)
 
     @classmethod
     def _is_workspace_filesystem_command(cls, request: ApprovalRequest) -> bool:

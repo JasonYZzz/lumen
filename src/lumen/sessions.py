@@ -14,11 +14,23 @@ from uuid import UUID, uuid4
 
 from pydantic_ai.messages import ModelMessage, ModelMessagesTypeAdapter
 
+from lumen.agents.types import (
+    ACTIVE_AGENT_STATUSES,
+    AgentEvent,
+    AgentMessage,
+    AgentResult,
+    AgentStatus,
+    AgentThreadState,
+    SessionAgentState,
+)
+from lumen.collaboration import SessionSettingsState
 from lumen.context.session_state import SessionContextState
 from lumen.events import TimelineEventRecord
+from lumen.live.types import LiveSessionState, SessionLiveState
 from lumen.plan import PlanState
+from lumen.work_products import EffectReceipt, SessionWorkState
 
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 9
 
 
 class SessionCorruptError(ValueError):
@@ -50,6 +62,11 @@ class TurnRecord:
     retryable: bool = False
     timeline_events: list[TimelineEventRecord] = field(default_factory=list[TimelineEventRecord])
     recovery_receipts: list[dict[str, Any]] = field(default_factory=list[dict[str, Any]])
+    channel: str = "text"
+    interaction_id: str | None = None
+    input_provenance: str | None = None
+    provider_item_ids: list[str] = field(default_factory=list[str])
+    live_metadata: dict[str, Any] = field(default_factory=dict[str, Any])
 
 
 @dataclass(frozen=True, slots=True)
@@ -83,6 +100,10 @@ class SessionData:
     compacted_prefix_length: int = 0
     compacted_source_end: int = 0
     context_state: SessionContextState = field(default_factory=SessionContextState)
+    settings: SessionSettingsState = field(default_factory=SessionSettingsState)
+    work_state: SessionWorkState = field(default_factory=SessionWorkState)
+    agent_state: SessionAgentState = field(default_factory=SessionAgentState)
+    live_state: SessionLiveState = field(default_factory=SessionLiveState)
 
 
 class SessionRepository:
@@ -136,6 +157,65 @@ class SessionRepository:
         )
         return SessionMetadata(session_id, agent_name, model_id, created_at, path)
 
+    def fork(self, session_id: str, *, through_turn: int) -> SessionMetadata:
+        """Create a non-destructive session branch ending at ``through_turn``."""
+
+        source = self.load(session_id)
+        if through_turn < 0 or through_turn >= len(source.turns):
+            raise IndexError(f"turn index out of range: {through_turn}")
+        created = self.create(
+            agent_name=source.metadata.agent_name,
+            model_id=source.metadata.model_id,
+        )
+        for turn in source.turns[: through_turn + 1]:
+            self.append_turn(
+                created.id,
+                user_input=turn.user_input,
+                messages=turn.messages,
+                approvals=turn.approvals,
+                usage=turn.usage,
+                status=turn.status,
+                plan=turn.plan,
+                diagnostics=turn.diagnostics,
+                compaction=turn.compaction,
+                error_message=turn.error_message,
+                partial_text=turn.partial_text,
+                retryable=turn.retryable,
+                timeline_events=turn.timeline_events,
+                recovery_receipts=turn.recovery_receipts,
+                channel=turn.channel,
+                interaction_id=turn.interaction_id,
+                input_provenance=turn.input_provenance,
+                provider_item_ids=turn.provider_item_ids,
+                live_metadata=turn.live_metadata,
+            )
+        self.append_session_settings(created.id, source.settings)
+        if source.work_state.work_products or source.work_state.effects:
+            self.append_work_state(created.id, source.work_state)
+        for thread in source.agent_state.threads:
+            copied_ref = thread.ref.model_copy(update={"parent_session_id": created.id})
+            if thread.status in ACTIVE_AGENT_STATUSES or thread.status in {
+                AgentStatus.APPROVAL_PENDING,
+                AgentStatus.IMPORT_PENDING,
+                AgentStatus.RECONCILIATION_REQUIRED,
+            }:
+                copied = thread.model_copy(
+                    update={
+                        "ref": copied_ref,
+                        "status": AgentStatus.NOT_CARRIED,
+                        "resolution": "fork_not_carried",
+                        "resolution_reason": "active execution is not copied into a fork",
+                        "result": None,
+                        "updated_at": self._now(),
+                    }
+                )
+            else:
+                copied = thread.model_copy(update={"ref": copied_ref})
+            self.append_agent_thread(created.id, copied)
+        for message in source.agent_state.messages:
+            self.append_agent_message(created.id, message)
+        return created
+
     def append_turn(
         self,
         session_id: str,
@@ -153,6 +233,11 @@ class SessionRepository:
         retryable: bool = False,
         timeline_events: Sequence[TimelineEventRecord] = (),
         recovery_receipts: Sequence[dict[str, object]] = (),
+        channel: str = "text",
+        interaction_id: str | None = None,
+        input_provenance: str | None = None,
+        provider_item_ids: Sequence[str] = (),
+        live_metadata: dict[str, Any] | None = None,
     ) -> None:
         path = self._path(session_id)
         if not path.is_file():
@@ -169,7 +254,14 @@ class SessionRepository:
             "diagnostics": list(diagnostics or []),
             "timeline_events": [record.to_dict() for record in timeline_events],
             "recovery_receipts": list(recovery_receipts),
+            "channel": channel,
+            "provider_item_ids": list(provider_item_ids),
+            "live_metadata": dict(live_metadata or {}),
         }
+        if interaction_id is not None:
+            record["interaction_id"] = interaction_id
+        if input_provenance is not None:
+            record["input_provenance"] = input_provenance
         if compaction is not None:
             record["compaction"] = self._dump_compaction(compaction)
         if error_message is not None:
@@ -190,6 +282,208 @@ class SessionRepository:
             path,
             {
                 "type": "context_state",
+                "created_at": self._now(),
+                "state": state.model_dump(mode="json"),
+            },
+        )
+
+    def append_session_settings(self, session_id: str, state: SessionSettingsState) -> None:
+        """Durably append the session-scoped collaboration/approval state."""
+
+        path = self._path(session_id)
+        if not path.is_file():
+            raise FileNotFoundError(f"session not found: {session_id}")
+        self._append(
+            path,
+            {
+                "type": "session_settings",
+                "created_at": self._now(),
+                "state": state.model_dump(mode="json"),
+            },
+        )
+
+    def append_work_state(self, session_id: str, state: SessionWorkState) -> None:
+        """Append the latest durable work-product snapshot."""
+
+        path = self._path(session_id)
+        if not path.is_file():
+            raise FileNotFoundError(f"session not found: {session_id}")
+        self._ensure_schema_v7(path)
+        self._append(
+            path,
+            {
+                "type": "work_state",
+                "created_at": self._now(),
+                "state": state.model_dump(mode="json"),
+            },
+        )
+
+    def append_effect(self, session_id: str, effect: EffectReceipt) -> None:
+        """Append one write-ahead effect state transition."""
+
+        path = self._path(session_id)
+        if not path.is_file():
+            raise FileNotFoundError(f"session not found: {session_id}")
+        self._ensure_schema_v7(path)
+        self._append(
+            path,
+            {
+                "type": "effect",
+                "created_at": self._now(),
+                "effect": effect.model_dump(mode="json"),
+            },
+        )
+
+    def append_agent_thread(self, session_id: str, thread: AgentThreadState) -> None:
+        """Append the latest materialized state for one Agent Thread."""
+
+        path = self._path(session_id)
+        if not path.is_file():
+            raise FileNotFoundError(f"session not found: {session_id}")
+        if thread.ref.parent_session_id != session_id:
+            raise ValueError("agent thread does not belong to session")
+        self._ensure_schema_v8(path)
+        self._append(
+            path,
+            {
+                "type": "agent_thread",
+                "created_at": self._now(),
+                "thread": thread.model_dump(mode="json"),
+            },
+        )
+
+    def append_agent_event(self, session_id: str, event: AgentEvent) -> None:
+        path = self._path(session_id)
+        if not path.is_file():
+            raise FileNotFoundError(f"session not found: {session_id}")
+        if event.session_id != session_id:
+            raise ValueError("agent event does not belong to session")
+        self._ensure_schema_v8(path)
+        self._append(
+            path,
+            {
+                "type": "agent_event",
+                "created_at": self._now(),
+                "event": event.model_dump(mode="json"),
+            },
+        )
+
+    def append_agent_message(self, session_id: str, message: AgentMessage) -> None:
+        path = self._path(session_id)
+        if not path.is_file():
+            raise FileNotFoundError(f"session not found: {session_id}")
+        self._ensure_schema_v8(path)
+        self._append(
+            path,
+            {
+                "type": "agent_message",
+                "created_at": self._now(),
+                "message": message.model_dump(mode="json"),
+            },
+        )
+
+    def append_agent_result(self, session_id: str, result: AgentResult) -> None:
+        path = self._path(session_id)
+        if not path.is_file():
+            raise FileNotFoundError(f"session not found: {session_id}")
+        self._ensure_schema_v8(path)
+        self._append(
+            path,
+            {
+                "type": "agent_result",
+                "created_at": self._now(),
+                "result": result.model_dump(mode="json"),
+            },
+        )
+
+    def append_live_session(self, session_id: str, state: LiveSessionState) -> None:
+        """Append one materialized Live lifecycle transition."""
+
+        path = self._path(session_id)
+        if not path.is_file():
+            raise FileNotFoundError(f"session not found: {session_id}")
+        if state.ref.session_id != session_id:
+            raise ValueError("live session does not belong to session")
+        self._ensure_schema_v9(path)
+        self._append(
+            path,
+            {
+                "type": "live_session",
+                "created_at": self._now(),
+                "state": state.model_dump(mode="json"),
+            },
+        )
+
+    def _ensure_schema_v7(self, path: Path) -> None:
+        """Append a non-destructive upgrade marker for historical sessions."""
+
+        effective = self._effective_schema_version(path)
+        if effective >= 7:
+            return
+        self._append(
+            path,
+            {
+                "type": "schema_upgrade",
+                "from_version": effective,
+                "to_version": 7,
+                "created_at": self._now(),
+            },
+        )
+
+    def _ensure_schema_v8(self, path: Path) -> None:
+        """Append a non-destructive v8 marker before Agent records."""
+
+        effective = self._effective_schema_version(path)
+        if effective >= 8:
+            return
+        self._append(
+            path,
+            {
+                "type": "schema_upgrade",
+                "from_version": effective,
+                "to_version": 8,
+                "created_at": self._now(),
+            },
+        )
+
+    def _ensure_schema_v9(self, path: Path) -> None:
+        """Append a non-destructive v9 marker before Live records."""
+
+        effective = self._effective_schema_version(path)
+        if effective >= 9:
+            return
+        self._append(
+            path,
+            {
+                "type": "schema_upgrade",
+                "from_version": effective,
+                "to_version": 9,
+                "created_at": self._now(),
+            },
+        )
+
+    @staticmethod
+    def _effective_schema_version(path: Path) -> int:
+        effective = 0
+        with path.open(encoding="utf-8") as file:
+            for line_number, line in enumerate(file, 1):
+                record = _parse_json_record(line, line_number=line_number, path=path)
+                if line_number == 1:
+                    effective = int(record.get("schema_version", 0))
+                elif record.get("type") == "schema_upgrade":
+                    effective = int(record.get("to_version", effective))
+        return effective
+
+    def append_plan_state(self, session_id: str, state: PlanState) -> None:
+        """Persist a plan transition that must survive before the next turn."""
+
+        path = self._path(session_id)
+        if not path.is_file():
+            raise FileNotFoundError(f"session not found: {session_id}")
+        self._append(
+            path,
+            {
+                "type": "plan_state",
                 "created_at": self._now(),
                 "state": state.model_dump(mode="json"),
             },
@@ -221,10 +515,13 @@ class SessionRepository:
         with path.open(encoding="utf-8") as file:
             for line_number, line in enumerate(file, 1):
                 try:
-                    record = json.loads(line)
+                    raw_record: Any = json.loads(line)
                 except json.JSONDecodeError:
                     continue
-                if not isinstance(record, dict) or record.get("type") != "turn":
+                if not isinstance(raw_record, dict):
+                    continue
+                record = cast(dict[str, Any], raw_record)
+                if record.get("type") != "turn":
                     continue
                 try:
                     turn = _parse_turn(record, line_number=line_number)
@@ -236,24 +533,27 @@ class SessionRepository:
                 if compaction is not None:
                     checkpoint = _load_checkpoint(compaction)
                     summary = _load_summary(compaction)
-                    raw_checkpoint = compaction.get("checkpoint")
+                    raw_checkpoint: Any = compaction.get("checkpoint")
                     is_v2 = (
                         isinstance(raw_checkpoint, dict)
-                        and raw_checkpoint.get("schema_version") == 2
+                        and cast(dict[str, Any], raw_checkpoint).get("schema_version") == 2
                     )
                     if checkpoint is not None and not is_v2:
                         checkpoint = _map_v1_checkpoint(checkpoint, full_history, parent)
                     if is_v2 and checkpoint is not None:
                         summary = _summary_from_v2_checkpoint(checkpoint)
-                    valid = checkpoint is not None and summary is not None and (
-                        not is_v2
-                        or _validate_v2_checkpoint(
-                            checkpoint,
-                            full_history,
-                            parent,
+                    if (
+                        checkpoint is not None
+                        and summary is not None
+                        and (
+                            not is_v2
+                            or _validate_v2_checkpoint(
+                                checkpoint,
+                                full_history,
+                                parent,
+                            )
                         )
-                    )
-                    if valid:
+                    ):
                         checkpoint_id = str(checkpoint.checkpoint_id)
                         episodes.append(
                             (
@@ -322,7 +622,7 @@ class SessionRepository:
             raise SessionCorruptError("missing session header")
         header = records[0]
         schema_version = header.get("schema_version")
-        if schema_version not in {1, 2, 3, 4, 5}:
+        if schema_version not in {1, 2, 3, 4, 5, 6, 7, 8, 9}:
             raise SessionCorruptError(f"unsupported session schema: {schema_version}")
         metadata = SessionMetadata(
             id=str(header["id"]),
@@ -343,7 +643,111 @@ class SessionRepository:
         compacted_prefix_length = 0
         compacted_source_end = 0
         context_state = SessionContextState()
+        settings = SessionSettingsState()
+        work_state = SessionWorkState()
+        agent_state = SessionAgentState()
+        live_state = SessionLiveState()
+        effective_schema = int(schema_version)
         for line_number, record in enumerate(records[1:], 2):
+            if record.get("type") == "schema_upgrade":
+                to_version = int(record.get("to_version", 0))
+                if to_version not in {7, 8, 9} or to_version <= effective_schema:
+                    raise SessionCorruptError(f"invalid schema_upgrade at line {line_number}")
+                effective_schema = to_version
+                continue
+            if record.get("type") == "live_session":
+                if effective_schema < 9:
+                    raise SessionCorruptError(
+                        f"live_session is not valid for schema v{effective_schema} at line {line_number}"
+                    )
+                try:
+                    live_session = LiveSessionState.model_validate(record.get("state"))
+                except ValueError as error:
+                    raise SessionCorruptError(f"invalid live_session at line {line_number}") from error
+                if live_session.ref.session_id != metadata.id:
+                    raise SessionCorruptError(f"live_session ownership mismatch at line {line_number}")
+                live_state = live_state.upsert(live_session)
+                continue
+            if record.get("type") == "work_state":
+                if effective_schema < 7:
+                    raise SessionCorruptError(
+                        f"work_state is not valid for schema v{effective_schema} at line {line_number}"
+                    )
+                try:
+                    work_state = SessionWorkState.model_validate(record.get("state"))
+                except ValueError as error:
+                    raise SessionCorruptError(f"invalid work_state at line {line_number}") from error
+                continue
+            if record.get("type") == "effect":
+                if effective_schema < 7:
+                    raise SessionCorruptError(
+                        f"effect is not valid for schema v{effective_schema} at line {line_number}"
+                    )
+                try:
+                    effect = EffectReceipt.model_validate(record.get("effect"))
+                except ValueError as error:
+                    raise SessionCorruptError(f"invalid effect at line {line_number}") from error
+                work_state = work_state.upsert_effect(effect)
+                continue
+            if record.get("type") == "agent_thread":
+                if effective_schema < 8:
+                    raise SessionCorruptError(
+                        f"agent_thread is not valid for schema v{effective_schema} at line {line_number}"
+                    )
+                try:
+                    thread = AgentThreadState.model_validate(record.get("thread"))
+                except ValueError as error:
+                    raise SessionCorruptError(f"invalid agent_thread at line {line_number}") from error
+                if thread.ref.parent_session_id != metadata.id:
+                    raise SessionCorruptError(f"agent_thread ownership mismatch at line {line_number}")
+                agent_state = agent_state.upsert_thread(thread)
+                continue
+            if record.get("type") == "agent_event":
+                if effective_schema < 8:
+                    raise SessionCorruptError(
+                        f"agent_event is not valid for schema v{effective_schema} at line {line_number}"
+                    )
+                try:
+                    event = AgentEvent.model_validate(record.get("event"))
+                except ValueError as error:
+                    raise SessionCorruptError(f"invalid agent_event at line {line_number}") from error
+                if event.session_id != metadata.id:
+                    raise SessionCorruptError(f"agent_event ownership mismatch at line {line_number}")
+                agent_state = agent_state.append_event(event)
+                continue
+            if record.get("type") == "agent_message":
+                if effective_schema < 8:
+                    raise SessionCorruptError(
+                        f"agent_message is not valid for schema v{effective_schema} at line {line_number}"
+                    )
+                try:
+                    message = AgentMessage.model_validate(record.get("message"))
+                except ValueError as error:
+                    raise SessionCorruptError(f"invalid agent_message at line {line_number}") from error
+                agent_state = agent_state.append_message(message)
+                continue
+            if record.get("type") == "agent_result":
+                if effective_schema < 8:
+                    raise SessionCorruptError(
+                        f"agent_result is not valid for schema v{effective_schema} at line {line_number}"
+                    )
+                try:
+                    result = AgentResult.model_validate(record.get("result"))
+                except ValueError as error:
+                    raise SessionCorruptError(f"invalid agent_result at line {line_number}") from error
+                existing = agent_state.get(result.agent_id)
+                if existing is None:
+                    raise SessionCorruptError(f"agent_result references unknown agent at line {line_number}")
+                agent_state = agent_state.upsert_thread(
+                    existing.model_copy(
+                        update={
+                            "result": result,
+                            "status": result.status,
+                            "updated_at": result.created_at,
+                        }
+                    )
+                )
+                continue
             if record.get("type") == "context_state":
                 if schema_version < 5:
                     raise SessionCorruptError(
@@ -354,16 +758,36 @@ class SessionRepository:
                 except ValueError as error:
                     raise SessionCorruptError(f"invalid context_state at line {line_number}") from error
                 continue
+            if record.get("type") == "session_settings":
+                if schema_version < 6:
+                    raise SessionCorruptError(
+                        f"session_settings is not valid for schema v{schema_version} at line {line_number}"
+                    )
+                try:
+                    settings = SessionSettingsState.model_validate(record.get("state"))
+                except ValueError as error:
+                    raise SessionCorruptError(f"invalid session_settings at line {line_number}") from error
+                continue
+            if record.get("type") == "plan_state":
+                if schema_version < 6:
+                    raise SessionCorruptError(
+                        f"plan_state is not valid for schema v{schema_version} at line {line_number}"
+                    )
+                try:
+                    latest_plan = PlanState.model_validate(record.get("state"))
+                except ValueError as error:
+                    raise SessionCorruptError(f"invalid plan_state at line {line_number}") from error
+                continue
             turn = _parse_turn(record, line_number=line_number)
             messages = turn.messages
             turns.append(turn)
             if turn.status in {"completed", "waiting_for_user"}:
                 if turn.compaction is not None:
                     candidate = _load_checkpoint(turn.compaction)
-                    raw_checkpoint = turn.compaction.get("checkpoint")
+                    raw_checkpoint: Any = turn.compaction.get("checkpoint")
                     is_v2_record = (
                         isinstance(raw_checkpoint, dict)
-                        and raw_checkpoint.get("schema_version") == 2
+                        and cast(dict[str, Any], raw_checkpoint).get("schema_version") == 2
                     )
                     if candidate is not None and not is_v2_record:
                         candidate = _map_v1_checkpoint(
@@ -402,16 +826,20 @@ class SessionRepository:
             # is diagnostic state and remains useful after failure/cancel.
             latest_plan = turn.plan
         return SessionData(
-            metadata,
-            turns,
-            active_history,
-            full_history,
-            latest_plan,
-            latest_compaction_summary,
-            latest_compaction_checkpoint,
-            compacted_prefix_length,
-            compacted_source_end,
-            context_state,
+            metadata=metadata,
+            turns=turns,
+            history=active_history,
+            full_history=full_history,
+            plan=latest_plan,
+            latest_compaction_summary=latest_compaction_summary,
+            latest_compaction_checkpoint=latest_compaction_checkpoint,
+            compacted_prefix_length=compacted_prefix_length,
+            compacted_source_end=compacted_source_end,
+            context_state=context_state,
+            settings=settings,
+            work_state=work_state,
+            agent_state=agent_state,
+            live_state=live_state,
         )
 
     def load_turn_page(
@@ -443,15 +871,61 @@ class SessionRepository:
             if header.get("type") != "session":
                 raise SessionCorruptError("missing session header")
             schema_version = header.get("schema_version")
-            if schema_version not in {1, 2, 3, 4, 5}:
+            if schema_version not in {1, 2, 3, 4, 5, 6, 7, 8, 9}:
                 raise SessionCorruptError(f"unsupported session schema: {schema_version}")
+
+            effective_schema = int(schema_version)
 
             for line_number, line in enumerate(file, 2):
                 record = _parse_json_record(line, line_number=line_number, path=path)
+                if record.get("type") == "schema_upgrade":
+                    to_version = int(record.get("to_version", 0))
+                    if to_version not in {7, 8, 9} or to_version <= effective_schema:
+                        raise SessionCorruptError(f"invalid schema_upgrade at line {line_number}")
+                    effective_schema = to_version
+                    continue
+                if record.get("type") == "live_session":
+                    if effective_schema < 9:
+                        raise SessionCorruptError(
+                            f"live_session is not valid for schema v{effective_schema} at line {line_number}"
+                        )
+                    continue
+                if record.get("type") in {"work_state", "effect"}:
+                    if effective_schema < 7:
+                        raise SessionCorruptError(
+                            f"{record.get('type')} is not valid for schema v{effective_schema} "
+                            f"at line {line_number}"
+                        )
+                    continue
+                if record.get("type") in {
+                    "agent_thread",
+                    "agent_event",
+                    "agent_message",
+                    "agent_result",
+                }:
+                    if effective_schema < 8:
+                        raise SessionCorruptError(
+                            f"{record.get('type')} is not valid for schema "
+                            f"v{effective_schema} at line {line_number}"
+                        )
+                    continue
                 if record.get("type") == "context_state":
                     if schema_version < 5:
                         raise SessionCorruptError(
                             f"context_state is not valid for schema v{schema_version} at line {line_number}"
+                        )
+                    continue
+                if record.get("type") == "session_settings":
+                    if schema_version < 6:
+                        raise SessionCorruptError(
+                            "session_settings is not valid for schema "
+                            f"v{schema_version} at line {line_number}"
+                        )
+                    continue
+                if record.get("type") == "plan_state":
+                    if schema_version < 6:
+                        raise SessionCorruptError(
+                            f"plan_state is not valid for schema v{schema_version} at line {line_number}"
                         )
                     continue
                 if record.get("type") != "turn":
@@ -540,6 +1014,15 @@ def _parse_turn(record: dict[str, Any], *, line_number: int) -> TurnRecord:
                 TimelineEventRecord.from_dict(item) for item in list(record.get("timeline_events") or [])
             ],
             recovery_receipts=[dict(item) for item in list(record.get("recovery_receipts") or [])],
+            channel=str(record.get("channel", "text")),
+            interaction_id=(
+                str(record["interaction_id"]) if record.get("interaction_id") is not None else None
+            ),
+            input_provenance=(
+                str(record["input_provenance"]) if record.get("input_provenance") is not None else None
+            ),
+            provider_item_ids=[str(item) for item in list(record.get("provider_item_ids") or [])],
+            live_metadata=dict(record.get("live_metadata") or {}),
         )
     except (KeyError, TypeError, ValueError) as error:
         raise SessionCorruptError(f"invalid turn at line {line_number}") from error
@@ -614,10 +1097,14 @@ def _validate_v2_checkpoint(
         return False
     if checkpoint.source_end != len(full_history):
         return False
-    expected_start_id = "session-origin" if checkpoint.source_start == 0 else (
-        parent.source_end_cursor.message_id
-        if isinstance(parent, CompactionCheckpointV2)
-        else f"legacy-boundary-{checkpoint.source_start}"
+    expected_start_id = (
+        "session-origin"
+        if checkpoint.source_start == 0
+        else (
+            parent.source_end_cursor.message_id
+            if isinstance(parent, CompactionCheckpointV2)
+            else f"legacy-boundary-{checkpoint.source_start}"
+        )
     )
     if checkpoint.source_start_cursor.message_id != expected_start_id:
         return False

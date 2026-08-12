@@ -1,5 +1,9 @@
 import type {
   ApprovalMode,
+  ApprovalScope,
+  AgentRecord,
+  CheckpointRecord,
+  CollaborationMode,
   ApiErrorBody,
   Bootstrap,
   EventEnvelope,
@@ -7,6 +11,8 @@ import type {
   FileSearchItem,
   ContextSourceItem,
   HookSummaryItem,
+  LiveEventEnvelope,
+  LiveStartResponse,
   McpPromptItem,
   QueueMode,
   RunStartedResponse,
@@ -15,6 +21,13 @@ import type {
 } from './types'
 
 const apiBaseUrl = process.env.NEXT_PUBLIC_LUMEN_API_BASE?.replace(/\/$/, '') ?? ''
+
+export function liveMediaWebSocketUrl(path: string): string {
+  const base = apiBaseUrl || window.location.origin
+  const url = new URL(path, base)
+  url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:'
+  return url.toString()
+}
 
 async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${apiBaseUrl}${path}`, {
@@ -58,6 +71,18 @@ export const lumenApi = {
     requestJson<{ sessionId: string }>('/api/v1/sessions', { method: 'POST' }),
   session: (sessionId: string) =>
     requestJson<SessionSnapshot>(`/api/v1/sessions/${sessionId}`),
+  listAgents: async (sessionId: string) =>
+    (await requestJson<{ items: AgentRecord[] }>(
+      `/api/v1/sessions/${sessionId}/agents`,
+    )).items,
+  agentAction: (
+    agentId: string,
+    action: string,
+    payload: Record<string, unknown> = {},
+  ) => requestJson<Record<string, unknown>>(`/api/v1/agents/${agentId}/actions`, {
+    method: 'POST',
+    body: JSON.stringify({ action, ...payload }),
+  }),
   startRun: (sessionId: string, input: string, clientRequestId: string) =>
     requestJson<RunStartedResponse>(`/api/v1/sessions/${sessionId}/runs`, {
       method: 'POST',
@@ -68,6 +93,33 @@ export const lumenApi = {
       method: 'POST',
       body: JSON.stringify({ clientRequestId }),
     }),
+  startLive: (
+    sessionId: string,
+    sdp: string | null,
+    clientRequestId: string,
+    route?: string,
+  ) =>
+    requestJson<LiveStartResponse>(`/api/v1/sessions/${sessionId}/live`, {
+      method: 'POST',
+      body: JSON.stringify({ sdp, clientRequestId, route }),
+    }),
+  interruptLive: (liveSessionId: string) =>
+    requestJson<Record<string, unknown>>(`/api/v1/live/${liveSessionId}/interrupt`, {
+      method: 'POST',
+    }),
+  endLive: (liveSessionId: string) =>
+    requestJson<Record<string, unknown>>(`/api/v1/live/${liveSessionId}`, {
+      method: 'DELETE',
+    }),
+  decideLiveApproval: (
+    liveSessionId: string,
+    callId: string,
+    approved: boolean,
+    scope: ApprovalScope = 'once',
+  ) => requestJson<{ status: string }>(
+    `/api/v1/live/${liveSessionId}/approvals/${callId}`,
+    { method: 'POST', body: JSON.stringify({ approved, scope }) },
+  ),
   cancelRun: (runId: string) =>
     requestJson<{ status: string }>(`/api/v1/runs/${runId}/cancel`, { method: 'POST' }),
   queueInput: (runId: string, text: string, mode: QueueMode) =>
@@ -75,16 +127,42 @@ export const lumenApi = {
       method: 'POST',
       body: JSON.stringify({ text, mode }),
     }),
-  decideApproval: (runId: string, callId: string, approved: boolean) =>
+  decideApproval: (
+    runId: string,
+    callId: string,
+    approved: boolean,
+    scope: ApprovalScope = 'once',
+  ) =>
     requestJson<{ status: string }>(`/api/v1/runs/${runId}/approvals/${callId}`, {
       method: 'POST',
-      body: JSON.stringify({ approved }),
+      body: JSON.stringify({ approved, scope }),
     }),
-  updateSettings: (settings: { model?: string; approvalMode?: ApprovalMode; confirmed?: boolean }) =>
+  updateWorkspaceSettings: (settings: { model?: string }) =>
     requestJson<Record<string, unknown>>('/api/v1/workspace/settings', {
       method: 'PATCH',
       body: JSON.stringify(settings),
     }),
+  updateSessionSettings: (
+    sessionId: string,
+    settings: {
+      approvalMode?: ApprovalMode
+      collaborationMode?: CollaborationMode
+      transcriptDensity?: 'normal' | 'verbose'
+    },
+  ) => requestJson<Record<string, unknown>>(`/api/v1/sessions/${sessionId}/settings`, {
+    method: 'PATCH',
+    body: JSON.stringify(settings),
+  }),
+  reviewPlan: (
+    sessionId: string,
+    action: 'approve' | 'reject',
+    revision: number,
+    clientRequestId: string,
+    feedback = '',
+  ) => requestJson<RunStartedResponse>(`/api/v1/sessions/${sessionId}/plan-review`, {
+    method: 'POST',
+    body: JSON.stringify({ action, revision, clientRequestId, feedback }),
+  }),
   searchFiles: async (query: string) =>
     (
       await requestJson<{ items: FileSearchItem[] }>(
@@ -155,6 +233,25 @@ export const lumenApi = {
       method: 'POST',
       body: JSON.stringify({ type: 'cancel_clarification' }),
     }),
+  dequeueInputs: (runId: string) =>
+    requestJson<{
+      status: string
+      items: Array<{ id: string; text: string; model_prompt: string; mode: QueueMode }>
+    }>(`/api/v1/runs/${runId}/input/dequeue`, { method: 'POST' }),
+  listCheckpoints: async (sessionId: string) =>
+    (await requestJson<{ items: CheckpointRecord[] }>(
+      `/api/v1/sessions/${sessionId}/checkpoints`,
+    )).items,
+  forkSession: (sessionId: string, throughTurn: number) =>
+    requestJson<{ sessionId: string }>(`/api/v1/sessions/${sessionId}/fork`, {
+      method: 'POST',
+      body: JSON.stringify({ throughTurn }),
+    }),
+  waiveVerification: (sessionId: string, scope: string[], reason: string) =>
+    requestJson<Record<string, unknown>>(
+      `/api/v1/sessions/${sessionId}/verification-waivers`,
+      { method: 'POST', body: JSON.stringify({ scope, reason }) },
+    ),
 }
 
 const eventTypes: EventType[] = [
@@ -169,10 +266,15 @@ const eventTypes: EventType[] = [
   'clarification.requested',
   'plan.created',
   'plan.updated',
+  'work_product.changed',
+  'agent.lifecycle',
+  'plan.review_pending',
+  'plan.review_resolved',
   'progress.reported',
   'tool.started',
   'tool.finished',
   'approval.pending',
+  'approval.batch_pending',
   'approval.resolved',
   'usage.updated',
   'context.compaction.started',
@@ -211,6 +313,56 @@ export function subscribeRun(
   for (const type of eventTypes) source.addEventListener(type, listener as EventListener)
   source.onerror = () => {
     if (source.readyState === EventSource.CLOSED) onError('运行事件连接已关闭')
+  }
+  return () => source.close()
+}
+
+const liveEventTypes = [
+  'live.session.created',
+  'live.session.connected',
+  'live.session.reconnecting',
+  'live.session.ended',
+  'live.session.failed',
+  'live.turn.started',
+  'live.input.speech_started',
+  'live.input.speech_stopped',
+  'live.input.transcript.delta',
+  'live.input.transcript.completed',
+  'live.response.started',
+  'live.response.audio_started',
+  'live.response.transcript.delta',
+  'live.response.completed',
+  'live.response.interrupted',
+  'live.tool.started',
+  'live.tool.approval_pending',
+  'live.tool.finished',
+  'live.usage.updated',
+  'live.reconciliation_required',
+]
+
+export function subscribeLive(
+  liveSessionId: string,
+  onEvent: (event: LiveEventEnvelope) => void,
+  onError: (message: string) => void,
+) {
+  const source = new EventSource(`${apiBaseUrl}/api/v1/live/${liveSessionId}/events`, {
+    withCredentials: true,
+  })
+  const listener = (message: MessageEvent<string>) => {
+    try {
+      const event = JSON.parse(message.data) as LiveEventEnvelope
+      onEvent(event)
+      if (event.type === 'live.session.ended' || event.type === 'live.session.failed') {
+        source.close()
+      }
+    } catch {
+      onError('无法解析实时语音事件')
+      source.close()
+    }
+  }
+  for (const type of liveEventTypes) source.addEventListener(type, listener as EventListener)
+  source.onerror = () => {
+    if (source.readyState === EventSource.CLOSED) onError('实时语音状态连接已关闭')
   }
   return () => source.close()
 }

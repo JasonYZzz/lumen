@@ -4,6 +4,9 @@ Validates that the builtin themes land on the app, the default activates on
 mount, and Textual derives the right dark/light flag from the palette.
 """
 
+# Theme command tests intentionally enter the protected slash-command seam.
+# pyright: reportPrivateUsage=false
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -40,7 +43,7 @@ def _make_app(tmp_path: Path, *, extra_yaml: str = "") -> LumenApp:
     config_path = tmp_path / "agent.yaml"
     config_path.write_text(
         """
-version: 1
+version: 2
 agent:
   name: theme-test
   model:
@@ -132,7 +135,7 @@ def test_ui_theme_config_validates_registered_names(tmp_path: Path) -> None:
     """``ui.theme`` defaults to dark, accepts registered names, rejects others."""
 
     base_yaml = """
-version: 1
+version: 2
 agent:
   model:
     id: test

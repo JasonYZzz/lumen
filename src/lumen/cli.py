@@ -61,7 +61,7 @@ def _version_callback(value: bool) -> None:
         raise typer.Exit
 
 
-_FULL_TEMPLATE = """version: 1
+_FULL_TEMPLATE = """version: 2
 agent:
   name: lumen
   model:
@@ -76,7 +76,7 @@ permissions:
   default_mode: manual
 """
 
-_LOCAL_TEMPLATE = """version: 1
+_LOCAL_TEMPLATE = """version: 2
 # Local-only overrides. This file should not be committed.
 # agent:
 #   limits:
@@ -421,7 +421,7 @@ def main(
         str | None,
         typer.Option(
             "--permission-mode",
-            help="Approval mode for --print: manual (deny all), accept_edits, plan, or auto.",
+            help="Approval mode for --print: manual (deny all), accept_edits, or auto.",
         ),
     ] = None,
     version: Annotated[
@@ -450,7 +450,7 @@ def main(
         if permission_mode is not None:
             if permission_mode not in {mode.value for mode in ApprovalMode}:
                 raise ConfigLoadError(
-                    "--permission-mode must be one of: manual, accept_edits, plan, auto"
+                    "--permission-mode must be one of: manual, accept_edits, auto"
                 )
             headless_mode = ApprovalMode(permission_mode)
         workspace = _workspace(cwd)

@@ -327,6 +327,170 @@ button:disabled {
   outline: none;
 }
 
+.header-action {
+  height: 32px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: transparent;
+  padding: 0 9px;
+  color: #56575a;
+  font-size: 11px;
+}
+
+.header-action:hover:not(:disabled) {
+  background: #f0f0ed;
+}
+
+.header-action:disabled {
+  opacity: 0.4;
+}
+
+.runtime-overlay {
+  position: fixed;
+  z-index: 100;
+  display: grid;
+  inset: 0;
+  place-items: center;
+  background: rgb(24 24 22 / 0.36);
+  padding: 24px;
+  backdrop-filter: blur(6px);
+}
+
+.runtime-inspector {
+  display: grid;
+  width: min(920px, 100%);
+  max-height: min(820px, calc(100dvh - 48px));
+  overflow: auto;
+  border: 1px solid var(--line-strong);
+  border-radius: 14px;
+  background: var(--page);
+  box-shadow: 0 28px 90px rgb(0 0 0 / 0.22);
+}
+
+.runtime-inspector > header,
+.agent-record,
+.work-record,
+.checkpoint-record {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.runtime-inspector > header {
+  position: sticky;
+  z-index: 1;
+  top: 0;
+  border-bottom: 1px solid var(--line);
+  background: rgb(250 250 248 / 0.96);
+  padding: 14px 18px;
+  backdrop-filter: blur(16px);
+}
+
+.runtime-inspector > header > div,
+.agent-record > div:first-child,
+.checkpoint-record > div {
+  display: grid;
+  gap: 3px;
+}
+
+.runtime-inspector header span,
+.agent-record span,
+.work-record span,
+.checkpoint-record span,
+.runtime-meta {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.runtime-inspector button {
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+  background: #fff;
+  padding: 5px 8px;
+  color: var(--ink-soft);
+  font-size: 10.5px;
+}
+
+.runtime-inspector button:disabled {
+  opacity: 0.45;
+}
+
+.runtime-section {
+  display: grid;
+  gap: 8px;
+  padding: 16px 18px;
+}
+
+.runtime-section + .runtime-section {
+  border-top: 1px solid var(--line);
+}
+
+.runtime-section h2 {
+  margin: 0 0 3px;
+  font-size: 12px;
+}
+
+.runtime-section h2 small {
+  color: var(--muted);
+  font-weight: 500;
+}
+
+.agent-record,
+.work-record,
+.checkpoint-record {
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: #fff;
+  padding: 10px 12px;
+}
+
+.agent-record p,
+.checkpoint-record p,
+.runtime-empty,
+.runtime-meta {
+  margin: 2px 0 0;
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.runtime-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 5px;
+}
+
+.compact-inspector {
+  width: min(760px, 100%);
+}
+
+.transcript-inspector {
+  width: min(1000px, 100%);
+  height: min(820px, calc(100dvh - 48px));
+  grid-template-rows: auto auto 1fr;
+}
+
+.transcript-inspector > input {
+  margin: 12px 18px 0;
+  border: 1px solid var(--line-strong);
+  border-radius: 7px;
+  background: #fff;
+  padding: 8px 10px;
+}
+
+.transcript-inspector > pre {
+  overflow: auto;
+  margin: 12px 18px 18px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #f5f5f2;
+  padding: 14px;
+  font-size: 11px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+}
+
 .auto-confirm {
   flex: 0 0 auto;
   gap: 11px;
@@ -335,6 +499,67 @@ button:disabled {
   padding: 10px max(24px, calc((100vw - 248px - 760px) / 2));
   color: #62572d;
   font-size: 12px;
+}
+
+.plan-review {
+  display: grid;
+  grid-template-columns: minmax(220px, 1fr) minmax(260px, 1.2fr) auto auto;
+  gap: 10px;
+  align-items: center;
+  padding: 12px 18px;
+  border-bottom: 1px solid var(--line);
+  background: #f4f4f1;
+}
+
+.plan-review > div {
+  display: grid;
+  gap: 2px;
+}
+
+.plan-review span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.plan-review textarea {
+  min-height: 38px;
+  max-height: 96px;
+  border: 1px solid var(--line-strong);
+  border-radius: 7px;
+  background: var(--page);
+  padding: 8px 10px;
+  resize: vertical;
+}
+
+.plan-review button {
+  border: 0;
+  border-radius: 7px;
+  background: var(--ink);
+  padding: 8px 11px;
+  color: #fff;
+  font-size: 11px;
+}
+
+.plan-review button.quiet {
+  border: 1px solid var(--line-strong);
+  background: transparent;
+  color: var(--ink-soft);
+}
+
+.plan-review button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+@media (max-width: 900px) {
+  .plan-review {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .plan-review > div,
+  .plan-review textarea {
+    grid-column: 1 / -1;
+  }
 }
 
 .auto-confirm > div {
@@ -1167,6 +1392,205 @@ button:disabled {
   opacity: 0.38;
 }
 
+.live-voice {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 3px;
+}
+
+.voice-start-button,
+.voice-icon-button,
+.voice-end-button {
+  display: grid;
+  width: 32px;
+  height: 32px;
+  place-items: center;
+  border: 0;
+  border-radius: 50%;
+}
+
+.voice-start-button {
+  background: #eadcc2;
+  color: #8b5a17;
+}
+
+.voice-start-button:hover:not(:disabled) {
+  background: #dfc99f;
+  color: #74470e;
+}
+
+.voice-icon-button {
+  background: #e7e7e3;
+  color: #5f6063;
+}
+
+.voice-icon-button.is-selected {
+  background: #eadcc2;
+  color: #8b5a17;
+}
+
+.voice-end-button {
+  background: #f0e1e3;
+  color: #a33f4e;
+}
+
+.live-voice-popover {
+  position: absolute;
+  right: 0;
+  bottom: 42px;
+  z-index: 30;
+  width: min(390px, calc(100vw - 44px));
+  overflow: hidden;
+  border: 1px solid #dedbd3;
+  border-radius: 14px;
+  background: rgb(253 253 251 / 0.98);
+  box-shadow: 0 18px 55px rgb(35 31 23 / 0.16);
+  backdrop-filter: blur(18px);
+}
+
+.live-voice-heading {
+  display: flex;
+  min-height: 48px;
+  align-items: center;
+  gap: 9px;
+  padding: 9px 12px;
+}
+
+.live-voice-heading strong {
+  flex: 1;
+  color: #5b5141;
+  font-size: 12px;
+  font-weight: 620;
+}
+
+.live-voice-heading select {
+  min-width: 0;
+  max-width: 150px;
+  border: 1px solid #dedbd3;
+  border-radius: 7px;
+  background: #f5f3ed;
+  padding: 4px 6px;
+  color: #6c675f;
+  font-size: 10px;
+}
+
+.live-wave {
+  display: flex;
+  height: 20px;
+  align-items: center;
+  gap: 2px;
+  color: #b7791f;
+}
+
+.live-wave i {
+  display: block;
+  width: 2px;
+  height: 5px;
+  border-radius: 2px;
+  background: currentcolor;
+  animation: live-wave 900ms ease-in-out infinite alternate;
+}
+
+.live-wave i:nth-child(2) { animation-delay: -600ms; }
+.live-wave i:nth-child(3) { animation-delay: -300ms; }
+.live-wave i:nth-child(4) { animation-delay: -750ms; }
+
+.live-wave.is-listening i,
+.live-wave.is-approval_pending i,
+.live-wave.is-error i {
+  height: 3px;
+  animation: none;
+}
+
+@keyframes live-wave {
+  from { height: 4px; }
+  to { height: 18px; }
+}
+
+.live-captions {
+  display: grid;
+  gap: 7px;
+  border-top: 1px solid #ebe8e0;
+  padding: 11px 12px 12px;
+}
+
+.live-captions p {
+  display: grid;
+  grid-template-columns: 46px 1fr;
+  gap: 7px;
+  margin: 0;
+  color: #4c4d50;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.live-captions span {
+  color: #a46c1d;
+  font-size: 10px;
+  font-weight: 650;
+  text-transform: uppercase;
+}
+
+.live-approval {
+  border-top: 1px solid #e2d5ba;
+  background: #fffaf0;
+  padding: 10px 12px;
+}
+
+.live-approval > strong {
+  color: #5c4a2e;
+  font-size: 12px;
+}
+
+.live-approval > span {
+  margin-left: 7px;
+  color: #a07431;
+  font: 10px ui-monospace, SFMono-Regular, monospace;
+}
+
+.live-approval pre {
+  max-height: 130px;
+  overflow: auto;
+  margin: 8px 0;
+  color: #6a6254;
+  font: 10px/1.5 ui-monospace, SFMono-Regular, monospace;
+  white-space: pre-wrap;
+}
+
+.live-approval > div {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.live-approval button {
+  border: 0;
+  border-radius: 6px;
+  background: #383631;
+  padding: 5px 9px;
+  color: #fff;
+  font-size: 10.5px;
+}
+
+.live-approval button:first-child {
+  background: #eee8dc;
+  color: #705c3c;
+}
+
+.live-voice-error {
+  margin: 0;
+  border-top: 1px solid #ecdadd;
+  background: #fff7f8;
+  padding: 9px 12px;
+  color: #a33f4e;
+  font-size: 11px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .live-wave i { animation: none; }
+}
+
 .queued-inputs {
   gap: 5px;
   margin-bottom: 7px;
@@ -1179,6 +1603,14 @@ button:disabled {
   background: #fff;
   padding: 4px 8px;
   color: #6f7073;
+  font-size: 10.5px;
+  white-space: nowrap;
+}
+
+.queued-inputs button {
+  border: 0;
+  background: transparent;
+  color: #8a632b;
   font-size: 10.5px;
   white-space: nowrap;
 }

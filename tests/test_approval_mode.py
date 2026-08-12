@@ -2,7 +2,7 @@
 
 Validates the policy that decides whether a tool call mounts the Allow/Deny
 panel or short-circuits. Auto approves every explicitly classified risk;
-``external_unknown`` still prompts. Ask mode sends every risky tool through
+``external_unknown`` still prompts. Manual mode sends every risky tool through
 the panel.
 """
 
@@ -22,11 +22,16 @@ from lumen.ui.app import LumenApp
 from lumen.ui.approval_panel import ApprovalPanel
 
 
-def _make_app(tmp_path: Path, *, default_mode: str = "ask") -> LumenApp:
+def _make_app(
+    tmp_path: Path,
+    *,
+    default_mode: str = "manual",
+    collaboration_mode: str = "default",
+) -> LumenApp:
     config_path = tmp_path / "agent.yaml"
     config_path.write_text(
         f"""
-version: 1
+version: 2
 agent:
   name: approval-test
   model:
@@ -35,6 +40,8 @@ tools:
   builtins: []
 permissions:
   default_mode: {default_mode}
+collaboration:
+  default_mode: {collaboration_mode}
 sessions:
   directory: sessions
 """,
@@ -60,7 +67,7 @@ def _request(risk: str, call_id: str = "call-1") -> ApprovalRequest:
 
 
 async def test_manual_mode_allows_reads_but_confirms_risky_actions(tmp_path: Path) -> None:
-    app = _make_app(tmp_path, default_mode="ask")
+    app = _make_app(tmp_path, default_mode="manual")
     async with app.run_test() as pilot:
         await pilot.pause()
         assert app._should_auto_approve("read") is True  # type: ignore[reportPrivateUsage]
@@ -120,7 +127,7 @@ async def test_auto_mode_short_circuits_write_without_card(tmp_path: Path) -> No
 async def test_manual_mode_mounts_card_for_risky_action(tmp_path: Path) -> None:
     """In manual mode, a write request mounts the card."""
 
-    app = _make_app(tmp_path, default_mode="ask")
+    app = _make_app(tmp_path, default_mode="manual")
     async with app.run_test() as pilot:
         await pilot.pause()
         task = asyncio.create_task(app._await_inline_approval(_request("write")))  # type: ignore[reportPrivateUsage]
@@ -135,7 +142,7 @@ async def test_manual_mode_mounts_card_for_risky_action(tmp_path: Path) -> None:
 
 
 async def test_manual_session_rule_skips_repeated_capability_prompt(tmp_path: Path) -> None:
-    app = _make_app(tmp_path, default_mode="ask")
+    app = _make_app(tmp_path, default_mode="manual")
     async with app.run_test() as pilot:
         first = asyncio.create_task(app._await_inline_approval(_request("write", "first")))  # type: ignore[reportPrivateUsage]
         await pilot.pause()
@@ -155,7 +162,7 @@ async def test_manual_session_rule_skips_repeated_capability_prompt(tmp_path: Pa
 
 
 async def test_mode_command_reports_current(tmp_path: Path) -> None:
-    app = _make_app(tmp_path, default_mode="ask")
+    app = _make_app(tmp_path, default_mode="manual")
     async with app.run_test() as pilot:
         await pilot.pause()
         await app.handle_input("/mode")
@@ -166,7 +173,7 @@ async def test_mode_command_reports_current(tmp_path: Path) -> None:
 
 
 async def test_mode_command_switches_to_auto(tmp_path: Path) -> None:
-    app = _make_app(tmp_path, default_mode="ask")
+    app = _make_app(tmp_path, default_mode="manual")
     async with app.run_test() as pilot:
         await pilot.pause()
         await app.handle_input("/mode auto")
@@ -179,7 +186,7 @@ async def test_mode_command_switches_to_auto(tmp_path: Path) -> None:
 
 
 async def test_mode_command_rejects_unknown(tmp_path: Path) -> None:
-    app = _make_app(tmp_path, default_mode="ask")
+    app = _make_app(tmp_path, default_mode="manual")
     async with app.run_test() as pilot:
         await pilot.pause()
         await app.handle_input("/mode yolo")
@@ -191,7 +198,7 @@ async def test_mode_command_rejects_unknown(tmp_path: Path) -> None:
 
 
 async def test_ctrl_m_does_not_create_a_second_mode_cycle(tmp_path: Path) -> None:
-    app = _make_app(tmp_path, default_mode="ask")
+    app = _make_app(tmp_path, default_mode="manual")
     async with app.run_test() as pilot:
         await pilot.pause()
         assert app.approval_mode == "manual"
@@ -201,7 +208,7 @@ async def test_ctrl_m_does_not_create_a_second_mode_cycle(tmp_path: Path) -> Non
 
 
 async def test_plan_mode_blocks_mutations_without_mounting_approval(tmp_path: Path) -> None:
-    app = _make_app(tmp_path, default_mode="plan")
+    app = _make_app(tmp_path, collaboration_mode="plan")
     async with app.run_test() as pilot:
         decision = await app._await_inline_approval(  # type: ignore[reportPrivateUsage]
             _request("write")
@@ -209,7 +216,7 @@ async def test_plan_mode_blocks_mutations_without_mounting_approval(tmp_path: Pa
         await pilot.pause()
 
         assert decision.approved is False
-        assert "blocked in plan mode" in decision.message
+        assert "blocked in plan collaboration mode" in decision.message
         assert list(app.query(".is-pending")) == []
 
 
@@ -227,8 +234,8 @@ async def test_mode_context_tells_model_when_plan_starts_and_ends(tmp_path: Path
         auto_prompt = app._apply_permission_mode_context(  # type: ignore[reportPrivateUsage]
             "implement this"
         )
-        assert 'name="auto"' in auto_prompt
-        assert "Plan mode is off" in auto_prompt
+        assert 'name="default"' in auto_prompt
+        assert "Follow the user's request normally" in auto_prompt
 
 
 def test_set_approval_mode_validates(tmp_path: Path) -> None:

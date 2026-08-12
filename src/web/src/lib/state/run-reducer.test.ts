@@ -88,6 +88,49 @@ describe('runReducer', () => {
     })
   })
 
+  it('projects every request in a batch approval event', () => {
+    const state = runReducer(initialRunState, {
+      type: 'event',
+      event: event('approval.batch_pending', {
+        batch_id: 'batch-1',
+        requests: [
+          { call_id: 'call-1', name: 'edit_file', args: { path: 'a.py' } },
+          { call_id: 'call-2', name: 'run_command', args: { argv: ['pytest'] } },
+        ],
+        presentations: [
+          { title: 'Edit a.py', preview: 'diff a', full_text: 'full diff a' },
+          { title: 'Run pytest', preview: 'pytest', full_text: 'pytest' },
+        ],
+      }),
+    })
+
+    expect(state.timeline).toHaveLength(2)
+    expect(state.timeline.map((item) => item.callId)).toEqual(['call-1', 'call-2'])
+    expect(state.timeline.every((item) => item.pendingApproval)).toBe(true)
+    expect(state.timeline[1].presentation?.title).toBe('Run pytest')
+  })
+
+  it('updates the Agent tree from lifecycle events', () => {
+    const state = runReducer(initialRunState, {
+      type: 'event',
+      event: event('agent.lifecycle', {
+        agent_id: 'agent-1',
+        path: '/root/explorer',
+        phase: 'completed',
+        status: 'completed',
+        summary: 'Found the cause',
+      }),
+    })
+
+    expect(state.agents[0]).toMatchObject({
+      id: 'agent-1',
+      path: '/root/explorer',
+      status: 'completed',
+      result_summary: 'Found the cause',
+    })
+    expect(state.timeline[0]).toMatchObject({ kind: 'agent', status: 'completed' })
+  })
+
   it('hides control tools while preserving their plan and progress UI', () => {
     let state = runReducer(initialRunState, {
       type: 'event',
@@ -118,6 +161,24 @@ describe('runReducer', () => {
     expect(state.timeline.some((item) => item.toolName === 'set_plan')).toBe(false)
   })
 
+  it('projects work-product lifecycle events into the shared timeline', () => {
+    const state = runReducer(initialRunState, {
+      type: 'event',
+      event: event('work_product.changed', {
+        phase: 'verified',
+        resource: 'report.md',
+        status: 'verified',
+        summary: 'target changed; non-target content unchanged',
+      }),
+    })
+
+    expect(state.timeline[0]).toMatchObject({
+      kind: 'work_product',
+      status: 'verified',
+      text: 'verified — report.md: target changed; non-target content unchanged',
+    })
+  })
+
   it('keeps the latest plan and terminal failure', () => {
     let state = runReducer(initialRunState, {
       type: 'event',
@@ -137,6 +198,37 @@ describe('runReducer', () => {
     })
     expect(state.status).toBe('failed')
     expect(state.timeline.at(-1)).toMatchObject({ kind: 'error', text: 'provider unavailable' })
+  })
+
+  it('tracks plan review pending and resolved events', () => {
+    const plan = {
+      goal: 'Ship safely',
+      revision: 3,
+      state_version: 4,
+      lifecycle: 'review_pending',
+      approved_revision: null,
+      steps: [{
+        id: 'one',
+        title: 'Inspect',
+        depends_on: [],
+        acceptance_criteria: [],
+        status: 'pending' as const,
+      }],
+    }
+    let state = runReducer(initialRunState, {
+      type: 'event',
+      event: event('plan.review_pending', { plan, revision: 3 }),
+    })
+
+    expect(state.planReviewStatus).toBe('review_pending')
+    expect(state.planReviewRevision).toBe(3)
+    expect(state.plan).toEqual(plan)
+
+    state = runReducer(state, {
+      type: 'event',
+      event: event('plan.review_resolved', { revision: 3, approved: true }, 2),
+    })
+    expect(state.planReviewStatus).toBe('approved')
   })
 
   it('keeps plans inside their owning conversation turns', () => {

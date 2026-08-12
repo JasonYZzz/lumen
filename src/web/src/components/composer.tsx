@@ -1,7 +1,7 @@
 'use client'
 
 import { ArrowUp, FileCode, Stop } from '@phosphor-icons/react'
-import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react'
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from 'react'
 import { lumenApi } from '@/lib/api/client'
 import type { FileSearchItem, QueueMode } from '@/lib/api/types'
 import { filterSlashCommands, type SlashCommand } from '@/lib/slash-commands'
@@ -16,6 +16,7 @@ export interface ComposerProps {
   onSubmit: () => void
   onStop: () => void
   onFocusChange?: (focused: boolean) => void
+  liveControl?: ReactNode
 }
 
 export function Composer({
@@ -28,6 +29,7 @@ export function Composer({
   onSubmit,
   onStop,
   onFocusChange,
+  liveControl,
 }: ComposerProps) {
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const [files, setFiles] = useState<FileSearchItem[]>([])
@@ -197,6 +199,7 @@ export function Composer({
         </div>
 
         <div className="composer-actions">
+          {liveControl}
           {busy && (
             <button className="stop-button" type="button" onClick={onStop} aria-label="停止运行">
               <Stop size={13} weight="fill" />

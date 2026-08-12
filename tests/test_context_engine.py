@@ -130,6 +130,35 @@ async def test_prepare_returns_envelope_with_fingerprint_and_budget() -> None:
     assert any(block.zone is ContextZone.SYSTEM for block in envelope.blocks)
 
 
+async def test_prepare_injects_bounded_work_state_into_task_zone() -> None:
+    engine = _engine(soft_token_limit=1_000_000)
+    request = _request([])
+    request = ContextRequest(
+        session=request.session,
+        agent=request.agent,
+        prompt=request.prompt,
+        task=request.task,
+        runtime=RuntimeContextSnapshot(
+            instructions="be helpful",
+            work_product_documents=(
+                {
+                    "kind": "work_state",
+                    "work_products": [{"id": "work:1", "resource": "report.md"}],
+                    "recent_effects": [],
+                },
+            ),
+        ),
+        history=request.history,
+    )
+
+    envelope = await engine.prepare(request, _no_emit)
+
+    task_blocks = [block for block in envelope.blocks if block.zone is ContextZone.TASK_STATE]
+    assert len(task_blocks) == 1
+    assert task_blocks[0].payload.text is not None
+    assert "report.md" in task_blocks[0].payload.text
+
+
 async def test_prepare_under_generous_limit_carries_no_compaction() -> None:
     engine = _engine(soft_token_limit=1_000_000)
     history = [ModelRequest(parts=[UserPromptPart(content="short")])]
@@ -435,14 +464,14 @@ async def test_context_report_is_session_scoped() -> None:
 async def test_context_report_exposes_resolved_model_policy() -> None:
     engine = _engine(
         soft_token_limit=900_000,
-        model_id="openai:deepseek-v4-pro",
+        model_id="openai:deepseek-v4-flash",
     )
     await engine.prepare(_request([], session_id="profile"), _no_emit)
 
     report = await engine.control(ContextReportCommand(session_id="profile"), _no_emit)
 
-    assert report.payload["active_model"] == "openai:deepseek-v4-pro"
-    assert report.payload["model_profile"] == "deepseek-v4-pro"
+    assert report.payload["active_model"] == "openai:deepseek-v4-flash"
+    assert report.payload["model_profile"] == "deepseek-v4-flash"
     assert report.payload["context_window_tokens"] == 1_000_000
     assert report.payload["output_reserve_tokens"] == 384_000
     assert report.payload["tokenizer_adapter"] == "conservative-cjk"

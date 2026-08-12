@@ -14,6 +14,17 @@ from pydantic_ai.messages import (
     UserPromptPart,
 )
 
+from lumen.agents.types import (
+    AgentConfigSnapshot,
+    AgentEvent,
+    AgentEventKind,
+    AgentMessage,
+    AgentResult,
+    AgentStatus,
+    AgentThreadRef,
+    AgentThreadState,
+)
+from lumen.collaboration import CollaborationMode, PlanReviewStatus, SessionSettingsState
 from lumen.context import (
     CompactionCheckpointV1,
     CompactionCheckpointV2,
@@ -23,8 +34,11 @@ from lumen.context import (
     TranscriptCursor,
 )
 from lumen.events import RunStarted, TextDelta, TimelineEventRecord
+from lumen.live import LiveConnectionState, LiveSessionRef, LiveSessionState
 from lumen.plan import PlanState, PlanStep, StepStatus
 from lumen.sessions import SCHEMA_VERSION, SessionCorruptError, SessionRepository
+from lumen.tools.spec import EffectKind
+from lumen.work_products import EffectReceipt, EffectStatus, SessionWorkState
 
 
 def test_session_round_trip_preserves_model_messages(tmp_path: Path) -> None:
@@ -48,10 +62,159 @@ def test_session_round_trip_preserves_model_messages(tmp_path: Path) -> None:
     assert loaded.full_history == loaded.history
     assert loaded.turns[0].user_input == "hello"
     assert loaded.plan == PlanState()
-    assert SCHEMA_VERSION == 5
+    assert SCHEMA_VERSION == 9
 
 
-def test_session_v5_round_trip_preserves_timeline_events(tmp_path: Path) -> None:
+def test_session_v7_round_trip_preserves_work_state_and_effects(tmp_path: Path) -> None:
+    repository = SessionRepository(tmp_path)
+    session = repository.create(agent_name="test-agent", model_id="test")
+    effect = EffectReceipt(
+        id="effect:one",
+        effect_kind=EffectKind.EXECUTION,
+        operation="run_command",
+        status=EffectStatus.VERIFIED,
+        summary="command completed",
+    )
+
+    repository.append_work_state(session.id, SessionWorkState())
+    repository.append_effect(session.id, effect)
+
+    assert repository.load(session.id).work_state.effects == (effect,)
+
+
+def test_session_v8_round_trip_preserves_agent_records(tmp_path: Path) -> None:
+    repository = SessionRepository(tmp_path)
+    session = repository.create(agent_name="test-agent", model_id="test")
+    thread = AgentThreadState(
+        ref=AgentThreadRef(
+            id="agent-one",
+            path="/root/one",
+            parent_session_id=session.id,
+            root_run_id="run-one",
+            agent_type="explorer",
+        ),
+        task="inspect",
+        task_name="one",
+        config=AgentConfigSnapshot(
+            model_name="test",
+            model_id="test",
+            cwd=str(tmp_path),
+        ),
+        idempotency_key="sha256:" + "0" * 64,
+    )
+    repository.append_agent_thread(session.id, thread)
+    repository.append_agent_message(
+        session.id,
+        AgentMessage(id="msg-one", agent_id="agent-one", sender="/root", content="context"),
+    )
+    repository.append_agent_event(
+        session.id,
+        AgentEvent(
+            id="event-one",
+            sequence=1,
+            agent_id="agent-one",
+            session_id=session.id,
+            root_run_id="run-one",
+            kind=AgentEventKind.COMPLETED,
+            status=AgentStatus.COMPLETED,
+        ),
+    )
+    repository.append_agent_result(
+        session.id,
+        AgentResult(
+            agent_id="agent-one",
+            status=AgentStatus.COMPLETED,
+            summary="done",
+        ),
+    )
+
+    loaded = repository.load(session.id).agent_state
+
+    assert loaded.get("agent-one") is not None
+    assert loaded.get("agent-one").result.summary == "done"  # type: ignore[union-attr]
+    assert loaded.messages[0].content == "context"
+    assert loaded.events[0].kind is AgentEventKind.COMPLETED
+
+
+def test_session_fork_marks_active_agents_not_carried(tmp_path: Path) -> None:
+    repository = SessionRepository(tmp_path)
+    session = repository.create(agent_name="test-agent", model_id="test")
+    repository.append_turn(
+        session.id,
+        user_input="work",
+        messages=[],
+        approvals=[],
+        usage={},
+        status="completed",
+    )
+    repository.append_agent_thread(
+        session.id,
+        AgentThreadState(
+            ref=AgentThreadRef(
+                id="agent-active",
+                path="/root/active",
+                parent_session_id=session.id,
+                root_run_id="run-one",
+                agent_type="explorer",
+            ),
+            task="inspect",
+            task_name="active",
+            status=AgentStatus.RUNNING,
+            config=AgentConfigSnapshot(model_name="test", model_id="test", cwd=str(tmp_path)),
+            idempotency_key="sha256:" + "1" * 64,
+        ),
+    )
+
+    forked = repository.fork(session.id, through_turn=0)
+    copied = repository.load(forked.id).agent_state.get("agent-active")
+
+    assert copied is not None
+    assert copied.status is AgentStatus.NOT_CARRIED
+    assert copied.ref.parent_session_id == forked.id
+
+
+def test_session_fork_preserves_v7_work_state(tmp_path: Path) -> None:
+    repository = SessionRepository(tmp_path)
+    session = repository.create(agent_name="test-agent", model_id="test")
+    repository.append_turn(
+        session.id,
+        user_input="work",
+        messages=[],
+        approvals=[],
+        usage={},
+        status="completed",
+    )
+    effect = EffectReceipt(
+        id="effect:forked",
+        effect_kind=EffectKind.EXECUTION,
+        operation="run_command",
+        status=EffectStatus.VERIFIED,
+        summary="command completed",
+    )
+    repository.append_effect(session.id, effect)
+
+    forked = repository.fork(session.id, through_turn=0)
+
+    assert repository.load(forked.id).work_state.effects == (effect,)
+
+
+def test_historical_v6_session_upgrades_append_only_for_work_state(tmp_path: Path) -> None:
+    repository = SessionRepository(tmp_path)
+    session = repository.create(agent_name="test-agent", model_id="test")
+    original = session.path.read_text(encoding="utf-8").replace('"schema_version":9', '"schema_version":6')
+    session.path.write_text(original, encoding="utf-8")
+
+    assert repository.load(session.id).work_state == SessionWorkState()
+    repository.append_work_state(session.id, SessionWorkState())
+
+    lines = [json.loads(line) for line in session.path.read_text(encoding="utf-8").splitlines()]
+    assert lines[0]["schema_version"] == 6
+    assert lines[1]["type"] == "schema_upgrade"
+    assert lines[2]["type"] == "work_state"
+    assert repository.load(session.id).work_state == SessionWorkState()
+
+
+def test_session_v6_round_trip_preserves_timeline_events(tmp_path: Path) -> None:
     repository = SessionRepository(tmp_path)
     session = repository.create(agent_name="test-agent", model_id="test")
     records = [
@@ -74,6 +237,21 @@ def test_session_v5_round_trip_preserves_timeline_events(tmp_path: Path) -> None
         RunStarted("literal @README.md"),
         TextDelta("answer"),
     ]
+
+
+def test_session_round_trip_preserves_independent_modes_and_plan_review(tmp_path: Path) -> None:
+    repository = SessionRepository(tmp_path)
+    session = repository.create(agent_name="test-agent", model_id="test")
+    state = SessionSettingsState(
+        collaboration_mode=CollaborationMode.PLAN,
+        approval_mode="auto",
+        plan_review_status=PlanReviewStatus.REVIEW_PENDING,
+        reviewed_revision=3,
+    )
+
+    repository.append_session_settings(session.id, state)
+
+    assert repository.load(session.id).settings == state
 
 
 def test_failed_turn_round_trip_preserves_partial_audit_without_model_history(tmp_path: Path) -> None:
@@ -192,7 +370,7 @@ def test_session_restores_latest_compacted_active_history(tmp_path: Path) -> Non
     repository = SessionRepository(tmp_path)
     session = repository.create(agent_name="test", model_id="test")
     old_messages = [ModelRequest(parts=[UserPromptPart(content="old question")])]
-    compacted = [ModelRequest(parts=[SystemPromptPart(content="Prior summary")])]
+    compacted: list[ModelMessage] = [ModelRequest(parts=[SystemPromptPart(content="Prior summary")])]
     new_messages = [
         ModelRequest(parts=[UserPromptPart(content="new question")]),
         ModelResponse(parts=[TextPart(content="new answer")]),
@@ -269,11 +447,9 @@ def test_corrupt_v2_checkpoint_falls_back_to_raw_transcript(tmp_path: Path) -> N
         source_end_cursor=TranscriptCursor(sequence=2, message_id=f"msg-{last_digest}"),
         full_history_length=2,
         rolling_state=rolling_state,
-        state_digest=(
-            f"sha256:{hashlib.sha256(rolling_state.model_dump_json().encode()).hexdigest()}"
-        ),
+        state_digest=(f"sha256:{hashlib.sha256(rolling_state.model_dump_json().encode()).hexdigest()}"),
     )
-    compacted = [ModelRequest(parts=[SystemPromptPart(content="Prior summary")])]
+    compacted: list[ModelMessage] = [ModelRequest(parts=[SystemPromptPart(content="Prior summary")])]
     repository.append_turn(
         session.id,
         user_input="old",
@@ -364,7 +540,7 @@ def test_session_without_compaction_has_none_summary(tmp_path: Path) -> None:
     assert loaded.latest_compaction_summary is None
 
 
-@pytest.mark.parametrize("schema_version", [1, 2, 3])
+@pytest.mark.parametrize("schema_version", [1, 2, 3, 4, 5, 6])
 def test_legacy_session_loads_without_rewriting(tmp_path: Path, schema_version: int) -> None:
     session_id = "00000000-0000-0000-0000-000000000001"
     path = tmp_path / f"{session_id}.jsonl"
@@ -407,7 +583,7 @@ def test_session_rejects_unknown_schema_version(tmp_path: Path) -> None:
         json.dumps(
             {
                 "type": "session",
-                "schema_version": 7,
+                "schema_version": 10,
                 "id": session_id,
                 "agent_name": "x",
                 "model_id": "test",
@@ -419,3 +595,30 @@ def test_session_rejects_unknown_schema_version(tmp_path: Path) -> None:
     )
     with pytest.raises(SessionCorruptError, match="unsupported session schema"):
         SessionRepository(tmp_path).load(session_id)
+
+
+def test_v9_live_state_is_append_only_and_owned_by_session(tmp_path: Path) -> None:
+    repository = SessionRepository(tmp_path)
+    session = repository.create(agent_name="test-agent", model_id="test")
+    state = LiveSessionState(
+        ref=LiveSessionRef(id="live-one", session_id=session.id),
+        model="gpt-realtime-2.1",
+        voice="marin",
+    )
+
+    repository.append_live_session(session.id, state)
+    repository.append_live_session(
+        session.id,
+        state.model_copy(update={"connection": LiveConnectionState.CLOSED}),
+    )
+
+    loaded = repository.load(session.id)
+    restored = loaded.live_state.get("live-one")
+    assert restored is not None
+    assert restored.connection is LiveConnectionState.CLOSED
+    records = [json.loads(line) for line in session.path.read_text().splitlines()]
+    assert [record["type"] for record in records] == [
+        "session",
+        "live_session",
+        "live_session",
+    ]

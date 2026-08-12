@@ -5,9 +5,14 @@ from __future__ import annotations
 import asyncio
 import re
 from collections.abc import Awaitable, Callable
+from typing import cast
 
+from rich.console import RenderableType
 from rich.markdown import Markdown as RichMarkdown
-from textual.app import ComposeResult
+from rich.segment import Segment
+from rich.text import Text
+from textual import events
+from textual.app import App, ComposeResult
 from textual.containers import Vertical
 from textual.widgets import Static
 
@@ -27,6 +32,56 @@ _HRULE_RE = re.compile(r"^ {0,3}(-\s*){3,}$|^ {0,3}(\*\s*){3,}$|^ {0,3}(_\s*){3,
 # Link reference definitions (``[label]: destination``). They are
 # document-global in Markdown and render nothing themselves.
 _LINK_DEF_RE = re.compile(r"^ {0,3}\[[^\]]+\]:[^\n]*", re.MULTILINE)
+
+
+class _SelectableMarkdownStatic(Static):
+    """Make Rich Markdown participate in Textual's screen text selection.
+
+    Textual's default ``Widget.get_selection`` only extracts text from its
+    native Text/Content visuals. Rich Markdown is wrapped in ``RichVisual``, so
+    selection highlights existed but yielded no text. Extracting from the same
+    rendered strips keeps wrapping, tables and visible Markdown formatting in
+    sync with what the user dragged over.
+    """
+
+    def __init__(self, content: RenderableType, *, classes: str, markup: bool = False) -> None:
+        self._markdown_renderable = content
+        self._render_width = 0
+        super().__init__("", classes=classes, markup=markup)
+
+    def on_mount(self) -> None:
+        self._refresh_selectable_content()
+
+    def on_resize(self, event: events.Resize) -> None:
+        if event.size.width != self._render_width:
+            self._refresh_selectable_content()
+
+    def update_markdown(self, content: RenderableType) -> None:
+        self._markdown_renderable = content
+        self._refresh_selectable_content()
+
+    def _refresh_selectable_content(self) -> None:
+        """Flatten Rich's rendered segments into selectable styled text."""
+
+        width = max(1, self.size.width or self.container_size.width)
+        self._render_width = width
+        app = cast(App[object], self.app)  # type: ignore[reportUnknownMemberType]
+        options = app.console_options.update(highlight=False, width=width)
+        segments = app.console.render(self._markdown_renderable, options)
+        lines = Segment.split_and_crop_lines(
+            segments,
+            width,
+            include_new_lines=False,
+            pad=False,
+        )
+        rendered = Text()
+        for line_index, line in enumerate(lines):
+            if line_index:
+                rendered.append("\n")
+            for segment in line:
+                if not segment.control:
+                    rendered.append(segment.text, style=segment.style)
+        self.update(rendered)
 
 
 def _link_definition_suffix(source: str) -> str:
@@ -162,7 +217,7 @@ class AssistantMarkdown(Vertical):
         super().__init__(classes=classes)
         self.source = ""
         self._frozen: list[str] = []
-        self._tail: Static | None = None
+        self._tail: _SelectableMarkdownStatic | None = None
         self._link_suffix = ""
         self.set_source(source)
 
@@ -203,8 +258,8 @@ class AssistantMarkdown(Vertical):
             # A new link definition can resolve reference-style links inside
             # already-frozen blocks; re-render just those.
             for child, block in zip(list(self.children), self._frozen, strict=False):
-                if "[" in block:
-                    child.update(self._render_block(block))
+                if "[" in block and isinstance(child, _SelectableMarkdownStatic):
+                    child.update_markdown(self._render_block(block))
         if self._tail is None:
             self._tail = self._block_widget(tail_text, None)
             self.mount(self._tail)
@@ -217,18 +272,18 @@ class AssistantMarkdown(Vertical):
         # Inside an unclosed fence the appended definitions would show up as
         # literal code, so the tail only gets them once its fences balance.
         if _has_open_fence(tail_text):
-            self._tail.update(RichMarkdown(tail_text))
+            self._tail.update_markdown(RichMarkdown(tail_text))
         else:
-            self._tail.update(self._render_block(tail_text))
+            self._tail.update_markdown(self._render_block(tail_text))
 
-    def _block_widget(self, text: str, previous: str | None) -> Static:
+    def _block_widget(self, text: str, previous: str | None) -> _SelectableMarkdownStatic:
         """Create one block child, with a spacer class when rich would not
         supply the inter-block blank line itself."""
 
         classes = "assistant-block"
         if _needs_top_margin(previous, text):
             classes += " assistant-block--spaced"
-        return Static(self._render_block(text), classes=classes, markup=False)
+        return _SelectableMarkdownStatic(self._render_block(text), classes=classes, markup=False)
 
     def _render_block(self, text: str) -> RichMarkdown:
         """Parse one block with the document's link definitions appended."""

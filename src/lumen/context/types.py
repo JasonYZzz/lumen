@@ -436,7 +436,8 @@ class RollingContextState(_Contract):
 class CompactionCheckpointV2(CompactionCheckpointV1):
     """Checkpoint whose authoritative delta boundary is a transcript cursor."""
 
-    schema_version: Literal[2] = 2
+    # Pydantic intentionally narrows the persisted discriminator in V2.
+    schema_version: Literal[2] = 2  # type: ignore[reportIncompatibleVariableOverride]
     source_start_cursor: TranscriptCursor
     source_end_cursor: TranscriptCursor
     full_history_length: int = Field(ge=0)

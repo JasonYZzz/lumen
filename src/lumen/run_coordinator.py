@@ -16,6 +16,7 @@ from lumen.runtime import (
     AgentRuntime,
     ApprovalBatchHandler,
     ApprovalHandler,
+    CompletionPolicy,
     EventSink,
     RunOutcome,
     get_partial_outcome,
@@ -97,12 +98,31 @@ class RunCoordinator:
         )
         return self._state
 
+    def replace_plan(self, plan: PlanState) -> None:
+        """Replace only the in-memory plan before the next durably recorded run."""
+
+        state = self.state
+        self._state = CoordinatorState(
+            session=state.session,
+            history=state.history,
+            full_history=state.full_history,
+            plan=plan,
+            compaction_summary=state.compaction_summary,
+            compaction_checkpoint=state.compaction_checkpoint,
+            compacted_prefix_length=state.compacted_prefix_length,
+            compacted_source_end=state.compacted_source_end,
+            last_user_input=state.last_user_input,
+            last_recovery_receipts=state.last_recovery_receipts,
+        )
+
     async def run(
         self,
         run_input: RunInput | str,
         emit: EventSink,
         approve: ApprovalHandler,
         approve_batch: ApprovalBatchHandler | None = None,
+        *,
+        completion_policy: CompletionPolicy | None = None,
     ) -> RunOutcome | None:
         if isinstance(run_input, str):
             run_input = RunInput(run_input, run_input)
@@ -141,6 +161,7 @@ class RunCoordinator:
                 ),
                 session_id=state.session.id,
                 recovery_receipts=state.last_recovery_receipts if run_input.is_retry else (),
+                completion_policy=completion_policy,
             )
         except asyncio.CancelledError as error:
             self._append_partial(run_input, error, status="cancelled", timeline_events=timeline_events)

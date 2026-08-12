@@ -56,7 +56,7 @@ def _manager_config(tmp_path: Path, extra: str = "") -> Any:
     path = tmp_path / "agent.yaml"
     path.write_text(
         """
-version: 1
+version: 2
 agent:
   model:
     id: test

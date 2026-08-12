@@ -1,14 +1,22 @@
+# LumenApp composes MessagePump-based handler mixins before Textual's App.
+# Pyright sees MessagePump.is_dom_root (Literal[False]) before App's root
+# override even though Textual's runtime MRO/metaclass intentionally supports it.
+# pyright: reportIncompatibleMethodOverride=false
+
 from __future__ import annotations
 
 import asyncio
+import json
 import re
+import shlex
 import subprocess
 import sys
 from typing import ClassVar, cast
+from uuid import uuid4
 
 from pydantic_ai.messages import ModelMessage
 from rich.text import Text
-from textual import on
+from textual import events, on
 from textual.app import App, ComposeResult
 from textual.binding import Binding, BindingType
 from textual.containers import VerticalScroll
@@ -16,23 +24,28 @@ from textual.lazy import Lazy
 from textual.widgets import Static
 from textual.worker import Worker
 
+from lumen.application import WorkspaceHost
 from lumen.approval import ApprovalMode, ApprovalPolicy
 from lumen.branding import FRAMEWORK_NAME
+from lumen.collaboration import CollaborationMode, apply_collaboration_context
 from lumen.config import AppConfig
 from lumen.context import ContextSummary
-from lumen.events import ApprovalRequest, RunEvent, UsageUpdated
+from lumen.events import ApprovalRequest, RunEvent, ToolCallFinished, ToolCallStarted, UsageUpdated
 from lumen.interactive_queue import QueueLimitError, QueueMode
 from lumen.plan import PlanState
 from lumen.resources import ResourceManager
-from lumen.run_coordinator import RunCoordinator, RunInput
+from lumen.run_coordinator import RunInput
 from lumen.runtime import ToolApproval
 from lumen.sessions import SessionMetadata
 from lumen.timeline import TimelineStore
+from lumen.tools.capability import build_capability_specs
 from lumen.tools.workspace import Workspace
 from lumen.ui.activity_indicator import RunActivityIndicator
 from lumen.ui.approval_controller import ApprovalControllerMixin
 from lumen.ui.approval_panel import ApprovalPanel
 from lumen.ui.autocomplete import CompletionDropdown
+from lumen.ui.checkpoint_screen import CheckpointScreen
+from lumen.ui.child_run_screen import ChildRunScreen
 from lumen.ui.commands import LumenCommandProvider
 from lumen.ui.completion_controller import CompletionControllerMixin
 from lumen.ui.composer import ComposerHistory, PromptEditor
@@ -45,6 +58,8 @@ from lumen.ui.file_mention import expand_file_mentions
 # through this module at call time.
 from lumen.ui.file_search import FileSearchHandle
 from lumen.ui.file_search import search_files as search_files
+from lumen.ui.history_screen import HistorySearchScreen
+from lumen.ui.host_session import HostSessionAdapter
 from lumen.ui.plan_panel import PlanPanel
 from lumen.ui.plan_review_panel import PlanReviewPanel
 from lumen.ui.queue_panel import InteractiveQueuePanel
@@ -55,6 +70,8 @@ from lumen.ui.status_bar import StatusBarMixin
 from lumen.ui.streaming_markdown import AssistantMarkdown, StreamingMarkdownController
 from lumen.ui.themes import register_themes, theme_color
 from lumen.ui.tool_card import ToolCard
+from lumen.ui.transcript_blocks import CommentaryBlock, ReadToolGroup
+from lumen.ui.transcript_screen import TranscriptScreen
 from lumen.ui.welcome import WelcomePanel
 
 _PROMPT_KEYWORD = re.compile(r"(?<!\S)(@[\w./-]+|/[a-z][\w:-]*|(?:[\w.-]+/)+[\w.-]+)")
@@ -107,6 +124,10 @@ class LumenApp(
         # LumenCommandProvider. This replaces /help as the primary
         # command-discovery surface.
         Binding("ctrl+p", "command_palette", "Command palette", show=True),
+        Binding("ctrl+o", "toggle_transcript_density", "Transcript density", show=False),
+        Binding("ctrl+t", "show_transcript", "Transcript", show=False),
+        Binding("ctrl+r", "search_history", "History search", show=False),
+        Binding("ctrl+b", "show_children", "Agents", show=False),
         Binding("alt+c", "copy_last_response", "Copy last response", show=False),
         Binding(
             "shift+tab",
@@ -178,14 +199,6 @@ class LumenApp(
        ``--spaced`` (see streaming_markdown._needs_top_margin). */
     .assistant-block { margin: 0; }
     .assistant-block--spaced { margin-top: 1; }
-    /* Commentary (intermediate model reasoning): visually de-emphasised.
-       It's analysis the user can skim, not the final answer. */
-    .commentary-block {
-        margin: 1 0;
-        padding: 0 2;
-        color: $text-muted;
-        text-style: italic;
-    }
     /* Progress block: accent-coloured, distinct from commentary. The ↳
        prefix is added in code. */
     .progress-block {
@@ -200,11 +213,12 @@ class LumenApp(
         color: $success;
     }
     .welcome-panel {
-        width: 100%;
-        max-width: 110;
-        height: auto;
-        margin: 1 0 2 0;
-        padding: 1 2;
+        width: 1fr;
+        height: 1fr;
+        min-height: 12;
+        padding: 0 1;
+        content-align: center middle;
+        text-align: center;
         color: $text-muted;
         background: $background;
     }
@@ -278,12 +292,12 @@ class LumenApp(
         # remote capability the operator has not classified. Initialised from
         # config but live-toggled via /mode or Shift+Tab.
         self._approval_mode = ApprovalMode.parse(config.permissions.default_mode)
+        self._collaboration_mode = CollaborationMode(config.collaboration.default_mode)
         self._approval_policy = ApprovalPolicy()
         self._assistant_stream: StreamingMarkdownController | None = None
         # One widget represents one logical assistant Markdown document.
         self._assistant_container: AssistantMarkdown | None = None
-        self._commentary_container: Static | None = None
-        self._commentary_text = ""
+        self._commentary_container: CommentaryBlock | None = None
         # The active plan belongs to the current user turn and lives inside
         # the scrolling transcript. Older turns retain their own plan panel.
         self._active_plan_panel: PlanPanel | None = None
@@ -292,6 +306,8 @@ class LumenApp(
         # Tool cards are mounted into the message timeline, keyed by call id so
         # multiple updates to one call render into a single card.
         self._tool_cards: dict[str, ToolCard] = {}
+        self._read_tool_groups: dict[str, ReadToolGroup] = {}
+        self._current_read_group: ReadToolGroup | None = None
         # Pending approval futures: one per call id. The runtime approval
         # callback awaits the future; the card's Decision message resolves it.
         self._approval_waiters: dict[str, asyncio.Future[ToolApproval]] = {}
@@ -306,12 +322,10 @@ class LumenApp(
         # ``previous_summary`` so the summarizer merges new history into the
         # prior summary rather than rebuilding from scratch (prevents drift).
         self._last_compaction_summary: ContextSummary | None = None
-        self.coordinator = RunCoordinator(
-            repository=resources.session_repository,
-            agent_name=config.agent.name,
-            model_id=lambda: resources.active_model_config().id,
-            runtime=lambda: resources.runtime,
-        )
+        self.workspace_host = WorkspaceHost(resources)
+        # Compatibility-shaped view for UI state restoration; execution,
+        # queueing, cancellation, modes, and approvals all cross Host commands.
+        self.coordinator = HostSessionAdapter(self.workspace_host)
         self.timeline_store = TimelineStore()
         self._follow_tail = True
         self._last_tail_scroll_y = 0.0
@@ -324,6 +338,8 @@ class LumenApp(
         self._completion_generation = 0
         self._completion_search_handle: FileSearchHandle | None = None
         self._last_usage_event: UsageUpdated | None = None
+        self._plan_review_revision: int | None = None
+        self._transcript_density = config.ui.transcript_density
 
     # Public read-only views for tests/UI introspection. We expose the history
     # list and browsing index so tests can assert navigation without poking at
@@ -363,7 +379,7 @@ class LumenApp(
         # Composer is a single rounded prompt box. Enter submits, so there is
         # no Send button — the focus ring is the only affordance, matching the
         # posting/opencode input style.
-        yield PromptEditor(id="prompt", language=None)
+        yield PromptEditor(id="prompt", language=None, placeholder="Ask Lumen…")
         # Claude-style prompt footer: one persistent mode indicator and the
         # minimum useful runtime context. Shift+Tab is the sole key-cycle.
         yield Static(
@@ -389,12 +405,13 @@ class LumenApp(
             editor = self.query_one("#prompt", PromptEditor)
             dropdown = self.query_one(CompletionDropdown)
             editor.bind_dropdown(dropdown)
-            await self.resources.open()
+            editor.configure_vim(self.config.ui.vim_mode)
+            await self.workspace_host.open()
             if self.resume_id:
-                state = self.coordinator.resume(self.resume_id)
+                state = await self.coordinator.resume(self.resume_id)
                 restored = True
             else:
-                state = self.coordinator.new_session()
+                state = await self.coordinator.new_session()
                 restored = False
             await self._apply_coordinator_state(state, restored=restored)
             self._refresh_topbar()
@@ -403,6 +420,7 @@ class LumenApp(
             status = self.query_one("#status", Static)
             self._refresh_mode_classes(status)
             status.update(self._status("Ready"))
+            self.query_one(RunActivityIndicator).set_animation_enabled(self.config.ui.animations)
             if self.resources.warnings:
                 await self._append_system("\n".join(self.resources.warnings))
             self.set_interval(0.2, self._load_older_if_at_top)
@@ -433,10 +451,11 @@ class LumenApp(
             if not future.done():
                 future.set_result(ToolApproval(approved=False, message="session closed"))
         self._approval_waiters.clear()
-        await self.resources.close()
+        await self.workspace_host.close()
 
     async def _append_system(self, text: str) -> None:
         container = self.query_one("#messages", VerticalScroll)
+        await self._dismiss_welcome()
         follow = self._capture_timeline_follow(container)
         # markup=False is critical: system messages often contain tool/MCP
         # output with ``key: value`` or ``[bracket]`` patterns that Textual's
@@ -446,6 +465,7 @@ class LumenApp(
 
     async def _append_user(self, text: str) -> None:
         container = self.query_one("#messages", VerticalScroll)
+        await self._dismiss_welcome()
         follow = self._capture_timeline_follow(container)
         # Prefix with » to visually mark user input. markup=False is critical:
         # user text can contain anything (paths, code, colons). The » is a
@@ -463,24 +483,34 @@ class LumenApp(
         if not text.strip():
             return
         container = self.query_one("#messages", VerticalScroll)
+        await self._dismiss_welcome()
         follow = self._capture_timeline_follow(container)
         if self._commentary_container is None:
-            self._commentary_container = Static("", classes="commentary-block", markup=False)
-            self._commentary_text = "∴ "
+            self._commentary_container = CommentaryBlock(
+                expanded=self._transcript_density == "verbose"
+            )
             await container.mount(Lazy(self._commentary_container))
-        self._commentary_text += text
-        self._commentary_container.update(self._commentary_text)
+        self._commentary_container.append(text)
         await self._finish_timeline_update(container, follow)
 
     def _close_commentary_segment(self) -> None:
         self._commentary_container = None
-        self._commentary_text = ""
+
+    async def _dismiss_welcome(self) -> None:
+        """Remove the one-shot empty state before mounting timeline content."""
+
+        try:
+            welcome = self.query_one("#welcome", WelcomePanel)
+        except Exception:
+            return
+        await welcome.remove()
 
     async def _append_progress(self, summary: str, next_action: str | None) -> None:
         # Prefix with ↳ to distinguish progress from commentary and assistant
         # text. The next-action line keeps its → arrow for the sub-bullet.
         body = f"↳ {summary}" + (f"\n\n→ {next_action}" if next_action else "")
         container = self.query_one("#messages", VerticalScroll)
+        await self._dismiss_welcome()
         follow = self._capture_timeline_follow(container)
         await container.mount(Lazy(AssistantMarkdown(body, classes="progress-block")))
         await self._finish_timeline_update(container, follow)
@@ -518,6 +548,23 @@ class LumenApp(
     ) -> None:
         if text.startswith("/"):
             await self._handle_command(text)
+            return
+        if text.startswith("!"):
+            await self._handle_shell_input(text)
+            return
+        if (
+            self._plan_review_revision is not None
+            and self._collaboration_mode is CollaborationMode.PLAN
+            and not self._run_is_active()
+        ):
+            self.last_prompt = text
+            self._record_history(text)
+            await self._append_user(text)
+            self.current_worker = self.run_worker(
+                self._run_rejected_plan(text),
+                name="rejected-plan-run",
+                exclusive=True,
+            )
             return
         if self.current_worker is not None and self.current_worker.is_running:
             expanded = expand_file_mentions(
@@ -557,6 +604,73 @@ class LumenApp(
             name="agent-run",
             exclusive=True,
         )
+
+    async def _handle_shell_input(self, text: str) -> None:
+        """Execute explicit ``! argv`` input through the same fail-closed OS sandbox."""
+
+        if self._collaboration_mode is CollaborationMode.PLAN:
+            await self._append_system("Direct shell is disabled in Plan mode.")
+            return
+        if self._run_is_active():
+            await self._append_system("Direct shell is unavailable while an agent run is active.")
+            return
+        try:
+            argv = shlex.split(text[1:].strip())
+        except ValueError as error:
+            await self._append_system(f"Invalid shell command: {error}")
+            return
+        if not argv:
+            await self._append_system("Usage: ! <command> [args…]")
+            return
+        self._record_history(text)
+        await self._append_user(text)
+        self.current_worker = self.run_worker(
+            self._run_direct_command(argv), name="direct-shell", exclusive=True
+        )
+
+    async def _run_direct_command(self, argv: list[str]) -> None:
+        call_id = f"shell-{uuid4().hex[:12]}"
+        started = asyncio.get_running_loop().time()
+        await self.render_event(
+            ToolCallStarted(
+                call_id,
+                "run_command",
+                {"argv": argv, "cwd": "."},
+                origin="user",
+                risk="execute",
+                started_at=started,
+            )
+        )
+        specs = build_capability_specs(
+            self.resources.workspace,
+            max_timeout=self.config.agent.limits.tool_timeout_seconds,
+            sandbox_config=self.config.sandbox,
+        )
+        command = next(spec.function for spec in specs if spec.name == "run_command")
+        try:
+            result = await command(argv)  # type: ignore[misc]
+            rendered = json.dumps(result, ensure_ascii=False, indent=2)
+            is_error = bool(result.get("exit_code"))
+            exit_code = result.get("exit_code")
+            elapsed = float(result.get("elapsed_seconds", 0.0))
+        except Exception as error:
+            rendered = f"{type(error).__name__}: {error}"
+            is_error = True
+            exit_code = None
+            elapsed = max(0.0, asyncio.get_running_loop().time() - started)
+        await self.render_event(
+            ToolCallFinished(
+                call_id,
+                "run_command",
+                rendered,
+                preview=rendered,
+                is_error=is_error,
+                elapsed_seconds=elapsed,
+                exit_code=exit_code,
+            )
+        )
+        self.query_one(RunActivityIndicator).stop()
+        self.query_one("#status", Static).update(self._status("Ready"))
 
     def _record_history(self, text: str) -> None:
         """Append ``text`` to prompt history, capped at ``_HISTORY_MAX``.
@@ -617,6 +731,10 @@ class LumenApp(
             is_retry=run_input.is_retry,
         )
         try:
+            await self.coordinator.set_modes(
+                self._approval_mode.value,
+                self._collaboration_mode.value,
+            )
             outcome = await self.coordinator.run(effective_input, emit, approve, approve_batch)
         except asyncio.CancelledError:
             self._resolve_all_pending_approvals(approved=False, message="run cancelled")
@@ -628,37 +746,49 @@ class LumenApp(
         finally:
             self._refresh_topbar()
 
-    def _apply_permission_mode_context(self, prompt: str) -> str:
-        """Tell the model the live mode without exposing the note in the UI."""
+    async def _run_approved_plan(self) -> None:
+        revision = self._plan_review_revision
+        if revision is None:
+            await self._append_system("No plan revision is pending review.")
+            return
 
-        guidance = {
-            ApprovalMode.MANUAL: (
-                "Plan mode is off. Follow the user's request normally; the host will ask the "
-                "user before approval-gated operations."
-            ),
-            ApprovalMode.ACCEPT_EDITS: (
-                "Plan mode is off. Follow the user's request normally. Builtin file edits may "
-                "run automatically; other approval-gated operations may pause."
-            ),
-            ApprovalMode.PLAN: (
-                "Work read-only. Explore and return a proposed implementation plan. You may use "
-                "read tools and commands that only inspect local state. Do not edit files, run "
-                "mutating commands, or affect external systems. Before the final response, call "
-                "set_plan with the proposed implementation steps. Keep those future steps pending; "
-                "the UI will ask the user to approve them before execution."
-            ),
-            ApprovalMode.AUTO: (
-                "Plan mode is off. Follow the user's request normally. Classified operations may "
-                "run without prompts, but continue to obey every boundary stated by the user."
-            ),
-        }[self._approval_mode]
-        return (
-            f'<permission-mode name="{self._approval_mode.value}">\n'
-            f"{guidance}\n"
-            "This current-mode note supersedes permission-mode notes from earlier turns.\n"
-            "</permission-mode>\n\n"
-            f"{prompt}"
+        async def emit(event: RunEvent) -> None:
+            await self.render_event(event)
+
+        outcome = await self.coordinator.approve_plan(
+            revision,
+            self._approval_mode.value,
+            emit,
+            self._await_inline_approval,
+            self._await_inline_approval_batch,
         )
+        self._plan_review_revision = None
+        if outcome is None:
+            self._resolve_all_pending_approvals(approved=False, message="run failed")
+        await self._apply_coordinator_state(self.coordinator.state)
+        self._refresh_topbar()
+
+    async def _run_rejected_plan(self, feedback: str) -> None:
+        revision = self._plan_review_revision
+        if revision is None:
+            return
+
+        async def emit(event: RunEvent) -> None:
+            await self.render_event(event)
+
+        await self.coordinator.reject_plan(
+            revision,
+            feedback,
+            emit,
+            self._await_inline_approval,
+            self._await_inline_approval_batch,
+        )
+        await self._apply_coordinator_state(self.coordinator.state)
+
+    def _apply_permission_mode_context(self, prompt: str) -> str:
+        """Apply the orthogonal collaboration mode to the model prompt."""
+
+        return apply_collaboration_context(prompt, self._collaboration_mode)
 
     def action_cancel_run(self) -> None:
         # Reject every pending approval so the worker can actually exit.
@@ -696,6 +826,23 @@ class LumenApp(
         if not text:
             self.notify("No assistant response to copy", severity="warning", timeout=2)
             return
+        self._copy_text_to_clipboard(text)
+        self.notify("Copied latest response", timeout=2)
+
+    @on(events.TextSelected)
+    def copy_mouse_selection(self) -> None:
+        """Copy a completed mouse drag selection, including rendered Markdown."""
+
+        selected = self.screen.get_selected_text()
+        if not selected:
+            return
+        self._copy_text_to_clipboard(selected)
+        if self.config.ui.notifications:
+            self.notify("Selection copied", timeout=1)
+
+    def _copy_text_to_clipboard(self, text: str) -> None:
+        """Use Textual's clipboard path plus pbcopy for Apple Terminal."""
+
         self.copy_to_clipboard(text)
         # Textual's OSC 52 path works in most terminals but Apple Terminal
         # intentionally ignores it. pbcopy makes the same action reliable on
@@ -711,7 +858,85 @@ class LumenApp(
                 )
             except (OSError, subprocess.SubprocessError):
                 pass
-        self.notify("Copied latest response", timeout=2)
+
+    def action_toggle_transcript_density(self) -> None:
+        """Switch between the concise default and the full audit transcript."""
+
+        self._transcript_density = (
+            "verbose" if self._transcript_density == "normal" else "normal"
+        )
+        expanded = self._transcript_density == "verbose"
+        for block in self.query(CommentaryBlock).results(CommentaryBlock):
+            block.set_expanded(expanded)
+        for card in self.query(ToolCard).results(ToolCard):
+            card.set_density(self._transcript_density)
+        for group in self.query(ReadToolGroup).results(ReadToolGroup):
+            group.set_expanded(expanded)
+        self.notify(f"Transcript: {self._transcript_density}", timeout=2)
+        if self.session is not None:
+            self.run_worker(
+                self.coordinator.set_transcript_density(self._transcript_density),
+                name="persist-transcript-density",
+                exclusive=False,
+            )
+
+    def action_show_transcript(self) -> None:
+        self.push_screen(
+            TranscriptScreen(
+                self.timeline_store.items,
+                raw=self._transcript_density == "verbose",
+            )
+        )
+
+    def action_search_history(self) -> None:
+        def restore(value: str | None) -> None:
+            if value is None:
+                return
+            editor = self.query_one("#prompt", PromptEditor)
+            editor.restore_text(value)
+            editor.focus()
+
+        self.push_screen(HistorySearchScreen(self.prompt_history), restore)
+
+    def action_show_children(self) -> None:
+        self.push_screen(
+            ChildRunScreen(
+                self.coordinator.list_child_runs,
+                self.coordinator.cancel_child_run,
+                message_provider=self.coordinator.send_agent_message,
+                followup_provider=self.coordinator.continue_agent,
+                import_provider=self.coordinator.approve_agent_import,
+                reject_provider=self.coordinator.reject_agent_import,
+                close_provider=self.coordinator.close_agent,
+                work_state_provider=self.coordinator.work_state,
+                waiver_provider=self.coordinator.waive_effect,
+            )
+        )
+
+    def action_show_checkpoints(self) -> None:
+        def resume_branch(session_id: str | None) -> None:
+            if session_id is not None:
+                self.run_worker(
+                    self._resume_checkpoint_branch(session_id),
+                    name="resume-checkpoint-branch",
+                    exclusive=True,
+                )
+
+        self.push_screen(
+            CheckpointScreen(
+                self.coordinator.list_checkpoints,
+                self.coordinator.fork_at_checkpoint,
+            ),
+            resume_branch,
+        )
+
+    async def _resume_checkpoint_branch(self, session_id: str) -> None:
+        state = await self.coordinator.resume(session_id)
+        await self._apply_coordinator_state(state, restored=True)
+        await self._append_system(
+            f"Rewound context into new session {session_id}. Workspace files were left unchanged."
+        )
+        self._refresh_topbar()
 
     def action_smart_escape(self) -> None:
         """Context-sensitive Escape: close dropdown → cancel run → clear input.
@@ -766,24 +991,53 @@ class LumenApp(
 
         return self._approval_mode.value
 
+    @property
+    def collaboration_mode(self) -> str:
+        return self._collaboration_mode.value
+
     def set_approval_mode(self, mode: str) -> None:
         """Switch the session permission mode immediately."""
 
+        if mode == "plan":
+            self._collaboration_mode = CollaborationMode.PLAN
+            self._refresh_topbar()
+            if self.session is not None and not self._run_is_active():
+                self.run_worker(
+                    self.coordinator.set_collaboration("plan"),
+                    name="persist-collaboration-mode",
+                    exclusive=False,
+                )
+            try:
+                status = self.query_one("#status", Static)
+                self._refresh_mode_classes(status)
+                status.update(self._status("Ready"))
+            except Exception:
+                pass
+            return
         try:
             parsed = ApprovalMode.parse(mode)
         except ValueError as error:
             raise ValueError(
-                f"approval mode must be 'manual', 'accept_edits', 'plan', or 'auto', got {mode!r}"
+                f"approval mode must be 'manual', 'accept_edits', or 'auto', got {mode!r}"
             ) from error
         if parsed is self._approval_mode:
-            return
-        self._approval_mode = parsed
-        if parsed is not ApprovalMode.PLAN:
-            try:
-                self.query_one(PlanReviewPanel).hide()
-            except Exception:
-                pass
+            self._collaboration_mode = CollaborationMode.DEFAULT
+        else:
+            self._approval_mode = parsed
+            self._collaboration_mode = CollaborationMode.DEFAULT
+        try:
+            self.query_one(PlanReviewPanel).hide()
+        except Exception:
+            pass
         self._refresh_topbar()
+        if self.session is not None and not self._run_is_active():
+            self.run_worker(
+                self.coordinator.set_modes(
+                    self._approval_mode.value, self._collaboration_mode.value
+                ),
+                name="persist-session-modes",
+                exclusive=False,
+            )
         # Refresh the status bar suffix too so the mode badge updates live,
         # not just on the next run event.
         try:
@@ -796,21 +1050,17 @@ class LumenApp(
     def request_approval_mode(self, mode: str) -> None:
         """Switch modes directly; the footer is the only success feedback."""
 
-        self.set_approval_mode(ApprovalMode.parse(mode).value)
+        self.set_approval_mode(mode)
 
     _request_approval_mode = request_approval_mode
 
     def action_toggle_approval_mode(self) -> None:
         """Cycle modes in the same order as Claude Code's CLI."""
 
-        modes = (
-            ApprovalMode.MANUAL,
-            ApprovalMode.ACCEPT_EDITS,
-            ApprovalMode.PLAN,
-            ApprovalMode.AUTO,
-        )
-        index = modes.index(self._approval_mode)
-        self._request_approval_mode(modes[(index + 1) % len(modes)].value)
+        modes = ("manual", "accept_edits", "plan", "auto")
+        current = "plan" if self._collaboration_mode is CollaborationMode.PLAN else self._approval_mode.value
+        index = modes.index(current)
+        self._request_approval_mode(modes[(index + 1) % len(modes)])
 
     # -- command palette actions ------------------------------------------
     # These wrap the existing /-command logic as ``action_*`` methods so the

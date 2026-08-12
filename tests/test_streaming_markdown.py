@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from typing import Any
 
 import pytest
 from rich.markdown import Markdown as RichMarkdown
@@ -15,6 +16,9 @@ from lumen.ui.streaming_markdown import (
     _partition_blocks,
     _split_blocks,
 )
+
+# These tests intentionally exercise the private block partitioning contract.
+# pyright: reportPrivateUsage=false
 
 
 class _DocApp(App[None]):
@@ -37,7 +41,9 @@ class _DocApp(App[None]):
             yield Static(RichMarkdown(self._single_source), classes="assistant-message")
 
 
-async def _stream(document: AssistantMarkdown, source: str, pilot: Pilot, step: int = 7) -> None:
+async def _stream(
+    document: AssistantMarkdown, source: str, pilot: Pilot[Any], step: int = 7
+) -> None:
     """Feed *source* in fixed-size chunks like a token stream."""
 
     for index in range(0, len(source), step):
@@ -109,12 +115,16 @@ async def test_split_rendering_matches_single_document_rendering() -> None:
     single = _DocApp(source)
     async with single.run_test(size=(80, 60)) as pilot:
         await pilot.pause()
-        expected = single.export_screenshot()
+        expected = "\n".join(
+            strip.text for strip in single.screen._compositor.render_strips()  # type: ignore[reportPrivateUsage]
+        )
 
     split = _DocApp()
     async with split.run_test(size=(80, 60)) as pilot:
         await _stream(split.query_one(AssistantMarkdown), source, pilot)
-        actual = split.export_screenshot()
+        actual = "\n".join(
+            strip.text for strip in split.screen._compositor.render_strips()  # type: ignore[reportPrivateUsage]
+        )
 
     assert actual == expected
 

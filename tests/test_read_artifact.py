@@ -29,7 +29,7 @@ def _manager(tmp_path: Path) -> ResourceManager:
     config_path = tmp_path / "agent.yaml"
     config_path.write_text(
         """
-version: 1
+version: 2
 agent:
   model:
     id: test
@@ -99,6 +99,7 @@ async def test_model_can_call_read_artifact_tool(tmp_path: Path) -> None:
     assert manager.tool_metadata["read_artifact"] == {
         "origin": "builtin:artifacts",
         "risk": "read",
+        "effect": "observe",
     }
 
     async def model_stream(messages: list[ModelMessage], info: AgentInfo):  # type: ignore[no-untyped-def]

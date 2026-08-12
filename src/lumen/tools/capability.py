@@ -13,10 +13,15 @@ import os
 import signal
 import time
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from lumen.tools.spec import Risk, ToolSpec
+from lumen.config import SandboxConfig
+from lumen.sandbox import SandboxRunner
+from lumen.tools.spec import EffectKind, Risk, ToolSpec
 from lumen.tools.workspace import Workspace, WorkspaceViolation
+
+if TYPE_CHECKING:
+    from lumen.work_products import TaskWorkspace
 
 MAX_OUTPUT_BYTES = 64 * 1024
 
@@ -78,7 +83,13 @@ class BoundedCollector:
         )
 
 
-def build_capability_specs(root: str | Path, *, max_timeout: float) -> list[ToolSpec]:
+def build_capability_specs(
+    root: str | Path,
+    *,
+    max_timeout: float,
+    sandbox_config: SandboxConfig | None = None,
+    task_workspace: TaskWorkspace | None = None,
+) -> list[ToolSpec]:
     """Build the workspace write/edit/exec specs.
 
     ``max_timeout`` is the upper bound the model cannot exceed with a per-call
@@ -86,6 +97,10 @@ def build_capability_specs(root: str | Path, *, max_timeout: float) -> list[Tool
     """
 
     workspace = Workspace(root)
+    sandbox = SandboxRunner(
+        workspace.root,
+        sandbox_config or SandboxConfig(mode="disabled"),
+    )
 
     def write_file(path: str, content: str, overwrite: bool = False) -> str:
         """Write UTF-8 text to ``path`` inside the workspace.
@@ -114,8 +129,20 @@ def build_capability_specs(root: str | Path, *, max_timeout: float) -> list[Tool
             raise WorkspaceViolation(f"path escapes workspace {workspace.root}: {path}")
 
         encoded = content.encode("utf-8")
-        _atomic_replace(parent, resolved.name, resolved, encoded)
-        return f"Wrote {len(encoded)} bytes to {path}"
+
+        def apply_write() -> str:
+            _atomic_replace(parent, resolved.name, resolved, encoded)
+            return f"Wrote {len(encoded)} bytes to {path}"
+
+        if task_workspace is None:
+            return apply_write()
+        return task_workspace.perform_text_mutation(
+            path,
+            operation="write_file",
+            selector="whole",
+            change=content,
+            action=apply_write,
+        )
 
     def edit_file(path: str, find: str, replace: str) -> str:
         """Replace the unique exact ``find`` occurrence in ``path`` with ``replace``.
@@ -136,8 +163,20 @@ def build_capability_specs(root: str | Path, *, max_timeout: float) -> list[Tool
             raise ValueError(f"{count} matches for find in {path}")
         updated = original.replace(find, replace, 1)
         encoded = updated.encode("utf-8")
-        _atomic_replace(resolved.parent, resolved.name, resolved, encoded)
-        return f"Edited {path}: replaced 1 occurrence"
+
+        def apply_edit() -> str:
+            _atomic_replace(resolved.parent, resolved.name, resolved, encoded)
+            return f"Edited {path}: replaced 1 occurrence"
+
+        if task_workspace is None:
+            return apply_edit()
+        return task_workspace.perform_text_mutation(
+            path,
+            operation="edit_file",
+            selector=f"anchor:{find}",
+            change=replace,
+            action=apply_edit,
+        )
 
     async def run_command(
         argv: list[str],
@@ -164,17 +203,21 @@ def build_capability_specs(root: str | Path, *, max_timeout: float) -> list[Tool
         if effective_timeout <= 0:
             raise ValueError("timeout must be positive")
 
-        child_env = {**os.environ, **(env or {})}
+        prepared = sandbox.prepare(argv, cwd=resolved_cwd, overrides=env)
         start = time.monotonic()
-        process = await asyncio.create_subprocess_exec(
-            *argv,
-            cwd=str(resolved_cwd),
-            stdin=asyncio.subprocess.DEVNULL,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            env=child_env,
-            start_new_session=True,
-        )
+        try:
+            process = await asyncio.create_subprocess_exec(
+                *prepared.argv,
+                cwd=str(resolved_cwd),
+                stdin=asyncio.subprocess.DEVNULL,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                env=prepared.env,
+                start_new_session=True,
+            )
+        except BaseException:
+            prepared.cleanup()
+            raise
 
         stdout_collector = BoundedCollector()
         stderr_collector = BoundedCollector()
@@ -209,6 +252,7 @@ def build_capability_specs(root: str | Path, *, max_timeout: float) -> list[Tool
                     await process.wait()
                 except Exception:
                     pass
+            prepared.cleanup()
             if cancelled and process.returncode is None:
                 try:
                     await process.wait()
@@ -231,9 +275,9 @@ def build_capability_specs(root: str | Path, *, max_timeout: float) -> list[Tool
         }
 
     return [
-        ToolSpec(write_file, risk=Risk.WRITE),
-        ToolSpec(edit_file, risk=Risk.WRITE),
-        ToolSpec(run_command, risk=Risk.EXECUTE, timeout=max_timeout),
+        ToolSpec(write_file, risk=Risk.WRITE, effect_kind=EffectKind.MUTATION),
+        ToolSpec(edit_file, risk=Risk.WRITE, effect_kind=EffectKind.MUTATION),
+        ToolSpec(run_command, risk=Risk.EXECUTE, effect_kind=EffectKind.EXECUTION, timeout=max_timeout),
     ]
 
 

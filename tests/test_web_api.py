@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import time
 from pathlib import Path
 from types import SimpleNamespace
+from typing import cast
 
 from fastapi.testclient import TestClient
 from pydantic_ai.messages import ModelMessage
@@ -9,9 +11,38 @@ from pydantic_ai.models.function import AgentInfo, FunctionModel
 
 from lumen.api import create_web_app
 from lumen.application import WorkspaceHost
-from lumen.config import LimitsConfig
+from lumen.completion import CompletionGate
+from lumen.config import LimitsConfig, LiveConfig, PermissionsConfig
+from lumen.live.manager import LiveSessionManager
+from lumen.live.protocol import LiveCompletionControl, LiveMediaKind
+from lumen.live.testing import FakeRealtimeTransport
 from lumen.runtime import AgentRuntime
 from lumen.sessions import SessionRepository
+from lumen.tools.gateway import CapabilityGateway
+from lumen.tools.registry import PermissionPolicy, ToolRegistry
+from lumen.ui.host_session import HostSessionAdapter
+
+
+class ApiAgentOrchestrator:
+    def __init__(self) -> None:
+        self.event_sink = None
+        self.messages: list[tuple[str, str]] = []
+
+    def bind_root_run(self, _session_id: str, _run_id: str, *, approval_mode: str) -> None:
+        return None
+
+    def unbind_root_run(self, _run_id: str) -> None:
+        return None
+
+    def list(self, _session_id: str) -> list[object]:
+        return []
+
+    def usage_summary(self, _session_id: str, _root_run_id: str | None = None) -> dict[str, object]:
+        return {"total": {}, "by_agent": {}}
+
+    async def send_message(self, agent_id: str, message: str) -> str:
+        self.messages.append((agent_id, message))
+        return '{"id":"message-one"}'
 
 
 class ApiResources:
@@ -23,6 +54,7 @@ class ApiResources:
 
         self.workspace = root
         self.session_repository = SessionRepository(root / "sessions")
+        self.agent_orchestrator = ApiAgentOrchestrator()
         self.runtime = AgentRuntime(
             model=FunctionModel(stream_function=stream),
             tools=[],
@@ -38,6 +70,7 @@ class ApiResources:
         self.tool_metadata: dict[str, dict[str, str]] = {}
         self.warnings: list[str] = []
         self.skills: list[object] = []
+        self.live_manager: LiveSessionManager | None = None
 
     async def open(self) -> ApiResources:
         return self
@@ -103,6 +136,44 @@ class ApiResources:
         }
 
 
+def test_web_and_tui_adapters_expose_shared_operator_capabilities(tmp_path: Path) -> None:
+    host = WorkspaceHost(ApiResources(tmp_path))  # type: ignore[arg-type]
+    app = create_web_app(host, launch_token="launch-secret", api_only=True)
+    paths: set[str] = set()
+    for route in app.routes:
+        path = cast(str | None, getattr(route, "path", None))
+        if path is not None:
+            paths.add(path)
+
+    assert {
+        "/api/v1/sessions/{session_id}/agents",
+        "/api/v1/agents/{agent_id}/actions",
+        "/api/v1/sessions/{session_id}/checkpoints",
+        "/api/v1/sessions/{session_id}/fork",
+        "/api/v1/runs/{run_id}/input/dequeue",
+        "/api/v1/sessions/{session_id}/verification-waivers",
+        "/api/v1/sessions/{session_id}/live",
+        "/api/v1/live/{live_session_id}",
+        "/api/v1/live/{live_session_id}/events",
+        "/api/v1/live/{live_session_id}/interrupt",
+    } <= paths
+    for method in (
+        "set_transcript_density",
+        "dequeue_interactive",
+        "list_child_runs",
+        "send_agent_message",
+        "continue_agent",
+        "approve_agent_import",
+        "reject_agent_import",
+        "close_agent",
+        "list_checkpoints",
+        "fork_at_checkpoint",
+        "work_state",
+        "waive_effect",
+    ):
+        assert callable(getattr(HostSessionAdapter, method))
+
+
 def test_web_api_authenticates_and_streams_a_run(tmp_path: Path) -> None:
     host = WorkspaceHost(ApiResources(tmp_path))  # type: ignore[arg-type]
     app = create_web_app(host, launch_token="launch-secret", api_only=True)
@@ -124,6 +195,7 @@ def test_web_api_authenticates_and_streams_a_run(tmp_path: Path) -> None:
         assert bootstrap.status_code == 200
         assert bootstrap.json()["activeModel"] == "test"
         assert bootstrap.json()["approvalMode"] == "manual"
+        assert bootstrap.json()["liveEnabled"] is False
 
         missing = client.get("/api/v1/does-not-exist")
         assert missing.status_code == 404
@@ -159,6 +231,45 @@ def test_web_api_authenticates_and_streams_a_run(tmp_path: Path) -> None:
         snapshot = client.get(f"/api/v1/sessions/{session_id}").json()
         assert snapshot["lastUserInput"] == "hello"
         assert snapshot["activeRunId"] is None
+        assert snapshot["workProducts"] == []
+        assert snapshot["pendingEffects"] == []
+        assert snapshot["recoverableEffects"] == []
+        assert snapshot["agents"] == []
+        assert snapshot["agentUsage"] == {"total": {}, "by_agent": {}}
+        assert snapshot["liveSessions"] == []
+
+        updated = client.patch(
+            f"/api/v1/sessions/{session_id}/settings",
+            headers=headers,
+            json={"transcriptDensity": "verbose"},
+        )
+        assert updated.status_code == 200
+        assert updated.json()["transcript_density"] == "verbose"
+
+        checkpoints = client.get(f"/api/v1/sessions/{session_id}/checkpoints")
+        assert checkpoints.status_code == 200
+        assert checkpoints.json()["items"][0]["prompt"] == "hello"
+
+        forked = client.post(
+            f"/api/v1/sessions/{session_id}/fork",
+            headers=headers,
+            json={"throughTurn": 0},
+        )
+        assert forked.status_code == 201
+        assert forked.json()["sessionId"] != session_id
+
+        agents = client.get(f"/api/v1/sessions/{session_id}/agents")
+        assert agents.status_code == 200
+        assert agents.json() == {"items": []}
+
+        sent = client.post(
+            "/api/v1/agents/agent-one/actions",
+            headers=headers,
+            json={"action": "send_message", "message": "more context"},
+        )
+        assert sent.status_code == 200
+        assert sent.json()["status"] == "queued"
+        assert host.resources.agent_orchestrator.messages == [("agent-one", "more context")]
 
 
 def test_web_api_rejects_mutation_from_wrong_origin(tmp_path: Path) -> None:
@@ -174,6 +285,100 @@ def test_web_api_rejects_mutation_from_wrong_origin(tmp_path: Path) -> None:
 
     assert response.status_code == 403
     assert response.json()["error"]["code"] == "invalid_origin"
+
+
+def test_web_api_establishes_and_ends_a_live_session(tmp_path: Path) -> None:
+    resources = ApiResources(tmp_path)
+    transport = FakeRealtimeTransport()
+    resources.live_manager = LiveSessionManager(
+        config=LiveConfig(enabled=True, api_key="test"),
+        router=transport.router(),
+        repository=resources.session_repository,
+        capability_gateway=CapabilityGateway(
+            ToolRegistry(tmp_path),
+            PermissionPolicy(PermissionsConfig()),
+            default_timeout=2,
+        ),
+        completion_gate=CompletionGate(),
+        plan_provider=lambda session_id: resources.session_repository.load(session_id).plan,
+        context_documents=lambda _session_id: (),
+    )
+    host = WorkspaceHost(resources)  # type: ignore[arg-type]
+    app = create_web_app(host, launch_token="launch-secret", api_only=True)
+
+    with TestClient(app, base_url="http://testserver") as client:
+        client.get("/auth/exchange", params={"token": "launch-secret"})
+        headers = {"Origin": "http://testserver"}
+        session_id = client.post("/api/v1/sessions", headers=headers).json()["sessionId"]
+        started = client.post(
+            f"/api/v1/sessions/{session_id}/live",
+            headers=headers,
+            json={"clientRequestId": "live-request", "sdp": "v=0\r\noffer"},
+        )
+        live_id = started.json()["liveSessionId"]
+        snapshot = client.get(f"/api/v1/live/{live_id}")
+        interrupted = client.post(f"/api/v1/live/{live_id}/interrupt", headers=headers)
+        ended = client.delete(f"/api/v1/live/{live_id}", headers=headers)
+        events = client.get(f"/api/v1/live/{live_id}/events")
+
+    assert started.status_code == 201
+    assert started.json()["answerSdp"] == transport.answer_sdp
+    assert snapshot.json()["connection"] == "active"
+    assert interrupted.json()["status"] == "interrupted"
+    assert ended.json()["status"] == "ended"
+    assert "event: live.session.connected" in events.text
+    assert "event: live.session.ended" in events.text
+
+
+def test_web_api_streams_authenticated_pcm_to_a_host_controlled_provider(tmp_path: Path) -> None:
+    resources = ApiResources(tmp_path)
+    transport = FakeRealtimeTransport(
+        media=LiveMediaKind.HOST_WEBSOCKET,
+        completion_control=LiveCompletionControl.HOST_GATED_SYNTHESIS,
+    )
+    resources.live_manager = LiveSessionManager(
+        config=LiveConfig(enabled=True, api_key="test"),
+        router=transport.router(),
+        repository=resources.session_repository,
+        capability_gateway=CapabilityGateway(
+            ToolRegistry(tmp_path),
+            PermissionPolicy(PermissionsConfig()),
+            default_timeout=2,
+        ),
+        completion_gate=CompletionGate(),
+        plan_provider=lambda session_id: resources.session_repository.load(session_id).plan,
+        context_documents=lambda _session_id: (),
+    )
+    host = WorkspaceHost(resources)  # type: ignore[arg-type]
+    app = create_web_app(host, launch_token="launch-secret", api_only=True)
+
+    with TestClient(app, base_url="http://testserver") as client:
+        client.get("/auth/exchange", params={"token": "launch-secret"})
+        headers = {"Origin": "http://testserver"}
+        session_id = client.post("/api/v1/sessions", headers=headers).json()["sessionId"]
+        started = client.post(
+            f"/api/v1/sessions/{session_id}/live",
+            headers=headers,
+            json={"clientRequestId": "live-pcm"},
+        )
+        live_id = started.json()["liveSessionId"]
+        assert started.json()["media"] == {
+            "kind": "host_websocket",
+            "media_path": f"/api/v1/live/{live_id}/media",
+            "input_sample_rate": 16_000,
+            "output_sample_rate": 24_000,
+        }
+        with client.websocket_connect(
+            f"/api/v1/live/{live_id}/media",
+            headers={"Origin": "http://testserver"},
+        ) as media:
+            media.send_bytes(b"\x01\x02\x03\x04")
+            for _ in range(50):
+                if transport.connections[0].audio:
+                    break
+                time.sleep(0.01)
+
+    assert transport.connections[0].audio == [b"\x01\x02\x03\x04"]
 
 
 def test_web_api_rejects_authenticated_requests_with_unexpected_host(tmp_path: Path) -> None:

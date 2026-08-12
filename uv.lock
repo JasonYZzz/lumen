@@ -834,6 +834,10 @@ dependencies = [
 ]
 
 [package.optional-dependencies]
+live = [
+    { name = "httpx" },
+    { name = "websockets" },
+]
 tokenizers = [
     { name = "tiktoken" },
 ]
@@ -854,6 +858,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "fastapi", specifier = ">=0.115,<1" },
+    { name = "httpx", marker = "extra == 'live'", specifier = ">=0.27,<1" },
     { name = "pydantic", specifier = ">=2.11" },
     { name = "pydantic-ai-slim", extras = ["anthropic", "google", "mcp", "openai"], specifier = ">=2.1.0" },
     { name = "pyyaml", specifier = ">=6.0.2" },
@@ -861,8 +866,9 @@ requires-dist = [
     { name = "tiktoken", marker = "extra == 'tokenizers'", specifier = ">=0.7,<1" },
     { name = "typer", specifier = ">=0.16" },
     { name = "uvicorn", specifier = ">=0.30" },
+    { name = "websockets", marker = "extra == 'live'", specifier = ">=14,<17" },
 ]
-provides-extras = ["tokenizers"]
+provides-extras = ["tokenizers", "live"]
 
 [package.metadata.requires-dev]
 dev = [

@@ -8,7 +8,7 @@ async def test_resource_manager_builds_runtime_and_selected_tools(tmp_path: Path
     config_path = tmp_path / "agent.yaml"
     config_path.write_text(
         """
-version: 1
+version: 2
 agent:
   name: test-agent
   model:
@@ -40,7 +40,7 @@ async def test_resource_manager_appends_custom_instructions(tmp_path: Path) -> N
     config_path = tmp_path / "agent.yaml"
     config_path.write_text(
         """
-version: 1
+version: 2
 agent:
   instructions_file: instructions.md
   model:
@@ -64,7 +64,7 @@ def test_base_instructions_define_lumen_without_impersonating_model_provider(tmp
     config_path = tmp_path / "agent.yaml"
     config_path.write_text(
         """
-version: 1
+version: 2
 agent:
   model: {id: test}
 tools: {builtins: []}
@@ -96,7 +96,7 @@ def create_tools() -> list[ToolSpec]:
     config_path = tmp_path / "agent.yaml"
     config_path.write_text(
         """
-version: 1
+version: 2
 agent:
   model:
     id: test
@@ -118,7 +118,7 @@ async def test_capability_tools_have_builtin_origin_and_risk(tmp_path: Path) -> 
     config_path = tmp_path / "agent.yaml"
     config_path.write_text(
         """
-version: 1
+version: 2
 agent:
   model:
     id: test
@@ -140,7 +140,7 @@ async def test_resource_manager_tracks_mcp_health(tmp_path: Path) -> None:
     config_path = tmp_path / "agent.yaml"
     config_path.write_text(
         """
-version: 1
+version: 2
 agent:
   model:
     id: test
@@ -168,7 +168,7 @@ async def test_resource_manager_summary_lists_control_tools(tmp_path: Path) -> N
     config_path = tmp_path / "agent.yaml"
     config_path.write_text(
         """
-version: 1
+version: 2
 agent: {model: {id: test}}
 tools: {builtins: []}
 """,

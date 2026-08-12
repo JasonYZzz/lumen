@@ -21,7 +21,7 @@ from pydantic_ai.toolsets import AbstractToolset, ToolsetTool, WrapperToolset
 from lumen.config import McpServerConfig
 from lumen.mcp_oauth import JsonCredentialStore
 from lumen.tools.registry import PermissionDecision, PermissionPolicy
-from lumen.tools.spec import Risk
+from lumen.tools.spec import EffectKind, Risk
 
 
 def _risk_for(config: McpServerConfig, server_name: str, public_name: str) -> Risk:
@@ -34,6 +34,12 @@ def _risk_for(config: McpServerConfig, server_name: str, public_name: str) -> Ri
     if raw_name in config.read_only_tools:
         return Risk.READ
     return Risk.EXTERNAL_UNKNOWN
+
+
+def _effect_for(config: McpServerConfig, server_name: str, public_name: str) -> EffectKind:
+    raw_name = public_name.removeprefix(f"{server_name}_")
+    declared = config.tool_effects.get(raw_name)
+    return EffectKind(declared) if declared is not None else EffectKind.UNKNOWN
 
 
 @dataclass(frozen=True, slots=True)
@@ -59,12 +65,18 @@ class McpToolsetBundle:
         """
         return _risk_for(self.config, self.name, public_name)
 
+    def effect_for(self, public_name: str) -> EffectKind:
+        return _effect_for(self.config, self.name, public_name)
+
     def requires_approval(self, public_name: str) -> bool:
         return self.policy.decide(public_name, self.risk_for(public_name)) is PermissionDecision.CONFIRM
 
     def is_deferred(self, public_name: str) -> bool:
         raw_name = public_name.removeprefix(f"{self.name}_")
         return self.config.defer_tools and raw_name not in self.config.always_load_tools
+
+    def is_sequential(self, public_name: str, parallel_mode: str) -> bool:
+        return _is_sequential(parallel_mode, self.effect_for(public_name))
 
 
 def build_mcp_toolset(
@@ -76,6 +88,7 @@ def build_mcp_toolset(
     timeout: float,
     credential_root: str | Path | None = None,
     status_sink: Callable[[str, str], None] | None = None,
+    parallel_mode: str = "sequential",
 ) -> McpToolsetBundle:
     if not name.replace("-", "_").replace("_", "").isalnum():
         raise ValueError(f"invalid MCP server name: {name!r}")
@@ -145,19 +158,35 @@ def build_mcp_toolset(
         )
 
     wrapped: AbstractToolset[None] = visible.approval_required(needs_approval)
-    if config.defer_tools:
-        always_loaded = frozenset(f"{name}_{raw}" for raw in config.always_load_tools)
+    always_loaded = frozenset(f"{name}_{raw}" for raw in config.always_load_tools)
 
-        def mark_deferred(
-            _ctx: RunContext[None], tool_definitions: list[ToolDefinition]
-        ) -> list[ToolDefinition]:
-            return [replace(tool, defer_loading=tool.name not in always_loaded) for tool in tool_definitions]
+    def prepare_definitions(
+        _ctx: RunContext[None], tool_definitions: list[ToolDefinition]
+    ) -> list[ToolDefinition]:
+        prepared: list[ToolDefinition] = []
+        for tool in tool_definitions:
+            effect = _effect_for(config, name, tool.name)
+            sequential = _is_sequential(parallel_mode, effect)
+            prepared.append(
+                replace(
+                    tool,
+                    defer_loading=(config.defer_tools and tool.name not in always_loaded),
+                    sequential=sequential,
+                )
+            )
+        return prepared
 
-        wrapped = wrapped.prepared(mark_deferred)
+    wrapped = wrapped.prepared(prepare_definitions)
     resilient: AbstractToolset[None] = ResilientMcpToolset(
         wrapped, client=client, server_name=name, status_sink=status_sink
     )
     return McpToolsetBundle(name, config, client, resilient, policy)
+
+
+def _is_sequential(parallel_mode: str, effect: EffectKind) -> bool:
+    return parallel_mode == "sequential" or (
+        parallel_mode == "parallel_safe" and effect is not EffectKind.OBSERVE
+    )
 
 
 # --------------------------------------------------------------------------- #

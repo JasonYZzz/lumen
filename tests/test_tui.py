@@ -151,12 +151,15 @@ async def test_tool_card_renders_running_then_finished() -> None:
         card.start(args={"path": "x"}, origin="builtin", risk="read")
         await pilot.pause()
         assert "●" in _header_text(card)
+        assert "Reading" in _header_text(card)
+        assert "read_file" not in _header_text(card)
         header = card.query_one(".tool-header", Static).content
         assert isinstance(header, Text)
         assert "bold #C7ACE8" in {str(span.style) for span in header.spans}
         card.update_result(result="ok", is_error=False, elapsed_seconds=0.5)
         await pilot.pause()
         assert "✓" in _header_text(card)
+        assert "Read" in _header_text(card)
 
 
 async def test_tool_card_uses_preview_until_expanded() -> None:
@@ -350,7 +353,7 @@ def _make_app(tmp_path: Path):  # type: ignore[no-untyped-def]
     config_path = tmp_path / "agent.yaml"
     config_path.write_text(
         """
-version: 1
+version: 2
 agent:
   name: tui-test
   model:
@@ -374,7 +377,7 @@ def _make_multi_model_app(tmp_path: Path):  # type: ignore[no-untyped-def]
     config_path = tmp_path / "agent.yaml"
     config_path.write_text(
         """
-version: 1
+version: 2
 agent:
   name: tui-test
   default_model: alpha
@@ -850,12 +853,14 @@ async def test_idle_welcome_surfaces_runtime_context(tmp_path: Path) -> None:
         welcome = app.query_one("#welcome", Static)
         content = str(welcome.content)
 
+        # The brand is a real terminal-pixel wordmark, not a hidden text label.
+        assert "▀" in content and "▄" in content
         assert "Workspace ready" in content
-        assert "Model" in content and "test" in content
-        assert "Mode" in content and "manual" in content
-        assert str(tmp_path) in content
-        assert "Outputs" in content and "outputs/" in content
-        assert "/" in content and "@" in content
+        assert "tools" in content and "skills" in content
+        assert "commands" in content and "files" in content
+        assert "Model" not in content
+        assert "Mode" not in content
+        assert str(tmp_path) not in content
 
 
 async def test_status_bar_updates_on_mode_switch(tmp_path: Path) -> None:
@@ -897,7 +902,8 @@ async def test_shift_tab_cycles_approval_mode(tmp_path: Path) -> None:
         assert app.approval_mode == "accept_edits"
         await pilot.press("shift+tab")
         await pilot.pause()
-        assert app.approval_mode == "plan"
+        assert app.collaboration_mode == "plan"
+        assert app.approval_mode == "accept_edits"
         await pilot.press("shift+tab")
         await pilot.pause()
         assert app.approval_mode == "auto"

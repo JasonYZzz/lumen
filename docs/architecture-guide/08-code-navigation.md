@@ -14,8 +14,9 @@
 | 历史 receipt 细节丢失 | `resources.py`（`read_artifact`） | `context/artifacts.py`、`context/transcript.py` |
 | Skill 未加载/脚本被拒绝 | `skills.py` | `resources.py`、Skill `SKILL.md` |
 | Web 断线后漏事件 | `application/events.py` | `api/app.py`、Web reducer |
+| Live 语音连接、工具或恢复异常 | `live/manager.py` | `live/router.py`、`live/protocol.py`、Provider Adapter、`tools/gateway.py`、Web media client |
 | 长期记忆污染 | `context/memory/manager.py` | `extraction.py`、`redaction.py`、`records.py` |
-| 子 Agent 行为异常 | `delegation.py` | `resources.py`、`config.py` |
+| 子 Agent 行为异常 | `agents/orchestrator.py` | `agents/runtime_factory.py`、`resources.py`、`sessions.py` |
 
 ## 8.2 推荐阅读调用链
 
@@ -28,7 +29,7 @@ cli.py
   -> runtime.py
        -> context/engine.py
        -> pydantic_ai Agent
-       -> tools / MCP / hooks / delegation
+       -> tools / MCP / hooks / agents
   -> sessions.py
   -> events.py
   -> ui/app.py 或 api/app.py
@@ -71,9 +72,7 @@ flowchart TD
 
 ## 8.5 当前值得继续深化的方向
 
-1. 将后台子 Agent 状态提升为应用层可订阅事件；
-2. 引入 worktree adapter，让可写子 Agent 隔离文件系统；
+1. 完成 read-only Agent 的模型/工具边界 transcript checkpoint 与安全恢复；
+2. 统一 TUI、Web、headless 的 Agent 生命周期事件和审批上浮；
 3. 统一插件、Hook、命令和 UI 扩展的发行 interface；
-4. 增加真实模型任务基准，而不只验证确定性单元行为；
-5. 提供可选 OS sandbox adapter；
-6. 为文件编辑增加 checkpoint/rewind module。
+4. 增加真实模型任务基准，而不只验证确定性单元行为。

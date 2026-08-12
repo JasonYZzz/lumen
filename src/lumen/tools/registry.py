@@ -10,7 +10,7 @@ from typing import Any, Literal, cast
 from pydantic_ai import Tool
 
 from lumen.config import PermissionsConfig, PluginConfig
-from lumen.tools.spec import Risk, ToolSpec
+from lumen.tools.spec import EffectKind, Risk, ToolSpec
 
 
 class DuplicateToolError(ValueError):
@@ -115,18 +115,24 @@ class ToolRegistry:
                     entry.spec.function,
                     name=name,
                     description=entry.spec.description,
-                    sequential=not _allows_parallel(parallel_mode, entry.spec.risk),
+                    sequential=not _allows_parallel(parallel_mode, entry.spec.effect),
                     requires_approval=decision is PermissionDecision.CONFIRM,
                     timeout=entry.spec.timeout or default_timeout,
-                    metadata={"origin": entry.origin, "risk": entry.spec.risk.value},
+                    metadata={
+                        "origin": entry.origin,
+                        "risk": entry.spec.risk.value,
+                        "effect": entry.spec.effect.value,
+                    },
                 )
             )
         return tools
 
 
-def _allows_parallel(mode: Literal["sequential", "parallel_safe", "parallel"], risk: Risk) -> bool:
+def _allows_parallel(
+    mode: Literal["sequential", "parallel_safe", "parallel"], effect: EffectKind
+) -> bool:
     if mode == "sequential":
         return False
     if mode == "parallel_safe":
-        return risk is Risk.READ
+        return effect is EffectKind.OBSERVE
     return True

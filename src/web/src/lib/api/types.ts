@@ -1,9 +1,34 @@
 import type { components } from './schema.generated'
 
 export type ApprovalMode = NonNullable<
-  components['schemas']['WorkspaceSettingsBody']['approvalMode']
+  components['schemas']['SessionSettingsBody']['approvalMode']
+>
+export type CollaborationMode = NonNullable<
+  components['schemas']['SessionSettingsBody']['collaborationMode']
 >
 export type QueueMode = components['schemas']['QueueInputBody']['mode']
+export type ApprovalScope = 'once' | 'session'
+
+export interface AgentRecord {
+  id: string
+  status: string
+  task?: string
+  role?: string
+  path?: string
+  task_generation?: number
+  result_summary?: string | null
+  workspace_mode?: string
+  [key: string]: unknown
+}
+
+export interface CheckpointRecord {
+  index: number
+  created_at: string
+  status: string
+  prompt: string
+  receipt_count: number
+  mutation_count: number
+}
 
 export interface Bootstrap {
   agent: string
@@ -12,11 +37,53 @@ export interface Bootstrap {
   modelId: string
   availableModels: string[]
   approvalMode: ApprovalMode
-  tools: Array<{ name: string; origin: string; risk: string }>
+  collaborationMode: CollaborationMode
+  tools: Array<{ name: string; origin: string; risk: string; effect?: string }>
   mcp: Array<Record<string, unknown>>
   skills: Array<{ name: string; description: string }>
   warnings: string[]
   activeRunId: string | null
+  liveEnabled: boolean
+}
+
+export interface LiveSessionState {
+  ref: { id: string; session_id: string; provider: string }
+  connection: string
+  activity: string
+  model: string
+  voice: string
+  turn_count: number
+  usage: Record<string, unknown>
+  last_user_transcript?: string | null
+  last_assistant_transcript?: string | null
+  pending_call_ids: string[]
+  error?: string | null
+  created_at: string
+  updated_at: string
+}
+
+export interface LiveStartResponse {
+  liveSessionId: string
+  sessionId: string
+  answerSdp: string | null
+  media: {
+    kind: 'direct_webrtc' | 'host_websocket' | 'managed_rtc'
+    answer_sdp?: string
+    media_path?: string
+    input_sample_rate?: number
+    output_sample_rate?: number
+  }
+  state: LiveSessionState
+}
+
+export interface LiveEventEnvelope {
+  version: 1
+  sequence: number
+  sessionId: string
+  liveSessionId: string
+  type: string
+  createdAt: string
+  data: Record<string, unknown>
 }
 
 export interface SessionSummary {
@@ -29,12 +96,18 @@ export interface SessionSummary {
 export interface PlanStep {
   id: string
   title: string
-  status: 'pending' | 'in_progress' | 'completed' | 'blocked'
+  depends_on: string[]
+  acceptance_criteria: Array<{ id: string; description: string }>
+  status: 'pending' | 'in_progress' | 'completed' | 'blocked' | 'skipped'
   note?: string | null
 }
 
 export interface PlanState {
+  goal: string
   revision: number
+  state_version: number
+  lifecycle: string
+  approved_revision: number | null
   steps: PlanStep[]
 }
 
@@ -48,6 +121,8 @@ export type TimelineKind =
   | 'system'
   | 'error'
   | 'compaction'
+  | 'work_product'
+  | 'agent'
 
 export interface TimelineEntry {
   id: string
@@ -74,6 +149,10 @@ export interface SessionSnapshot {
   timeline: Array<Record<string, unknown>>
   lastUserInput: string | null
   activeRunId: string | null
+  approvalMode: ApprovalMode
+  collaborationMode: CollaborationMode
+  planReviewStatus: string
+  transcriptDensity: 'normal' | 'verbose'
   pendingClarification: {
     id: string
     question: string
@@ -81,6 +160,12 @@ export interface SessionSnapshot {
     related_plan_step?: string | null
     created_at: string
   } | null
+  workProducts: Array<Record<string, unknown>>
+  pendingEffects: Array<Record<string, unknown>>
+  recoverableEffects: Array<Record<string, unknown>>
+  agents: AgentRecord[]
+  agentUsage: Record<string, unknown>
+  liveSessions: LiveSessionState[]
 }
 
 export type EventType =
@@ -95,10 +180,15 @@ export type EventType =
   | 'clarification.requested'
   | 'plan.created'
   | 'plan.updated'
+  | 'work_product.changed'
+  | 'agent.lifecycle'
+  | 'plan.review_pending'
+  | 'plan.review_resolved'
   | 'progress.reported'
   | 'tool.started'
   | 'tool.finished'
   | 'approval.pending'
+  | 'approval.batch_pending'
   | 'approval.resolved'
   | 'usage.updated'
   | 'context.compaction.started'

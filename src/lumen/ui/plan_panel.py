@@ -7,6 +7,8 @@ the TUI can theme active, completed, pending, and blocked steps distinctly.
 
 from __future__ import annotations
 
+from typing import Any
+
 from textual.containers import Vertical
 from textual.widgets import Static
 
@@ -30,6 +32,7 @@ _STATUS_CLASSES: dict[StepStatus, str] = {
 class PlanPanel(Vertical):
     """Renders one turn's plan inline with the conversation timeline."""
 
+    can_focus = True
     DEFAULT_CSS = """
     PlanPanel {
         height: auto;
@@ -46,12 +49,14 @@ class PlanPanel(Vertical):
     .plan-step-completed { color: $text-muted; }
     .plan-step-pending { color: $text-muted; }
     .plan-step-blocked { color: $error; text-style: bold; }
+    .plan-detail { color: $text-muted; padding: 0 5; }
     """
 
     def __init__(self, plan: PlanState | None = None) -> None:
         super().__init__()
         self._plan = plan
         self._collapsed = False
+        self._show_details = False
         self._header = Static("Tasks", classes="plan-header", markup=False)
 
     def compose(self):  # type: ignore[no-untyped-def]
@@ -83,7 +88,8 @@ class PlanPanel(Vertical):
                 active_text = active.title if active is not None else "Complete"
                 self._header.update(f"Tasks {completed}/{len(plan.steps)} · {active_text}")
                 return
-            self._header.update(f"Tasks  {completed}/{len(plan.steps)}")
+            revision = f" · revision {plan.revision}" if plan.revision else ""
+            self._header.update(f"Tasks  {completed}/{len(plan.steps)}{revision} · E details")
             # Collapse state is managed exclusively by collapse(); update_plan
             # only controls has-plan visibility.
             for step in plan.steps:
@@ -91,6 +97,31 @@ class PlanPanel(Vertical):
                 css = _STATUS_CLASSES[step.status]
                 note = f" — {step.note}" if step.note else ""
                 self.mount(Static(f"{glyph} {step.title}{note}", classes=f"plan-step {css}"))
+                if self._show_details:
+                    dependency = ", ".join(step.depends_on) or "none"
+                    owner = step.owner or "agent"
+                    self.mount(
+                        Static(
+                            f"owner {owner} · depends on {dependency}",
+                            classes="plan-detail",
+                            markup=False,
+                        )
+                    )
+                    for criterion in step.acceptance_criteria:
+                        linked = [
+                            receipt
+                            for receipt in plan.evidence
+                            if receipt.id in step.evidence_ids
+                            and criterion.id in receipt.criterion_ids
+                        ]
+                        state = "passed" if any(receipt.passed for receipt in linked) else "required"
+                        self.mount(
+                            Static(
+                                f"[{state}] {criterion.id}: {criterion.description}",
+                                classes="plan-detail",
+                                markup=False,
+                            )
+                        )
         else:
             self._header.update("Tasks")
             self.remove_class("has-plan")
@@ -104,6 +135,14 @@ class PlanPanel(Vertical):
         else:
             self.remove_class("plan-collapsed")
         self._render_plan()
+
+    def on_key(self, event: Any) -> None:  # type: ignore[no-untyped-def]
+        if getattr(event, "key", "") not in {"e", "enter"}:
+            return
+        self._show_details = not self._show_details
+        self._render_plan()
+        event.prevent_default()
+        event.stop()
 
     def render(self):  # type: ignore[no-untyped-def]
         # The container itself doesn't paint text; children do. We expose a

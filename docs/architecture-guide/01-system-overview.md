@@ -7,8 +7,13 @@ flowchart TB
     User["用户"] --> TUI["Textual TUI adapter"]
     User --> Web["Next.js Web adapter"]
     Web --> API["FastAPI + SSE adapter"]
+    Web -->|"WebRTC / PCM"| Live
     TUI --> Host["WorkspaceHost"]
     API --> Host
+    Host --> Live["LiveSessionManager"]
+    Live --> Router["LiveProviderRouter"]
+    Router --> Realtime["OpenAI / Bailian Realtime"]
+    Live --> Gateway["CapabilityGateway"]
 
     Host --> Coordinator["RunCoordinator"]
     Coordinator --> Runtime["AgentRuntime"]
@@ -28,12 +33,12 @@ flowchart TB
 
 | 层 | 主要职责 | 关键源码 |
 |---|---|---|
-| 交互层 | 输入、展示、审批交互、断线重连 | `ui/`、`web/`、`api/app.py` |
+| 交互层 | 输入、展示、审批交互、SSE/WebRTC 断线重连 | `ui/`、`web/`、`api/app.py` |
 | 应用层 | 命令分派、workspace 并发规则、run 生命周期 | `application/host.py` |
 | 会话层 | 恢复、交互队列、turn 持久化 | `run_coordinator.py`、`sessions.py` |
 | Agent 层 | 模型调用、工具循环、流式输出、重试 | `runtime.py` |
 | 上下文层 | token 预算、压缩、记忆、artifact | `context/` |
-| 能力层 | 本地工具、MCP、Skill、Hook、子 Agent | `tools/`、`mcp_*`、`skills.py`、`delegation.py` |
+| 能力层 | 本地工具、MCP、Skill、Hook、子 Agent | `tools/`、`mcp_*`、`skills.py`、`agents/` |
 
 ## 1.2 最重要的 deep modules
 
@@ -66,6 +71,12 @@ flowchart TB
 
 `prepare`、`commit`、`control` 构成上下文 seam。调用者无需知道 token counter、压缩器、checkpoint 或 memory repository 的内部结构。
 
+### LiveSessionManager 与 CapabilityGateway
+
+`LiveSessionManager` 是 Workspace 级实时语音 deep module；它拥有 call 生命周期、事件 journal、转写持久化、工具串行化、安全恢复和主动 rollover。`LiveProviderRouter` 在建连前按 capability 选择并冻结 Route；OpenAI、百炼的 SDP/WebSocket、事件和 function-call 结构分别止于 Provider Adapter。
+
+`CapabilityGateway` 是 Live 等替代 transport 的能力执行 seam：它投影文字 runtime 所用的同一份 `ToolRegistry`、权限策略、EffectKind recorder 与已连接 MCP toolset，执行时统一应用参数校验、Risk 审批、receipt、timeout 和 provider-call 幂等。语音模型不会获得绕过 Host 的第二套能力策略。
+
 ## 1.3 核心设计原则
 
 1. **完整事实与活动上下文分离**：JSONL 永远追加；模型只接收预算内的 active history。
@@ -74,6 +85,7 @@ flowchart TB
 4. **权限不是沙箱**：审批决定“允不允许”，workspace confinement 决定“能访问哪里”；操作系统隔离仍需外部 sandbox。
 5. **远端能力默认不可信**：未分类 MCP 工具使用 `external_unknown`，即使 auto 模式也要确认。
 6. **失败也要形成可审计结果**：取消、模型失败、超时会携带 partial outcome，而不是丢弃已发生事实。
+7. **媒体可替换、控制留在 Host**：可信 sideband 存在时可 direct WebRTC；否则音频经 Host PCM relay。API Key、工具、审批、完成门禁和 durable state 永不下放浏览器。
 
 ## 1.4 依赖方向
 

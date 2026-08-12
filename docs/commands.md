@@ -33,7 +33,7 @@ lumen -p "生成摘要" --output-format json
 lumen -p "继续" --resume <session-id>
 ```
 
-`--print/-p` 运行一次非交互 Agent turn，照常持久化 session。`--output-format` 支持 `text` 和 `json`；`--permission-mode` 支持 `manual`、`accept_edits`、`plan`、`auto`。headless 无法弹出审批 UI，因此 `manual` 下需要人工确认的调用会被自动拒绝。
+`--print/-p` 运行一次非交互 Agent turn，照常持久化 session。`--output-format` 支持 `text` 和 `json`；`--permission-mode` 支持 `manual`、`accept_edits`、`auto`。Plan 是独立的 session collaboration mode，可由 `collaboration.default_mode: plan` 配置；headless 无法弹出审批 UI，因此 `manual` 下需要人工确认的调用会被自动拒绝。
 
 ### 1.3 Web 客户端
 
@@ -71,17 +71,20 @@ lumen mcp reset [--name <name>] --cwd . [--config PATH]
 
 ## 2. TUI slash 命令
 
-在 TUI 输入 `/` 可打开补全，`/help` 会按分组输出 25 条可见注册命令；下表为便于查阅，将 `/resource` 的三个子形式拆成独立行。`/quit` 仍可调用，但只是 `/exit` 的隐藏兼容别名，不出现在帮助、补全或命令面板中。
+在 TUI 输入 `/` 可打开补全，`/help` 按分组输出注册命令；下表为便于查阅，将 `/resource` 的三个子形式拆成独立行。`/quit` 仍可调用，但只是 `/exit` 的隐藏兼容别名，不出现在帮助、补全或命令面板中。
 
 | 分组 | 命令 | 作用 | 运行期间 |
 |---|---|---|---|
 | Session | `/new` | 新建 session | 禁用 |
 | Session | `/sessions` | 列出历史 session | 可用 |
+| Session | `/agents [interrupt\|message\|continue\|import\|reject\|close] <id> [text]` | 查看、协调、中断、导入/拒绝或关闭 Agent；`/children` 为可见兼容入口 | 可用 |
+| Session | `/checkpoints` | 浏览 receipts，并从历史 turn 创建非破坏式 session 分支 | 禁用 |
 | Session | `/resume <id>` | 恢复指定 session | 禁用 |
 | Session | `/clear` | 清空可见时间线，保留 session 上下文 | 禁用 |
 | Session | `/retry` | 重发上一条 prompt | 需先结束当前 run |
 | Model | `/model [name]` | 无参数列模型；有参数切换模型 | 查看可用；切换会被后端保护 |
 | Model | `/mode [manual\|accept_edits\|plan\|auto]` | 查看或切换审批模式 | 可用 |
+| Model | `/status` | 查看 workspace、session、模式、沙箱和 UI 状态 | 可用 |
 | Context | `/context [--json\|sources]` | 查看预算报告、JSON 报告或活动来源 | 可用 |
 | Context | `/compact [focus]` | 请求强制压缩，可附 focus | 可用 |
 | Context | `/clarification cancel` | 取消待回答澄清 | 可用 |
@@ -94,6 +97,7 @@ lumen mcp reset [--name <name>] --cwd . [--config PATH]
 | MCP | `/prompt <server:name> [key=value ...]` | 渲染模板并作为一次 Agent run 提交 | 需先结束当前 run |
 | Memory | `/memory [action]` | 管理持久记忆，详见下节 | 可用 |
 | Other | `/theme [lumen-dark\|lumen-light]` | 查看或即时切换主题 | 可用 |
+| Other | `/transcript` | 打开可搜索、可展开/Raw/复制的结构化 transcript | 可用 |
 | Other | `/help` | 显示分组命令帮助 | 可用 |
 | Other | `/tools` | 列出模型可见工具 | 可用 |
 | Other | `/hooks` | 列出 hooks、最近触发与 deny 统计 | 可用 |

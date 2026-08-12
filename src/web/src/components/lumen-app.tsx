@@ -26,8 +26,10 @@ import {
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react'
 import { exchangeLaunchToken, lumenApi, subscribeRun } from '@/lib/api/client'
 import type {
+  AgentRecord,
   ApprovalMode,
   Bootstrap,
+  CheckpointRecord,
   EventEnvelope,
   QueueMode,
   SessionSummary,
@@ -41,6 +43,7 @@ import {
 } from '@/lib/slash-commands'
 import { Composer } from './composer'
 import { LandingEntry } from './landing-entry'
+import { LiveVoiceControls } from './live-voice-controls'
 import { MarkdownMessage } from './markdown-message'
 
 function requestId() {
@@ -57,7 +60,14 @@ export function LumenApp() {
   const [loading, setLoading] = useState(true)
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const [confirmAuto, setConfirmAuto] = useState(false)
+  const [planFeedback, setPlanFeedback] = useState('')
+  const [planReviewBusy, setPlanReviewBusy] = useState(false)
   const [showJumpToLatest, setShowJumpToLatest] = useState(false)
+  const [inspectorOpen, setInspectorOpen] = useState(false)
+  const [checkpointsOpen, setCheckpointsOpen] = useState(false)
+  const [transcriptOpen, setTranscriptOpen] = useState(false)
+  const [checkpoints, setCheckpoints] = useState<CheckpointRecord[]>([])
+  const [controlBusy, setControlBusy] = useState(false)
   const closeStreamRef = useRef<(() => void) | null>(null)
   const timelineRef = useRef<HTMLElement>(null)
   const stickToLatestRef = useRef(true)
@@ -104,6 +114,11 @@ export function LumenApp() {
       try {
         const snapshot = await lumenApi.session(id)
         setSessionId(id)
+        setBootstrap((current) => current ? {
+          ...current,
+          approvalMode: snapshot.approvalMode,
+          collaborationMode: snapshot.collaborationMode,
+        } : current)
         dispatch({ type: 'snapshot', snapshot })
         const url = new URL(window.location.href)
         url.searchParams.set('session', id)
@@ -164,6 +179,99 @@ export function LumenApp() {
     return created.sessionId
   }, [openSession, refreshChrome])
 
+  const refreshSessionCapabilities = useCallback(async () => {
+    if (!sessionId) return
+    const [snapshot, agents] = await Promise.all([
+      lumenApi.session(sessionId),
+      lumenApi.listAgents(sessionId),
+    ])
+    dispatch({ type: 'agents-refreshed', agents })
+    dispatch({
+      type: 'work-state-refreshed',
+      workProducts: snapshot.workProducts,
+      pendingEffects: snapshot.pendingEffects,
+      recoverableEffects: snapshot.recoverableEffects,
+    })
+  }, [sessionId])
+
+  const openInspector = useCallback(async () => {
+    setInspectorOpen(true)
+    await refreshSessionCapabilities()
+  }, [refreshSessionCapabilities])
+
+  const runAgentAction = useCallback(async (agent: AgentRecord, action: string) => {
+    let payload: Record<string, unknown> = {}
+    if (action === 'send_message') {
+      const message = window.prompt(`给 ${agent.path ?? agent.id} 发送补充信息`)
+      if (!message?.trim()) return
+      payload = { message: message.trim() }
+    } else if (action === 'continue') {
+      const task = window.prompt(`继续 ${agent.path ?? agent.id} 的任务`)
+      if (!task?.trim()) return
+      payload = { task: task.trim() }
+    } else if (action === 'close') {
+      const reason = window.prompt('关闭 Agent 的处理说明')
+      if (!reason?.trim()) return
+      payload = { resolution: 'web_resolution', reason: reason.trim() }
+    }
+    setControlBusy(true)
+    try {
+      await lumenApi.agentAction(agent.id, action, payload)
+      await refreshSessionCapabilities()
+    } catch (error) {
+      dispatch({
+        type: 'local-error',
+        message: error instanceof Error ? error.message : 'Agent 操作失败',
+      })
+    } finally {
+      setControlBusy(false)
+    }
+  }, [refreshSessionCapabilities])
+
+  const openCheckpoints = useCallback(async () => {
+    if (!sessionId) return
+    setCheckpoints(await lumenApi.listCheckpoints(sessionId))
+    setCheckpointsOpen(true)
+  }, [sessionId])
+
+  const forkCheckpoint = useCallback(async (checkpoint: CheckpointRecord) => {
+    if (!sessionId || !window.confirm(`从 turn ${checkpoint.index + 1} 创建新任务分支？`)) return
+    setControlBusy(true)
+    try {
+      const created = await lumenApi.forkSession(sessionId, checkpoint.index)
+      await refreshChrome()
+      setCheckpointsOpen(false)
+      await openSession(created.sessionId)
+    } finally {
+      setControlBusy(false)
+    }
+  }, [openSession, refreshChrome, sessionId])
+
+  const toggleTranscriptDensity = useCallback(async () => {
+    if (!sessionId) return
+    const transcriptDensity = run.transcriptDensity === 'normal' ? 'verbose' : 'normal'
+    await lumenApi.updateSessionSettings(sessionId, { transcriptDensity })
+    dispatch({ type: 'transcript-density', density: transcriptDensity })
+  }, [run.transcriptDensity, sessionId])
+
+  const dequeueInputs = useCallback(async () => {
+    if (!run.runId) return
+    const result = await lumenApi.dequeueInputs(run.runId)
+    if (result.items.length) {
+      setInput((current) => [result.items.map((item) => item.text).join('\n\n'), current]
+        .filter((item) => item.trim()).join('\n\n'))
+    }
+  }, [run.runId])
+
+  const waiveEffect = useCallback(async (effect: Record<string, unknown>) => {
+    if (!sessionId) return
+    const id = String(effect.id ?? '')
+    const reason = window.prompt('说明为什么可以跳过该验证')
+    if (!id || !reason?.trim()) return
+    await lumenApi.waiveVerification(sessionId, [id], reason.trim())
+    await refreshSessionCapabilities()
+  }, [refreshSessionCapabilities, sessionId])
+
   const handleSlashCommand = useCallback(
     async (command: string): Promise<boolean> => {
       const parts = command.trim().split(/\s+/)
@@ -195,16 +303,28 @@ export function LumenApp() {
         if (!argument) {
           dispatch({
             type: 'local-message',
-            message: `当前模式：${bootstrap?.approvalMode ?? 'manual'}\n\n可用：\`manual\` · \`accept_edits\` · \`plan\` · \`auto\``,
+            message: `协作：${bootstrap?.collaborationMode ?? 'default'}；审批：${bootstrap?.approvalMode ?? 'manual'}\n\n可用：\`manual\` · \`accept_edits\` · \`plan\` · \`auto\``,
           })
           setInput('')
           return true
         }
-        if (argument === 'auto') {
+        if (!sessionId) {
+          dispatch({ type: 'local-error', message: '请先创建或打开任务。' })
+        } else if (argument === 'auto') {
           setConfirmAuto(true)
-        } else if (argument === 'manual' || argument === 'accept_edits' || argument === 'plan') {
-          await lumenApi.updateSettings({ approvalMode: argument })
-          await refreshChrome()
+        } else if (argument === 'plan') {
+          await lumenApi.updateSessionSettings(sessionId, { collaborationMode: 'plan' })
+          setBootstrap((current) => current ? { ...current, collaborationMode: 'plan' } : current)
+        } else if (argument === 'manual' || argument === 'accept_edits') {
+          await lumenApi.updateSessionSettings(sessionId, {
+            approvalMode: argument,
+            collaborationMode: 'default',
+          })
+          setBootstrap((current) => current ? {
+            ...current,
+            approvalMode: argument,
+            collaborationMode: 'default',
+          } : current)
         } else {
           dispatch({ type: 'local-error', message: `不支持的模式：${argument}` })
         }
@@ -218,7 +338,7 @@ export function LumenApp() {
             message: `当前模型：${bootstrap?.activeModel ?? '未知'}\n\n${bootstrap?.availableModels.map((model) => `\`${model}\``).join(' · ') || '暂无可用模型'}`,
           })
         } else {
-          await lumenApi.updateSettings({ model: argument })
+          await lumenApi.updateWorkspaceSettings({ model: argument })
           await refreshChrome()
         }
         setInput('')
@@ -388,11 +508,44 @@ export function LumenApp() {
         setInput('')
         return true
       }
+      if (name === '/agents') {
+        if (sessionId) await openInspector()
+        else dispatch({ type: 'local-message', message: '当前还没有 Session。' })
+        setInput('')
+        return true
+      }
+      if (name === '/checkpoints') {
+        if (sessionId) await openCheckpoints()
+        else dispatch({ type: 'local-message', message: '当前还没有 Session。' })
+        setInput('')
+        return true
+      }
+      if (name === '/transcript') {
+        setTranscriptOpen(true)
+        setInput('')
+        return true
+      }
+      if (name === '/dequeue') {
+        await dequeueInputs()
+        setInput('')
+        return true
+      }
       dispatch({ type: 'local-error', message: `未知命令：${name}。输入 / 查看可用命令。` })
       setInput('')
       return true
     },
-    [attachRun, bootstrap, createSession, refreshChrome, run.runId, run.timeline, sessionId],
+    [
+      attachRun,
+      bootstrap,
+      createSession,
+      dequeueInputs,
+      openCheckpoints,
+      openInspector,
+      refreshChrome,
+      run.runId,
+      run.timeline,
+      sessionId,
+    ],
   )
 
   const submit = useCallback(async () => {
@@ -429,21 +582,57 @@ export function LumenApp() {
 
   const setApprovalMode = useCallback(
     async (mode: ApprovalMode) => {
+      if (!sessionId) return
       if (mode === 'auto') {
         setConfirmAuto(true)
         return
       }
-      await lumenApi.updateSettings({ approvalMode: mode })
-      await refreshChrome()
+      await lumenApi.updateSessionSettings(sessionId, { approvalMode: mode })
+      setBootstrap((current) => current ? { ...current, approvalMode: mode } : current)
     },
-    [refreshChrome],
+    [sessionId],
   )
 
   const approveAuto = useCallback(async () => {
-    await lumenApi.updateSettings({ approvalMode: 'auto', confirmed: true })
+    if (!sessionId) return
+    await lumenApi.updateSessionSettings(sessionId, { approvalMode: 'auto' })
+    setBootstrap((current) => current ? { ...current, approvalMode: 'auto' } : current)
     setConfirmAuto(false)
     await refreshChrome()
-  }, [refreshChrome])
+  }, [sessionId])
+
+  const reviewPlan = useCallback(async (action: 'approve' | 'reject') => {
+    if (!sessionId || !run.planReviewRevision || planReviewBusy) return
+    const feedback = planFeedback.trim()
+    if (action === 'reject' && !feedback) {
+      dispatch({ type: 'local-error', message: '驳回计划时需要填写反馈。' })
+      return
+    }
+    setPlanReviewBusy(true)
+    try {
+      const started = await lumenApi.reviewPlan(
+        sessionId,
+        action,
+        run.planReviewRevision,
+        requestId(),
+        feedback,
+      )
+      dispatch({ type: 'run-registered', runId: started.runId })
+      setBootstrap((current) => current ? {
+        ...current,
+        collaborationMode: action === 'approve' ? 'default' : 'plan',
+      } : current)
+      setPlanFeedback('')
+      attachRun(started.runId)
+    } catch (error) {
+      dispatch({
+        type: 'local-error',
+        message: error instanceof Error ? error.message : '计划审批失败',
+      })
+    } finally {
+      setPlanReviewBusy(false)
+    }
+  }, [attachRun, planFeedback, planReviewBusy, run.planReviewRevision, sessionId])
 
   const leaveSession = useCallback(() => {
     closeStreamRef.current?.()
@@ -569,7 +758,7 @@ export function LumenApp() {
               <select
                 value={bootstrap?.activeModel ?? ''}
                 disabled={!bootstrap || workspaceBusy}
-                onChange={(event) => void lumenApi.updateSettings({ model: event.target.value }).then(refreshChrome)}
+                onChange={(event) => void lumenApi.updateWorkspaceSettings({ model: event.target.value }).then(refreshChrome)}
                 aria-label="模型"
               >
                 {bootstrap?.availableModels.map((model) => <option key={model}>{model}</option>)}
@@ -584,12 +773,84 @@ export function LumenApp() {
               >
                 <option value="manual">每次确认</option>
                 <option value="accept_edits">自动改文件</option>
-                <option value="plan">计划模式</option>
                 <option value="auto">自动</option>
               </select>
             </label>
+            <label>
+              <select
+                value={bootstrap?.collaborationMode ?? 'default'}
+                disabled={!sessionId || workspaceBusy}
+                onChange={(event) => {
+                  if (!sessionId) return
+                  const collaborationMode = event.target.value as 'default' | 'plan'
+                  void lumenApi.updateSessionSettings(sessionId, { collaborationMode }).then(() => {
+                    setBootstrap((current) => current ? { ...current, collaborationMode } : current)
+                  })
+                }}
+                aria-label="协作模式"
+              >
+                <option value="default">执行</option>
+                <option value="plan">计划</option>
+              </select>
+            </label>
+            <button
+              type="button"
+              className="header-action"
+              disabled={!sessionId}
+              onClick={() => void openInspector()}
+            >
+              Agents {run.agents.length || ''}
+            </button>
+            <button
+              type="button"
+              className="header-action"
+              disabled={!sessionId || workspaceBusy}
+              onClick={() => void openCheckpoints()}
+            >
+              Checkpoints
+            </button>
+            <button
+              type="button"
+              className="header-action"
+              disabled={!sessionId}
+              onClick={() => setTranscriptOpen(true)}
+            >
+              Transcript
+            </button>
           </div>
         </header>
+
+        {inspectorOpen && (
+          <RuntimeInspector
+            agents={run.agents}
+            workProducts={run.workProducts}
+            pendingEffects={run.pendingEffects}
+            recoverableEffects={run.recoverableEffects}
+            busy={controlBusy}
+            onClose={() => setInspectorOpen(false)}
+            onRefresh={() => void refreshSessionCapabilities()}
+            onAgentAction={(agent, action) => void runAgentAction(agent, action)}
+            onWaive={(effect) => void waiveEffect(effect)}
+          />
+        )}
+
+        {checkpointsOpen && (
+          <CheckpointInspector
+            checkpoints={checkpoints}
+            busy={controlBusy}
+            onClose={() => setCheckpointsOpen(false)}
+            onFork={(checkpoint) => void forkCheckpoint(checkpoint)}
+          />
+        )}
+
+        {transcriptOpen && (
+          <TranscriptInspector
+            timeline={run.timeline}
+            density={run.transcriptDensity}
+            onClose={() => setTranscriptOpen(false)}
+            onToggleDensity={() => void toggleTranscriptDensity()}
+          />
+        )}
 
         {confirmAuto && (
           <div className="auto-confirm" role="alert">
@@ -597,6 +858,35 @@ export function LumenApp() {
             <div><strong>开启 auto 模式？</strong><span>已分类的写入、执行和外部工具将不再逐次确认。</span></div>
             <button type="button" onClick={() => void approveAuto()}>确认开启</button>
             <button type="button" className="quiet" onClick={() => setConfirmAuto(false)}>取消</button>
+          </div>
+        )}
+
+        {(run.planReviewStatus === 'review_pending'
+          || run.planReviewStatus === 'approved_waiting_to_execute')
+          && run.planReviewRevision && (
+          <div className="plan-review" role="alert">
+            <div>
+              <strong>计划 revision {run.planReviewRevision} 等待审批</strong>
+              <span>批准后将以当前审批模式开始新的执行 turn。</span>
+            </div>
+            <textarea
+              value={planFeedback}
+              disabled={planReviewBusy}
+              placeholder="如需驳回，请填写修改意见"
+              aria-label="计划驳回反馈"
+              onChange={(event) => setPlanFeedback(event.target.value)}
+            />
+            <button type="button" disabled={planReviewBusy} onClick={() => void reviewPlan('approve')}>
+              {run.planReviewStatus === 'approved_waiting_to_execute' ? '继续执行' : '批准并执行'}
+            </button>
+            <button
+              type="button"
+              className="quiet"
+              disabled={planReviewBusy || !planFeedback.trim()}
+              onClick={() => void reviewPlan('reject')}
+            >
+              驳回并重新规划
+            </button>
           </div>
         )}
 
@@ -611,6 +901,14 @@ export function LumenApp() {
               onQueueModeChange={setQueueMode}
               onSubmit={() => void submit()}
               onStop={() => void stop()}
+              liveControl={(
+                <LiveVoiceControls
+                  enabled={Boolean(bootstrap?.liveEnabled)}
+                  blocked={workspaceBusy}
+                  ensureSession={async () => sessionId ?? createSession()}
+                  onEnded={(id) => void openSession(id)}
+                />
+              )}
             />
           ) : (
             <>
@@ -630,8 +928,10 @@ export function LumenApp() {
                     <ConversationTurn
                       key={turn.id}
                       turn={turn}
-                      onApproval={(callId, approved) => {
-                        if (run.runId) void lumenApi.decideApproval(run.runId, callId, approved)
+                      onApproval={(callId, approved, scope) => {
+                        if (run.runId) {
+                          void lumenApi.decideApproval(run.runId, callId, approved, scope)
+                        }
                       }}
                     />
                   ))
@@ -656,6 +956,7 @@ export function LumenApp() {
                 {run.queuedInputs.length > 0 && (
                   <div className="queued-inputs">
                     {run.queuedInputs.map((item) => <span key={item.id}>{queueModeLabel(item.mode)} · {item.text}</span>)}
+                    <button type="button" onClick={() => void dequeueInputs()}>撤回到输入框</button>
                   </div>
                 )}
                 <Composer
@@ -667,6 +968,14 @@ export function LumenApp() {
                   onQueueModeChange={setQueueMode}
                   onSubmit={() => void submit()}
                   onStop={() => void stop()}
+                  liveControl={(
+                    <LiveVoiceControls
+                      enabled={Boolean(bootstrap?.liveEnabled)}
+                      blocked={Boolean(run.runId)}
+                      ensureSession={async () => sessionId ?? createSession()}
+                      onEnded={(id) => void openSession(id)}
+                    />
+                  )}
                 />
               </footer>
             </>
@@ -674,6 +983,141 @@ export function LumenApp() {
         </div>
       </section>
     </main>
+  )
+}
+
+function RuntimeInspector({
+  agents,
+  workProducts,
+  pendingEffects,
+  recoverableEffects,
+  busy,
+  onClose,
+  onRefresh,
+  onAgentAction,
+  onWaive,
+}: {
+  agents: AgentRecord[]
+  workProducts: Array<Record<string, unknown>>
+  pendingEffects: Array<Record<string, unknown>>
+  recoverableEffects: Array<Record<string, unknown>>
+  busy: boolean
+  onClose: () => void
+  onRefresh: () => void
+  onAgentAction: (agent: AgentRecord, action: string) => void
+  onWaive: (effect: Record<string, unknown>) => void
+}) {
+  return (
+    <div className="runtime-overlay" role="dialog" aria-modal="true" aria-label="Agents 与工作状态">
+      <section className="runtime-inspector">
+        <header>
+          <div><strong>Runtime</strong><span>Agents、工作对象与待处理副作用</span></div>
+          <div><button type="button" onClick={onRefresh} disabled={busy}>刷新</button><button type="button" onClick={onClose}><X size={16} /></button></div>
+        </header>
+        <div className="runtime-section">
+          <h2>Agents <small>{agents.length}</small></h2>
+          {agents.length === 0 ? <p className="runtime-empty">当前 Session 没有 Agent。</p> : agents.map((agent) => (
+            <article className="agent-record" key={agent.id}>
+              <div>
+                <strong>{agent.path ?? agent.id}</strong>
+                <span>{agent.role ?? 'default'} · {agent.status}</span>
+                {agent.task && <p>{agent.task}</p>}
+                {agent.result_summary && <p>{agent.result_summary}</p>}
+              </div>
+              <div className="runtime-actions">
+                <button type="button" disabled={busy} onClick={() => onAgentAction(agent, 'send_message')}>消息</button>
+                <button type="button" disabled={busy} onClick={() => onAgentAction(agent, 'continue')}>继续</button>
+                {['queued', 'running', 'waiting', 'approval_pending'].includes(agent.status) && (
+                  <button type="button" disabled={busy} onClick={() => onAgentAction(agent, 'interrupt')}>中断</button>
+                )}
+                {agent.status === 'import_pending' && <>
+                  <button type="button" disabled={busy} onClick={() => onAgentAction(agent, 'approve_import')}>导入</button>
+                  <button type="button" disabled={busy} onClick={() => onAgentAction(agent, 'reject_import')}>拒绝</button>
+                </>}
+                {!['queued', 'running', 'waiting', 'approval_pending', 'import_pending', 'closed'].includes(agent.status) && (
+                  <button type="button" disabled={busy} onClick={() => onAgentAction(agent, 'close')}>关闭</button>
+                )}
+              </div>
+            </article>
+          ))}
+        </div>
+        <div className="runtime-section">
+          <h2>Work Products <small>{workProducts.length}</small></h2>
+          {workProducts.length === 0 ? <p className="runtime-empty">当前没有持续工作对象。</p> : workProducts.map((item, index) => (
+            <article className="work-record" key={String(item.id ?? index)}>
+              <strong>{String(item.resource ?? item.id ?? `work-product-${index + 1}`)}</strong>
+              <span>{String(item.kind ?? 'resource')} · {String(item.status ?? 'unknown')}</span>
+            </article>
+          ))}
+        </div>
+        <div className="runtime-section">
+          <h2>Pending Effects <small>{pendingEffects.length}</small></h2>
+          {pendingEffects.length === 0 ? <p className="runtime-empty">没有待验证副作用。</p> : pendingEffects.map((effect, index) => (
+            <article className="work-record" key={String(effect.id ?? index)}>
+              <strong>{String(effect.operation ?? effect.id ?? `effect-${index + 1}`)}</strong>
+              <span>{String(effect.status ?? 'pending')}</span>
+              <button type="button" disabled={busy} onClick={() => onWaive(effect)}>记录 waiver</button>
+            </article>
+          ))}
+          {recoverableEffects.length > 0 && <p className="runtime-meta">可恢复 effects：{recoverableEffects.length}</p>}
+        </div>
+      </section>
+    </div>
+  )
+}
+
+function CheckpointInspector({
+  checkpoints,
+  busy,
+  onClose,
+  onFork,
+}: {
+  checkpoints: CheckpointRecord[]
+  busy: boolean
+  onClose: () => void
+  onFork: (checkpoint: CheckpointRecord) => void
+}) {
+  return (
+    <div className="runtime-overlay" role="dialog" aria-modal="true" aria-label="Session checkpoints">
+      <section className="runtime-inspector compact-inspector">
+        <header><div><strong>Checkpoints</strong><span>Rewind 会创建新 Session，不覆盖当前工作区。</span></div><button type="button" onClick={onClose}><X size={16} /></button></header>
+        <div className="runtime-section">
+          {checkpoints.length === 0 ? <p className="runtime-empty">还没有已完成 turn。</p> : checkpoints.map((checkpoint) => (
+            <article className="checkpoint-record" key={checkpoint.index}>
+              <div><strong>Turn {checkpoint.index + 1}</strong><span>{checkpoint.status} · {checkpoint.receipt_count} receipts · {checkpoint.mutation_count} mutations</span><p>{checkpoint.prompt}</p></div>
+              <button type="button" disabled={busy} onClick={() => onFork(checkpoint)}>从这里分支</button>
+            </article>
+          ))}
+        </div>
+      </section>
+    </div>
+  )
+}
+
+function TranscriptInspector({
+  timeline,
+  density,
+  onClose,
+  onToggleDensity,
+}: {
+  timeline: TimelineEntry[]
+  density: 'normal' | 'verbose'
+  onClose: () => void
+  onToggleDensity: () => void
+}) {
+  const [query, setQuery] = useState('')
+  const needle = query.trim().toLowerCase()
+  const visible = needle
+    ? timeline.filter((item) => `${item.kind} ${item.text} ${item.toolName ?? ''}`.toLowerCase().includes(needle))
+    : timeline
+  return (
+    <div className="runtime-overlay" role="dialog" aria-modal="true" aria-label="Transcript">
+      <section className="runtime-inspector transcript-inspector">
+        <header><div><strong>Transcript</strong><span>{timeline.length} events · {density}</span></div><div><button type="button" onClick={onToggleDensity}>切换密度</button><button type="button" onClick={onClose}><X size={16} /></button></div></header>
+        <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索 transcript…" autoFocus />
+        <pre>{visible.map((item) => density === 'verbose' ? JSON.stringify(item) : `[${item.kind.toUpperCase()}] ${item.toolName ? `${item.toolName} ` : ''}${item.text || item.preview || item.status || ''}`).join('\n\n')}</pre>
+      </section>
+    </div>
   )
 }
 
@@ -710,7 +1154,7 @@ function ConversationTurn({
   onApproval,
 }: {
   turn: ConversationTurnState
-  onApproval: (callId: string, approved: boolean) => void
+  onApproval: (callId: string, approved: boolean, scope?: 'once' | 'session') => void
 }) {
   return (
     <section className="conversation-turn">
@@ -779,7 +1223,7 @@ function TimelineRow({
   onApproval,
 }: {
   item: TimelineEntry
-  onApproval: (callId: string, approved: boolean) => void
+  onApproval: (callId: string, approved: boolean, scope?: 'once' | 'session') => void
 }) {
   const [expanded, setExpanded] = useState(false)
   const [copied, setCopied] = useState(false)
@@ -828,7 +1272,11 @@ function TimelineRow({
             <strong>{item.presentation.title}</strong>
             <pre>{expanded ? item.presentation.full_text : item.presentation.preview}</pre>
             {item.pendingApproval && item.callId && (
-              <div><button type="button" onClick={() => onApproval(item.callId!, true)}>允许一次</button><button type="button" className="deny" onClick={() => onApproval(item.callId!, false)}>拒绝</button></div>
+              <div>
+                <button type="button" onClick={() => onApproval(item.callId!, true, 'once')}>允许一次</button>
+                <button type="button" onClick={() => onApproval(item.callId!, true, 'session')}>本会话始终允许</button>
+                <button type="button" className="deny" onClick={() => onApproval(item.callId!, false)}>拒绝</button>
+              </div>
             )}
           </div>
         )}
@@ -879,6 +1327,7 @@ function noteLabel(kind: TimelineEntry['kind']) {
   if (kind === 'progress') return '进度'
   if (kind === 'compaction') return '上下文'
   if (kind === 'error') return '错误'
+  if (kind === 'work_product') return '工作对象'
   return '系统'
 }
 
@@ -914,6 +1363,11 @@ Session:
   /new                              — 新建任务
   /retry                            — 重试上次任务
   /clear                            — 清空当前显示（保留会话上下文）
+  /checkpoints                      — 查看 checkpoint 并创建 Session 分支
+  /dequeue                          — 撤回尚未执行的排队输入
+Runtime:
+  /agents                           — 查看和协调子 Agent
+  /transcript                       — 搜索结构化 transcript
 Model:
   /model [name]                     — 查看或切换模型
   /mode [manual|accept_edits|plan|auto] — 查看或切换审批模式

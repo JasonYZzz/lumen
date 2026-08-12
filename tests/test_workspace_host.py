@@ -10,22 +10,30 @@ from pydantic_ai import Tool
 from pydantic_ai.messages import ModelMessage, ModelRequest, ToolReturnPart
 from pydantic_ai.models.function import AgentInfo, DeltaToolCall, FunctionModel
 
+from lumen.agents import AgentConfigSnapshot, AgentThreadRef, AgentThreadState
 from lumen.application import (
     ApprovalAlreadyResolvedError,
+    ApprovePlan,
     CancelRun,
     ContextControl,
     CreateSession,
     DecideApproval,
     EventEnvelope,
     InvokeSkill,
+    SetCollaborationMode,
     StartRun,
+    WaivePlanVerification,
     WorkspaceBusyError,
     WorkspaceHost,
 )
 from lumen.config import LimitsConfig
+from lumen.context import ArtifactStore
+from lumen.plan import EvidenceKind, EvidenceReceipt, PlanState, PlanStep, StepStatus
 from lumen.runtime import AgentRuntime
 from lumen.sessions import SessionRepository
 from lumen.skills import Skill
+from lumen.tools.spec import EffectKind
+from lumen.work_products import EffectStatus, TaskWorkspace
 
 
 class LocalResources:
@@ -40,6 +48,7 @@ class LocalResources:
         self.tool_metadata: dict[str, dict[str, str]] = {}
         self.warnings: list[str] = []
         self.skills: list[object] = []
+        self.task_workspace: TaskWorkspace | None = None
 
     async def open(self) -> LocalResources:
         return self
@@ -158,6 +167,85 @@ async def test_workspace_host_deduplicates_requests_and_rejects_parallel_runs(
     assert duplicate.run_id == first.run_id
 
 
+async def test_plan_review_is_revisioned_persistent_and_idempotent(tmp_path: Path) -> None:
+    phase = 0
+
+    async def stream(_messages: list[ModelMessage], _info: AgentInfo):  # type: ignore[no-untyped-def]
+        nonlocal phase
+        if phase == 0:
+            phase = 1
+            yield {
+                0: DeltaToolCall(
+                    "set_plan",
+                    '{"goal":"Ship safely","steps":[{"id":"implement","title":"Implement"}]}',
+                    tool_call_id="plan-create",
+                )
+            }
+        elif phase == 1:
+            phase = 2
+            yield "Plan ready."
+        elif phase == 2:
+            phase = 3
+            yield {
+                0: DeltaToolCall(
+                    "update_step",
+                    '{"step_id":"implement","status":"in_progress"}',
+                    tool_call_id="step-start",
+                )
+            }
+        elif phase == 3:
+            phase = 4
+            yield {
+                0: DeltaToolCall(
+                    "update_step",
+                    '{"step_id":"implement","status":"completed"}',
+                    tool_call_id="step-finish",
+                )
+            }
+        else:
+            yield "Approved revision executed."
+
+    resources = LocalResources(
+        tmp_path,
+        AgentRuntime(
+            model=FunctionModel(stream_function=stream),
+            tools=[],
+            toolsets=[],
+            instructions="help",
+            limits=LimitsConfig(),
+            tool_metadata={},
+        ),
+    )
+    host = WorkspaceHost(resources)  # type: ignore[arg-type]
+    await host.open()
+    try:
+        session = await host.dispatch(CreateSession())
+        await host.dispatch(SetCollaborationMode(session.session_id, "plan"))
+        planning = await host.dispatch(
+            StartRun(session.session_id, "plan this", "planning-request")
+        )
+        planning_events = [event async for event in host.subscribe(planning.run_id)]
+        pending = await host.snapshot(session.session_id)
+        approved = await host.dispatch(
+            ApprovePlan(session.session_id, pending.plan["revision"], "approve-request")
+        )
+        duplicate = await host.dispatch(
+            ApprovePlan(session.session_id, pending.plan["revision"], "approve-request")
+        )
+        execution_events = [event async for event in host.subscribe(approved.run_id)]
+        restored = resources.session_repository.load(session.session_id)
+    finally:
+        await host.close()
+
+    assert "plan.review_pending" in [event.type for event in planning_events]
+    assert pending.plan_review_status == "review_pending"
+    assert pending.collaboration_mode == "plan"
+    assert duplicate.run_id == approved.run_id
+    assert execution_events[0].type == "plan.review_resolved"
+    assert execution_events[-1].type == "run.completed"
+    assert restored.plan.approved_revision == restored.plan.revision
+
+
 async def test_workspace_host_cancel_is_persisted_and_idempotent(tmp_path: Path) -> None:
     entered = asyncio.Event()
 
@@ -194,6 +282,106 @@ async def test_workspace_host_cancel_is_persisted_and_idempotent(tmp_path: Path)
     assert again.status == "cancelled"
     assert events[-1].type == "run.cancelled"
     assert turn.status == "cancelled"
+
+
+async def test_host_creates_scoped_user_waiver_receipt(tmp_path: Path) -> None:
+    resources = LocalResources(tmp_path, _runtime())
+    host = WorkspaceHost(resources)  # type: ignore[arg-type]
+    await host.open()
+    try:
+        session = await host.dispatch(CreateSession())
+        plan = PlanState(
+            revision=2,
+            approved_revision=2,
+            steps=[PlanStep(id="done", title="Done", status=StepStatus.COMPLETED)],
+            evidence=[
+                EvidenceReceipt(
+                    id="ediff",
+                    kind=EvidenceKind.DIFF,
+                    source_id="write-call",
+                    summary="file changed",
+                    passed=True,
+                    sequence=1,
+                )
+            ],
+        )
+        actor = host._actor(session.session_id)  # type: ignore[reportPrivateUsage]
+        actor.coordinator.replace_plan(plan)
+        resources.session_repository.append_plan_state(session.session_id, plan)
+
+        result = await host.dispatch(
+            WaivePlanVerification(session.session_id, (), "No project test command exists")
+        )
+        restored = resources.session_repository.load(session.session_id).plan
+    finally:
+        await host.close()
+
+    assert result.status == "waived"
+    assert restored.evidence[-1].kind is EvidenceKind.USER_WAIVER
+    assert restored.evidence[-1].sequence > restored.evidence[0].sequence
+
+
+async def test_host_waives_a_work_effect_without_an_approved_plan(tmp_path: Path) -> None:
+    resources = LocalResources(tmp_path, _runtime())
+    resources.task_workspace = TaskWorkspace(
+        tmp_path,
+        ArtifactStore(tmp_path / "artifacts"),
+        resources.session_repository,
+    )
+    host = WorkspaceHost(resources)  # type: ignore[arg-type]
+    await host.open()
+    try:
+        session = await host.dispatch(CreateSession())
+        resources.task_workspace.bind_session(session.session_id)
+        receipt = resources.task_workspace.record_tool_effect(
+            tool_name="remote_action",
+            effect_kind=EffectKind.UNKNOWN,
+            success=True,
+            summary="remote tool returned success",
+        )
+        assert receipt is not None
+        before = await host.snapshot(session.session_id)
+
+        result = await host.dispatch(
+            WaivePlanVerification(session.session_id, (receipt.id,), "confirmed remotely")
+        )
+        after = await host.snapshot(session.session_id)
+    finally:
+        await host.close()
+
+    assert len(before.pending_effects) == 1
+    assert result.status == "waived"
+    assert result.data["effect_count"] == 1
+    assert after.pending_effects == []
+    state = resources.session_repository.load(session.session_id).work_state
+    assert state.effects[-1].status is EffectStatus.VERIFIED
+
+
+async def test_host_snapshot_exposes_current_and_recoverable_work_product_state(
+    tmp_path: Path,
+) -> None:
+    resources = LocalResources(tmp_path, _runtime())
+    resources.task_workspace = TaskWorkspace(
+        tmp_path,
+        ArtifactStore(tmp_path / "artifacts"),
+        resources.session_repository,
+    )
+    host = WorkspaceHost(resources)  # type: ignore[arg-type]
+    await host.open()
+    try:
+        session = await host.dispatch(CreateSession())
+        (tmp_path / "report.md").write_text("before", encoding="utf-8")
+        resources.task_workspace.bind_session(session.session_id)
+        opened = resources.task_workspace.open_work_product("report.md")
+        resources.task_workspace.change_work_product(opened["id"], "whole", "after")
+
+        snapshot = await host.snapshot(session.session_id)
+    finally:
+        await host.close()
+
+    assert snapshot.work_products[0]["resource"] == "report.md"
+    assert snapshot.pending_effects == []
+    assert snapshot.recoverable_effects[0]["status"] == "verified"
 
 
 def _last_tool_return(messages: Sequence[ModelMessage]) -> ToolReturnPart | None:
@@ -253,6 +441,141 @@ async def test_workspace_host_manual_approval_can_be_resolved_from_another_reque
     assert executed is False
     assert any(event.type == "approval.resolved" and not event.data["approved"] for event in seen)
     assert turn.approvals[0]["approved"] is False
+
+
+async def test_workspace_host_remembers_bounded_approval_for_the_session(
+    tmp_path: Path,
+) -> None:
+    model_step = 0
+    executions: list[str] = []
+
+    def write_note(content: str) -> str:
+        executions.append(content)
+        return content
+
+    async def stream(_messages: list[ModelMessage], _info: AgentInfo):  # type: ignore[no-untyped-def]
+        nonlocal model_step
+        model_step += 1
+        if model_step <= 2:
+            yield {
+                0: DeltaToolCall(
+                    "write_note",
+                    f'{{"content":"note-{model_step}"}}',
+                    tool_call_id=f"call-{model_step}",
+                )
+            }
+        else:
+            yield "done"
+
+    runtime = AgentRuntime(
+        model=FunctionModel(stream_function=stream),
+        tools=[Tool(write_note, sequential=True, requires_approval=True)],
+        toolsets=[],
+        instructions="help",
+        limits=LimitsConfig(),
+        tool_metadata={"write_note": {"origin": "plugin:test", "risk": "write"}},
+    )
+    host = WorkspaceHost(LocalResources(tmp_path, runtime))  # type: ignore[arg-type]
+    await host.open()
+    try:
+        session = await host.dispatch(CreateSession())
+        started = await host.dispatch(StartRun(session.session_id, "write twice", "remember"))
+        pending_calls: list[str] = []
+        async for event in host.subscribe(started.run_id):
+            if event.type == "approval.pending":
+                pending_calls.append(str(event.data["call_id"]))
+                await host.dispatch(
+                    DecideApproval(started.run_id, str(event.data["call_id"]), True, "session")
+                )
+    finally:
+        await host.close()
+
+    assert pending_calls == ["call-1"]
+    assert executions == ["note-1", "note-2"]
+
+
+async def test_workspace_host_expands_file_mentions_for_every_client_adapter(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "context.md").write_text("shared host context", encoding="utf-8")
+    seen: list[str] = []
+
+    async def stream(messages: list[ModelMessage], _info: AgentInfo):  # type: ignore[no-untyped-def]
+        seen.append(str(messages[-1]))
+        yield "done"
+
+    runtime = AgentRuntime(
+        model=FunctionModel(stream_function=stream),
+        tools=[],
+        toolsets=[],
+        instructions="help",
+        limits=LimitsConfig(),
+        tool_metadata={},
+    )
+    host = WorkspaceHost(LocalResources(tmp_path, runtime))  # type: ignore[arg-type]
+    await host.open()
+    try:
+        session = await host.dispatch(CreateSession())
+        started = await host.dispatch(
+            StartRun(session.session_id, "review @context.md", "web-style-input")
+        )
+        async for _event in host.subscribe(started.run_id):
+            pass
+    finally:
+        await host.close()
+
+    assert seen
+    assert "shared host context" in seen[0]
+    assert '<file path="context.md">' in seen[0]
+
+
+async def test_workspace_host_projects_agent_state_for_all_clients(tmp_path: Path) -> None:
+    async def stream(_messages: list[ModelMessage], _info: AgentInfo):  # type: ignore[no-untyped-def]
+        yield "unused"
+
+    runtime = AgentRuntime(
+        model=FunctionModel(stream_function=stream),
+        tools=[],
+        toolsets=[],
+        instructions="help",
+        limits=LimitsConfig(),
+        tool_metadata={},
+    )
+    host = WorkspaceHost(LocalResources(tmp_path, runtime))  # type: ignore[arg-type]
+    await host.open()
+    try:
+        session = await host.dispatch(CreateSession())
+        host.resources.session_repository.append_agent_thread(
+            session.session_id,
+            AgentThreadState(
+                ref=AgentThreadRef(
+                    id="agent-one",
+                    path="/root/explorer",
+                    parent_session_id=session.session_id,
+                    root_run_id="run-one",
+                    agent_type="explorer",
+                ),
+                task="inspect the parser",
+                task_name="explorer",
+                config=AgentConfigSnapshot(
+                    model_name="test",
+                    model_id="test-model",
+                    cwd=str(tmp_path),
+                ),
+                idempotency_key="sha256:" + "0" * 64,
+            ),
+        )
+        snapshot = await host.snapshot(session.session_id)
+    finally:
+        await host.close()
+
+    assert len(snapshot.agents) == 1
+    agent = snapshot.agents[0]
+    assert agent["id"] == "agent-one"
+    assert agent["path"] == "/root/explorer"
+    assert agent["role"] == "explorer"
+    assert agent["status"] == "queued"
+    assert agent["task"] == "inspect the parser"
 
 
 async def test_workspace_host_invokes_skills_and_routes_context_controls(tmp_path: Path) -> None:

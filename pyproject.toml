@@ -24,6 +24,10 @@ dependencies = [
 tokenizers = [
   "tiktoken>=0.7,<1",
 ]
+live = [
+  "httpx>=0.27,<1",
+  "websockets>=14,<17",
+]
 
 [project.scripts]
 lumen = "lumen.cli:app"

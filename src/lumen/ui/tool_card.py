@@ -10,6 +10,7 @@ and follows the same vertical arrow-key vocabulary.
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from typing import Any, ClassVar, cast
 
 from rich.text import Text
@@ -19,6 +20,7 @@ from textual.message import Message
 from textual.widgets import Static
 
 from lumen.events import ToolApprovalPending
+from lumen.ui.activity_indicator import tool_activity_presentation
 from lumen.ui.diff_view import style_diff_lines, unified_diff_lines
 from lumen.ui.themes import theme_color
 
@@ -117,6 +119,7 @@ class ToolCard(Vertical):
         self._preview: str | None = None
         self._expanded = False
         self._compact = False
+        self._normal_density = False
         # All three widgets render model/tool output that can contain
         # markup-unsafe characters (``key: value``, ``[...]``, etc.), so we
         # disable rich-markup parsing on each.
@@ -200,6 +203,13 @@ class ToolCard(Vertical):
             self._compact = True
             self._refresh_body()
             self._refresh_result()
+
+    def set_density(self, density: str) -> None:
+        """Apply transcript density without discarding the expandable audit."""
+
+        self._normal_density = density == "normal"
+        self._refresh_body()
+        self._refresh_result()
 
     def set_approval_pending(self, request: ToolApprovalPending) -> None:
         self._status = "pending"
@@ -323,6 +333,12 @@ class ToolCard(Vertical):
 
     def _refresh_header(self) -> None:
         glyph = _STATUS_GLYPHS.get(self._status, "●")
+        presentation = tool_activity_presentation(
+            self.tool_name,
+            self._args or {},
+            origin=self._origin or "builtin",
+            risk=self._risk or "read",
+        )
         meta_bits: list[str] = []
         if self._risk:
             meta_bits.append(self._risk)
@@ -333,7 +349,7 @@ class ToolCard(Vertical):
         if self._exit_code is not None:
             meta_bits.append(f"exit={self._exit_code}")
         meta = " · ".join(meta_bits)
-        tool_color = self._theme_variable("tool", "#C7ACE8")
+        tool_color = self._theme_variable(presentation.tone, "#C7ACE8")
         glyph_token = {
             "ok": "success",
             "approved": "success",
@@ -344,7 +360,30 @@ class ToolCard(Vertical):
         glyph_color = self._theme_variable(glyph_token, tool_color)
         meta_color = self._theme_variable("activity-meta", "#948A80")
         header = Text(f"{glyph} ", style=f"bold {glyph_color}")
-        header.append(self.tool_name, style=f"bold {tool_color}")
+        if self._status in {"ok", "error"}:
+            label = presentation.completed_verb
+        elif self._status == "approved":
+            label = f"Approved · {presentation.active_verb}"
+        elif self._status == "denied":
+            label = f"Denied · {presentation.active_verb}"
+        else:
+            label = presentation.active_verb
+        header.append(label, style=f"bold {tool_color}")
+        path_value = self._args.get("path") if self._args else None
+        appended_detail = False
+        if isinstance(path_value, str) and path_value:
+            try:
+                workspace = Path(
+                    cast(Any, self.app).resources.workspace  # type: ignore[reportUnknownMemberType]
+                ).resolve()
+                target = (workspace / path_value).resolve()
+                if target.is_relative_to(workspace):
+                    header.append(f"  {path_value}", style=f"underline {meta_color} link file://{target}")
+                    appended_detail = True
+            except (AttributeError, OSError, ValueError):
+                pass
+        if presentation.detail and not appended_detail:
+            header.append(f"  {presentation.detail}", style=meta_color)
         if meta:
             header.append(f"  ({meta})", style=meta_color)
         self._header.update(header)
@@ -353,7 +392,7 @@ class ToolCard(Vertical):
         return theme_color(cast(App[object], self.app), token, fallback)  # type: ignore[reportUnknownMemberType]
 
     def _refresh_body(self) -> None:
-        if self._args is None or self._compact:
+        if self._args is None or self._compact or (self._normal_density and not self._expanded):
             self._body.update("")
             self._body.display = False
             return
@@ -434,13 +473,51 @@ class ToolCard(Vertical):
             self._result_widget.display = False
             return
         self._result_widget.display = True
+        if self.tool_name == "run_command":
+            parsed = self._command_result()
+            if parsed is not None:
+                self._result_widget.update(parsed)
+                return
         if self._expanded:
             rendered = self._result
+        elif self._normal_density:
+            rendered = " ".join((self._preview if self._preview is not None else self._result).split())
+            if len(rendered) > 160:
+                rendered = rendered[:159].rstrip() + "…"
         else:
             rendered = self._preview if self._preview is not None else self._result
             if len(rendered) > _COLLAPSED_ARG_CHARS:
                 rendered = rendered[:_COLLAPSED_ARG_CHARS].rstrip() + "\n… [E to expand]"
         self._result_widget.update(rendered)
+
+    def _command_result(self) -> str | None:
+        """Render run_command output as terminal output, not a JSON transport dump."""
+
+        if self._result is None:
+            return None
+        try:
+            payload = json.loads(self._result)
+        except (TypeError, ValueError):
+            return None
+        if not isinstance(payload, dict) or "exit_code" not in payload:
+            return None
+        data = cast(dict[str, Any], payload)
+        stdout = str(data.get("stdout", "")).rstrip()
+        stderr = str(data.get("stderr", "")).rstrip()
+        rows = [
+            f"exit {data.get('exit_code')} · {data.get('elapsed_seconds', 0)}s"
+            + (" · timed out" if data.get("timed_out") else "")
+        ]
+        if stdout:
+            rows.append(stdout if self._expanded else _single_preview(stdout, 400))
+        if stderr:
+            rows.append("stderr: " + (stderr if self._expanded else _single_preview(stderr, 240)))
+        return "\n".join(rows)
+
+
+def _single_preview(value: str, limit: int) -> str:
+    rendered = " ".join(value.split())
+    return rendered if len(rendered) <= limit else rendered[: limit - 1].rstrip() + "…"
 
 
 __all__ = ["ToolCard"]

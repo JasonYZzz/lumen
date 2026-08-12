@@ -10,9 +10,12 @@ from typer.testing import CliRunner
 import lumen.cli as cli
 from lumen.cli import app
 
+# This module intentionally verifies the private version fallback seam.
+# pyright: reportPrivateUsage=false
+
 
 def _minimal_config(name: str = "global") -> str:
-    return f"""version: 1
+    return f"""version: 2
 agent:
   name: {name}
   model:
@@ -37,7 +40,7 @@ def test_check_config_prints_discovered_tools(tmp_path: Path) -> None:
     config = tmp_path / "agent.yaml"
     config.write_text(
         """
-version: 1
+version: 2
 agent:
   name: cli-test
   model:

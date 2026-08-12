@@ -3,10 +3,11 @@ from __future__ import annotations
 import asyncio
 from collections.abc import AsyncIterator
 from dataclasses import asdict
-from typing import Any
+from typing import Any, cast
 
 from lumen.approval import ApprovalPresenter
 from lumen.events import (
+    AgentLifecycleChanged,
     ApprovalRequest,
     ClarificationRequested,
     CommentaryDelta,
@@ -17,6 +18,8 @@ from lumen.events import (
     InputDequeued,
     InputQueued,
     PlanCreated,
+    PlanReviewPending,
+    PlanReviewResolved,
     PlanUpdated,
     ProgressReported,
     RunCancelled,
@@ -33,18 +36,24 @@ from lumen.events import (
     ToolCallFinished,
     ToolCallStarted,
     UsageUpdated,
+    WorkProductChanged,
 )
+from lumen.plan import PlanState
 
 from .models import EventEnvelope
 
 _EVENT_NAMES: dict[type[object], str] = {
+    AgentLifecycleChanged: "agent.lifecycle",
     RunStarted: "run.started",
     TextDelta: "assistant.delta",
     TextRetracted: "assistant.retracted",
     CommentaryDelta: "commentary.delta",
     PlanCreated: "plan.created",
     PlanUpdated: "plan.updated",
+    PlanReviewPending: "plan.review_pending",
+    PlanReviewResolved: "plan.review_resolved",
     ProgressReported: "progress.reported",
+    WorkProductChanged: "work_product.changed",
     ToolCallStarted: "tool.started",
     ToolCallFinished: "tool.finished",
     ToolApprovalPending: "approval.pending",
@@ -63,6 +72,7 @@ _EVENT_NAMES: dict[type[object], str] = {
     InputDelivered: "input.delivered",
     InputDequeued: "input.dequeued",
 }
+_EVENT_TYPES = {name: event_type for event_type, name in _EVENT_NAMES.items()}
 
 
 def event_payload(event: RunEvent) -> tuple[str, dict[str, Any]]:
@@ -74,7 +84,7 @@ def event_payload(event: RunEvent) -> tuple[str, dict[str, Any]]:
     if isinstance(event, TextRetracted):
         return name, {"characters": event.characters}
     data = asdict(event)
-    if isinstance(event, PlanCreated | PlanUpdated):
+    if isinstance(event, PlanCreated | PlanUpdated | PlanReviewPending):
         data["plan"] = event.plan.model_dump(mode="json")
     if isinstance(event, ToolApprovalPending):
         presenter = ApprovalPresenter().build(
@@ -92,6 +102,22 @@ def event_payload(event: RunEvent) -> tuple[str, dict[str, Any]]:
             asdict(ApprovalPresenter().build(request=request)) for request in event.requests
         ]
     return name, data
+
+
+def event_from_payload(name: str, payload: dict[str, Any]) -> RunEvent:
+    """Rehydrate a Host event for in-process clients such as the TUI."""
+
+    event_type = _EVENT_TYPES.get(name)
+    if event_type is None:
+        raise ValueError(f"unknown host event type: {name}")
+    data = dict(payload)
+    data.pop("presentation", None)
+    data.pop("presentations", None)
+    if event_type in {PlanCreated, PlanUpdated, PlanReviewPending}:
+        data["plan"] = PlanState.model_validate(data["plan"])
+    elif event_type is ToolApprovalBatchPending:
+        data["requests"] = tuple(ApprovalRequest(**item) for item in data["requests"])
+    return cast(RunEvent, event_type(**data))
 
 
 class EventJournal:
