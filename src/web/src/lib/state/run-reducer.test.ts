@@ -15,8 +15,32 @@ function event(type: EventEnvelope['type'], data: Record<string, unknown>, seque
 }
 
 describe('runReducer', () => {
-  it('projects streamed text and retractions without duplicating the final output', () => {
+  it('coalesces thinking deltas into one reasoning entry separate from the answer', () => {
     let state = runReducer(initialRunState, {
+      type: 'event',
+      event: event('run.started', { prompt: 'question' }),
+    })
+    state = runReducer(state, {
+      type: 'event',
+      event: event('thinking.delta', { text: 'considering ' }, 2),
+    })
+    state = runReducer(state, {
+      type: 'event',
+      event: event('thinking.delta', { text: 'options' }, 3),
+    })
+    state = runReducer(state, {
+      type: 'event',
+      event: event('assistant.delta', { text: 'answer' }, 4),
+    })
+
+    expect(state.timeline.map((item) => [item.kind, item.text])).toEqual([
+      ['user', 'question'],
+      ['thinking', 'considering options'],
+      ['assistant', 'answer'],
+    ])
+  })
+
+  it('projects streamed text and retractions without duplicating the final output', () => {    let state = runReducer(initialRunState, {
       type: 'event',
       event: event('run.started', { prompt: 'inspect' }),
     })
@@ -86,6 +110,31 @@ describe('runReducer', () => {
       approved: true,
       result: 'updated',
     })
+  })
+
+  it('preserves schema-validated tool views for live and snapshot rendering', () => {
+    let state = runReducer(initialRunState, {
+      type: 'event',
+      event: event('tool.started', {
+        call_id: 'call-view',
+        name: 'future_tool',
+        args: { value: 1 },
+        call_view: { schema_version: 1, title: 'Inspecting future value', detail: 'value 1' },
+      }),
+    })
+    state = runReducer(state, {
+      type: 'event',
+      event: event('tool.finished', {
+        call_id: 'call-view',
+        name: 'future_tool',
+        result: 'raw',
+        is_error: false,
+        result_view: { schema_version: 1, preview: 'done', full_text: 'full result' },
+      }, 2),
+    })
+
+    expect(state.timeline[0].callView?.title).toBe('Inspecting future value')
+    expect(state.timeline[0].resultView?.full_text).toBe('full result')
   })
 
   it('projects every request in a batch approval event', () => {

@@ -479,8 +479,9 @@ async def test_slash_enter_accepts_completion_not_literal(tmp_path: Path) -> Non
     async with app.run_test(size=(100, 30)) as pilot:
         editor = await _focus_editor(pilot)
         app.handle_input = capture  # type: ignore[assignment]
-        # Type /e then immediately press Enter — simulating fast typing.
-        for ch in "/e":
+        # Type /ex then immediately press Enter — simulating fast typing.
+        # ("/e" alone would now match /edit first, so use the full prefix.)
+        for ch in "/ex":
             await pilot.press(ch)
         await pilot.pause()
         # Dropdown should be open with /exit highlighted.

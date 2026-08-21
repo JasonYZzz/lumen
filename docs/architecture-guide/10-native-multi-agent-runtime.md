@@ -5,7 +5,7 @@
 
 ## 决策
 
-Lumen 使用 Host 生命周期内稳定的 `AgentOrchestrator` 作为多 Agent 控制面，以 Session v8 append-only records 作为持久状态权威。模型可调用的 spawn、message、follow-up、wait、interrupt、list、close 工具保持为薄 Adapter；单个 child loop 由 `AgentRuntimeFactory` 通过现有 Pydantic AI `AgentRuntime` 创建。
+Lumen 使用 Host 生命周期内稳定的 `AgentOrchestrator` 作为多 Agent 控制面，以 Session v9 append-only records 作为持久状态权威。模型可调用的 spawn、message、follow-up、wait、interrupt、list、close 工具保持为薄 Adapter；单个 child loop 由 `AgentRuntimeFactory` 通过现有 Pydantic AI `AgentRuntime` 创建。v9 由 Realtime `live_session` record 引入，不改变 v8 Agent record 的语义。
 
 V1 不引入 LangGraph。Lumen 已有 Session/EventJournal、RunCoordinator、TaskWorkspace、审批、ArtifactStore 和恢复协议；引入第二套 checkpoint/graph persistence 会产生双重状态权威。未来只有在单一 Agent 内确实需要可复用的确定性图执行、且能由 Session journal 统一提交时，才重新评估 LangGraph。
 
@@ -30,4 +30,4 @@ V1 不引入 LangGraph。Lumen 已有 Session/EventJournal、RunCoordinator、Ta
 
 ## 兼容性
 
-旧 `delegation` 配置映射到 `agents` 并产生弃用警告；同时出现时由 `agents` 决定。旧 child 工具与 Host API 通过 Adapter 操作新线程或只读展示历史 Child Run，不成为新的状态权威。v1-v7 Session 以空 Agent 状态加载，历史文件不被重写。
+旧 `delegation` 配置映射到 `agents` 并产生弃用警告；同时出现时由 `agents` 决定。旧 child 工具与 Host API 通过 Adapter 操作新线程或只读展示历史 Child Run，不成为新的状态权威。v1-v7 Session 以空 Agent 状态加载；v8 直接读取 Agent records；任何历史文件都不改写 header，新增高版本事实时只追加 upgrade marker。

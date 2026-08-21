@@ -3,26 +3,25 @@
 A card is created when a tool call starts and updated as it finishes or as an
 approval decision becomes pending/resolved. The application-level
 ``ApprovalPanel`` owns production interaction above the composer; cards remain
-an ordered audit trail. A standalone selector is retained for isolated reuse
-and follows the same vertical arrow-key vocabulary.
+an ordered audit trail.
 """
 
 from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any, ClassVar, cast
+from typing import Any, cast
 
 from rich.text import Text
 from textual.app import App, ComposeResult
 from textual.containers import Vertical
-from textual.message import Message
 from textual.widgets import Static
 
 from lumen.events import ToolApprovalPending
+from lumen.tools.presentation import ToolResultView
 from lumen.ui.activity_indicator import tool_activity_presentation
 from lumen.ui.diff_view import style_diff_lines, unified_diff_lines
-from lumen.ui.themes import theme_color
+from lumen.ui.themes import FALLBACK_COLORS, theme_color
 
 _STATUS_GLYPHS = {
     "running": "●",
@@ -33,9 +32,6 @@ _STATUS_GLYPHS = {
     "pending": "?",
 }
 
-#: The two options shown in the approval selector. No option is selected until
-#: the user deliberately navigates with an arrow key.
-_APPROVAL_OPTIONS = ("Allow", "Deny")
 _COLLAPSED_ARG_CHARS = 800
 
 
@@ -43,9 +39,8 @@ class ToolCard(Vertical):
     """A single tool call rendered as a timeline card."""
 
     # Vertical containers are not focusable by default. We opt in so the
-    # approval selector can receive keyboard input (Up/Down/Enter) when
-    # the card is pending. Without this, self.focus() silently no-ops and
-    # keypresses never reach on_key.
+    # 'e' expand/collapse key can reach on_key when the card is focused.
+    # Without this, self.focus() silently no-ops.
     can_focus = True
 
     DEFAULT_CSS = """
@@ -69,39 +64,7 @@ class ToolCard(Vertical):
     }
     .tool-result { padding: 0 2; color: $text-muted; }
     .tool-result.is-error { color: $error; }
-    /* Approval row: amber, bold to draw the eye to the pending decision. */
-    .tool-approval {
-        height: auto;
-        padding: 0 1;
-        color: $warning;
-        text-style: bold;
-    }
-    .tool-approval-hint {
-        color: $text-muted;
-        text-style: italic;
-        padding: 0 1;
-    }
     """
-
-    class Decision(Message):
-        """Posted when the user confirms Allow or Deny on the card."""
-
-        def __init__(self, call_id: str, approved: bool) -> None:
-            super().__init__()
-            self.call_id = call_id
-            self.approved = approved
-
-    #: Keys that drive the approval selector when the card has focus.
-    _APPROVAL_KEYS: ClassVar[set[str]] = {
-        "left",
-        "right",
-        "h",
-        "l",
-        "y",
-        "n",
-        "enter",
-        "tab",
-    }
 
     def __init__(self, call_id: str, tool_name: str) -> None:
         super().__init__()
@@ -117,6 +80,8 @@ class ToolCard(Vertical):
         self._args: dict[str, Any] | None = None
         self._result: str | None = None
         self._preview: str | None = None
+        self._call_view: dict[str, Any] | None = None
+        self._result_view: dict[str, Any] | None = None
         self._expanded = False
         self._compact = False
         self._normal_density = False
@@ -126,14 +91,6 @@ class ToolCard(Vertical):
         self._header = Static("", classes="tool-header", markup=False)
         self._body = Static("", classes="tool-args", markup=False)
         self._result_widget = Static("", classes="tool-result", markup=False)
-        # Approval selector state. ``_approval_index`` is the highlighted
-        # option (0=Allow, 1=Deny). The selector widget uses markup=True so we
-        # can color the active option via [$accent]...[/] tags; the option
-        # labels themselves are hardcoded (no user content), so markup is safe.
-        self._approval_label: Static | None = None
-        self._approval_hint: Static | None = None
-        self._approval_index: int | None = None
-        self._decided = False
 
     def compose(self) -> ComposeResult:
         yield self._header
@@ -151,11 +108,13 @@ class ToolCard(Vertical):
         origin: str,
         risk: str,
         started_at: float = 0.0,
+        call_view: dict[str, Any] | None = None,
     ) -> None:
         self._args = args
         self._origin = origin
         self._risk = risk
         self._status = "running"
+        self._call_view = call_view
         self._refresh_header()
         self._refresh_body()
 
@@ -167,21 +126,20 @@ class ToolCard(Vertical):
         is_error: bool,
         elapsed_seconds: float = 0.0,
         exit_code: int | None = None,
+        result_view: dict[str, Any] | None = None,
     ) -> None:
         self._result = result
         self._preview = preview
         self._elapsed_seconds = elapsed_seconds
         self._exit_code = exit_code
         self._status = "error" if is_error else "ok"
+        self._result_view = result_view
         self._refresh_result()
         self._result_widget.set_class(is_error, "is-error")
         if is_error:
             self.add_class("is-error")
         else:
             self.remove_class("is-error")
-        # A finished card no longer needs its approval selector; the runtime
-        # has already resolved the decision.
-        self._remove_approval_widgets()
         self._refresh_header()
 
     @property
@@ -211,32 +169,6 @@ class ToolCard(Vertical):
         self._refresh_body()
         self._refresh_result()
 
-    def set_approval_pending(self, request: ToolApprovalPending) -> None:
-        self._status = "pending"
-        self._args = request.args
-        self.add_class("is-pending")
-        self._refresh_header()
-        self._refresh_body()
-        # Mount the inline approval selector. We use markup=True here because
-        # the rendered string is built from our own [$accent]...[/] tags around
-        # the hardcoded option labels — no user-supplied content reaches it.
-        if self._approval_label is None:
-            self._approval_index = None
-            self._approval_label = Static(self._render_selector(), classes="tool-approval")
-            self._approval_hint = Static(
-                "↑↓ select · Enter confirm",
-                classes="tool-approval-hint",
-                markup=False,
-            )
-            self.mount(self._approval_label)
-            self.mount(self._approval_hint)
-            # Take focus so keypresses route to this card's on_key. We defer
-            # via call_after_refresh because the just-mounted widgets need a
-            # layout pass before focus can land; calling self.focus() inline
-            # silently no-ops. The app returns focus to the prompt editor once
-            # the decision resolves (see _handle_tool_decision).
-            self.call_after_refresh(self.focus)  # type: ignore[func-returns-value]
-
     def mark_approval_pending(self, request: ToolApprovalPending) -> None:
         """Mark the timeline record pending without mounting controls.
 
@@ -256,80 +188,21 @@ class ToolCard(Vertical):
         self._refresh_body()
 
     def resolve_approval(self, *, approved: bool) -> None:
-        self._decided = True
         self._status = "approved" if approved else "denied"
         self.remove_class("is-pending")
-        self._remove_approval_widgets()
         self._refresh_header()
 
-    # -- approval selector keyboard navigation -----------------------------
-
     def on_key(self, event: Any) -> None:  # type: ignore[no-untyped-def]
-        """Drive the approval selector when the card is focused and pending.
-
-        Up/Down move the highlight between Allow and Deny; Enter confirms.
-        We only intercept these keys while the selector is
-        actually mounted — once resolved, all keys fall through normally.
-        """
+        """Toggle the expanded audit body with 'e' on a finished card."""
 
         key = getattr(event, "key", "")
-        if key == "e" and self._approval_label is None and self._status in {"ok", "error"}:
+        if key == "e" and self._status in {"ok", "error"}:
             self._expanded = not self._expanded
             self._compact = False
             self._refresh_body()
             self._refresh_result()
             event.prevent_default()
             event.stop()
-            return
-        if self._decided or self._approval_label is None:
-            return
-        if key == "up":
-            self._approval_index = 0
-            self._refresh_selector()
-            event.prevent_default()
-            event.stop()
-        elif key == "down":
-            self._approval_index = 1
-            self._refresh_selector()
-            event.prevent_default()
-            event.stop()
-        elif key == "enter":
-            self._confirm_selection()
-            event.prevent_default()
-            event.stop()
-
-    def _render_selector(self) -> str:
-        """Build the ``→ Allow    Deny`` line with the active option accented.
-
-        Uses Textual markup (``[...]`` tags) to color the highlighted option.
-        Safe because the option labels are hardcoded, not user content.
-        """
-
-        parts: list[str] = []
-        for i, opt in enumerate(_APPROVAL_OPTIONS):
-            if self._approval_index is not None and i == self._approval_index:
-                parts.append(f"[$accent on $surface]→ {opt}[/]")
-            else:
-                parts.append(f"[dim]  {opt}[/]")
-        return "    ".join(parts)
-
-    def _refresh_selector(self) -> None:
-        if self._approval_label is not None:
-            self._approval_label.update(self._render_selector())
-
-    def _confirm_selection(self) -> None:
-        if self._decided or self._approval_index is None:
-            return
-        self._decided = True
-        approved = self._approval_index == 0
-        self.post_message(self.Decision(self.call_id, approved))
-
-    def _remove_approval_widgets(self) -> None:
-        for widget in (self._approval_label, self._approval_hint):
-            if widget is not None:
-                widget.remove()
-        self._approval_label = None
-        self._approval_hint = None
 
     def _refresh_header(self) -> None:
         glyph = _STATUS_GLYPHS.get(self._status, "●")
@@ -338,6 +211,7 @@ class ToolCard(Vertical):
             self._args or {},
             origin=self._origin or "builtin",
             risk=self._risk or "read",
+            view=self._call_view,
         )
         meta_bits: list[str] = []
         if self._risk:
@@ -349,7 +223,7 @@ class ToolCard(Vertical):
         if self._exit_code is not None:
             meta_bits.append(f"exit={self._exit_code}")
         meta = " · ".join(meta_bits)
-        tool_color = self._theme_variable(presentation.tone, "#C7ACE8")
+        tool_color = self._theme_variable(presentation.tone, FALLBACK_COLORS["tool"])
         glyph_token = {
             "ok": "success",
             "approved": "success",
@@ -358,7 +232,7 @@ class ToolCard(Vertical):
             "pending": "warning",
         }.get(self._status, "tool")
         glyph_color = self._theme_variable(glyph_token, tool_color)
-        meta_color = self._theme_variable("activity-meta", "#948A80")
+        meta_color = self._theme_variable("activity-meta", FALLBACK_COLORS["activity-meta"])
         header = Text(f"{glyph} ", style=f"bold {glyph_color}")
         if self._status in {"ok", "error"}:
             label = presentation.completed_verb
@@ -378,7 +252,10 @@ class ToolCard(Vertical):
                 ).resolve()
                 target = (workspace / path_value).resolve()
                 if target.is_relative_to(workspace):
-                    header.append(f"  {path_value}", style=f"underline {meta_color} link file://{target}")
+                    # Underline only the path text: extending the link style
+                    # over the leading spaces renders a phantom underline.
+                    header.append("  ", style=meta_color)
+                    header.append(path_value, style=f"underline {meta_color} link file://{target}")
                     appended_detail = True
             except (AttributeError, OSError, ValueError):
                 pass
@@ -416,8 +293,9 @@ class ToolCard(Vertical):
         """Resolve a theme color hex for diff styling.
 
         Returns the active theme's ``attr`` color (e.g. ``success``) so the
-        diff adapts to lumen-dark/lumen-light, falling back to a Rich named
-        color if the theme is somehow unavailable.
+        diff adapts to lumen-dark/lumen-light, falling back to the dark-theme
+        default from :data:`FALLBACK_COLORS` if the theme is somehow
+        unavailable.
         """
 
         app = cast(App[object], self.app)  # type: ignore[reportUnknownMemberType]
@@ -435,8 +313,8 @@ class ToolCard(Vertical):
         """
 
         body_lines = unified_diff_lines(find, replace, context_lines=1)
-        add_color = self._diff_color("success", "green")
-        del_color = self._diff_color("error", "red")
+        add_color = self._diff_color("success", FALLBACK_COLORS["success"])
+        del_color = self._diff_color("error", FALLBACK_COLORS["error"])
 
         if not body_lines:
             return Text("~ no textual change", style="dim")
@@ -473,6 +351,15 @@ class ToolCard(Vertical):
             self._result_widget.display = False
             return
         self._result_widget.display = True
+        if self._result_view is not None:
+            view = ToolResultView.model_validate(self._result_view)
+            if self._expanded:
+                self._result_widget.update(view.full_text)
+            elif self._normal_density:
+                self._result_widget.update(view.summary)
+            else:
+                self._result_widget.update(view.preview)
+            return
         if self.tool_name == "run_command":
             parsed = self._command_result()
             if parsed is not None:

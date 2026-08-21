@@ -1,12 +1,12 @@
 import { useEffect, useRef, useState } from 'react'
 import type { MascotActivity, MascotGesture, MascotMotionMode } from './mascot-types'
 
-export const IDLE_ACTION_DELAY_RANGE_MS = [8_000, 18_000] as const
-export const BLINK_DELAY_RANGE_MS = [3_000, 7_000] as const
-export const REDUCED_BLINK_DELAY_RANGE_MS = [7_000, 12_000] as const
-export const ALERT_GESTURE_MS = 1_650
-export const STRETCH_GESTURE_MS = 1_850
-export const FIRST_IDLE_ACTION_DELAY_MS = 2_200
+export const IDLE_ACTION_DELAY_RANGE_MS = [14_000, 26_000] as const
+export const BLINK_DELAY_RANGE_MS = [4_000, 8_000] as const
+export const REDUCED_BLINK_DELAY_RANGE_MS = [9_000, 14_000] as const
+export const ALERT_GESTURE_MS = 1_200
+export const STRETCH_GESTURE_MS = 1_350
+export const FIRST_IDLE_ACTION_DELAY_MS = 4_800
 
 export function randomDelay(
   random: () => number,
@@ -31,7 +31,7 @@ export function nextBlinkDelay(
 }
 
 export function nextIdleGesture(random: () => number = Math.random): MascotGesture {
-  return random() < 0.72 ? 'alert' : 'stretch'
+  return random() < 0.82 ? 'alert' : 'stretch'
 }
 
 export function gestureForActivity(

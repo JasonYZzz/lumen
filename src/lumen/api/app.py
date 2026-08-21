@@ -29,14 +29,18 @@ from lumen.application import (
     CloseAgent,
     CloseChildRun,
     CommandAcknowledged,
+    ConfigurationConflictHostError,
     ContextControl,
     ContinueAgent,
     CreateSession,
     DecideApproval,
+    DeleteModelConfiguration,
+    DeleteSession,
     DequeueRunInputs,
     EndLiveSession,
     ForkSessionAtTurn,
     GetBootstrap,
+    GetConfiguration,
     InterruptAgent,
     InterruptLiveSession,
     InvalidStateError,
@@ -53,6 +57,7 @@ from lumen.application import (
     RejectAgentImport,
     RejectChildImport,
     RejectPlan,
+    RenameSession,
     RetryRun,
     RunNotFoundError,
     SelectModel,
@@ -61,9 +66,11 @@ from lumen.application import (
     SetApprovalMode,
     SetCollaborationMode,
     SetContextSource,
+    SetSessionArchived,
     SetTranscriptDensity,
     StartLiveSession,
     StartRun,
+    UpsertModelConfiguration,
     WaivePlanVerification,
     WorkspaceBusyError,
     WorkspaceHost,
@@ -75,10 +82,13 @@ from .schemas import (
     AgentActionBody,
     ApprovalBody,
     ChildRunActionBody,
+    ConfigurationRevisionBody,
     ControlBody,
     ForkSessionBody,
+    ModelConfigurationBody,
     PlanReviewBody,
     QueueInputBody,
+    RenameSessionBody,
     RetryRunBody,
     SessionSettingsBody,
     StartLiveBody,
@@ -119,6 +129,40 @@ def _camel_snapshot(value: Any) -> dict[str, Any]:
         "agents": raw["agents"],
         "agentUsage": raw["agent_usage"],
         "liveSessions": raw["live_sessions"],
+    }
+
+
+def _camel_configuration(raw: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "revision": raw["revision"],
+        "targetPath": raw["target_path"],
+        "editable": raw["editable"],
+        "editReason": raw["edit_reason"],
+        "exclusive": raw["exclusive"],
+        "sources": raw["sources"],
+        "warnings": raw["warnings"],
+        "defaultModel": raw["default_model"],
+        "models": [
+            {
+                "name": model["name"],
+                "id": model["id"],
+                "api": model["api"],
+                "baseUrl": model["base_url"],
+                "apiKeyEnv": model["api_key_env"],
+                "settings": model["settings"],
+                "context": model["context"],
+                "isDefault": model["is_default"],
+                "source": model["source"],
+                "authKind": model["auth_kind"],
+                "authAvailable": model["auth_available"],
+            }
+            for model in raw["models"]
+        ],
+        **(
+            {"restartRequired": raw["restart_required"]}
+            if "restart_required" in raw
+            else {}
+        ),
     }
 
 
@@ -167,7 +211,10 @@ def create_web_app(
 
     @app.exception_handler(WorkspaceHostError)
     async def host_error(_request: Request, error: WorkspaceHostError) -> JSONResponse:
-        if isinstance(error, WorkspaceBusyError | ApprovalStateError):
+        if isinstance(
+            error,
+            WorkspaceBusyError | ApprovalStateError | ConfigurationConflictHostError,
+        ):
             status = 409
         elif isinstance(error, SessionNotFoundError | RunNotFoundError):
             status = 404
@@ -236,6 +283,49 @@ def create_web_app(
             changed.update(cast(Any, result).data)
         return {"status": "updated", **changed}
 
+    @app.get("/api/v1/capabilities")
+    async def capability_inventory() -> dict[str, Any]:
+        return host.capabilities()
+
+    @app.get("/api/v1/configuration")
+    async def get_configuration() -> dict[str, Any]:
+        result = await host.dispatch(GetConfiguration())
+        return _camel_configuration(result.data)
+
+    @app.put("/api/v1/configuration/models/{model_name}")
+    async def upsert_model_configuration(
+        model_name: str,
+        body: ModelConfigurationBody,
+    ) -> dict[str, Any]:
+        definition = body.model_dump(
+            mode="json",
+            by_alias=False,
+            exclude={"expected_revision", "set_default"},
+            exclude_none=True,
+        )
+        result = await host.dispatch(
+            UpsertModelConfiguration(
+                expected_revision=body.expected_revision,
+                name=model_name,
+                definition=definition,
+                set_default=body.set_default,
+            )
+        )
+        return {"status": result.status, **_camel_configuration(result.data)}
+
+    @app.delete("/api/v1/configuration/models/{model_name}")
+    async def delete_model_configuration(
+        model_name: str,
+        body: ConfigurationRevisionBody,
+    ) -> dict[str, Any]:
+        result = await host.dispatch(
+            DeleteModelConfiguration(
+                expected_revision=body.expected_revision,
+                name=model_name,
+            )
+        )
+        return {"status": result.status, **_camel_configuration(result.data)}
+
     @app.patch("/api/v1/sessions/{session_id}/settings")
     async def update_session_settings(session_id: str, body: SessionSettingsBody) -> dict[str, Any]:
         changed: dict[str, Any] = {}
@@ -251,8 +341,8 @@ def create_web_app(
         return {"status": "updated", **changed}
 
     @app.get("/api/v1/sessions")
-    async def list_sessions() -> dict[str, Any]:
-        result = await host.dispatch(ListSessions())
+    async def list_sessions(include_archived: bool = False) -> dict[str, Any]:
+        result = await host.dispatch(ListSessions(include_archived=include_archived))
         return {
             "sessions": [
                 {
@@ -260,6 +350,7 @@ def create_web_app(
                     "createdAt": item.created_at,
                     "modelId": item.model_id,
                     "title": item.title,
+                    "archived": item.archived,
                 }
                 for item in cast(Any, result).sessions
             ]
@@ -269,6 +360,26 @@ def create_web_app(
     async def create_session() -> dict[str, str]:
         result = await host.dispatch(CreateSession())
         return {"sessionId": cast(Any, result).session_id}
+
+    @app.patch("/api/v1/sessions/{session_id}")
+    async def rename_session(session_id: str, body: RenameSessionBody) -> dict[str, Any]:
+        result = await host.dispatch(RenameSession(session_id, body.title))
+        return {"status": cast(Any, result).status, **cast(Any, result).data}
+
+    @app.post("/api/v1/sessions/{session_id}/archive")
+    async def archive_session(session_id: str) -> dict[str, str]:
+        result = await host.dispatch(SetSessionArchived(session_id, True))
+        return {"status": cast(Any, result).status}
+
+    @app.delete("/api/v1/sessions/{session_id}/archive")
+    async def restore_session(session_id: str) -> dict[str, str]:
+        result = await host.dispatch(SetSessionArchived(session_id, False))
+        return {"status": cast(Any, result).status}
+
+    @app.delete("/api/v1/sessions/{session_id}")
+    async def delete_session(session_id: str) -> dict[str, str]:
+        result = await host.dispatch(DeleteSession(session_id))
+        return {"status": cast(Any, result).status}
 
     @app.get("/api/v1/sessions/{session_id}")
     async def session_snapshot(session_id: str) -> dict[str, Any]:

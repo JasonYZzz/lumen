@@ -13,6 +13,7 @@ from lumen.api import create_web_app
 from lumen.application import WorkspaceHost
 from lumen.completion import CompletionGate
 from lumen.config import LimitsConfig, LiveConfig, PermissionsConfig
+from lumen.configuration import ConfigurationConflictError
 from lumen.live.manager import LiveSessionManager
 from lumen.live.protocol import LiveCompletionControl, LiveMediaKind
 from lumen.live.testing import FakeRealtimeTransport
@@ -45,6 +46,93 @@ class ApiAgentOrchestrator:
         return '{"id":"message-one"}'
 
 
+class ApiConfigurationSnapshot:
+    def __init__(self, revision: str, models: list[dict[str, object]]) -> None:
+        self.revision = revision
+        self.models = models
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "revision": self.revision,
+            "target_path": "/workspace/.lumen/agent.web.yaml",
+            "editable": True,
+            "edit_reason": None,
+            "exclusive": False,
+            "sources": [{"scope": "project", "path": "/workspace/.lumen/agent.yaml"}],
+            "warnings": [],
+            "default_model": str(self.models[0]["name"]),
+            "models": self.models,
+        }
+
+
+class ApiConfiguration:
+    def __init__(self) -> None:
+        self.snapshot = ApiConfigurationSnapshot(
+            "sha256:initial",
+            [
+                {
+                    "name": "test",
+                    "id": "test-model",
+                    "api": None,
+                    "base_url": None,
+                    "api_key_env": None,
+                    "settings": {},
+                    "context": {},
+                    "is_default": True,
+                    "source": {"scope": "project", "path": "/workspace/.lumen/agent.yaml"},
+                    "auth_kind": "none",
+                    "auth_available": False,
+                }
+            ],
+        )
+
+    def inspect(self) -> ApiConfigurationSnapshot:
+        return self.snapshot
+
+    def upsert_model(
+        self,
+        *,
+        expected_revision: str,
+        name: str,
+        definition: dict[str, object],
+        set_default: bool,
+    ) -> ApiConfigurationSnapshot:
+        if expected_revision != self.snapshot.revision:
+            raise ConfigurationConflictError("configuration changed")
+        models = [item for item in self.snapshot.models if item["name"] != name]
+        models.append(
+            {
+                "name": name,
+                "id": definition["id"],
+                "api": definition.get("api"),
+                "base_url": definition.get("base_url"),
+                "api_key_env": definition.get("api_key_env"),
+                "settings": definition.get("settings", {}),
+                "context": definition.get("context", {}),
+                "is_default": set_default,
+                "source": {"scope": "managed", "path": "/workspace/.lumen/agent.web.yaml"},
+                "auth_kind": "environment" if definition.get("api_key_env") else "none",
+                "auth_available": bool(definition.get("api_key_env")),
+            }
+        )
+        self.snapshot = ApiConfigurationSnapshot("sha256:updated", models)
+        return self.snapshot
+
+    def remove_model(
+        self,
+        *,
+        expected_revision: str,
+        name: str,
+    ) -> ApiConfigurationSnapshot:
+        if expected_revision != self.snapshot.revision:
+            raise ConfigurationConflictError("configuration changed")
+        self.snapshot = ApiConfigurationSnapshot(
+            "sha256:deleted",
+            [item for item in self.snapshot.models if item["name"] != name],
+        )
+        return self.snapshot
+
+
 class ApiResources:
     def __init__(self, root: Path) -> None:
         self.rendered_prompts: list[tuple[str, dict[str, str]]] = []
@@ -55,6 +143,7 @@ class ApiResources:
         self.workspace = root
         self.session_repository = SessionRepository(root / "sessions")
         self.agent_orchestrator = ApiAgentOrchestrator()
+        self.configuration = ApiConfiguration()
         self.runtime = AgentRuntime(
             model=FunctionModel(stream_function=stream),
             tools=[],
@@ -126,6 +215,22 @@ class ApiResources:
             }
         ]
 
+    def capabilities_report(self) -> dict[str, object]:
+        return {
+            "tools": [
+                {
+                    "name": "read_file",
+                    "origin": "builtin",
+                    "status": "loaded",
+                    "approval": "allow",
+                    "schema_digest": "sha256:test",
+                }
+            ],
+            "skills": [],
+            "mcp_servers": [],
+            "agent_profiles": [],
+        }
+
     def summary(self) -> dict[str, object]:
         return {
             "agent": "api-agent",
@@ -149,6 +254,7 @@ def test_web_and_tui_adapters_expose_shared_operator_capabilities(tmp_path: Path
         "/api/v1/sessions/{session_id}/agents",
         "/api/v1/agents/{agent_id}/actions",
         "/api/v1/sessions/{session_id}/checkpoints",
+        "/api/v1/sessions/{session_id}/archive",
         "/api/v1/sessions/{session_id}/fork",
         "/api/v1/runs/{run_id}/input/dequeue",
         "/api/v1/sessions/{session_id}/verification-waivers",
@@ -156,6 +262,9 @@ def test_web_and_tui_adapters_expose_shared_operator_capabilities(tmp_path: Path
         "/api/v1/live/{live_session_id}",
         "/api/v1/live/{live_session_id}/events",
         "/api/v1/live/{live_session_id}/interrupt",
+        "/api/v1/capabilities",
+        "/api/v1/configuration",
+        "/api/v1/configuration/models/{model_name}",
     } <= paths
     for method in (
         "set_transcript_density",
@@ -197,11 +306,43 @@ def test_web_api_authenticates_and_streams_a_run(tmp_path: Path) -> None:
         assert bootstrap.json()["approvalMode"] == "manual"
         assert bootstrap.json()["liveEnabled"] is False
 
+        capabilities = client.get("/api/v1/capabilities")
+        assert capabilities.status_code == 200
+        assert capabilities.json()["tools"][0]["name"] == "read_file"
+
+        configuration = client.get("/api/v1/configuration")
+        assert configuration.status_code == 200
+        assert configuration.json()["models"][0]["name"] == "test"
+
+        headers = {"Origin": "http://testserver"}
+        saved_model = client.put(
+            "/api/v1/configuration/models/local",
+            headers=headers,
+            json={
+                "expectedRevision": configuration.json()["revision"],
+                "id": "openai:local",
+                "api": "responses",
+                "baseUrl": "http://127.0.0.1:11434/v1",
+                "apiKeyEnv": "LOCAL_MODEL_KEY",
+                "setDefault": True,
+            },
+        )
+        assert saved_model.status_code == 200
+        assert saved_model.json()["restartRequired"] is True
+        assert saved_model.json()["models"][-1]["baseUrl"].endswith("/v1")
+
+        stale_model = client.put(
+            "/api/v1/configuration/models/stale",
+            headers=headers,
+            json={"expectedRevision": configuration.json()["revision"], "id": "test"},
+        )
+        assert stale_model.status_code == 409
+        assert stale_model.json()["error"]["code"] == "configuration_conflict"
+
         missing = client.get("/api/v1/does-not-exist")
         assert missing.status_code == 404
         assert missing.json()["error"]["code"] == "not_found"
 
-        headers = {"Origin": "http://testserver"}
         created = client.post("/api/v1/sessions", headers=headers)
         assert created.status_code == 201
         session_id = created.json()["sessionId"]
@@ -270,6 +411,37 @@ def test_web_api_authenticates_and_streams_a_run(tmp_path: Path) -> None:
         assert sent.status_code == 200
         assert sent.json()["status"] == "queued"
         assert host.resources.agent_orchestrator.messages == [("agent-one", "more context")]
+
+        renamed = client.patch(
+            f"/api/v1/sessions/{session_id}",
+            headers=headers,
+            json={"title": "Managed conversation"},
+        )
+        assert renamed.status_code == 200
+        assert renamed.json() == {"status": "renamed", "title": "Managed conversation"}
+
+        archived = client.post(f"/api/v1/sessions/{session_id}/archive", headers=headers)
+        assert archived.json() == {"status": "archived"}
+        assert all(
+            item["sessionId"] != session_id
+            for item in client.get("/api/v1/sessions").json()["sessions"]
+        )
+        archived_items = client.get(
+            "/api/v1/sessions", params={"include_archived": "true"}
+        ).json()["sessions"]
+        assert next(item for item in archived_items if item["sessionId"] == session_id) == {
+            "sessionId": session_id,
+            "createdAt": snapshot["createdAt"],
+            "modelId": "test-model",
+            "title": "Managed conversation",
+            "archived": True,
+        }
+
+        restored = client.delete(f"/api/v1/sessions/{session_id}/archive", headers=headers)
+        assert restored.json() == {"status": "restored"}
+        deleted = client.delete(f"/api/v1/sessions/{session_id}", headers=headers)
+        assert deleted.json() == {"status": "deleted"}
+        assert client.get(f"/api/v1/sessions/{session_id}").status_code == 404
 
 
 def test_web_api_rejects_mutation_from_wrong_origin(tmp_path: Path) -> None:

@@ -12,7 +12,7 @@ from textual.containers import Vertical
 from textual.widgets import Static
 
 from lumen.ui.activity_indicator import ToolActivityFamily, ToolActivityPresentation
-from lumen.ui.themes import theme_color
+from lumen.ui.themes import FALLBACK_COLORS, theme_color
 
 
 def _one_line(value: str, *, limit: int = 96) -> str:
@@ -38,8 +38,9 @@ class CommentaryBlock(Vertical):
     CommentaryBlock.expanded .commentary-summary { text-style: bold; }
     """
 
-    def __init__(self, *, expanded: bool = False) -> None:
+    def __init__(self, *, expanded: bool = False, label: str = "Thinking") -> None:
         super().__init__()
+        self._label = label
         self._text = ""
         self._expanded = expanded
         self._summary = Static("", classes="commentary-summary", markup=False)
@@ -84,7 +85,7 @@ class CommentaryBlock(Vertical):
 
     def _refresh(self) -> None:
         marker = "▾" if self._expanded else "▸"
-        self._summary.update(f"{marker} Thinking · {_one_line(self._text) or 'working…'}")
+        self._summary.update(f"{marker} {self._label} · {_one_line(self._text) or 'working…'}")
         # Keep this exact prefix for stable transcript export and compatibility.
         self._body.update(f"∴ {self._text}")
 
@@ -186,15 +187,15 @@ class ReadToolGroup(Vertical):
         state = f" · {errors} failed" if errors else ""
         detail = latest.presentation.detail if latest is not None else None
         suffix = f" · {_one_line(detail, limit=48)}" if total == 1 and detail else ""
-        header = Text(f"{marker} ", style=self._color("activity-meta", "#948A80"))
+        header = Text(f"{marker} ", style=self._color("activity-meta", FALLBACK_COLORS["activity-meta"]))
         if errors:
-            summary_color = self._color("error", "#D16D75")
+            summary_color = self._color("error", FALLBACK_COLORS["error"])
         elif running:
-            summary_color = self._color("tool", "#C7ACE8")
+            summary_color = self._color("tool", FALLBACK_COLORS["tool"])
         else:
-            summary_color = self._color("foreground", "#ECE9E4")
+            summary_color = self._color("foreground", FALLBACK_COLORS["foreground"])
         header.append(summary, style=f"bold {summary_color}" if running or errors else summary_color)
-        header.append(state + suffix, style=self._color("activity-meta", "#948A80"))
+        header.append(state + suffix, style=self._color("activity-meta", FALLBACK_COLORS["activity-meta"]))
         self._header.update(header)
         body = Text()
         for index, call in enumerate(self._calls.values()):
@@ -202,9 +203,9 @@ class ReadToolGroup(Vertical):
                 body.append("\n")
             glyph = {"running": "●", "ok": "✓", "error": "✗"}[call.status]
             glyph_color = {
-                "running": self._color("tool", "#C7ACE8"),
-                "ok": self._color("success", "#86A66C"),
-                "error": self._color("error", "#D16D75"),
+                "running": self._color("tool", FALLBACK_COLORS["tool"]),
+                "ok": self._color("success", FALLBACK_COLORS["success"]),
+                "error": self._color("error", FALLBACK_COLORS["error"]),
             }[call.status]
             presentation = call.presentation
             label = (
@@ -214,9 +215,10 @@ class ReadToolGroup(Vertical):
             )
             detail = presentation.detail
             body.append(f"{glyph} ", style=f"bold {glyph_color}")
-            body.append(label, style=self._color("foreground", "#ECE9E4"))
+            body.append(label, style=self._color("foreground", FALLBACK_COLORS["foreground"]))
             if detail:
-                body.append(f" · {detail}", style=self._color("activity-meta", "#948A80"))
+                meta_style = self._color("activity-meta", FALLBACK_COLORS["activity-meta"])
+                body.append(f" · {detail}", style=meta_style)
         self._body.update(body)
 
     def _summary(self, *, running: int) -> str:

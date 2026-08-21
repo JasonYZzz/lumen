@@ -292,7 +292,7 @@ class HostSessionAdapter:
                             run_id,
                             event.call_id,
                             decision.approved,
-                            "session" if decision.remember else "once",
+                            decision.remember_scope,
                         )
                     )
                     continue
@@ -310,7 +310,7 @@ class HostSessionAdapter:
                                 run_id,
                                 call_id,
                                 decision.approved,
-                                "session" if decision.remember else "once",
+                                decision.remember_scope,
                             )
                         )
                     continue

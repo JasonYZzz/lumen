@@ -5,7 +5,7 @@ import hashlib
 import json
 import os
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
 from typing import Any, cast
@@ -20,6 +20,7 @@ class ConfigScope(StrEnum):
     LEGACY = "legacy"
     PROJECT = "project"
     LOCAL = "local"
+    MANAGED = "managed"
     EXPLICIT = "explicit"
 
 
@@ -39,6 +40,150 @@ class ConfigResolution:
     searched_paths: tuple[Path, ...]
     warnings: tuple[str, ...]
     exclusive: bool
+    provenance: Mapping[str, ConfigSource] = field(default_factory=dict[str, ConfigSource])
+
+    def report(self, *, config: AppConfig | None = None) -> ResolvedConfigReport:
+        """Return a read-only, secret-safe projection of the effective config.
+
+        The report is diagnostic data only. Runtime decisions continue to use
+        :attr:`config`, keeping configuration ownership in ``ConfigResolver``.
+        """
+
+        effective_config = _redacted_config(config or self.config)
+        effective_paths = set(_declared_paths(effective_config))
+        return ResolvedConfigReport(
+            effective_config=effective_config,
+            sources=self.sources,
+            searched_paths=self.searched_paths,
+            warnings=self.warnings,
+            exclusive=self.exclusive,
+            provenance={
+                field_path: source
+                for field_path, source in self.provenance.items()
+                if field_path in effective_paths
+            },
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class ResolvedConfigReport:
+    effective_config: dict[str, Any]
+    sources: tuple[ConfigSource, ...]
+    searched_paths: tuple[Path, ...]
+    warnings: tuple[str, ...]
+    exclusive: bool
+    provenance: Mapping[str, ConfigSource]
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "effective_config": self.effective_config,
+            "sources": [source.as_dict() for source in self.sources],
+            "searched_paths": [str(path) for path in self.searched_paths],
+            "warnings": list(self.warnings),
+            "exclusive": self.exclusive,
+            "provenance": {
+                field_path: source.as_dict()
+                for field_path, source in sorted(self.provenance.items())
+            },
+        }
+
+
+def _declared_paths(value: Any, prefix: tuple[str, ...] = ()) -> tuple[str, ...]:
+    if isinstance(value, dict):
+        mapping = cast(dict[str, Any], value)
+        paths = tuple(
+            path
+            for key, item in mapping.items()
+            for path in _declared_paths(item, (*prefix, str(key)))
+        )
+        return paths or ((".".join(prefix),) if prefix else ())
+    if isinstance(value, list):
+        return ((".".join(prefix),) if prefix else ())
+    return ((".".join(prefix),) if prefix else ())
+
+
+def _clear_provenance_prefix(provenance: dict[str, ConfigSource], prefix: str) -> None:
+    for field_path in tuple(provenance):
+        if field_path == prefix or field_path.startswith(f"{prefix}."):
+            provenance.pop(field_path)
+
+
+def _record_provenance(
+    provenance: dict[str, ConfigSource],
+    layer: dict[str, Any],
+    source: ConfigSource,
+) -> None:
+    agent = _mapping(layer.get("agent"))
+    if agent is not None:
+        if "model" in agent:
+            _clear_provenance_prefix(provenance, "agent.model")
+            _clear_provenance_prefix(provenance, "agent.models")
+            _clear_provenance_prefix(provenance, "agent.default_model")
+        if "models" in agent:
+            _clear_provenance_prefix(provenance, "agent.model")
+            models = _mapping(agent.get("models")) or {}
+            for name in models:
+                _clear_provenance_prefix(provenance, f"agent.models.{name}")
+    servers = _mapping(layer.get("mcp_servers")) or {}
+    for name in servers:
+        _clear_provenance_prefix(provenance, f"mcp_servers.{name}")
+    for field_path in _declared_paths(layer):
+        provenance[field_path] = source
+
+
+_SECRET_KEYS = frozenset(
+    {
+        "api_key",
+        "apikey",
+        "authorization",
+        "client_secret",
+        "cookie",
+        "password",
+        "secret",
+        "token",
+    }
+)
+
+
+def _is_secret_key(key: str) -> bool:
+    return key in _SECRET_KEYS or key.endswith(("_api_key", "_password", "_secret", "_token"))
+
+
+def _is_secret_environment_name(name: str) -> bool:
+    normalized = name.lower()
+    return _is_secret_key(normalized) or normalized.endswith(
+        ("_authorization", "_cookie", "_key")
+    )
+
+
+def _redacted_config(config: AppConfig) -> dict[str, Any]:
+    raw = config.model_dump(mode="json")
+    secret_values = {
+        value
+        for name, value in os.environ.items()
+        if value and _is_secret_environment_name(name)
+    }
+
+    def redact(value: Any, path: tuple[str, ...]) -> Any:
+        if len(path) >= 4 and path[0] == "mcp_servers" and path[2] in {"env", "headers"}:
+            return "<redacted>"
+        if path:
+            key = path[-1].lower()
+            if key not in {"api_key_env", "workspace_id_env", "credential_file"} and _is_secret_key(
+                key
+            ):
+                return "<redacted>"
+        if isinstance(value, dict):
+            mapping = cast(dict[str, Any], value)
+            return {str(key): redact(item, (*path, str(key))) for key, item in mapping.items()}
+        if isinstance(value, list):
+            items = cast(list[Any], value)
+            return [redact(item, (*path, str(index))) for index, item in enumerate(items)]
+        if isinstance(value, str) and any(secret in value for secret in secret_values):
+            return "<redacted>"
+        return value
+
+    return cast(dict[str, Any], redact(raw, ()))
 
 
 def _dedupe(values: list[Any]) -> list[Any]:
@@ -223,6 +368,7 @@ class ConfigResolver:
             ConfigSource(ConfigScope.LEGACY, self.workspace / "agent.yaml"),
             ConfigSource(ConfigScope.PROJECT, self.workspace / ".lumen" / "agent.yaml"),
             ConfigSource(ConfigScope.LOCAL, self.workspace / ".lumen" / "agent.local.yaml"),
+            ConfigSource(ConfigScope.MANAGED, self.workspace / ".lumen" / "agent.web.yaml"),
         )
 
     def discovered_sources(self) -> tuple[ConfigSource, ...]:
@@ -234,15 +380,27 @@ class ConfigResolver:
         return tuple(
             source
             for source in self.discovered_sources()
-            if source.scope in {ConfigScope.LEGACY, ConfigScope.PROJECT, ConfigScope.LOCAL}
+            if source.scope
+            in {ConfigScope.LEGACY, ConfigScope.PROJECT, ConfigScope.LOCAL, ConfigScope.MANAGED}
         )
 
     def has_project_skills(self) -> bool:
         return not self.exclusive and (self.workspace / ".lumen" / "skills").is_dir()
 
-    def resolve(self, *, project_trusted: bool = True) -> ConfigResolution:
-        discovered = self.discovered_sources()
+    def resolve(
+        self,
+        *,
+        project_trusted: bool = True,
+        source_overrides: Mapping[Path, Mapping[str, Any]] | None = None,
+    ) -> ConfigResolution:
+        overrides = {
+            Path(path).expanduser().resolve(): copy.deepcopy(dict(value))
+            for path, value in (source_overrides or {}).items()
+        }
         candidates = self.candidate_sources()
+        discovered = tuple(
+            source for source in candidates if source.path.is_file() or source.path in overrides
+        )
         if self.explicit_path is not None and not discovered:
             raise ConfigLoadError(f"cannot read configuration {self.explicit_path}: file does not exist")
         if not discovered:
@@ -257,18 +415,22 @@ class ConfigResolver:
             raise ConfigLoadError(f"project is not trusted; refusing to read: {files}")
 
         layers: list[tuple[ConfigSource, dict[str, Any]]] = []
+        provenance: dict[str, ConfigSource] = {}
         warnings: list[str] = []
         for source in discovered:
-            try:
-                loaded: object = yaml.safe_load(source.path.read_text(encoding="utf-8"))
-            except OSError as error:
-                raise ConfigLoadError(
-                    f"cannot read {source.scope.value} configuration {source.path}: {error}"
-                ) from error
-            except yaml.YAMLError as error:
-                raise ConfigLoadError(
-                    f"invalid YAML in {source.scope.value} configuration {source.path}: {error}"
-                ) from error
+            if source.path in overrides:
+                loaded: object = overrides[source.path]
+            else:
+                try:
+                    loaded = yaml.safe_load(source.path.read_text(encoding="utf-8"))
+                except OSError as error:
+                    raise ConfigLoadError(
+                        f"cannot read {source.scope.value} configuration {source.path}: {error}"
+                    ) from error
+                except yaml.YAMLError as error:
+                    raise ConfigLoadError(
+                        f"invalid YAML in {source.scope.value} configuration {source.path}: {error}"
+                    ) from error
             if not isinstance(loaded, dict):
                 raise ConfigLoadError(
                     f"{source.scope.value} configuration root must be a mapping: {source.path}"
@@ -279,7 +441,9 @@ class ConfigResolver:
                     f"Legacy configuration {source.path} is deprecated; migrate it to "
                     f"{self.workspace / '.lumen' / 'agent.yaml'}."
                 )
-            layers.append((source, _prepare_layer(raw, source)))
+            prepared = _prepare_layer(raw, source)
+            layers.append((source, prepared))
+            _record_provenance(provenance, prepared, source)
 
         merged = _merge_layers(layers)
         sessions = _mapping(merged.get("sessions"))
@@ -308,6 +472,7 @@ class ConfigResolver:
             searched_paths=tuple(source.path for source in candidates),
             warnings=tuple(warnings),
             exclusive=self.exclusive,
+            provenance=provenance,
         )
 
 
@@ -316,4 +481,5 @@ __all__ = [
     "ConfigResolver",
     "ConfigScope",
     "ConfigSource",
+    "ResolvedConfigReport",
 ]

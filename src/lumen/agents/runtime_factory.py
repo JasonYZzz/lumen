@@ -15,10 +15,11 @@ from pydantic_ai.toolsets import AbstractToolset, FilteredToolset
 
 from lumen.config import AgentsConfig, LimitsConfig, ModelSettingsConfig, PermissionsConfig, SandboxConfig
 from lumen.context.artifacts import ArtifactStore
-from lumen.events import ApprovalRequest
+from lumen.events import ApprovalRequest, ProgressReported, ToolCallStarted
 from lumen.interactive_queue import QueueMode
 from lumen.models import build_model
 from lumen.runtime import AgentRuntime, ApprovalHandler, CompletionPolicy, ToolApproval
+from lumen.task_control import CONTROL_TOOL_NAMES
 from lumen.tools.builtin import build_builtin_specs
 from lumen.tools.registry import PermissionPolicy, ToolRegistry
 from lumen.tools.spec import EffectKind
@@ -70,6 +71,7 @@ class NativeAgentRuntimeFactory(AgentRuntimeFactory):
         self.task_workspace = task_workspace
         self._approval_handler: ApprovalHandler | None = None
         self._status_handler: Callable[[str, AgentStatus], Awaitable[None]] | None = None
+        self._progress_handler: Callable[[str, str, str | None], Awaitable[None]] | None = None
         self._active_runtimes: dict[str, AgentRuntime] = {}
 
     def bind_approval_handler(self, handler: ApprovalHandler | None) -> None:
@@ -80,6 +82,18 @@ class NativeAgentRuntimeFactory(AgentRuntimeFactory):
         handler: Callable[[str, AgentStatus], Awaitable[None]] | None,
     ) -> None:
         self._status_handler = handler
+
+    def bind_progress_handler(
+        self,
+        handler: Callable[[str, str, str | None], Awaitable[None]] | None,
+    ) -> None:
+        """Bind the (agent_id, summary, detail) progress sink used by child runs.
+
+        Child process events are otherwise invisible to the parent timeline;
+        the orchestrator turns this stream into auditable ``agent.progress``
+        records.
+        """
+        self._progress_handler = handler
 
     def snapshot(self, profile: AgentProfile, *, approval_mode: str) -> AgentConfigSnapshot:
         model_name = profile.model or self.active_model_name()
@@ -453,8 +467,29 @@ class NativeAgentRuntimeFactory(AgentRuntimeFactory):
         self._active_runtimes[thread.ref.id] = runtime
         history = self._load_history(thread.history_ref)
 
-        async def emit(_event: object) -> None:
-            return None
+        async def emit(event: object) -> None:
+            # Child process events flow to the parent timeline as bounded
+            # progress summaries instead of a verbatim event copy: the child's
+            # own transcript stays in its history artifact, and only
+            # significant steps (non-control tool calls, progress reports)
+            # surface to the parent.
+            handler = self._progress_handler
+            if handler is None:
+                return
+            summary: str | None = None
+            detail: str | None = None
+            if isinstance(event, ToolCallStarted):
+                if event.origin == "control" or event.name in CONTROL_TOOL_NAMES:
+                    return
+                summary = event.name
+                target = event.args.get("path") or event.args.get("query") or event.args.get("url")
+                detail = str(target) if target is not None else None
+            elif isinstance(event, ProgressReported):
+                summary = event.summary
+                detail = event.next_action
+            else:
+                return
+            await handler(thread.ref.id, summary, detail)
 
         async def approve(request: ApprovalRequest) -> ToolApproval:
             risk = request.risk
@@ -570,13 +605,15 @@ class NativeAgentRuntimeFactory(AgentRuntimeFactory):
             }
             for name, entry in registry.entries.items()
         }
-        # Artifact reading is safe and workspace-independent, so preserve the
-        # parent's already-confined tool implementation when selected.
+        # Artifact reading and web access are workspace-independent, so preserve
+        # the parent's already-configured tool implementations when selected.
+        portable_tools = {"read_artifact", "web_fetch", "web_search"}
         tools.extend(
-            tool for tool in self.parent_tools() if tool.name == "read_artifact" and tool.name in allowed
+            tool for tool in self.parent_tools() if tool.name in portable_tools and tool.name in allowed
         )
-        if "read_artifact" in allowed and "read_artifact" in parent_metadata:
-            metadata["read_artifact"] = parent_metadata["read_artifact"]
+        for name in portable_tools & allowed:
+            if name in parent_metadata:
+                metadata[name] = parent_metadata[name]
         return tools, metadata
 
     def _toolsets_for(self, thread: AgentThreadState) -> list[AbstractToolset[None]]:

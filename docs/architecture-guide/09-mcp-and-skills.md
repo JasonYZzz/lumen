@@ -37,6 +37,8 @@ flowchart LR
 - deny 的工具不会进入可见 Toolset；需要确认的工具由 approval wrapper 暂停；
 - `defer_tools` 默认开启，只有 `always_load_tools` 中的 Schema 常驻上下文。
 
+远端 MCP 工具仍进入统一 Tool Contract：未声明副作用时 Risk 为 `external_unknown`、EffectKind 为 `unknown`，并发默认 `exclusive`。Capability observation 会显示 loaded/deferred/disabled、审批决定和 schema digest；它只解释实际策略结果，不替代 `ToolRegistry`、`PermissionPolicy` 或 MCP toolset 的权威。
+
 ### 连接韧性（ResilientMcpToolset）
 
 包装链最外层是 `ResilientMcpToolset`，解决"连接层故障终止整个 run"的问题：

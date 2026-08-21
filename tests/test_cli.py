@@ -60,6 +60,52 @@ sessions:
     assert "read_file" in result.stdout
 
 
+def test_dump_effective_config_is_json_and_never_prints_resolved_secrets(tmp_path: Path) -> None:
+    config = tmp_path / "agent.yaml"
+    config.write_text(
+        """version: 2
+agent:
+  model: {id: test, api_key_env: MODEL_TOKEN}
+mcp_servers:
+  docs:
+    transport: stdio
+    command: python
+    env: {ACCESS_TOKEN: "${MCP_TOKEN}"}
+""",
+        encoding="utf-8",
+    )
+
+    result = CliRunner().invoke(
+        app,
+        ["--config", str(config), "--cwd", str(tmp_path), "--dump-effective-config"],
+        env={"MODEL_TOKEN": "model-secret-value", "MCP_TOKEN": "mcp-secret-value"},
+    )
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.stdout)
+    assert payload["effective_config"]["mcp_servers"]["docs"]["env"]["ACCESS_TOKEN"] == (
+        "<redacted>"
+    )
+    assert "model-secret-value" not in result.stdout
+    assert "mcp-secret-value" not in result.stdout
+
+
+def test_capabilities_json_uses_resource_manager_inventory(tmp_path: Path) -> None:
+    config = tmp_path / "agent.yaml"
+    config.write_text(_minimal_config(), encoding="utf-8")
+
+    result = CliRunner().invoke(
+        app,
+        ["capabilities", "--config", str(config), "--cwd", str(tmp_path), "--json"],
+    )
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.stdout)
+    tools = {item["name"]: item for item in payload["tools"]}
+    assert tools["read_file"]["origin"] == "builtin"
+    assert tools["read_file"]["schema_digest"].startswith("sha256:")
+
+
 def test_default_discovery_uses_global_config_from_another_project(tmp_path: Path) -> None:
     home = tmp_path / "home"
     workspace = tmp_path / "another project"

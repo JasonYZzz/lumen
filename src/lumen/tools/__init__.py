@@ -5,8 +5,16 @@ from .gateway import (
     CapabilityInvocation,
     CapabilityResult,
     CapabilityStatus,
+    ToolExecutionIdentity,
+    ToolGuardDecision,
 )
-from .spec import EffectKind, Risk, ToolSpec
+from .presentation import (
+    ToolCallView,
+    ToolPresentationCatalog,
+    ToolPresentationSpec,
+    ToolResultView,
+)
+from .spec import EffectKind, Risk, ToolConcurrency, ToolOutputSpec, ToolSpec
 
 __all__ = [
     "CapabilityApproval",
@@ -17,5 +25,13 @@ __all__ = [
     "CapabilityStatus",
     "EffectKind",
     "Risk",
+    "ToolCallView",
+    "ToolConcurrency",
+    "ToolExecutionIdentity",
+    "ToolGuardDecision",
+    "ToolOutputSpec",
+    "ToolPresentationCatalog",
+    "ToolPresentationSpec",
+    "ToolResultView",
     "ToolSpec",
 ]

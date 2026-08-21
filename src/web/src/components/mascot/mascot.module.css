@@ -10,7 +10,7 @@
   position: absolute;
   inset: 0;
   opacity: 1;
-  transition: opacity 280ms ease;
+  transition: opacity 360ms cubic-bezier(.16, 1, .3, 1);
 }
 
 .rendererHidden {
@@ -35,7 +35,7 @@
   position: absolute;
   inset: 0;
   pointer-events: none;
-  animation: mascotEntrance 520ms cubic-bezier(.2, .78, .24, 1) both;
+  animation: mascotEntrance 640ms cubic-bezier(.16, 1, .3, 1) both;
 }
 
 .aura {
@@ -45,6 +45,11 @@
   border-radius: 50%;
   background: radial-gradient(circle, rgba(255, 198, 133, .18), rgba(255, 198, 133, 0) 70%);
   filter: blur(13px);
+  transform-origin: 52% 68%;
+}
+
+.visual[data-motion="full"][data-active="true"] .aura {
+  animation: auraLife 9.6s cubic-bezier(.4, 0, .25, 1) infinite;
 }
 
 .shadow {
@@ -71,15 +76,15 @@
   opacity: 1;
   transform: scale(1);
   transition:
-    opacity 360ms cubic-bezier(.22, .72, .22, 1),
-    transform 420ms cubic-bezier(.22, .72, .22, 1),
-    filter 320ms ease;
+    opacity 460ms cubic-bezier(.16, 1, .3, 1),
+    transform 500ms cubic-bezier(.16, 1, .3, 1),
+    filter 420ms ease-out;
 }
 
 .layeredCharacterHidden {
   opacity: 0;
-  transform: translateY(1px) scale(.985);
-  filter: blur(1.5px);
+  transform: translateY(1px) scale(.992);
+  filter: blur(.65px);
 }
 
 .bodyRig {
@@ -91,7 +96,7 @@
 }
 
 .bodyLife {
-  animation: bodyCounterbalance 8.1s cubic-bezier(.4, 0, .22, 1) infinite;
+  animation: bodyCounterbalance 11.8s cubic-bezier(.4, 0, .22, 1) infinite;
 }
 
 .tail,
@@ -115,7 +120,7 @@
 }
 
 .tailMotion {
-  animation: tailDrift 8.1s cubic-bezier(.4, 0, .22, 1) infinite;
+  animation: tailDrift 11.8s cubic-bezier(.4, 0, .22, 1) infinite;
 }
 
 .body {
@@ -126,12 +131,12 @@
 .authoredPose {
   z-index: 5;
   opacity: 0;
-  transform: translateY(2px) scale(.985);
-  filter: blur(1.8px);
+  transform: translateY(1px) scale(.992);
+  filter: blur(.65px);
   transition:
-    opacity 360ms cubic-bezier(.22, .72, .22, 1),
-    transform 420ms cubic-bezier(.22, .72, .22, 1),
-    filter 300ms ease;
+    opacity 460ms cubic-bezier(.16, 1, .3, 1),
+    transform 500ms cubic-bezier(.16, 1, .3, 1),
+    filter 420ms ease-out;
 }
 
 .authoredPoseActive {
@@ -159,7 +164,7 @@
 
 .breathActive {
   opacity: 1;
-  animation: localizedBreath 4.2s cubic-bezier(.42, 0, .3, 1) infinite;
+  animation: localizedBreath 5.6s cubic-bezier(.42, 0, .3, 1) infinite;
 }
 
 .focusLayer {
@@ -179,24 +184,37 @@
 }
 
 @keyframes mascotEntrance {
-  from { opacity: 0; transform: translateY(7px); }
-  to { opacity: 1; transform: translateY(0); }
+  from {
+    opacity: .18;
+    filter: blur(3px) saturate(.92);
+    clip-path: inset(8% 6% 0 round 42%);
+    transform: translateY(5px) scale(.965);
+  }
+  to {
+    opacity: 1;
+    filter: blur(0) saturate(1);
+    clip-path: inset(0 0 0 round 0);
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes auraLife {
+  0%, 100% { opacity: .72; transform: scale(.94); }
+  54% { opacity: 1; transform: scale(1.035); }
 }
 
 @keyframes tailDrift {
-  0%, 100% { transform: translateY(-4.4%) scale(1.018) rotate(-2.2deg); }
-  18% { transform: translateY(-4.52%) scale(1.019) rotate(-1.85deg); }
-  43% { transform: translateY(-4.82%) scale(1.021) rotate(2.65deg); }
-  57% { transform: translateY(-4.76%) scale(1.02) rotate(2.35deg); }
-  78% { transform: translateY(-4.46%) scale(1.019) rotate(-.5deg); }
+  0%, 100% { transform: translateY(-4.4%) scale(1.018) rotate(-1.35deg); }
+  24% { transform: translateY(-4.5%) scale(1.019) rotate(-.9deg); }
+  52% { transform: translateY(-4.7%) scale(1.02) rotate(1.65deg); }
+  76% { transform: translateY(-4.5%) scale(1.019) rotate(.2deg); }
 }
 
 @keyframes bodyCounterbalance {
-  0%, 100% { transform: translate(.18%, 2.1%) scale(.86) rotate(.36deg); }
-  18% { transform: translate(.12%, 2.05%) scale(.86) rotate(.28deg); }
-  43% { transform: translate(-.34%, 1.78%) scale(.86) rotate(-.58deg); }
-  57% { transform: translate(-.28%, 1.84%) scale(.86) rotate(-.48deg); }
-  78% { transform: translate(-.04%, 2.02%) scale(.86) rotate(.08deg); }
+  0%, 100% { transform: translate(.1%, 2.1%) scale(.86) rotate(.2deg); }
+  24% { transform: translate(.06%, 2.04%) scale(.86) rotate(.14deg); }
+  52% { transform: translate(-.2%, 1.88%) scale(.86) rotate(-.34deg); }
+  76% { transform: translate(-.04%, 2.02%) scale(.86) rotate(.04deg); }
 }
 
 @keyframes localizedBreath {
@@ -211,44 +229,47 @@
 }
 
 .gestureSettle.rig {
-  animation: cohesiveSettle 1.65s cubic-bezier(.22, .72, .22, 1) both;
+  animation: cohesiveSettle 1.2s cubic-bezier(.16, 1, .3, 1) both;
 }
 
 .gestureSubmit.rig {
-  animation: cohesiveSubmit 760ms cubic-bezier(.2, .76, .25, 1) both;
+  animation: cohesiveSubmit 620ms cubic-bezier(.16, 1, .3, 1) both;
 }
 
 .gestureSettle.shadow {
-  animation: shadowSettle 1.65s cubic-bezier(.22, .72, .22, 1) both;
+  animation: shadowSettle 1.2s cubic-bezier(.16, 1, .3, 1) both;
 }
 
 .gestureSubmit.shadow {
-  animation: shadowSubmit 760ms cubic-bezier(.2, .76, .25, 1) both;
+  animation: shadowSubmit 620ms cubic-bezier(.16, 1, .3, 1) both;
+}
+
+.visual[data-gesture="stretch"] .gestureSettle {
+  animation-duration: 1.35s;
 }
 
 @keyframes cohesiveSettle {
   0%, 100% { transform: translateY(0) rotate(0) scale(1); }
-  24% { transform: translateY(2px) rotate(-.9deg) scaleX(1.012) scaleY(.988); }
-  56% { transform: translateY(-2.2px) rotate(.68deg) scaleX(.996) scaleY(1.008); }
-  78% { transform: translateY(.6px) rotate(-.22deg) scale(1); }
+  24% { transform: translateY(1px) rotate(-.35deg) scaleX(1.004) scaleY(.996); }
+  58% { transform: translateY(-1.2px) rotate(.24deg) scale(1.002); }
 }
 
 @keyframes cohesiveSubmit {
   0%, 100% { transform: translateY(0) rotate(0) scale(1); }
-  32% { transform: translateY(-2px) rotate(-.35deg) scale(1.006); }
-  66% { transform: translateY(.7px) rotate(.14deg) scaleX(1.004) scaleY(.996); }
+  38% { transform: translateY(-1.6px) rotate(-.22deg) scale(1.004); }
+  72% { transform: translateY(.35px) rotate(.08deg) scale(1.001); }
 }
 
 @keyframes shadowSettle {
   0%, 100% { opacity: 1; transform: scaleX(1); }
-  24% { opacity: .92; transform: scaleX(1.035); }
-  56% { opacity: .82; transform: scaleX(.97); }
+  24% { opacity: .94; transform: scaleX(1.018); }
+  58% { opacity: .86; transform: scaleX(.985); }
 }
 
 @keyframes shadowSubmit {
   0%, 100% { opacity: 1; transform: scaleX(1); }
-  32% { opacity: .74; transform: scaleX(.94); }
-  66% { opacity: .94; transform: scaleX(1.025); }
+  38% { opacity: .8; transform: scaleX(.955); }
+  72% { opacity: .95; transform: scaleX(1.012); }
 }
 
 @media (max-width: 640px) {

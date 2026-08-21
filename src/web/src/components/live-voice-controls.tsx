@@ -12,6 +12,7 @@ import { lumenApi } from '@/lib/api/client'
 import type { LiveEventEnvelope } from '@/lib/api/types'
 import { initialLiveState, liveReducer } from '@/lib/live/live-reducer'
 import { RealtimeVoiceClient } from '@/lib/live/realtime-client'
+import { ChoiceMenu } from './choice-menu'
 
 export interface LiveVoiceControlsProps {
   enabled: boolean
@@ -234,22 +235,23 @@ export function LiveVoiceControls({
             </span>
             <strong>{statusLabels[state.status] ?? 'Live 已连接'}</strong>
             {devices.length > 1 && (
-              <select
+              <ChoiceMenu
+                className="is-device"
                 value={deviceId}
-                aria-label="麦克风设备"
-                onChange={(event) => {
-                  const next = event.target.value
+                label="麦克风设备"
+                menuWidth={280}
+                options={[
+                  { value: '', label: '默认麦克风', description: '跟随系统当前输入设备' },
+                  ...devices.map((device) => ({
+                    value: device.deviceId,
+                    label: device.label || `麦克风 ${device.deviceId.slice(0, 6)}`,
+                  })),
+                ]}
+                onChange={(next) => {
                   setDeviceId(next)
                   void clientRef.current?.selectDevice(next)
                 }}
-              >
-                <option value="">默认麦克风</option>
-                {devices.map((device) => (
-                  <option key={device.deviceId} value={device.deviceId}>
-                    {device.label || `麦克风 ${device.deviceId.slice(0, 6)}`}
-                  </option>
-                ))}
-              </select>
+              />
             )}
           </div>
           {(state.userTranscript || state.assistantTranscript) && (

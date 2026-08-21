@@ -41,6 +41,7 @@ from lumen.events import (
     RunWaitingForUser,
     TextDelta,
     TextRetracted,
+    ThinkingDelta,
     ToolApprovalBatchPending,
     ToolApprovalPending,
     ToolApprovalResolved,
@@ -49,7 +50,7 @@ from lumen.events import (
     UsageUpdated,
     WorkProductChanged,
 )
-from lumen.resources import CONTROL_TOOL_NAMES
+from lumen.task_control import CONTROL_TOOL_NAMES
 from lumen.ui.activity_indicator import (
     RunActivityIndicator,
     tool_activity_presentation,
@@ -88,6 +89,8 @@ class EventRendererMixin:
         activity = self.query_one(RunActivityIndicator)
         if not isinstance(event, CommentaryDelta):
             self._close_commentary_segment()
+        if not isinstance(event, ThinkingDelta):
+            self._close_thinking_segment()
         if not isinstance(event, ToolCallStarted | ToolCallFinished):
             self._current_read_group = None
         if isinstance(event, InputQueued | InputDelivered | InputDequeued):
@@ -115,6 +118,10 @@ class EventRendererMixin:
             await self._close_assistant_segment()
             await self._append_commentary(event.text)
             activity.stop()
+        elif isinstance(event, ThinkingDelta):
+            await self._close_assistant_segment()
+            await self._append_thinking(event.text)
+            activity.suspend("Thinking")
         elif isinstance(event, PlanCreated | PlanUpdated):
             self.plan = event.plan
             await self._close_assistant_segment()
@@ -140,7 +147,10 @@ class EventRendererMixin:
             await self._close_assistant_segment()
             detail = event.summary or event.status
             await self._append_system(f"Agent {event.path} · {event.phase}: {detail}")
-            activity.stop()
+            # Child progress keeps streaming while the parent run is active;
+            # killing the activity indicator per step would make it flicker.
+            if event.phase != "progress":
+                activity.stop()
         elif isinstance(event, PlanReviewPending):
             self.plan = event.plan
             self._plan_review_revision = event.revision
@@ -173,15 +183,12 @@ class EventRendererMixin:
                 event.args,
                 origin=event.origin,
                 risk=event.risk,
+                view=event.call_view,
             )
             use_activity_group = presentation.groupable and self._transcript_density == "normal"
             if use_activity_group:
                 group = self._current_read_group
-                if (
-                    group is None
-                    or group.parent is None
-                    or not group.is_compatible(presentation)
-                ):
+                if group is None or group.parent is None or not group.is_compatible(presentation):
                     group = ReadToolGroup()
                     self._current_read_group = group
                     await messages.mount(group)
@@ -213,7 +220,13 @@ class EventRendererMixin:
                             del self._tool_cards[old_id]
                         if len(self._tool_cards) <= self._TOOL_CARD_MAX:
                             break
-            card.start(args=event.args, origin=event.origin, risk=event.risk, started_at=event.started_at)
+            card.start(
+                args=event.args,
+                origin=event.origin,
+                risk=event.risk,
+                started_at=event.started_at,
+                call_view=event.call_view,
+            )
             card.set_density(self._transcript_density)
             status.update(self._status(f"Running {event.name}…"))
             activity.suspend(
@@ -239,6 +252,7 @@ class EventRendererMixin:
                     is_error=event.is_error,
                     elapsed_seconds=event.elapsed_seconds,
                     exit_code=event.exit_code,
+                    result_view=event.result_view,
                 )
             activity.start("Thinking")
         elif isinstance(event, ToolApprovalPending):
@@ -293,7 +307,7 @@ class EventRendererMixin:
                 f"Context compacted: {event.active_message_count} active messages."
             )
         elif isinstance(event, ContextCompactionFailed):
-            await self._update_compaction_row(f"Context compaction failed: {event.message}")
+            await self._update_compaction_row(f"✗ Context compaction failed: {event.message}", failed=True)
         elif isinstance(event, UsageUpdated):
             status.update(self._status_line(event))
         elif isinstance(event, RunCompleted):
@@ -322,14 +336,17 @@ class EventRendererMixin:
             self.query_one("#prompt", PromptEditor).focus()
         elif isinstance(event, RunFailed):
             await self._close_assistant_segment()
-            await self._append_system(f"Run failed: {event.message}")
+            await self._append_error(f"Run failed: {event.message} · /retry to resend")
             status.update(self._status("Run failed"))
             activity.stop()
             if self.config.ui.terminal_title:
                 self.title = f"Lumen · failed · {self.resources.workspace.name}"
-            if self.config.ui.notifications:
-                self.notify(f"Agent run failed: {event.message}", severity="error", timeout=5)
-        elif isinstance(event, RunCancelled):
+            # 失败不再额外发 toast:错误行 + 状态栏 + 终端标题已是三重信号,
+            # 而顶部右侧的 toast 会恰好盖住时间线里的错误行本体(含 /retry 提示)。
+        elif isinstance(event, RunCancelled):  # pyright: ignore[reportUnnecessaryIsInstance]
+            # The isinstance guard stays even though the current RunEvent union
+            # makes it provably narrowed: a future event type must fall through
+            # silently here, not be misrendered as a cancellation.
             await self._close_assistant_segment()
             await self._append_system("Run cancelled.")
             status.update(self._status("Cancelled"))
@@ -378,13 +395,18 @@ class EventRendererMixin:
         if self._assistant_stream is not None:
             await self._assistant_stream.flush()
 
-    async def _update_compaction_row(self: LumenApp, text: str) -> None:
-        """Render compaction state into one mutable row, not three messages."""
+    async def _update_compaction_row(self: LumenApp, text: str, *, failed: bool = False) -> None:
+        """Render compaction state into one mutable row, not three messages.
+
+        ``failed`` switches the row to error color so a failed compaction
+        reads as a failure, not as routine progress metadata.
+        """
 
         messages = self.query_one("#messages", VerticalScroll)
         if self._compaction_row is None:
             self._compaction_row = Static("", classes="compaction-row", markup=False)
             await messages.mount(self._compaction_row)
+        self._compaction_row.set_class(failed, "is-error")
         self._compaction_row.update(text)
 
     def _clear_compaction_row(self: LumenApp) -> None:

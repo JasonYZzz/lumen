@@ -60,6 +60,9 @@ AgentEventSink = Callable[[AgentEvent], Awaitable[None] | None]
 EvidenceSink = Callable[[EvidenceReceipt, str | None, tuple[str, ...]], Awaitable[None] | None]
 PlanProvider = Callable[[], PlanState]
 
+#: Per-agent cap on journal progress records (see ``_agent_progress``).
+_MAX_PROGRESS_EVENTS_PER_AGENT = 60
+
 
 class AgentOrchestrator:
     """Own scheduling, lifecycle, persistence, messaging, and completion policy.
@@ -99,9 +102,13 @@ class AgentOrchestrator:
         self._condition = asyncio.Condition()
         self._event_lock = asyncio.Lock()
         self._recovered_sessions: set[str] = set()
+        self._progress_counts: dict[str, int] = {}
         bind_status = getattr(runtime_factory, "bind_status_handler", None)
         if bind_status is not None:
             bind_status(self._runtime_status_changed)
+        bind_progress = getattr(runtime_factory, "bind_progress_handler", None)
+        if bind_progress is not None:
+            bind_progress(self._agent_progress)
 
     def bind_root_run(self, session_id: str, root_run_id: str, *, approval_mode: str) -> None:
         """Bind model tools to one owning Session and root run."""
@@ -649,6 +656,8 @@ class AgentOrchestrator:
         await self._emit(updated, kind)
         async with self._condition:
             self._condition.notify_all()
+        if status not in ACTIVE_AGENT_STATUSES:
+            self._progress_counts.pop(thread.ref.id, None)
         return updated
 
     async def _runtime_status_changed(self, agent_id: str, status: AgentStatus) -> None:
@@ -661,6 +670,25 @@ class AgentOrchestrator:
             AgentEventKind.APPROVAL_REQUESTED
             if status is AgentStatus.APPROVAL_PENDING
             else AgentEventKind.STARTED,
+        )
+
+    async def _agent_progress(self, agent_id: str, summary: str, detail: str | None) -> None:
+        """Record one bounded child step as an ``agent.progress`` event.
+
+        The per-thread cap keeps a chatty child from flooding the session
+        journal; beyond the cap the run continues silently because progress
+        records are presentation-oriented, not load-bearing.
+        """
+        thread = self._owned_thread(agent_id)
+        if thread.status not in ACTIVE_AGENT_STATUSES:
+            return
+        self._progress_counts[agent_id] = self._progress_counts.get(agent_id, 0) + 1
+        if self._progress_counts[agent_id] > _MAX_PROGRESS_EVENTS_PER_AGENT:
+            return
+        await self._emit(
+            thread,
+            AgentEventKind.PROGRESS,
+            {"summary": summary, "detail": detail},
         )
 
     async def _emit(

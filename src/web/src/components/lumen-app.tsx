@@ -1,25 +1,37 @@
 'use client'
 
 import {
+  Archive,
   ArrowDown,
+  ArrowCounterClockwise,
   ArrowsClockwise,
   CaretDown,
   Check,
   CheckCircle,
   Circle,
   CircleNotch,
+  ClockCounterClockwise,
   Copy,
+  DotsThree,
   FileCode,
   FolderSimple,
   FolderOpen,
+  GearSix,
+  HardDrives,
   Info,
   List,
+  ListMagnifyingGlass,
   MagnifyingGlass,
   NotePencil,
   PencilSimpleLine,
+  PlugsConnected,
+  Plus,
+  Robot,
   ShieldCheck,
   Sparkle,
   TerminalWindow,
+  TreeStructure,
+  Trash,
   WarningCircle,
   X,
 } from '@phosphor-icons/react'
@@ -29,7 +41,10 @@ import type {
   AgentRecord,
   ApprovalMode,
   Bootstrap,
+  CapabilityInventory,
   CheckpointRecord,
+  ConfigurationSnapshot,
+  ConfiguredModel,
   EventEnvelope,
   QueueMode,
   SessionSummary,
@@ -42,18 +57,47 @@ import {
   type SlashCommand,
 } from '@/lib/slash-commands'
 import { Composer } from './composer'
+import { ChoiceMenu, type ChoiceOption } from './choice-menu'
 import { LandingEntry } from './landing-entry'
 import { LiveVoiceControls } from './live-voice-controls'
 import { MarkdownMessage } from './markdown-message'
+import { SessionActionsMenu } from './session-actions-menu'
+import { EMPTY_WORKSPACE_PROMPT } from '@/lib/copy'
+import {
+  activityMeta,
+  activityTitle,
+  transcriptEventLabel,
+  timelineNoteLabel,
+  toolSourceLabel,
+  turnPresentation,
+  type TurnPresentation,
+} from '@/lib/turn-activity'
+import { useModalFocus } from './use-modal-focus'
 
 function requestId() {
   return crypto.randomUUID()
 }
 
+const approvalChoices: Array<ChoiceOption<ApprovalMode>> = [
+  { value: 'manual', label: '每次确认', description: '工具执行前逐项确认，适合审慎操作。' },
+  { value: 'accept_edits', label: '自动改文件', description: '文件修改自动允许，其他动作仍按规则确认。' },
+  { value: 'auto', label: '自动执行', description: '在权限与 Sandbox 约束内持续执行。' },
+]
+
 export function LumenApp() {
   const [bootstrap, setBootstrap] = useState<Bootstrap | null>(null)
   const [sessions, setSessions] = useState<SessionSummary[]>([])
   const [sessionId, setSessionId] = useState<string | null>(null)
+  const [sessionView, setSessionView] = useState<'active' | 'archived'>('active')
+  const [sessionMenu, setSessionMenu] = useState<{
+    session: SessionSummary
+    anchor: HTMLButtonElement
+  } | null>(null)
+  const [sessionDialog, setSessionDialog] = useState<{
+    mode: 'rename' | 'delete'
+    session: SessionSummary
+  } | null>(null)
+  const [sessionManagementBusy, setSessionManagementBusy] = useState(false)
   const [run, dispatch] = useReducer(runReducer, initialRunState)
   const [input, setInput] = useState('')
   const [queueMode, setQueueMode] = useState<QueueMode>('steer')
@@ -66,6 +110,7 @@ export function LumenApp() {
   const [inspectorOpen, setInspectorOpen] = useState(false)
   const [checkpointsOpen, setCheckpointsOpen] = useState(false)
   const [transcriptOpen, setTranscriptOpen] = useState(false)
+  const [settingsOpen, setSettingsOpen] = useState(false)
   const [checkpoints, setCheckpoints] = useState<CheckpointRecord[]>([])
   const [controlBusy, setControlBusy] = useState(false)
   const closeStreamRef = useRef<(() => void) | null>(null)
@@ -75,7 +120,7 @@ export function LumenApp() {
   const refreshChrome = useCallback(async () => {
     const [nextBootstrap, nextSessions] = await Promise.all([
       lumenApi.bootstrap(),
-      lumenApi.listSessions(),
+      lumenApi.listSessions(true),
     ])
     setBootstrap(nextBootstrap)
     setSessions(nextSessions)
@@ -106,6 +151,7 @@ export function LumenApp() {
 
   const openSession = useCallback(
     async (id: string) => {
+      setSessionMenu(null)
       closeStreamRef.current?.()
       closeStreamRef.current = null
       stickToLatestRef.current = true
@@ -144,16 +190,13 @@ export function LumenApp() {
         await exchangeLaunchToken()
         const [nextBootstrap, nextSessions] = await Promise.all([
           lumenApi.bootstrap(),
-          lumenApi.listSessions(),
+          lumenApi.listSessions(true),
         ])
         if (disposed) return
         setBootstrap(nextBootstrap)
         setSessions(nextSessions)
         const requested = new URL(window.location.href).searchParams.get('session')
-        const target = requested && nextSessions.some((item) => item.sessionId === requested)
-          ? requested
-          : null
-        if (target) await openSession(target)
+        if (requested) await openSession(requested)
       } catch (error) {
         if (!disposed) {
           dispatch({
@@ -200,6 +243,7 @@ export function LumenApp() {
   }, [refreshSessionCapabilities])
 
   const runAgentAction = useCallback(async (agent: AgentRecord, action: string) => {
+    // TODO(设计审计 W6)：window.prompt 原生弹窗无焦点管理、样式不可控，后续替换为自绘弹层
     let payload: Record<string, unknown> = {}
     if (action === 'send_message') {
       const message = window.prompt(`给 ${agent.path ?? agent.id} 发送补充信息`)
@@ -235,6 +279,7 @@ export function LumenApp() {
   }, [sessionId])
 
   const forkCheckpoint = useCallback(async (checkpoint: CheckpointRecord) => {
+    // TODO(设计审计 W6)：window.confirm 同上，后续替换为自绘确认弹层
     if (!sessionId || !window.confirm(`从 turn ${checkpoint.index + 1} 创建新任务分支？`)) return
     setControlBusy(true)
     try {
@@ -264,6 +309,7 @@ export function LumenApp() {
   }, [run.runId])
 
   const waiveEffect = useCallback(async (effect: Record<string, unknown>) => {
+    // TODO(设计审计 W6)：window.prompt 同上，后续替换为自绘弹层
     if (!sessionId) return
     const id = String(effect.id ?? '')
     const reason = window.prompt('说明为什么可以跳过该验证')
@@ -299,11 +345,31 @@ export function LumenApp() {
         setInput('')
         return true
       }
+      if (name === '/plan') {
+        if (!argument) {
+          dispatch({ type: 'local-message', message: '在 `/plan` 后输入任务，Lumen 会先生成计划供你确认。' })
+          setInput('/plan ')
+          return true
+        }
+        if (run.runId) {
+          dispatch({ type: 'local-error', message: '/plan 在任务运行期间不可用，请先停止当前任务。' })
+          return true
+        }
+        const targetSession = sessionId ?? (await createSession())
+        await lumenApi.updateSessionSettings(targetSession, { collaborationMode: 'plan' })
+        setBootstrap((current) => current ? { ...current, collaborationMode: 'plan' } : current)
+        const started = await lumenApi.startRun(targetSession, argument, requestId())
+        dispatch({ type: 'run-registered', runId: started.runId })
+        attachRun(started.runId)
+        await refreshChrome()
+        setInput('')
+        return true
+      }
       if (name === '/mode') {
         if (!argument) {
           dispatch({
             type: 'local-message',
-            message: `协作：${bootstrap?.collaborationMode ?? 'default'}；审批：${bootstrap?.approvalMode ?? 'manual'}\n\n可用：\`manual\` · \`accept_edits\` · \`plan\` · \`auto\``,
+            message: `审批：${bootstrap?.approvalMode ?? 'manual'}\n\n可用：\`manual\` · \`accept_edits\` · \`auto\`；需要先规划时使用 \`/plan 任务\`。`,
           })
           setInput('')
           return true
@@ -359,6 +425,7 @@ export function LumenApp() {
         const started = await lumenApi.invokeSkill(targetSession, skillName, argument, requestId())
         dispatch({ type: 'run-registered', runId: started.runId })
         attachRun(started.runId)
+        await refreshChrome()
         setInput('')
         return true
       }
@@ -379,6 +446,7 @@ export function LumenApp() {
         )
         dispatch({ type: 'run-registered', runId: started.runId })
         attachRun(started.runId)
+        await refreshChrome()
         setInput('')
         return true
       }
@@ -562,6 +630,7 @@ export function LumenApp() {
       const started = await lumenApi.startRun(targetSession, prompt, requestId())
       dispatch({ type: 'run-registered', runId: started.runId })
       attachRun(started.runId)
+      await refreshChrome()
       setInput('')
     } catch (error) {
       dispatch({
@@ -569,7 +638,7 @@ export function LumenApp() {
         message: error instanceof Error ? error.message : '无法启动运行',
       })
     }
-  }, [attachRun, createSession, handleSlashCommand, input, queueMode, run.runId, sessionId])
+  }, [attachRun, createSession, handleSlashCommand, input, queueMode, refreshChrome, run.runId, sessionId])
 
   const stop = useCallback(async () => {
     if (!run.runId) return
@@ -638,11 +707,56 @@ export function LumenApp() {
     closeStreamRef.current?.()
     closeStreamRef.current = null
     setSessionId(null)
+    setSessionMenu(null)
     dispatch({ type: 'reset' })
     const url = new URL(window.location.href)
     url.searchParams.delete('session')
     window.history.replaceState({}, '', `${url.pathname}${url.search}`)
   }, [])
+
+  const setArchived = useCallback(async (session: SessionSummary, archived: boolean) => {
+    setSessionManagementBusy(true)
+    try {
+      if (archived) await lumenApi.archiveSession(session.sessionId)
+      else {
+        await lumenApi.restoreSession(session.sessionId)
+        setSessionView('active')
+      }
+      if (archived && session.sessionId === sessionId) leaveSession()
+      setSessionMenu(null)
+      await refreshChrome()
+    } catch (error) {
+      dispatch({
+        type: 'local-error',
+        message: error instanceof Error ? error.message : archived ? '归档失败' : '恢复失败',
+      })
+    } finally {
+      setSessionManagementBusy(false)
+    }
+  }, [leaveSession, refreshChrome, sessionId])
+
+  const commitSessionDialog = useCallback(async (title?: string) => {
+    if (!sessionDialog) return
+    setSessionManagementBusy(true)
+    try {
+      if (sessionDialog.mode === 'rename') {
+        await lumenApi.renameSession(sessionDialog.session.sessionId, title?.trim() ?? '')
+      } else {
+        await lumenApi.deleteSession(sessionDialog.session.sessionId)
+        if (sessionDialog.session.sessionId === sessionId) leaveSession()
+      }
+      setSessionDialog(null)
+      setSessionMenu(null)
+      await refreshChrome()
+    } catch (error) {
+      dispatch({
+        type: 'local-error',
+        message: error instanceof Error ? error.message : '任务管理操作失败',
+      })
+    } finally {
+      setSessionManagementBusy(false)
+    }
+  }, [leaveSession, refreshChrome, sessionDialog, sessionId])
 
   const scrollToLatest = useCallback((behavior: ScrollBehavior = 'smooth') => {
     const timeline = timelineRef.current
@@ -667,8 +781,14 @@ export function LumenApp() {
   }, [run.timeline, run.queuedInputs.length, scrollToLatest])
 
   const activeSession = sessions.find((item) => item.sessionId === sessionId)
+  const sessionIsArchived = Boolean(activeSession?.archived)
+  const visibleSessions = sessions.filter((item) => item.archived === (sessionView === 'archived'))
   const workspaceBusy = Boolean(bootstrap?.activeRunId || run.runId)
-  const isLanding = !loading && run.timeline.length === 0 && !run.runId && run.queuedInputs.length === 0
+  const isLanding = !sessionIsArchived
+    && !loading
+    && run.timeline.length === 0
+    && !run.runId
+    && run.queuedInputs.length === 0
   const statusLabel = run.runId
     ? '运行中'
     : workspaceBusy
@@ -687,63 +807,158 @@ export function LumenApp() {
       value: `/model ${model}`,
       description: model === bootstrap?.activeModel ? '当前模型' : '切换模型',
       keywords: 'model',
+      kind: 'model' as const,
     }))
     const modeCommands: SlashCommand[] = [
-      { value: '/mode manual', description: '每次确认', keywords: 'approval' },
-      { value: '/mode accept_edits', description: '自动接受文件修改', keywords: 'approval' },
-      { value: '/mode plan', description: '先出计划再执行', keywords: 'approval' },
-      { value: '/mode auto', description: '自动执行', keywords: 'approval' },
+      { value: '/mode manual', description: '每次确认', keywords: 'approval', kind: 'mode' },
+      { value: '/mode accept_edits', description: '自动接受文件修改', keywords: 'approval', kind: 'mode' },
+      { value: '/mode auto', description: '自动执行', keywords: 'approval', kind: 'mode' },
     ]
     const skillCommands = (bootstrap?.skills ?? []).map((skill) => ({
       value: `/skill:${skill.name} `,
       description: skill.description || '运行技能',
       keywords: 'skill',
+      kind: 'skill' as const,
     }))
     return [...baseSlashCommands, ...modelCommands, ...modeCommands, ...skillCommands]
   }, [bootstrap])
+  const composerSettings = (
+    <div className="composer-settings">
+      <ChoiceMenu
+        className="is-model"
+        label="模型"
+        value={bootstrap?.activeModel ?? ''}
+        disabled={!bootstrap || workspaceBusy}
+        icon={<Sparkle size={14} />}
+        options={(bootstrap?.availableModels ?? []).map((model) => ({
+          value: model,
+          label: model,
+          description: model === bootstrap?.activeModel ? '当前使用的模型' : '切换后用于下一轮任务',
+        }))}
+        onChange={(model) => void lumenApi.updateWorkspaceSettings({ model }).then(refreshChrome)}
+      />
+      <ChoiceMenu
+        label="审批模式"
+        value={bootstrap?.approvalMode ?? 'manual'}
+        icon={<ShieldCheck size={14} />}
+        options={approvalChoices}
+        onChange={(mode) => void setApprovalMode(mode)}
+      />
+    </div>
+  )
 
   return (
     <main className="workspace-shell">
       <aside className={`session-sidebar ${sidebarOpen ? 'is-open' : ''}`}>
         <div className="sidebar-brand-row">
           <button className="brand" type="button" onClick={leaveSession}>lumen</button>
-          <button className="sidebar-close" type="button" onClick={() => setSidebarOpen(false)}>
-            <X size={18} />
+          <button className="sidebar-close" type="button" aria-label="关闭" onClick={() => setSidebarOpen(false)}>
+            <X size={18} aria-hidden="true" />
           </button>
         </div>
-        <button className="new-session" type="button" onClick={() => void createSession()}>
-          <NotePencil size={18} /> 新建任务
+        <button className="new-session" type="button" onClick={leaveSession}>
+          <NotePencil size={18} aria-hidden="true" /> 新建任务
         </button>
+        <div className="sidebar-section-heading">工作区</div>
+        <div className="sidebar-workspace">
+          <FolderSimple size={16} aria-hidden="true" />
+          <span title={bootstrap?.workspace}>{bootstrap?.workspace.split('/').at(-1) ?? 'workspace'}</span>
+        </div>
         <nav className="session-list" aria-label="历史任务">
-          <p className="sidebar-label">任务</p>
-          {sessions.length === 0 ? (
-            <div className="sidebar-empty">暂无任务</div>
+          <div className="session-view-tabs" role="tablist" aria-label="任务视图">
+            <button
+              type="button"
+              role="tab"
+              aria-selected={sessionView === 'active'}
+              className={sessionView === 'active' ? 'is-active' : ''}
+              onClick={() => {
+                setSessionView('active')
+                setSessionMenu(null)
+              }}
+            >
+              最近任务
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={sessionView === 'archived'}
+              className={sessionView === 'archived' ? 'is-active' : ''}
+              onClick={() => {
+                setSessionView('archived')
+                setSessionMenu(null)
+              }}
+            >
+              已归档
+            </button>
+          </div>
+          {visibleSessions.length === 0 ? (
+            <div className="sidebar-empty">
+              {sessionView === 'active' ? '还没有历史任务' : '还没有归档任务'}
+            </div>
           ) : (
-            sessions.map((session) => (
-              <button
-                key={session.sessionId}
-                type="button"
-                className={session.sessionId === sessionId ? 'is-active' : ''}
-                onClick={() => void openSession(session.sessionId)}
-              >
-                <span>{session.title}</span>
-              </button>
+            visibleSessions.map((session) => (
+              <div className="session-row-wrap" key={session.sessionId}>
+                <div className={`session-row ${session.sessionId === sessionId ? 'is-active' : ''}`}>
+                  <button
+                    type="button"
+                    className="session-open"
+                    onClick={() => void openSession(session.sessionId)}
+                  >
+                    <span>{session.title}</span>
+                  </button>
+                  <button
+                    type="button"
+                    className="session-more"
+                    aria-label={`管理任务：${session.title}`}
+                    aria-haspopup="menu"
+                    aria-expanded={sessionMenu?.session.sessionId === session.sessionId}
+                    onClick={(event) => setSessionMenu((current) => (
+                      current?.session.sessionId === session.sessionId
+                        ? null
+                        : { session, anchor: event.currentTarget }
+                    ))}
+                  >
+                    <DotsThree size={18} weight="bold" aria-hidden="true" />
+                  </button>
+                </div>
+              </div>
             ))
           )}
         </nav>
-        <div className="sidebar-workspace">
-          <FolderSimple size={16} />
-          <span title={bootstrap?.workspace}>{bootstrap?.workspace.split('/').at(-1) ?? 'workspace'}</span>
-        </div>
+        {sessionMenu && (
+          <SessionActionsMenu
+            anchor={sessionMenu.anchor}
+            session={sessionMenu.session}
+            busy={sessionManagementBusy}
+            blocked={sessionMenu.session.sessionId === sessionId && workspaceBusy}
+            onClose={() => setSessionMenu(null)}
+            onRename={() => {
+              setSessionDialog({ mode: 'rename', session: sessionMenu.session })
+              setSessionMenu(null)
+            }}
+            onArchive={() => {
+              const session = sessionMenu.session
+              setSessionMenu(null)
+              void setArchived(session, !session.archived)
+            }}
+            onDelete={() => {
+              setSessionDialog({ mode: 'delete', session: sessionMenu.session })
+              setSessionMenu(null)
+            }}
+          />
+        )}
       </aside>
 
-      {sidebarOpen && <button className="sidebar-scrim" type="button" onClick={() => setSidebarOpen(false)} />}
+      {/* scrim 是鼠标点按的便捷关闭区,移出 Tab 顺序避免焦点停在全屏不可见元素上;键盘用户走 sidebar-close */}
+      {sidebarOpen && (
+        <button className="sidebar-scrim" type="button" tabIndex={-1} aria-label="关闭任务列表" onClick={() => setSidebarOpen(false)} />
+      )}
 
       <section className="agent-workspace">
-        <header className="workspace-header">
+        <header className={`workspace-header ${isLanding ? 'is-landing' : ''}`}>
           <div className="workspace-heading">
-            <button className="sidebar-toggle" type="button" onClick={() => setSidebarOpen(true)}>
-              <List size={19} />
+            <button className="sidebar-toggle" type="button" aria-label="打开任务列表" onClick={() => setSidebarOpen(true)}>
+              <List size={19} aria-hidden="true" />
             </button>
             <div>
               <h1>{activeSession?.title ?? '新任务'}</h1>
@@ -753,72 +968,60 @@ export function LumenApp() {
               </p>}
             </div>
           </div>
-          <div className="workspace-controls">
-            <label>
-              <select
-                value={bootstrap?.activeModel ?? ''}
-                disabled={!bootstrap || workspaceBusy}
-                onChange={(event) => void lumenApi.updateWorkspaceSettings({ model: event.target.value }).then(refreshChrome)}
-                aria-label="模型"
+          <div className="workspace-controls" aria-label="工作区工具">
+            {sessionId && <>
+              <button
+                type="button"
+                className="header-action"
+                aria-label="打开智能体与工作状态"
+                data-tooltip="运行时"
+                disabled={!sessionId}
+                onClick={() => void openInspector()}
               >
-                {bootstrap?.availableModels.map((model) => <option key={model}>{model}</option>)}
-              </select>
-            </label>
-            <label>
-              <ShieldCheck size={15} />
-              <select
-                value={bootstrap?.approvalMode ?? 'manual'}
-                onChange={(event) => void setApprovalMode(event.target.value as ApprovalMode)}
-                aria-label="审批模式"
-              >
-                <option value="manual">每次确认</option>
-                <option value="accept_edits">自动改文件</option>
-                <option value="auto">自动</option>
-              </select>
-            </label>
-            <label>
-              <select
-                value={bootstrap?.collaborationMode ?? 'default'}
+                <TreeStructure size={16} aria-hidden="true" />
+                {run.agents.length > 0 && <span className="header-action-count">{run.agents.length}</span>}
+              </button>
+              <button
+                type="button"
+                className="header-action"
+                aria-label="打开检查点"
+                data-tooltip="检查点"
                 disabled={!sessionId || workspaceBusy}
-                onChange={(event) => {
-                  if (!sessionId) return
-                  const collaborationMode = event.target.value as 'default' | 'plan'
-                  void lumenApi.updateSessionSettings(sessionId, { collaborationMode }).then(() => {
-                    setBootstrap((current) => current ? { ...current, collaborationMode } : current)
-                  })
-                }}
-                aria-label="协作模式"
+                onClick={() => void openCheckpoints()}
               >
-                <option value="default">执行</option>
-                <option value="plan">计划</option>
-              </select>
-            </label>
+                <ClockCounterClockwise size={16} aria-hidden="true" />
+              </button>
+              <button
+                type="button"
+                className="header-action"
+                aria-label="打开运行记录"
+                data-tooltip="运行记录"
+                disabled={!sessionId}
+                onClick={() => setTranscriptOpen(true)}
+              >
+                <ListMagnifyingGlass size={16} aria-hidden="true" />
+              </button>
+              <span className="workspace-controls-divider" aria-hidden="true" />
+            </>}
             <button
               type="button"
               className="header-action"
-              disabled={!sessionId}
-              onClick={() => void openInspector()}
+              aria-label="打开系统设置"
+              data-tooltip="设置"
+              onClick={() => setSettingsOpen(true)}
             >
-              Agents {run.agents.length || ''}
-            </button>
-            <button
-              type="button"
-              className="header-action"
-              disabled={!sessionId || workspaceBusy}
-              onClick={() => void openCheckpoints()}
-            >
-              Checkpoints
-            </button>
-            <button
-              type="button"
-              className="header-action"
-              disabled={!sessionId}
-              onClick={() => setTranscriptOpen(true)}
-            >
-              Transcript
+              <GearSix size={16} aria-hidden="true" />
             </button>
           </div>
         </header>
+
+        {settingsOpen && (
+          <SettingsDialog
+            workspace={bootstrap?.workspace ?? ''}
+            runActive={Boolean(run.runId)}
+            onClose={() => setSettingsOpen(false)}
+          />
+        )}
 
         {inspectorOpen && (
           <RuntimeInspector
@@ -849,6 +1052,16 @@ export function LumenApp() {
             density={run.transcriptDensity}
             onClose={() => setTranscriptOpen(false)}
             onToggleDensity={() => void toggleTranscriptDensity()}
+          />
+        )}
+
+        {sessionDialog && (
+          <SessionManagementDialog
+            mode={sessionDialog.mode}
+            session={sessionDialog.session}
+            busy={sessionManagementBusy}
+            onClose={() => setSessionDialog(null)}
+            onConfirm={(title) => void commitSessionDialog(title)}
           />
         )}
 
@@ -901,6 +1114,7 @@ export function LumenApp() {
               onQueueModeChange={setQueueMode}
               onSubmit={() => void submit()}
               onStop={() => void stop()}
+              settingsControl={composerSettings}
               liveControl={(
                 <LiveVoiceControls
                   enabled={Boolean(bootstrap?.liveEnabled)}
@@ -924,10 +1138,11 @@ export function LumenApp() {
                 ) : run.timeline.length === 0 ? (
                   <EmptyWorkspace />
                 ) : (
-                  groupTimelineByTurn(run.timeline).map((turn) => (
+                  groupTimelineByTurn(run.timeline).map((turn, index, turns) => (
                     <ConversationTurn
                       key={turn.id}
                       turn={turn}
+                      active={Boolean(run.runId) && index === turns.length - 1}
                       onApproval={(callId, approved, scope) => {
                         if (run.runId) {
                           void lumenApi.decideApproval(run.runId, callId, approved, scope)
@@ -946,7 +1161,21 @@ export function LumenApp() {
                 </button>
               )}
 
-              <footer className="workspace-composer">
+              {sessionIsArchived && activeSession ? (
+                <div className="archived-session-notice" role="status">
+                  <Archive size={18} weight="duotone" />
+                  <span>此任务已归档。恢复后才能继续对话。</span>
+                  <button
+                    type="button"
+                    disabled={sessionManagementBusy}
+                    onClick={() => void setArchived(activeSession, false)}
+                  >
+                    <ArrowCounterClockwise size={16} />
+                    恢复任务
+                  </button>
+                </div>
+              ) : (
+                <footer className="workspace-composer">
                 {run.runId && (
                   <div className="run-live-status" role="status">
                     <CircleNotch size={14} className="spin" />
@@ -968,6 +1197,7 @@ export function LumenApp() {
                   onQueueModeChange={setQueueMode}
                   onSubmit={() => void submit()}
                   onStop={() => void stop()}
+                  settingsControl={composerSettings}
                   liveControl={(
                     <LiveVoiceControls
                       enabled={Boolean(bootstrap?.liveEnabled)}
@@ -977,12 +1207,577 @@ export function LumenApp() {
                     />
                   )}
                 />
-              </footer>
+                </footer>
+              )}
             </>
           )}
         </div>
       </section>
     </main>
+  )
+}
+
+type SettingsSection = 'overview' | 'models' | 'extensions' | 'agents'
+
+interface ModelDraft {
+  originalName: string | null
+  name: string
+  id: string
+  api: Exclude<ConfiguredModel['api'], null> | ''
+  baseUrl: string
+  apiKeyEnv: string
+  setDefault: boolean
+  settings: Record<string, unknown>
+  context: Record<string, unknown>
+  authKind: ConfiguredModel['authKind']
+}
+
+function modelDraft(model: ConfiguredModel): ModelDraft {
+  return {
+    originalName: model.name,
+    name: model.name,
+    id: model.id,
+    api: model.api ?? '',
+    baseUrl: model.baseUrl ?? '',
+    apiKeyEnv: model.apiKeyEnv ?? '',
+    setDefault: model.isDefault,
+    settings: { ...model.settings },
+    context: { ...model.context },
+    authKind: model.authKind,
+  }
+}
+
+function emptyModelDraft(): ModelDraft {
+  return {
+    originalName: null,
+    name: '',
+    id: '',
+    api: '',
+    baseUrl: '',
+    apiKeyEnv: '',
+    setDefault: false,
+    settings: {},
+    context: {},
+    authKind: 'none',
+  }
+}
+
+function modelDraftChanged(draft: ModelDraft | null, configuration: ConfigurationSnapshot | null) {
+  if (!draft) return false
+  if (draft.originalName === null) {
+    return Boolean(
+      draft.name.trim()
+      || draft.id.trim()
+      || draft.api
+      || draft.baseUrl.trim()
+      || draft.apiKeyEnv.trim()
+      || draft.setDefault
+      || Object.keys(draft.settings).some((key) => draft.settings[key] !== undefined)
+      || Object.keys(draft.context).some((key) => draft.context[key] !== undefined),
+    )
+  }
+  const original = configuration?.models.find((model) => model.name === draft.originalName)
+  if (!original) return true
+  return (
+    draft.name !== original.name
+    || draft.id !== original.id
+    || draft.api !== (original.api ?? '')
+    || draft.baseUrl !== (original.baseUrl ?? '')
+    || draft.apiKeyEnv !== (original.apiKeyEnv ?? '')
+    || draft.setDefault !== original.isDefault
+    || JSON.stringify(draft.settings) !== JSON.stringify(original.settings)
+    || JSON.stringify(draft.context) !== JSON.stringify(original.context)
+  )
+}
+
+function SettingsDialog({
+  workspace,
+  runActive,
+  onClose,
+}: {
+  workspace: string
+  runActive: boolean
+  onClose: () => void
+}) {
+  const [section, setSection] = useState<SettingsSection>('models')
+  const [configuration, setConfiguration] = useState<ConfigurationSnapshot | null>(null)
+  const [capabilities, setCapabilities] = useState<CapabilityInventory | null>(null)
+  const [draft, setDraft] = useState<ModelDraft | null>(null)
+  const [busy, setBusy] = useState(false)
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
+  const [restartRequired, setRestartRequired] = useState(false)
+  const [deleteArmed, setDeleteArmed] = useState(false)
+  const [closeArmed, setCloseArmed] = useState(false)
+  const [pathCopied, setPathCopied] = useState(false)
+  const [capabilityError, setCapabilityError] = useState('')
+  const [capabilityLoading, setCapabilityLoading] = useState(true)
+
+  const load = useCallback(async () => {
+    setLoading(true)
+    setError('')
+    try {
+      const nextConfiguration = await lumenApi.configuration()
+      setConfiguration(nextConfiguration)
+      setDraft((current) => {
+        if (current?.originalName === null) return current
+        const selected = nextConfiguration.models.find(
+          (model) => model.name === current?.originalName,
+        ) ?? nextConfiguration.models[0]
+        return selected ? modelDraft(selected) : emptyModelDraft()
+      })
+    } catch (loadError) {
+      setError(loadError instanceof Error ? loadError.message : '无法读取设置')
+    } finally {
+      setLoading(false)
+    }
+  }, [])
+
+  const loadCapabilities = useCallback(async () => {
+    setCapabilityLoading(true)
+    setCapabilityError('')
+    try {
+      setCapabilities(await lumenApi.capabilities())
+    } catch (loadError) {
+      setCapabilityError(loadError instanceof Error ? loadError.message : '无法读取运行能力')
+    } finally {
+      setCapabilityLoading(false)
+    }
+  }, [])
+
+  useEffect(() => {
+    void load()
+    void loadCapabilities()
+  }, [load, loadCapabilities])
+
+  useEffect(() => {
+    if (!draft && configuration?.models[0]) setDraft(modelDraft(configuration.models[0]))
+  }, [configuration, draft])
+
+  const save = async () => {
+    if (!configuration || !draft) return
+    setBusy(true)
+    setError('')
+    try {
+      const result = await lumenApi.upsertModelConfiguration(draft.name.trim(), {
+        expectedRevision: configuration.revision,
+        id: draft.id.trim(),
+        api: draft.api || null,
+        baseUrl: draft.baseUrl.trim() || null,
+        apiKeyEnv: draft.apiKeyEnv.trim() || null,
+        settings: draft.settings,
+        context: draft.context,
+        setDefault: draft.setDefault,
+      })
+      setConfiguration(result)
+      const saved = result.models.find((model) => model.name === draft.name.trim())
+      if (saved) setDraft(modelDraft(saved))
+      setRestartRequired(Boolean(result.restartRequired))
+      setDeleteArmed(false)
+      setCloseArmed(false)
+    } catch (saveError) {
+      setError(saveError instanceof Error ? saveError.message : '保存模型失败')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const remove = async () => {
+    if (!configuration || !draft?.originalName) return
+    setBusy(true)
+    setError('')
+    try {
+      const result = await lumenApi.deleteModelConfiguration(
+        draft.originalName,
+        configuration.revision,
+      )
+      setConfiguration(result)
+      setDraft(result.models[0] ? modelDraft(result.models[0]) : emptyModelDraft())
+      setRestartRequired(Boolean(result.restartRequired))
+      setDeleteArmed(false)
+      setCloseArmed(false)
+    } catch (removeError) {
+      setError(removeError instanceof Error ? removeError.message : '删除模型失败')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const valid = Boolean(
+    draft?.name.trim() &&
+    draft.id.trim() &&
+    !(draft.authKind === 'inline' && !draft.apiKeyEnv.trim()),
+  )
+  const editable = Boolean(configuration?.editable) && !runActive
+  const draftChanged = modelDraftChanged(draft, configuration)
+  const requestClose = useCallback(() => {
+    if (busy) return
+    if (draftChanged && !closeArmed) {
+      setCloseArmed(true)
+      return
+    }
+    onClose()
+  }, [busy, closeArmed, draftChanged, onClose])
+  const dialogRef = useModalFocus(requestClose)
+
+  const navItems: Array<{
+    id: SettingsSection
+    label: string
+    icon: typeof GearSix
+    count?: number
+  }> = [
+    { id: 'overview', label: '通用设置', icon: GearSix },
+    { id: 'models', label: '模型', icon: HardDrives, count: configuration?.models.length },
+    {
+      id: 'extensions',
+      label: '扩展能力',
+      icon: PlugsConnected,
+      count: (capabilities?.skills.length ?? 0) + (capabilities?.mcp_servers.length ?? 0),
+    },
+    { id: 'agents', label: 'Agent 预设', icon: Robot, count: capabilities?.agent_profiles.length },
+  ]
+
+  return (
+    <div
+      ref={dialogRef}
+      className="runtime-overlay settings-overlay"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="settings-title"
+      tabIndex={-1}
+    >
+      <section className="settings-dialog">
+        <header className="settings-header">
+          <div>
+            <strong id="settings-title">设置</strong>
+            <span>{workspace || 'Lumen 工作区'}</span>
+          </div>
+          <div>
+            {configuration?.targetPath && (
+              <button
+                type="button"
+                className="settings-path-button"
+                aria-label={pathCopied ? '配置路径已复制' : '复制配置路径'}
+                onClick={() => {
+                  void navigator.clipboard.writeText(configuration.targetPath).then(() => {
+                    setPathCopied(true)
+                    window.setTimeout(() => setPathCopied(false), 1200)
+                  }).catch(() => setError('无法复制配置路径，请检查浏览器剪贴板权限。'))
+                }}
+              >
+                {pathCopied ? <Check size={14} aria-hidden="true" /> : <Copy size={14} aria-hidden="true" />}
+                {pathCopied ? '已复制' : '复制配置路径'}
+              </button>
+            )}
+            <button type="button" className="settings-close" aria-label="关闭设置" onClick={requestClose}>
+              <X size={17} aria-hidden="true" />
+            </button>
+          </div>
+        </header>
+        <div className="settings-layout">
+          <nav className="settings-nav" aria-label="设置分类">
+            {navItems.map((item) => {
+              const Icon = item.icon
+              return (
+                <button
+                  key={item.id}
+                  type="button"
+                  className={section === item.id ? 'is-active' : ''}
+                  aria-current={section === item.id ? 'page' : undefined}
+                  onClick={() => setSection(item.id)}
+                >
+                  <Icon size={16} aria-hidden="true" />
+                  <span>{item.label}</span>
+                  {item.count !== undefined && <small>{item.count}</small>}
+                </button>
+              )
+            })}
+          </nav>
+          <div className="settings-content">
+            {loading ? (
+              <div className="settings-loading"><CircleNotch size={18} className="spin" /> 正在读取配置</div>
+            ) : error && !configuration ? (
+              <div className="settings-error" role="alert">
+                <WarningCircle size={18} />
+                <span>{error}</span>
+                <button type="button" onClick={() => void load()}>重试</button>
+              </div>
+            ) : section === 'overview' ? (
+              <SettingsOverview
+                configuration={configuration}
+                capabilities={capabilities}
+                capabilityError={capabilityError}
+              />
+            ) : section === 'models' ? (
+              <div className="model-settings">
+                <div className="settings-section-heading">
+                  <div><h2>模型</h2><p>配置推理提供方；密钥只通过环境变量读取。</p></div>
+                  <button
+                    type="button"
+                    disabled={!editable || busy}
+                    onClick={() => {
+                      setDraft(emptyModelDraft())
+                      setDeleteArmed(false)
+                      setCloseArmed(false)
+                    }}
+                  >
+                    <Plus size={14} /> 添加模型
+                  </button>
+                </div>
+                {(restartRequired || configuration?.restartRequired) && (
+                  <div className="settings-notice is-success" role="status">
+                    <CheckCircle size={17} weight="fill" />
+                    <span><strong>配置已保存</strong>重启 Lumen Web 后载入新的模型注册表。</span>
+                  </div>
+                )}
+                {runActive && (
+                  <div className="settings-notice"><Info size={17} /><span>任务运行期间配置为只读，请在运行结束后保存。</span></div>
+                )}
+                {!configuration?.editable && (
+                  <div className="settings-notice"><Info size={17} /><span>{configuration?.editReason}</span></div>
+                )}
+                {closeArmed && draftChanged && (
+                  <div className="settings-notice is-warning" role="alert">
+                    <WarningCircle size={17} />
+                    <span><strong>有尚未保存的更改</strong>关闭设置会放弃当前模型表单中的修改。</span>
+                    <div>
+                      <button type="button" onClick={() => setCloseArmed(false)}>继续编辑</button>
+                      <button type="button" className="is-danger" onClick={onClose}>放弃更改</button>
+                    </div>
+                  </div>
+                )}
+                <div className="model-settings-body">
+                  <div className="model-list" role="listbox" aria-label="已配置模型">
+                    {configuration?.models.map((model) => (
+                      <button
+                        type="button"
+                        role="option"
+                        aria-selected={draft?.originalName === model.name}
+                        className={draft?.originalName === model.name ? 'is-active' : ''}
+                        key={model.name}
+                        disabled={busy || (draftChanged && draft?.originalName !== model.name)}
+                        title={draftChanged && draft?.originalName !== model.name ? '请先保存或还原当前更改' : undefined}
+                        onClick={() => {
+                          setDraft(modelDraft(model))
+                          setDeleteArmed(false)
+                          setCloseArmed(false)
+                        }}
+                      >
+                        <span><strong>{model.name}</strong><small>{model.id}</small></span>
+                        {model.isDefault && <em>默认</em>}
+                      </button>
+                    ))}
+                  </div>
+                  {draft && (
+                    <form className="model-form" onSubmit={(event) => { event.preventDefault(); void save() }}>
+                      {error && <div className="settings-inline-error" role="alert"><span>{error}</span><button type="button" onClick={() => void load()}>重新读取</button></div>}
+                      <div className="model-form-grid">
+                        <label><span>配置名称</span><input value={draft.name} disabled={draft.originalName !== null || busy || !editable} onChange={(event) => setDraft({ ...draft, name: event.target.value })} placeholder="例如 local-qwen" /></label>
+                        <label><span>模型 ID</span><input value={draft.id} disabled={busy || !editable} onChange={(event) => setDraft({ ...draft, id: event.target.value })} placeholder="例如 openai:qwen3" /></label>
+                        <label><span>API 协议</span><select value={draft.api} disabled={busy || !editable} onChange={(event) => setDraft({ ...draft, api: event.target.value as ModelDraft['api'] })}><option value="">自动选择</option><option value="responses">Responses API</option><option value="chat">Chat Completions</option><option value="openai-responses">OpenAI Responses 兼容</option><option value="openai-completions">OpenAI Completions 兼容</option><option value="chat-completions">Chat Completions 兼容别名</option></select></label>
+                        <label><span>API 地址</span><input value={draft.baseUrl} disabled={busy || !editable} onChange={(event) => setDraft({ ...draft, baseUrl: event.target.value })} placeholder="提供方默认或 http://127.0.0.1:11434/v1" /></label>
+                        <label className="model-form-wide"><span>API 密钥环境变量</span><input value={draft.apiKeyEnv} disabled={busy || !editable} onChange={(event) => setDraft({ ...draft, apiKeyEnv: event.target.value })} placeholder="例如 OPENAI_API_KEY；本地模型可留空" /><small>Web 不读取、显示或保存密钥明文。</small></label>
+                        <label><span>最大输出 Token</span><input type="number" min="1" value={String(draft.settings.max_tokens ?? '')} disabled={busy || !editable} onChange={(event) => setDraft({ ...draft, settings: { ...draft.settings, max_tokens: event.target.value ? Number(event.target.value) : undefined } })} placeholder="提供方默认" /></label>
+                        <label><span>上下文窗口</span><input type="number" min="1" value={String(draft.context.window_tokens ?? '')} disabled={busy || !editable} onChange={(event) => setDraft({ ...draft, context: { ...draft.context, window_tokens: event.target.value ? Number(event.target.value) : undefined } })} placeholder="自动识别" /></label>
+                      </div>
+                      {draft.authKind === 'inline' && !draft.apiKeyEnv.trim() && (
+                        <div className="settings-notice"><WarningCircle size={17} /><span>此模型来自含内联密钥的配置。先改为环境变量名，Web 才会创建安全覆盖。</span></div>
+                      )}
+                      <label className="settings-checkbox"><input type="checkbox" checked={draft.setDefault} disabled={busy || !editable || Boolean(draft.originalName && draft.setDefault)} onChange={(event) => setDraft({ ...draft, setDefault: event.target.checked })} /><span>{draft.originalName && draft.setDefault ? '当前默认模型' : '设为重启后的默认模型'}</span></label>
+                      <footer>
+                        {draft.originalName && configuration && configuration.models.length > 1 && (
+                          <button
+                            type="button"
+                            className={deleteArmed ? 'is-danger' : 'is-quiet'}
+                            disabled={busy || !editable}
+                            onClick={() => deleteArmed ? void remove() : setDeleteArmed(true)}
+                          >
+                            <Trash size={14} /> {deleteArmed ? '确认删除' : '删除模型'}
+                          </button>
+                        )}
+                        <span />
+                        <button
+                          type="button"
+                          className="is-quiet"
+                          disabled={busy}
+                          onClick={() => {
+                            const original = configuration?.models.find(
+                              (model) => model.name === draft.originalName,
+                            )
+                            setDraft(original ? modelDraft(original) : emptyModelDraft())
+                            setCloseArmed(false)
+                            setDeleteArmed(false)
+                          }}
+                        >
+                          {draft.originalName ? '还原' : '清空'}
+                        </button>
+                        <button type="submit" disabled={!valid || !editable || busy || !draftChanged}>{busy ? '正在保存…' : draftChanged ? '保存配置' : '已保存'}</button>
+                      </footer>
+                    </form>
+                  )}
+                </div>
+              </div>
+            ) : section === 'extensions' ? (
+              <CapabilitySettings
+                capabilities={capabilities}
+                loading={capabilityLoading}
+                error={capabilityError}
+                onRetry={() => void loadCapabilities()}
+              />
+            ) : (
+              <AgentProfileSettings
+                capabilities={capabilities}
+                loading={capabilityLoading}
+                error={capabilityError}
+                onRetry={() => void loadCapabilities()}
+              />
+            )}
+          </div>
+        </div>
+      </section>
+    </div>
+  )
+}
+
+function SettingsOverview({
+  configuration,
+  capabilities,
+  capabilityError,
+}: {
+  configuration: ConfigurationSnapshot | null
+  capabilities: CapabilityInventory | null
+  capabilityError: string
+}) {
+  return (
+    <div className="settings-overview">
+      <div className="settings-section-heading"><div><h2>通用设置</h2><p>当前工作区的配置来源与运行能力概览。</p></div></div>
+      {capabilityError && <div className="settings-notice"><WarningCircle size={17} /><span><strong>运行能力暂不可用</strong>{capabilityError}。模型配置仍可独立管理。</span></div>}
+      {configuration?.warnings.map((warning) => <div className="settings-notice" key={warning}><Info size={17} /><span>{warning}</span></div>)}
+      <dl className="settings-stat-grid">
+        <div><dt>模型</dt><dd>{configuration?.models.length ?? 0}</dd></div>
+        <div><dt>工具</dt><dd>{capabilities?.tools.length ?? 0}</dd></div>
+        <div><dt>Skills</dt><dd>{capabilities?.skills.length ?? 0}</dd></div>
+        <div><dt>MCP</dt><dd>{capabilities?.mcp_servers.length ?? 0}</dd></div>
+      </dl>
+      <section className="settings-source-list">
+        <h3>配置优先级</h3>
+        {configuration?.sources.map((source) => (
+          <div key={`${source.scope}:${source.path}`}><span>{source.scope}</span><code>{source.path}</code></div>
+        ))}
+        <div className="is-target"><span>Web 写入</span><code>{configuration?.targetPath}</code></div>
+      </section>
+    </div>
+  )
+}
+
+function CapabilitySettings({
+  capabilities,
+  loading,
+  error,
+  onRetry,
+}: {
+  capabilities: CapabilityInventory | null
+  loading: boolean
+  error: string
+  onRetry: () => void
+}) {
+  const groups = [
+    { title: 'Skills', items: capabilities?.skills ?? [], key: 'name' },
+    { title: 'MCP Servers', items: capabilities?.mcp_servers ?? [], key: 'name' },
+    { title: '工具', items: capabilities?.tools ?? [], key: 'name' },
+  ]
+  return <div className="capability-settings"><div className="settings-section-heading"><div><h2>扩展能力</h2><p>来自当前运行时的只读清单；配置编辑将在后续版本开放。</p></div></div>{loading ? <div className="settings-loading"><CircleNotch size={18} className="spin" /> 正在读取运行能力</div> : error ? <div className="settings-error" role="alert"><WarningCircle size={18} /><span>{error}</span><button type="button" onClick={onRetry}>重试</button></div> : groups.map((group) => <section key={group.title}><h3>{group.title} <small>{group.items.length}</small></h3>{group.items.length ? group.items.map((item, index) => <div className="capability-row" key={`${String(item[group.key] ?? index)}`}><span><strong>{String(item.name ?? item.reference ?? `item-${index + 1}`)}</strong><small>{String(item.description ?? item.origin ?? '')}</small></span><em>{String(item.status ?? '已载入')}</em></div>) : <p>当前没有 {group.title}。</p>}</section>)}</div>
+}
+
+function AgentProfileSettings({
+  capabilities,
+  loading,
+  error,
+  onRetry,
+}: {
+  capabilities: CapabilityInventory | null
+  loading: boolean
+  error: string
+  onRetry: () => void
+}) {
+  const profiles = capabilities?.agent_profiles ?? []
+  return <div className="capability-settings"><div className="settings-section-heading"><div><h2>Agent 预设</h2><p>展示当前发现的角色配置及其能力收窄范围。</p></div></div>{loading ? <div className="settings-loading"><CircleNotch size={18} className="spin" /> 正在读取 Agent 预设</div> : error ? <div className="settings-error" role="alert"><WarningCircle size={18} /><span>{error}</span><button type="button" onClick={onRetry}>重试</button></div> : <section><h3>可用预设 <small>{profiles.length}</small></h3>{profiles.length ? profiles.map((profile, index) => <div className="capability-row" key={String(profile.name ?? index)}><span><strong>{String(profile.name ?? `profile-${index + 1}`)}</strong><small>{String(profile.description ?? profile.role ?? '')}</small></span><em>{String(profile.status ?? '可用')}</em></div>) : <p>当前没有自定义 Agent 预设。</p>}</section>}</div>
+}
+
+function SessionManagementDialog({
+  mode,
+  session,
+  busy,
+  onClose,
+  onConfirm,
+}: {
+  mode: 'rename' | 'delete'
+  session: SessionSummary
+  busy: boolean
+  onClose: () => void
+  onConfirm: (title?: string) => void
+}) {
+  const [title, setTitle] = useState(session.title)
+  const dialogRef = useModalFocus(busy ? () => undefined : onClose)
+  const validTitle = title.trim().length > 0 && title.trim().length <= 80
+
+  return (
+    <div
+      ref={dialogRef}
+      className="runtime-overlay"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="session-management-title"
+      tabIndex={-1}
+    >
+      <form
+        className="session-management-dialog"
+        onSubmit={(event) => {
+          event.preventDefault()
+          if (mode === 'delete' || validTitle) onConfirm(mode === 'rename' ? title.trim() : undefined)
+        }}
+      >
+        <header>
+          <div>
+            <strong id="session-management-title">
+              {mode === 'rename' ? '重命名任务' : '删除任务'}
+            </strong>
+            <span title={session.title}>{session.title}</span>
+          </div>
+          <button type="button" aria-label="关闭" disabled={busy} onClick={onClose}>
+            <X size={16} aria-hidden="true" />
+          </button>
+        </header>
+        {mode === 'rename' ? (
+          <label>
+            <span>任务标题</span>
+            <input
+              value={title}
+              maxLength={80}
+              autoFocus
+              disabled={busy}
+              onChange={(event) => setTitle(event.target.value)}
+            />
+            <small>{title.length}/80</small>
+          </label>
+        ) : (
+          <p>
+            删除后该任务会从 Web 列表中移除，无法在界面恢复。底层 Session journal
+            保持追加式审计，不会原地改写历史记录。
+          </p>
+        )}
+        <footer>
+          <button type="button" className="quiet" disabled={busy} onClick={onClose}>取消</button>
+          <button
+            type="submit"
+            className={mode === 'delete' ? 'danger' : ''}
+            disabled={busy || (mode === 'rename' && !validTitle)}
+          >
+            {busy ? '正在处理…' : mode === 'rename' ? '保存标题' : '确认删除'}
+          </button>
+        </footer>
+      </form>
+    </div>
   )
 }
 
@@ -1007,15 +1802,23 @@ function RuntimeInspector({
   onAgentAction: (agent: AgentRecord, action: string) => void
   onWaive: (effect: Record<string, unknown>) => void
 }) {
+  const dialogRef = useModalFocus(onClose)
   return (
-    <div className="runtime-overlay" role="dialog" aria-modal="true" aria-label="Agents 与工作状态">
+    <div ref={dialogRef} className="runtime-overlay" role="dialog" aria-modal="true" aria-label="智能体与工作状态" tabIndex={-1}>
       <section className="runtime-inspector">
         <header>
-          <div><strong>Runtime</strong><span>Agents、工作对象与待处理副作用</span></div>
-          <div><button type="button" onClick={onRefresh} disabled={busy}>刷新</button><button type="button" onClick={onClose}><X size={16} /></button></div>
+          <div><strong>运行时</strong><span>智能体、工作对象与待处理副作用</span></div>
+          <div className="runtime-header-actions">
+            <button type="button" aria-label="刷新运行时状态" data-tooltip="刷新" onClick={onRefresh} disabled={busy}>
+              <ArrowsClockwise size={16} className={busy ? 'spin' : ''} aria-hidden="true" />
+            </button>
+            <button type="button" aria-label="关闭" data-tooltip="关闭" onClick={onClose}>
+              <X size={16} aria-hidden="true" />
+            </button>
+          </div>
         </header>
         <div className="runtime-section">
-          <h2>Agents <small>{agents.length}</small></h2>
+          <h2>智能体 <small>{agents.length}</small></h2>
           {agents.length === 0 ? <p className="runtime-empty">当前 Session 没有 Agent。</p> : agents.map((agent) => (
             <article className="agent-record" key={agent.id}>
               <div>
@@ -1042,7 +1845,7 @@ function RuntimeInspector({
           ))}
         </div>
         <div className="runtime-section">
-          <h2>Work Products <small>{workProducts.length}</small></h2>
+          <h2>工作对象 <small>{workProducts.length}</small></h2>
           {workProducts.length === 0 ? <p className="runtime-empty">当前没有持续工作对象。</p> : workProducts.map((item, index) => (
             <article className="work-record" key={String(item.id ?? index)}>
               <strong>{String(item.resource ?? item.id ?? `work-product-${index + 1}`)}</strong>
@@ -1051,7 +1854,7 @@ function RuntimeInspector({
           ))}
         </div>
         <div className="runtime-section">
-          <h2>Pending Effects <small>{pendingEffects.length}</small></h2>
+          <h2>待处理副作用 <small>{pendingEffects.length}</small></h2>
           {pendingEffects.length === 0 ? <p className="runtime-empty">没有待验证副作用。</p> : pendingEffects.map((effect, index) => (
             <article className="work-record" key={String(effect.id ?? index)}>
               <strong>{String(effect.operation ?? effect.id ?? `effect-${index + 1}`)}</strong>
@@ -1077,10 +1880,11 @@ function CheckpointInspector({
   onClose: () => void
   onFork: (checkpoint: CheckpointRecord) => void
 }) {
+  const dialogRef = useModalFocus(onClose)
   return (
-    <div className="runtime-overlay" role="dialog" aria-modal="true" aria-label="Session checkpoints">
+    <div ref={dialogRef} className="runtime-overlay" role="dialog" aria-modal="true" aria-label="Session 检查点" tabIndex={-1}>
       <section className="runtime-inspector compact-inspector">
-        <header><div><strong>Checkpoints</strong><span>Rewind 会创建新 Session，不覆盖当前工作区。</span></div><button type="button" onClick={onClose}><X size={16} /></button></header>
+        <header><div><strong>检查点</strong><span>Rewind 会创建新 Session，不覆盖当前工作区。</span></div><button type="button" aria-label="关闭" onClick={onClose}><X size={16} aria-hidden="true" /></button></header>
         <div className="runtime-section">
           {checkpoints.length === 0 ? <p className="runtime-empty">还没有已完成 turn。</p> : checkpoints.map((checkpoint) => (
             <article className="checkpoint-record" key={checkpoint.index}>
@@ -1106,25 +1910,107 @@ function TranscriptInspector({
   onToggleDensity: () => void
 }) {
   const [query, setQuery] = useState('')
+  const [copied, setCopied] = useState(false)
   const needle = query.trim().toLowerCase()
   const visible = needle
-    ? timeline.filter((item) => `${item.kind} ${item.text} ${item.toolName ?? ''}`.toLowerCase().includes(needle))
+    ? timeline.filter((item) => JSON.stringify(item).toLowerCase().includes(needle))
     : timeline
+  const dialogRef = useModalFocus(onClose)
+  const copyVisible = async () => {
+    const text = visible.map((item) => (
+      density === 'verbose'
+        ? JSON.stringify(item, null, 2)
+        : `[${transcriptEventLabel(item)}] ${item.toolName ? `${item.toolName} · ` : ''}${item.text || item.preview || item.status || ''}`
+    )).join('\n\n')
+    await navigator.clipboard.writeText(text)
+    setCopied(true)
+    window.setTimeout(() => setCopied(false), 1200)
+  }
   return (
-    <div className="runtime-overlay" role="dialog" aria-modal="true" aria-label="Transcript">
+    <div ref={dialogRef} className="runtime-overlay transcript-overlay" role="dialog" aria-modal="true" aria-labelledby="transcript-title" tabIndex={-1}>
       <section className="runtime-inspector transcript-inspector">
-        <header><div><strong>Transcript</strong><span>{timeline.length} events · {density}</span></div><div><button type="button" onClick={onToggleDensity}>切换密度</button><button type="button" onClick={onClose}><X size={16} /></button></div></header>
-        <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索 transcript…" autoFocus />
-        <pre>{visible.map((item) => density === 'verbose' ? JSON.stringify(item) : `[${item.kind.toUpperCase()}] ${item.toolName ? `${item.toolName} ` : ''}${item.text || item.preview || item.status || ''}`).join('\n\n')}</pre>
+        <header>
+          <div><strong id="transcript-title">运行记录</strong><span>{timeline.length} 条事件 · {density === 'verbose' ? '详细视图' : '标准视图'}</span></div>
+          <div className="runtime-header-actions">
+            <button type="button" aria-label={density === 'verbose' ? '切换到标准视图' : '切换到详细视图'} data-tooltip={density === 'verbose' ? '标准视图' : '详细视图'} aria-pressed={density === 'verbose'} onClick={onToggleDensity}>
+              <List size={16} aria-hidden="true" />
+            </button>
+            <button type="button" aria-label="复制当前记录" data-tooltip={copied ? '已复制' : '复制'} disabled={visible.length === 0} onClick={() => void copyVisible()}>
+              {copied ? <Check size={16} aria-hidden="true" /> : <Copy size={16} aria-hidden="true" />}
+            </button>
+            <button type="button" aria-label="关闭运行记录" data-tooltip="关闭" onClick={onClose}><X size={16} aria-hidden="true" /></button>
+          </div>
+        </header>
+        <div className="transcript-toolbar">
+          <label>
+            <MagnifyingGlass size={16} aria-hidden="true" />
+            <span className="sr-only">搜索运行记录</span>
+            <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索消息、工具或状态" autoFocus />
+            {query && <button type="button" aria-label="清除搜索" onClick={() => setQuery('')}><X size={14} aria-hidden="true" /></button>}
+          </label>
+          <span aria-live="polite">{needle ? `${visible.length} 条匹配` : `${visible.length} 条记录`}</span>
+        </div>
+        {visible.length ? (
+          <ol className="transcript-list">
+            {visible.map((item) => <TranscriptRecord key={item.id} item={item} density={density} />)}
+          </ol>
+        ) : (
+          <div className="transcript-empty">
+            <strong>没有匹配的记录</strong>
+            <span>尝试搜索消息正文、工具名称或执行状态。</span>
+            <button type="button" onClick={() => setQuery('')}>清除搜索</button>
+          </div>
+        )}
       </section>
     </div>
+  )
+}
+
+function TranscriptRecord({
+  item,
+  density,
+}: {
+  item: TimelineEntry
+  density: 'normal' | 'verbose'
+}) {
+  const planSummary = item.kind === 'plan' && item.plan
+    ? [
+      item.plan.goal,
+      item.plan.steps.length ? `${item.plan.steps.length} 个步骤` : '计划状态已更新',
+    ].filter(Boolean).join(' · ')
+    : ''
+  const body = density === 'verbose'
+    ? JSON.stringify(item, null, 2)
+    : item.text || item.preview || planSummary || item.status || '已记录结构化事件。'
+  const preview = body.replace(/\s+/g, ' ').trim()
+  const long = density === 'verbose' || body.length > 360 || body.split('\n').length > 7
+  const metadata = [item.toolName, item.status].filter(Boolean).join(' · ')
+
+  return (
+    <li className={`transcript-record is-${item.kind}`}>
+      <header>
+        <span className="transcript-kind">
+          {item.kind === 'tool' && <TerminalWindow size={14} aria-hidden="true" />}
+          {transcriptEventLabel(item)}
+        </span>
+        {metadata && <small>{metadata}</small>}
+      </header>
+      {long ? (
+        <details>
+          <summary>{preview.slice(0, 180)}{preview.length > 180 ? '…' : ''}</summary>
+          <pre>{body}</pre>
+        </details>
+      ) : (
+        <p>{body}</p>
+      )}
+    </li>
   )
 }
 
 function EmptyWorkspace() {
   return (
     <div className="workspace-empty">
-      <p>有什么需要处理？</p>
+      <p>{EMPTY_WORKSPACE_PROMPT}</p>
     </div>
   )
 }
@@ -1151,11 +2037,14 @@ export function groupTimelineByTurn(timeline: TimelineEntry[]): ConversationTurn
 
 function ConversationTurn({
   turn,
+  active,
   onApproval,
 }: {
   turn: ConversationTurnState
-  onApproval: (callId: string, approved: boolean, scope?: 'once' | 'session') => void
+  active: boolean
+  onApproval: (callId: string, approved: boolean, scope?: 'once' | 'session' | 'always') => void
 }) {
+  const presentation = turnPresentation(turn.response, turn.user?.text)
   return (
     <section className="conversation-turn">
       {turn.user && <TimelineRow item={turn.user} onApproval={onApproval} />}
@@ -1168,10 +2057,62 @@ function ConversationTurn({
             <strong>Lumen</strong>
           </header>
           <div className="assistant-turn-body">
-            {turn.response.map((item) => (
+            {presentation.activity.length > 0 && (
+              <TurnActivity
+                active={active}
+                presentation={presentation}
+                onApproval={onApproval}
+              />
+            )}
+            {presentation.foreground.map((item) => (
               <TimelineRow key={item.id} item={item} onApproval={onApproval} />
             ))}
           </div>
+        </div>
+      )}
+    </section>
+  )
+}
+
+function TurnActivity({
+  active,
+  presentation,
+  onApproval,
+}: {
+  active: boolean
+  presentation: TurnPresentation
+  onApproval: (callId: string, approved: boolean, scope?: 'once' | 'session' | 'always') => void
+}) {
+  const [expanded, setExpanded] = useState(active || presentation.requiresAttention)
+  const current = presentation.activity.at(-1)
+
+  useEffect(() => {
+    if (active || presentation.requiresAttention) setExpanded(true)
+    else setExpanded(false)
+  }, [active, presentation.requiresAttention])
+
+  return (
+    <section
+      className={`turn-activity ${active ? 'is-active' : ''} ${presentation.requiresAttention ? 'needs-attention' : ''}`}
+      aria-label="处理过程"
+    >
+      <button
+        className="turn-activity-summary"
+        type="button"
+        aria-expanded={expanded}
+        onClick={() => setExpanded((value) => !value)}
+      >
+        <span className="turn-activity-heading">
+          <strong>{activityTitle(presentation, active)}</strong>
+          <small>{active && current ? activityItemLabel(current) : activityMeta(presentation)}</small>
+        </span>
+        <CaretDown size={15} className={expanded ? 'is-expanded' : ''} aria-hidden="true" />
+      </button>
+      {expanded && (
+        <div className="turn-activity-list">
+          {presentation.activity.map((item) => (
+            <TimelineRow key={item.id} item={item} onApproval={onApproval} />
+          ))}
         </div>
       )}
     </section>
@@ -1223,7 +2164,7 @@ function TimelineRow({
   onApproval,
 }: {
   item: TimelineEntry
-  onApproval: (callId: string, approved: boolean, scope?: 'once' | 'session') => void
+  onApproval: (callId: string, approved: boolean, scope?: 'once' | 'session' | 'always') => void
 }) {
   const [expanded, setExpanded] = useState(false)
   const [copied, setCopied] = useState(false)
@@ -1250,6 +2191,7 @@ function TimelineRow({
     )
   }
   if (item.kind === 'tool') {
+    const sourceLabel = toolSourceLabel(item)
     const compact = ['completed', 'ok', 'success'].includes(item.status ?? '')
       && !item.isError
       && !item.pendingApproval
@@ -1262,8 +2204,14 @@ function TimelineRow({
           aria-expanded={expanded}
           onClick={() => setExpanded((value) => !value)}
         >
-          <ToolGlyph name={item.toolName ?? ''} />
-          <span><strong>{item.toolName}</strong><small>{toolTarget(item)}</small></span>
+          <ToolGlyph item={item} />
+          <span>
+            <span className="tool-title-line">
+              <strong>{String(item.callView?.title ?? item.toolName ?? '')}</strong>
+              {sourceLabel && <b>{sourceLabel}</b>}
+            </span>
+            <small>{String(item.callView?.detail ?? toolTarget(item))}</small>
+          </span>
           <em className={`is-${item.status ?? 'idle'}`}>{toolStatus(item)}</em>
           <CaretDown size={14} className={expanded ? 'is-expanded' : ''} />
         </button>
@@ -1275,6 +2223,7 @@ function TimelineRow({
               <div>
                 <button type="button" onClick={() => onApproval(item.callId!, true, 'once')}>允许一次</button>
                 <button type="button" onClick={() => onApproval(item.callId!, true, 'session')}>本会话始终允许</button>
+                <button type="button" onClick={() => onApproval(item.callId!, true, 'always')}>本项目始终允许</button>
                 <button type="button" className="deny" onClick={() => onApproval(item.callId!, false)}>拒绝</button>
               </div>
             )}
@@ -1285,19 +2234,26 @@ function TimelineRow({
             {Object.keys(item.args ?? {}).length > 0 && (
               <section><span>输入</span><pre>{JSON.stringify(item.args ?? {}, null, 2)}</pre></section>
             )}
-            {item.result && <section><span>输出</span><pre>{item.result}</pre></section>}
+            {(item.resultView?.full_text || item.result) && (
+              <section>
+                <span>输出</span>
+                <pre>{String(item.resultView?.full_text ?? item.result ?? '')}</pre>
+              </section>
+            )}
           </div>
         )}
-        {!expanded && item.preview && <p>{item.preview}</p>}
+        {!expanded && (item.resultView?.preview || item.preview) && (
+          <p>{String(item.resultView?.preview ?? item.preview ?? '')}</p>
+        )}
       </article>
     )
   }
+  const label = timelineNoteLabel(item.kind)
   return (
     <article className={`timeline-note is-${item.kind}`}>
-      <NoteGlyph kind={item.kind} />
       <div>
-        <strong>{noteLabel(item.kind)}</strong>
-        {item.kind === 'progress'
+        {label && <strong>{label}</strong>}
+        {item.kind === 'progress' || item.kind === 'thinking' || item.kind === 'commentary'
           ? <MarkdownMessage content={item.text} />
           : <p>{item.text}</p>}
       </div>
@@ -1305,7 +2261,12 @@ function TimelineRow({
   )
 }
 
-function ToolGlyph({ name }: { name: string }) {
+function ToolGlyph({ item }: { item: TimelineEntry }) {
+  const family = String(item.callView?.family ?? '').toLowerCase()
+  if (family === 'mcp') return <ArrowsClockwise size={17} />
+  if (family === 'skill') return <Sparkle size={17} />
+  if (family === 'web') return <MagnifyingGlass size={17} />
+  const name = item.toolName ?? ''
   const normalized = name.toLowerCase()
   if (normalized.includes('search') || normalized.includes('find')) return <MagnifyingGlass size={17} />
   if (normalized.includes('edit') || normalized.includes('write') || normalized.includes('patch')) return <PencilSimpleLine size={17} />
@@ -1314,21 +2275,19 @@ function ToolGlyph({ name }: { name: string }) {
   return <TerminalWindow size={17} />
 }
 
-function NoteGlyph({ kind }: { kind: TimelineEntry['kind'] }) {
-  if (kind === 'commentary') return <Sparkle size={15} />
-  if (kind === 'progress') return <CircleNotch size={15} />
-  if (kind === 'compaction') return <ArrowsClockwise size={15} />
-  if (kind === 'error') return <WarningCircle size={15} weight="fill" />
-  return <Info size={15} />
-}
-
-function noteLabel(kind: TimelineEntry['kind']) {
-  if (kind === 'commentary') return '进展'
-  if (kind === 'progress') return '进度'
-  if (kind === 'compaction') return '上下文'
-  if (kind === 'error') return '错误'
-  if (kind === 'work_product') return '工作对象'
-  return '系统'
+function activityItemLabel(item: TimelineEntry) {
+  if (item.kind === 'tool') {
+    const activeVerb = item.callView?.active_verb
+    const title = item.callView?.title
+    const detail = item.callView?.detail
+    const label = typeof activeVerb === 'string'
+      ? activeVerb
+      : typeof title === 'string'
+        ? title
+        : item.toolName ?? '工具'
+    return `${label}${typeof detail === 'string' && detail ? ` · ${detail}` : ''}`
+  }
+  return timelineNoteLabel(item.kind)
 }
 
 function toolStatus(item: TimelineEntry) {
@@ -1370,7 +2329,8 @@ Runtime:
   /transcript                       — 搜索结构化 transcript
 Model:
   /model [name]                     — 查看或切换模型
-  /mode [manual|accept_edits|plan|auto] — 查看或切换审批模式
+  /mode [manual|accept_edits|auto]  — 查看或切换审批模式
+  /plan <task>                      — 先生成计划，确认后再执行
 Context:
   /context                          — 查看上下文预算
   /context sources                  — 查看当前会话上下文来源

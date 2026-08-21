@@ -167,7 +167,59 @@ class McpApprovalStore:
         return removed
 
 
+class ApprovalRuleStore:
+    """Cross-session "always allow" approval rules, scoped to one project.
+
+    Rules are keyed by the same bounded capability string the host derives for
+    session rules (``origin:tool[:executable]``). Stored separately from user
+    config because these files are machine-managed: the config YAML may hold
+    credentials and hand-written comments that must never be rewritten.
+    """
+
+    def __init__(
+        self,
+        workspace: str | Path,
+        *,
+        state_root: str | Path | None = None,
+    ) -> None:
+        self.workspace = Path(workspace).expanduser().resolve()
+        self.project_id = canonical_project_identity(self.workspace)
+        root = Path(state_root).expanduser() if state_root is not None else Path.home() / ".lumen" / "state"
+        self.path = root / "approval-rules" / f"{self.project_id}.json"
+
+    def _data(self) -> dict[str, Any]:
+        data = _read_json(
+            self.path,
+            {"version": 1, "project_id": self.project_id, "allow": {}},
+        )
+        if not isinstance(data.get("allow"), dict):
+            data["allow"] = {}
+        data.update({"version": 1, "project_id": self.project_id})
+        return data
+
+    def allowed_keys(self) -> set[str]:
+        return {str(key) for key in self._data()["allow"]}
+
+    def allow(self, key: str) -> None:
+        data = self._data()
+        data["allow"][key] = {"updated_at": datetime.now(UTC).isoformat()}
+        _atomic_write_json(self.path, data)
+
+    def forget(self, key: str | None = None) -> bool:
+        data = self._data()
+        if key is None:
+            if not self.path.exists():
+                return False
+            self.path.unlink()
+            return True
+        removed = data["allow"].pop(key, None) is not None
+        if removed:
+            _atomic_write_json(self.path, data)
+        return removed
+
+
 __all__ = [
+    "ApprovalRuleStore",
     "McpApprovalStore",
     "TrustStore",
     "canonical_project_identity",

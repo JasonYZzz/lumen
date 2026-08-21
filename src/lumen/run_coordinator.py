@@ -9,7 +9,14 @@ from dataclasses import dataclass, field
 from pydantic_ai.messages import ModelMessage
 
 from lumen.context import CompactionCheckpointV1, CompactionCheckpointV2, ContextSummary
-from lumen.events import InputDequeued, InputQueued, RunEvent, RunStarted, TimelineEventRecord
+from lumen.events import (
+    InputDequeued,
+    InputQueued,
+    RunEvent,
+    RunFailed,
+    RunStarted,
+    TimelineEventRecord,
+)
 from lumen.interactive_queue import QueuedMessage, QueueMode
 from lumen.plan import PlanState
 from lumen.runtime import (
@@ -21,7 +28,7 @@ from lumen.runtime import (
     RunOutcome,
     get_partial_outcome,
 )
-from lumen.sessions import SessionMetadata, SessionRepository
+from lumen.sessions import SessionMetadata, SessionRepository, recoverable_orphaned_input
 
 
 @dataclass(frozen=True, slots=True)
@@ -43,6 +50,7 @@ class RunInput:
     display_text: str
     model_prompt: str
     is_retry: bool = False
+    interaction_id: str | None = None
 
 
 class RunCoordinator:
@@ -93,7 +101,11 @@ class RunCoordinator:
             ),
             compacted_prefix_length=loaded.compacted_prefix_length,
             compacted_source_end=loaded.compacted_source_end,
-            last_user_input=loaded.turns[-1].user_input if loaded.turns else None,
+            last_user_input=(
+                loaded.turns[-1].user_input
+                if loaded.turns
+                else recoverable_orphaned_input(loaded)
+            ),
             last_recovery_receipts=(tuple(loaded.turns[-1].recovery_receipts) if loaded.turns else ()),
         )
         return self._state
@@ -112,6 +124,87 @@ class RunCoordinator:
             compacted_prefix_length=state.compacted_prefix_length,
             compacted_source_end=state.compacted_source_end,
             last_user_input=state.last_user_input,
+            last_recovery_receipts=state.last_recovery_receipts,
+        )
+
+    def persist_run_start(self, user_input: str, interaction_id: str) -> None:
+        """Durably accept one input before model execution or tool effects begin."""
+
+        state = self.state
+        self._repository.append_turn_started(
+            state.session.id,
+            user_input=user_input,
+            interaction_id=interaction_id,
+            plan=state.plan,
+        )
+
+    def persist_unhandled_failure(
+        self,
+        user_input: str,
+        interaction_id: str,
+        error_message: str,
+    ) -> bool:
+        """Close a running projection when terminal persistence itself failed.
+
+        The normal runtime path owns rich messages, usage and diagnostics. This
+        fallback is intentionally minimal: it runs only while the durable read
+        projection still contains the matching ``running`` turn.
+        """
+
+        state = self.state
+        loaded = self._repository.load(state.session.id)
+        running = next(
+            (
+                turn
+                for turn in loaded.turns
+                if turn.interaction_id == interaction_id and turn.status == "running"
+            ),
+            None,
+        )
+        if running is None:
+            return False
+        timeline_events = list(running.timeline_events)
+        timeline_events.append(
+            TimelineEventRecord.from_event(
+                RunFailed(error_message),
+                sequence=len(timeline_events) + 1,
+            )
+        )
+        self._repository.append_turn(
+            state.session.id,
+            user_input=user_input,
+            messages=[],
+            approvals=[],
+            usage={},
+            status="failed",
+            plan=state.plan,
+            error_message=error_message,
+            timeline_events=timeline_events,
+            interaction_id=interaction_id,
+        )
+        self._state = CoordinatorState(
+            session=state.session,
+            history=state.history,
+            full_history=state.full_history,
+            plan=state.plan,
+            compaction_summary=state.compaction_summary,
+            compaction_checkpoint=state.compaction_checkpoint,
+            compacted_prefix_length=state.compacted_prefix_length,
+            compacted_source_end=state.compacted_source_end,
+            last_user_input=user_input,
+            last_recovery_receipts=state.last_recovery_receipts,
+        )
+        return True
+        self._state = CoordinatorState(
+            session=state.session,
+            history=state.history,
+            full_history=state.full_history,
+            plan=state.plan,
+            compaction_summary=state.compaction_summary,
+            compaction_checkpoint=state.compaction_checkpoint,
+            compacted_prefix_length=state.compacted_prefix_length,
+            compacted_source_end=state.compacted_source_end,
+            last_user_input=user_input,
             last_recovery_receipts=state.last_recovery_receipts,
         )
 
@@ -213,12 +306,21 @@ class RunCoordinator:
                 compaction=outcome.compaction,
                 timeline_events=timeline_events,
                 recovery_receipts=outcome.recovery_receipts,
+                request_receipts=outcome.request_receipts,
+                interaction_id=run_input.interaction_id,
             )
-        except BaseException:
+        except BaseException as error:
             if runtime.context_engine is not None and outcome.context_fingerprint is not None:
                 runtime.context_engine.discard_unpersisted(
                     state.session.id,
                     outcome.context_fingerprint,
+                )
+            if isinstance(error, Exception):
+                self._append_terminal_persistence_failure(
+                    run_input,
+                    error,
+                    plan=outcome.plan,
+                    timeline_events=timeline_events,
                 )
             raise
         if runtime.context_engine is not None and outcome.context_fingerprint is not None:
@@ -231,6 +333,42 @@ class RunCoordinator:
         if runtime.context_engine is not None and runtime.context_engine.memory is not None:
             runtime.context_engine.memory.schedule_session(state.session.id)
         return outcome
+
+    def _append_terminal_persistence_failure(
+        self,
+        run_input: RunInput,
+        error: Exception,
+        *,
+        plan: PlanState,
+        timeline_events: list[TimelineEventRecord],
+    ) -> None:
+        """Preserve the visible transcript when rich provider messages cannot serialize."""
+
+        message = f"terminal_persistence_failed: {type(error).__name__}: {error}"
+        fallback_events = list(timeline_events)
+        fallback_events.append(
+            TimelineEventRecord.from_event(
+                RunFailed(message),
+                sequence=len(fallback_events) + 1,
+            )
+        )
+        try:
+            self._repository.append_turn(
+                self.state.session.id,
+                user_input=run_input.display_text,
+                messages=[],
+                approvals=[],
+                usage={},
+                status="failed",
+                plan=plan,
+                error_message=message,
+                timeline_events=fallback_events,
+                interaction_id=run_input.interaction_id,
+            )
+        except Exception:
+            # The Host has one final minimal running-turn reconciliation path.
+            # Preserve the original persistence exception for its audit text.
+            return
 
     async def enqueue_interactive(self, run_input: RunInput, mode: QueueMode) -> QueuedMessage:
         runtime = self._runtime()
@@ -293,6 +431,8 @@ class RunCoordinator:
             retryable=partial.retryable if partial is not None else False,
             timeline_events=timeline_events,
             recovery_receipts=partial.recovery_receipts if partial is not None else (),
+            request_receipts=partial.request_receipts if partial is not None else (),
+            interaction_id=run_input.interaction_id,
         )
         self._state = next_state
 

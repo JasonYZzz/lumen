@@ -68,6 +68,8 @@ LUMEN_DARK = Theme(
 LUMEN_LIGHT = Theme(
     name="lumen-light",
     primary="#A06D24",
+    # 4.34:1 on background — metadata-only, never body text (see the note on
+    # the activity-meta variable below).
     secondary="#81766E",
     background="#FDFDFC",
     surface="#F5F5F3",
@@ -75,7 +77,9 @@ LUMEN_LIGHT = Theme(
     foreground="#242422",
     warning="#A06D24",
     error="#A63F4D",
-    success="#5F8C69",
+    # Deepened from #5F8C69 (3.79:1 on background) to clear WCAG AA 4.5:1
+    # for text-sized status glyphs; #4F7A57 measures 4.85:1 on #FDFDFC.
+    success="#4F7A57",
     accent="#8F5E1C",
     dark=False,
     variables={
@@ -85,6 +89,9 @@ LUMEN_LIGHT = Theme(
         "activity-shimmer": "#B95A0E",
         "activity-soft": "#914718",
         "activity-detail": "#8F6030",
+        # #81766E measures 4.34:1 on background — just under the 4.5:1 body
+        # bar. It is reserved for secondary metadata (elapsed time, tool
+        # counts, inactive mode labels), never for body text, so it stays.
         "activity-meta": "#81766E",
         "tool": "#76539C",
         "tool-shimmer": "#824FAF",
@@ -115,6 +122,26 @@ LUMEN_LIGHT = Theme(
 BUILTIN_THEMES: dict[str, Theme] = {
     LUMEN_DARK.name: LUMEN_DARK,
     LUMEN_LIGHT.name: LUMEN_LIGHT,
+}
+
+#: Last-resort colors for :func:`theme_color` when the active theme lacks a
+#: token (e.g. a user-registered custom theme). Values mirror ``LUMEN_DARK``
+#: so a missing token degrades to the default theme's look instead of an
+#: arbitrary Rich default. Centralized so call sites never hardcode dark hex
+#: literals; with the builtin themes this path is never exercised.
+FALLBACK_COLORS: dict[str, str] = {
+    "primary": "#C99552",
+    "foreground": "#ECE9E4",
+    "success": "#86A66C",
+    "error": "#D16D75",
+    "activity": "#F0A24A",
+    "activity-shimmer": "#FFC166",
+    "activity-soft": "#C77B2A",
+    "activity-detail": "#D8A56B",
+    "activity-meta": "#948A80",
+    "tool": "#C7ACE8",
+    "mode-edit": "#69B9AF",
+    "mode-manual": "#948A80",
 }
 
 
@@ -148,6 +175,7 @@ def register_themes(app: App[object], *, theme: str | None = None) -> None:
 __all__ = [
     "BUILTIN_THEMES",
     "DEFAULT_THEME",
+    "FALLBACK_COLORS",
     "LUMEN_DARK",
     "LUMEN_LIGHT",
     "register_themes",

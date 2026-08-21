@@ -29,7 +29,6 @@ from lumen.runtime import ToolApproval
 from lumen.ui.approval_panel import ApprovalPanel
 from lumen.ui.composer import PromptEditor, edit_text_external
 from lumen.ui.plan_review_panel import PlanReviewPanel
-from lumen.ui.tool_card import ToolCard
 
 if TYPE_CHECKING:
     from lumen.ui.app import LumenApp
@@ -192,21 +191,6 @@ class ApprovalControllerMixin(MessagePump):
         except Exception:
             pass
 
-    @on(ToolCard.Decision)
-    def _handle_tool_decision(self: LumenApp, event: ToolCard.Decision) -> None:
-        future = self._approval_waiters.pop(event.call_id, None)
-        if future is None or future.done():
-            return
-        action = "allowed" if event.approved else "denied"
-        message = (
-            f"The user {action} this tool call (mode={self._approval_mode.value}, decision_source=user)."
-        )
-        future.set_result(ToolApproval(approved=event.approved, message=message))
-        # Return focus to the prompt editor so the user can keep typing. The
-        # tool card grabbed focus when its approval selector mounted; now that
-        # the decision is resolved we hand it back.
-        self.query_one("#prompt", PromptEditor).focus()
-
     @on(ApprovalPanel.Decision)
     def _handle_approval_decision(self: LumenApp, event: ApprovalPanel.Decision) -> None:
         panel = self.query_one(ApprovalPanel)
@@ -215,15 +199,17 @@ class ApprovalControllerMixin(MessagePump):
         panel.resolve(event.call_id)
         if future is None or future.done():
             return
-        if event.remember and request is not None and request.call_id == event.call_id:
+        if event.scope != "once" and request is not None and request.call_id == event.call_id:
+            # Session-scoped convenience for this UI; the host journal records
+            # the same decision and owns persistent "always" rule storage.
             self._session_approval_keys.add(self._approval_scope_key(request))
         action = "allowed" if event.approved else "denied"
-        source = "user_session" if event.remember else "user"
+        source = {"session": "user_session", "always": "user_always"}.get(event.scope, "user")
         message = (
             f"The user {action} this tool call (mode={self._approval_mode.value}, decision_source={source})."
         )
         future.set_result(
-            ToolApproval(approved=event.approved, message=message, remember=event.remember)
+            ToolApproval(approved=event.approved, message=message, remember_scope=event.scope)
         )
         if panel.active_request is None:
             self.query_one("#prompt", PromptEditor).focus()

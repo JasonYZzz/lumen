@@ -1,5 +1,9 @@
 # Web Realtime 语音 Runtime 决策记录
 
+状态：Accepted
+
+日期：2026-08-18
+
 ## 1. 决策
 
 Lumen 使用 `LiveProviderRouter` 在一次 Live call 建立前选择 Provider Profile，并将选择结果冻结为
@@ -52,7 +56,7 @@ Router 只负责 capability admission、有序 fallback 和冻结 Route；它不
 2. 浏览器 DataChannel 和 PCM WebSocket 都不是工具命令权威。所有工具调用必须由 Provider Adapter
    的服务端连接生成 canonical `tool_call_ready`，再交给 `CapabilityGateway`。
 3. PCM WebSocket 复用 Web cookie、Host allow-list 和严格 Origin 校验；单帧上限 64 KiB。
-4. Risk 决定审批；EffectKind 决定 receipt、并发和验证。Live 不创建第二套工具策略。
+4. Risk 决定审批，EffectKind 决定 receipt 与验证，ToolConcurrency 决定调用能否重叠。Live 不创建第二套工具策略。
 5. `native_required_tool` Route 使用 `complete_live_turn`；当前 OpenAI Adapter 属于此类。
 6. `host_gated_synthesis` Route 只让 Provider 输出文本。`CompletionGate` 通过后才发出
    `live.response.approved`，浏览器才合成语音；失败则发出 `live.completion.blocked`，不会播放被阻止的

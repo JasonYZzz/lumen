@@ -26,7 +26,7 @@ from lumen.application import WorkspaceHost
 from lumen.approval import ApprovalMode
 from lumen.branding import FRAMEWORK_NAME, FRAMEWORK_SLUG
 from lumen.config import AppConfig, ConfigLoadError
-from lumen.config_resolver import ConfigResolver, ConfigScope
+from lumen.config_resolver import ConfigResolution, ConfigResolver, ConfigScope
 from lumen.headless import run_headless
 from lumen.resources import ResourceManager
 from lumen.trust import McpApprovalStore, TrustStore, git_common_directory
@@ -363,15 +363,32 @@ def _resolve_for_workspace(
     approve_mcp: bool,
     report_only: bool = False,
 ) -> AppConfig:
+    config, _resolution = _resolve_with_report(
+        workspace,
+        config_path,
+        approve_mcp=approve_mcp,
+        report_only=report_only,
+    )
+    return config
+
+
+def _resolve_with_report(
+    workspace: Path,
+    config_path: Path | None,
+    *,
+    approve_mcp: bool,
+    report_only: bool = False,
+) -> tuple[AppConfig, ConfigResolution]:
     resolver = ConfigResolver(workspace, explicit_path=config_path)
     trusted = _ensure_project_trust(resolver, workspace)
     resolution = resolver.resolve(project_trusted=trusted)
-    return _apply_mcp_approvals(
+    config = _apply_mcp_approvals(
         resolution.config,
         workspace,
         interactive=approve_mcp and sys.stdin.isatty(),
         report_only=report_only,
     )
+    return config, resolution
 
 
 @app.callback()
@@ -404,6 +421,13 @@ def main(
     check_config: Annotated[
         bool,
         typer.Option("--check-config", help="Validate configuration and discover approved tools, then exit."),
+    ] = False,
+    dump_effective_config: Annotated[
+        bool,
+        typer.Option(
+            "--dump-effective-config",
+            help="Print the merged, secret-redacted configuration with field provenance, then exit.",
+        ),
     ] = False,
     print_prompt: Annotated[
         str | None,
@@ -440,8 +464,10 @@ def main(
     if ctx.invoked_subcommand is not None:
         return
     try:
-        if print_prompt is not None and check_config:
-            raise ConfigLoadError("--print cannot be combined with --check-config")
+        if sum((print_prompt is not None, check_config, dump_effective_config)) > 1:
+            raise ConfigLoadError(
+                "--print, --check-config, and --dump-effective-config cannot be combined"
+            )
         if print_prompt is None and (permission_mode is not None or output_format != "text"):
             raise ConfigLoadError("--output-format and --permission-mode require --print")
         if output_format not in {"text", "json"}:
@@ -454,12 +480,21 @@ def main(
                 )
             headless_mode = ApprovalMode(permission_mode)
         workspace = _workspace(cwd)
-        config = _resolve_for_workspace(
+        config, resolution = _resolve_with_report(
             workspace,
             config_path,
-            approve_mcp=not check_config,
-            report_only=check_config,
+            approve_mcp=not check_config and not dump_effective_config,
+            report_only=check_config or dump_effective_config,
         )
+        if dump_effective_config:
+            typer.echo(
+                json.dumps(
+                    resolution.report(config=config).as_dict(),
+                    ensure_ascii=False,
+                    indent=2,
+                )
+            )
+            return
         manager = ResourceManager(config, workspace=workspace)
         if model is not None:
             try:
@@ -592,6 +627,44 @@ def web(
             log_level="info",
             access_log=access_log,
         )
+    except (ConfigLoadError, OSError, RuntimeError, ValueError, TypeError, KeyError) as error:
+        typer.echo(f"Error: {error}", err=True)
+        raise typer.Exit(1) from error
+
+
+@app.command("capabilities")
+def capabilities(
+    cwd: Annotated[Path, typer.Option("--cwd", help="Workspace used for capability discovery.")] = Path("."),
+    config_path: Annotated[Path | None, typer.Option("--config", "-c")] = None,
+    model: Annotated[str | None, typer.Option("--model", "-m")] = None,
+    json_output: Annotated[bool, typer.Option("--json", help="Emit machine-readable JSON.")] = False,
+) -> None:
+    """Inspect effective tools, Skills, MCP servers, and Agent profiles."""
+
+    try:
+        workspace = _workspace(cwd)
+        config = _resolve_for_workspace(
+            workspace,
+            config_path,
+            approve_mcp=False,
+            report_only=True,
+        )
+        manager = ResourceManager(config, workspace=workspace)
+        if model is not None:
+            manager.set_startup_model(model)
+
+        async def collect() -> dict[str, Any]:
+            async with manager:
+                return manager.capabilities_report()
+
+        report = asyncio.run(collect())
+        if json_output:
+            typer.echo(json.dumps(report, ensure_ascii=False, indent=2))
+            return
+        for item in report["tools"]:
+            typer.echo(
+                f"{item['name']}\t{item['status']}\t{item['approval']}\t{item['origin']}"
+            )
     except (ConfigLoadError, OSError, RuntimeError, ValueError, TypeError, KeyError) as error:
         typer.echo(f"Error: {error}", err=True)
         raise typer.Exit(1) from error

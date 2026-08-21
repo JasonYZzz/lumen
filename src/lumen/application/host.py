@@ -4,6 +4,7 @@ import asyncio
 from collections import Counter
 from collections.abc import AsyncIterator
 from dataclasses import asdict, dataclass, field
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Protocol, cast, overload
 from uuid import uuid4
@@ -15,6 +16,7 @@ from lumen.collaboration import (
     SessionSettingsState,
     apply_collaboration_context,
 )
+from lumen.configuration import ConfigurationConflictError, ConfigurationEditError
 from lumen.context import ContextCompactCommand, ContextMemoryCommand, ContextReportCommand
 from lumen.events import (
     AgentLifecycleChanged,
@@ -36,11 +38,12 @@ from lumen.live.manager import LiveSessionManager
 from lumen.plan import EvidenceKind, EvidenceReceipt, PlanLifecycle
 from lumen.run_coordinator import RunCoordinator, RunInput
 from lumen.runtime import AgentRuntime, CompletionPolicy, ToolApproval
-from lumen.sessions import SessionMetadata, SessionRepository
+from lumen.sessions import SessionData, SessionMetadata, SessionRepository
 from lumen.skills import expand_skill_for_message
 from lumen.timeline import RepositoryTimelineAdapter, TimelineStore
 from lumen.tools.gateway import CapabilityApproval
 from lumen.tools.workspace import Workspace
+from lumen.trust import ApprovalRuleStore
 
 from .events import EventJournal
 from .models import (
@@ -56,15 +59,19 @@ from .models import (
     CloseChildRun,
     CommandAcknowledged,
     CommandResult,
+    ConfigurationConflictHostError,
     ContextControl,
     ContinueAgent,
     CreateSession,
     DecideApproval,
+    DeleteModelConfiguration,
+    DeleteSession,
     DequeueRunInputs,
     EndLiveSession,
     EventEnvelope,
     ForkSessionAtTurn,
     GetBootstrap,
+    GetConfiguration,
     InterruptAgent,
     InterruptLiveSession,
     InvalidStateError,
@@ -82,6 +89,7 @@ from .models import (
     RejectAgentImport,
     RejectChildImport,
     RejectPlan,
+    RenameSession,
     RetryRun,
     RunNotFoundError,
     RunStartedResult,
@@ -95,9 +103,11 @@ from .models import (
     SetApprovalMode,
     SetCollaborationMode,
     SetContextSource,
+    SetSessionArchived,
     SetTranscriptDensity,
     StartLiveSession,
     StartRun,
+    UpsertModelConfiguration,
     WaivePlanVerification,
     WorkspaceBootstrap,
     WorkspaceBusyError,
@@ -114,6 +124,7 @@ class WorkspaceResources(Protocol):
     warnings: list[str]
     skills: list[Any]
     agent_orchestrator: Any
+    configuration: Any
 
     async def open(self) -> Any: ...
     async def close(self) -> None: ...
@@ -125,6 +136,7 @@ class WorkspaceResources(Protocol):
     def mcp_prompt_summary(self) -> list[dict[str, object]]: ...
     async def render_mcp_prompt(self, reference: str, arguments: dict[str, str]) -> str: ...
     def hook_summary(self) -> list[dict[str, object]]: ...
+    def capabilities_report(self) -> dict[str, Any]: ...
     def summary(self) -> dict[str, Any]: ...
 
 
@@ -167,6 +179,19 @@ class WorkspaceHost:
         self._state_lock = asyncio.Lock()
         self._opened = False
         self._approval_policy = ApprovalPolicy()
+        # Production resources own a workspace-scoped rule store; test doubles
+        # inject a hermetic one. The fallback keeps the host self-sufficient.
+        injected_rules = getattr(resources, "approval_rules", None)
+        self._approval_rules: ApprovalRuleStore = (
+            injected_rules if injected_rules is not None else ApprovalRuleStore(resources.workspace)
+        )
+        self._persistent_approval_keys: set[str]
+        try:
+            self._persistent_approval_keys = self._approval_rules.allowed_keys()
+        except OSError:
+            # An unreadable rule file must not brick the host; fresh rules can
+            # still be written once the underlying I/O recovers.
+            self._persistent_approval_keys = set()
         self._live_execution_id: str | None = None
         self._live_approvals: dict[str, dict[str, _PendingApproval]] = {}
         self._live_manager = getattr(resources, "live_manager", None)
@@ -201,6 +226,11 @@ class WorkspaceHost:
             await self.resources.close()
             self._opened = False
 
+    def capabilities(self) -> dict[str, Any]:
+        """Expose the ResourceManager read projection to every client Adapter."""
+
+        return self.resources.capabilities_report()
+
     @overload
     async def dispatch(self, command: CreateSession) -> SessionCreated: ...
 
@@ -209,6 +239,11 @@ class WorkspaceHost:
 
     @overload
     async def dispatch(self, command: GetBootstrap) -> WorkspaceBootstrap: ...
+
+    @overload
+    async def dispatch(
+        self, command: GetConfiguration | UpsertModelConfiguration | DeleteModelConfiguration
+    ) -> CommandAcknowledged: ...
 
     @overload
     async def dispatch(self, command: ListSessions) -> SessionList: ...
@@ -231,9 +266,12 @@ class WorkspaceHost:
             | DecideApproval
             | QueueRunInput
             | DequeueRunInputs
+            | DeleteSession
             | SetApprovalMode
             | SetCollaborationMode
             | SetTranscriptDensity
+            | RenameSession
+            | SetSessionArchived
             | SelectModel
             | ContextControl
             | SetContextSource
@@ -255,16 +293,59 @@ class WorkspaceHost:
             | RejectChildImport
             | CloseChildRun
             | WaivePlanVerification
+            | GetConfiguration
+            | UpsertModelConfiguration
+            | DeleteModelConfiguration
         ),
     ) -> CommandAcknowledged: ...
 
     async def dispatch(self, command: WorkspaceCommand) -> CommandResult:
         if isinstance(command, GetBootstrap):
             return self._bootstrap()
+        if isinstance(command, GetConfiguration):
+            return CommandAcknowledged("ok", self.resources.configuration.inspect().as_dict())
+        if isinstance(command, UpsertModelConfiguration):
+            self._require_configuration_edit_safe()
+            try:
+                snapshot = self.resources.configuration.upsert_model(
+                    expected_revision=command.expected_revision,
+                    name=command.name,
+                    definition=command.definition,
+                    set_default=command.set_default,
+                )
+            except ConfigurationConflictError as error:
+                raise ConfigurationConflictHostError(str(error)) from error
+            except ConfigurationEditError as error:
+                raise InvalidStateError(str(error)) from error
+            return CommandAcknowledged(
+                "saved",
+                {**snapshot.as_dict(), "restart_required": True},
+            )
+        if isinstance(command, DeleteModelConfiguration):
+            self._require_configuration_edit_safe()
+            try:
+                snapshot = self.resources.configuration.remove_model(
+                    expected_revision=command.expected_revision,
+                    name=command.name,
+                )
+            except ConfigurationConflictError as error:
+                raise ConfigurationConflictHostError(str(error)) from error
+            except ConfigurationEditError as error:
+                raise InvalidStateError(str(error)) from error
+            return CommandAcknowledged(
+                "saved",
+                {**snapshot.as_dict(), "restart_required": True},
+            )
         if isinstance(command, ListSessions):
-            return self._list_sessions()
+            return self._list_sessions(include_archived=command.include_archived)
         if isinstance(command, CreateSession):
             return self._create_session()
+        if isinstance(command, RenameSession):
+            return self._rename_session(command.session_id, command.title)
+        if isinstance(command, SetSessionArchived):
+            return self._set_session_archived(command.session_id, archived=command.archived)
+        if isinstance(command, DeleteSession):
+            return self._delete_session(command.session_id)
         if isinstance(command, StartRun):
             return await self._start_run(command)
         if isinstance(command, StartLiveSession):
@@ -420,6 +501,13 @@ class WorkspaceHost:
             return self._cancel_clarification(command)
         return await self._context_control(command)
 
+    def _require_configuration_edit_safe(self) -> None:
+        if self._active_run_id is not None:
+            raise WorkspaceBusyError(
+                "cannot edit model configuration while an agent run is active",
+                details={"run_id": self._active_run_id},
+            )
+
     def _bootstrap(self) -> WorkspaceBootstrap:
         summary = self.resources.summary()
         skills = [
@@ -448,11 +536,18 @@ class WorkspaceHost:
             live_enabled=self._live_manager is not None,
         )
 
-    def _list_sessions(self) -> SessionList:
+    def _list_sessions(self, *, include_archived: bool = False) -> SessionList:
         items: list[SessionSummary] = []
         for metadata in self.resources.session_repository.list():
             loaded = self.resources.session_repository.load(metadata.id)
-            title = loaded.turns[0].user_input.strip() if loaded.turns else "New session"
+            if loaded.catalog.deleted_at is not None:
+                continue
+            archived = loaded.catalog.archived_at is not None
+            if archived and not include_archived:
+                continue
+            if not loaded.turns and loaded.catalog.title is None:
+                continue
+            title = loaded.catalog.title or loaded.turns[0].user_input.strip()
             if len(title) > 60:
                 title = title[:57].rstrip() + "…"
             items.append(
@@ -461,14 +556,97 @@ class WorkspaceHost:
                     created_at=metadata.created_at,
                     model_id=metadata.model_id,
                     title=title,
+                    archived=archived,
                 )
             )
         return SessionList(items)
 
+    def _rename_session(self, session_id: str, title: str) -> CommandAcknowledged:
+        normalized = " ".join(title.split())
+        if not normalized:
+            raise InvalidStateError("session title cannot be empty")
+        if len(normalized) > 80:
+            raise InvalidStateError("session title cannot exceed 80 characters")
+        loaded = self._managed_session(session_id)
+        updated = loaded.catalog.model_copy(update={"title": normalized})
+        self.resources.session_repository.append_session_catalog(session_id, updated)
+        return CommandAcknowledged("renamed", {"title": normalized})
+
+    def _seed_session_title(self, session_id: str, input_text: str, loaded: SessionData) -> None:
+        """Make the first accepted prompt discoverable before its run reaches a terminal turn."""
+
+        if loaded.catalog.title is not None or loaded.turns:
+            return
+        normalized = " ".join(input_text.split())
+        if not normalized:
+            return
+        if len(normalized) > 80:
+            normalized = normalized[:79].rstrip() + "…"
+        updated = loaded.catalog.model_copy(update={"title": normalized})
+        self.resources.session_repository.append_session_catalog(session_id, updated)
+
+    def _set_session_archived(
+        self,
+        session_id: str,
+        *,
+        archived: bool,
+    ) -> CommandAcknowledged:
+        loaded = self._managed_session(session_id)
+        if archived:
+            self._require_session_management_safe(session_id)
+        archived_at = datetime.now(UTC).isoformat() if archived else None
+        updated = loaded.catalog.model_copy(update={"archived_at": archived_at})
+        self.resources.session_repository.append_session_catalog(session_id, updated)
+        return CommandAcknowledged("archived" if archived else "restored")
+
+    def _delete_session(self, session_id: str) -> CommandAcknowledged:
+        loaded = self._managed_session(session_id)
+        self._require_session_management_safe(session_id)
+        updated = loaded.catalog.model_copy(update={"deleted_at": datetime.now(UTC).isoformat()})
+        self.resources.session_repository.append_session_catalog(session_id, updated)
+        self._sessions.pop(session_id, None)
+        return CommandAcknowledged("deleted")
+
+    def _managed_session(self, session_id: str) -> Any:
+        try:
+            loaded = self.resources.session_repository.load(session_id)
+        except FileNotFoundError as error:
+            raise SessionNotFoundError(str(error)) from error
+        if loaded.catalog.deleted_at is not None:
+            raise SessionNotFoundError(f"session not found: {session_id}")
+        return loaded
+
+    def _require_session_management_safe(self, session_id: str) -> None:
+        actor = self._sessions.get(session_id)
+        issues: list[str] = []
+        if actor is not None and actor.active_run_id is not None:
+            issues.append("the Session has an active run")
+        orchestrator = getattr(self.resources, "agent_orchestrator", None)
+        agent_issues = getattr(orchestrator, "completion_issues", None)
+        if callable(agent_issues):
+            result = cast(Any, agent_issues)(session_id)
+            issues.extend(str(item) for item in cast(list[object], result))
+        task_workspace = getattr(self.resources, "task_workspace", None)
+        work_issues = getattr(task_workspace, "completion_issues", None)
+        if callable(work_issues):
+            result = cast(Any, work_issues)(session_id)
+            issues.extend(str(item) for item in cast(list[object], result))
+        if issues:
+            raise InvalidStateError(
+                "cannot archive or delete a Session with unresolved work",
+                details={"issues": issues},
+            )
+
     async def snapshot(self, session_id: str) -> SessionSnapshot:
         actor = self._actor(session_id)
         state = actor.coordinator.state
-        store = TimelineStore(RepositoryTimelineAdapter(self.resources.session_repository, session_id))
+        store = TimelineStore(
+            RepositoryTimelineAdapter(
+                self.resources.session_repository,
+                session_id,
+                active_interaction_id=actor.active_run_id,
+            )
+        )
         store.load_older(limit=200)
         loaded = self.resources.session_repository.load(session_id)
         pending = loaded.context_state.pending_clarification
@@ -562,7 +740,11 @@ class WorkspaceHost:
             transcript_density=getattr(ui_config, "transcript_density", "normal"),
         )
         self.resources.session_repository.append_session_settings(state.session.id, settings)
-        self._sessions[state.session.id] = _SessionActor(coordinator, state.session, settings)
+        actor = _SessionActor(coordinator, state.session, settings)
+        # Cross-session "always" rules carry over from previous sessions; the
+        # project-scoped store is the persistence authority for them.
+        actor.approval_keys.update(self._persistent_approval_keys)
+        self._sessions[state.session.id] = actor
         return SessionCreated(state.session.id)
 
     @staticmethod
@@ -614,11 +796,13 @@ class WorkspaceHost:
         if actor is not None:
             return actor
         try:
+            loaded = self.resources.session_repository.load(session_id)
+            if loaded.catalog.deleted_at is not None:
+                raise SessionNotFoundError(f"session not found: {session_id}")
             coordinator = self._coordinator()
             state = coordinator.resume(session_id)
         except FileNotFoundError as error:
             raise SessionNotFoundError(str(error)) from error
-        loaded = self.resources.session_repository.load(session_id)
         if self._live_manager is not None:
             self._live_manager.recover_session(session_id)
             loaded = self.resources.session_repository.load(session_id)
@@ -627,6 +811,9 @@ class WorkspaceHost:
             task_workspace.bind_session(session_id)
             loaded = self.resources.session_repository.load(session_id)
         actor = _SessionActor(coordinator, state.session, loaded.settings)
+        # Cross-session "always" rules carry over from previous sessions; the
+        # project-scoped store is the persistence authority for them.
+        actor.approval_keys.update(self._persistent_approval_keys)
         self._sessions[session_id] = actor
         return actor
 
@@ -664,6 +851,10 @@ class WorkspaceHost:
                     "a Live tool execution is active",
                     details={"live_session_id": self._live_execution_id},
                 )
+            loaded = self._managed_session(command.session_id)
+            if loaded.catalog.archived_at is not None:
+                raise InvalidStateError("restore the archived Session before starting a run")
+            self._seed_session_title(command.session_id, command.input, loaded)
             actor = self._actor(command.session_id)
             run_id = str(uuid4())
             record = _RunRecord(
@@ -672,6 +863,7 @@ class WorkspaceHost:
                 client_request_id=command.client_request_id,
                 journal=EventJournal(session_id=command.session_id, run_id=run_id),
             )
+            actor.coordinator.persist_run_start(command.input, run_id)
             self._runs[run_id] = record
             self._requests[request_key] = run_id
             self._active_run_id = run_id
@@ -782,13 +974,17 @@ class WorkspaceHost:
                 thread = self.resources.session_repository.load(actor.metadata.id).agent_state.get(
                     agent_event.agent_id
                 )
+                summary = str(agent_event.data.get("summary", ""))
+                detail = str(agent_event.data.get("detail", "") or "")
+                if detail and detail != summary:
+                    summary = f"{summary} — {detail}" if summary else detail
                 await emit(
                     AgentLifecycleChanged(
                         agent_id=agent_event.agent_id,
                         path=thread.ref.path if thread is not None else agent_event.agent_id,
                         phase=agent_event.kind.value.removeprefix("agent."),
                         status=agent_event.status.value,
-                        summary=str(agent_event.data.get("summary", "")),
+                        summary=summary,
                     )
                 )
 
@@ -803,7 +999,12 @@ class WorkspaceHost:
             )
         try:
             outcome = await actor.coordinator.run(
-                RunInput(text, prepared_prompt, is_retry=is_retry),
+                RunInput(
+                    text,
+                    prepared_prompt,
+                    is_retry=is_retry,
+                    interaction_id=record.id,
+                ),
                 emit,
                 approve,
                 approve_batch,
@@ -875,6 +1076,7 @@ class WorkspaceHost:
                 await emit(RunCancelled())
         except Exception as error:
             record.status = "failed"
+            actor.coordinator.persist_unhandled_failure(text, record.id, str(error))
             if not terminal_seen:
                 await emit(RunFailed(str(error)))
         finally:
@@ -930,11 +1132,14 @@ class WorkspaceHost:
             else self._require_live_manager().snapshot(command.run_id).ref.session_id
         )
         pending.decision = command.approved
-        if command.approved and command.scope == "session":
+        if command.approved and command.scope in {"session", "always"}:
             actor = self._actor(owning_session_id)
-            actor.approval_keys.add(self._approval_scope_key(pending.request))
+            key = self._approval_scope_key(pending.request)
+            actor.approval_keys.add(key)
+            if command.scope == "always":
+                self._approval_rules.allow(key)
         action = "allowed" if command.approved else "denied"
-        source = "user_session" if command.scope == "session" else "user"
+        source = {"session": "user_session", "always": "user_always"}.get(command.scope, "user")
         pending.future.set_result(
             ToolApproval(
                 command.approved,
@@ -947,6 +1152,8 @@ class WorkspaceHost:
 
     async def _start_live_session(self, command: StartLiveSession) -> LiveStartedResult:
         manager = self._require_live_manager()
+        if self._managed_session(command.session_id).catalog.archived_at is not None:
+            raise InvalidStateError("restore the archived Session before starting Live")
         self._actor(command.session_id)
         result = await manager.connect(
             LiveConnectRequest(

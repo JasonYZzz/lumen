@@ -24,7 +24,7 @@ from textual.widgets import OptionList
 from textual.widgets.option_list import Option
 
 from lumen.completion import CompletionSuggestion
-from lumen.ui.themes import theme_color
+from lumen.ui.themes import FALLBACK_COLORS, theme_color
 
 if TYPE_CHECKING:
     from textual.widget import Widget
@@ -187,8 +187,8 @@ class CompletionDropdown(OptionList):
         label_token = "mode-edit" if prefix.startswith("@") else "activity"
         if suggestion.label.startswith(("/tool", "/skill", "/mcp", "/resource", "/prompt")):
             label_token = "tool"
-        label_color = self._theme_variable(label_token, "#F0A24A")
-        meta_color = self._theme_variable("activity-meta", "#948A80")
+        label_color = self._theme_variable(label_token, FALLBACK_COLORS["activity"])
+        meta_color = self._theme_variable("activity-meta", FALLBACK_COLORS["activity-meta"])
         rendered = Text()
         rendered.append(f"{suggestion.label:<{label_width}}", style=f"bold {label_color}")
         if suggestion.description:

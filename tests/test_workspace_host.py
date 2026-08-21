@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Sequence
+from decimal import Decimal
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -18,9 +19,14 @@ from lumen.application import (
     ContextControl,
     CreateSession,
     DecideApproval,
+    DeleteSession,
     EventEnvelope,
     InvokeSkill,
+    ListSessions,
+    RenameSession,
+    SessionNotFoundError,
     SetCollaborationMode,
+    SetSessionArchived,
     StartRun,
     WaivePlanVerification,
     WorkspaceBusyError,
@@ -33,6 +39,7 @@ from lumen.runtime import AgentRuntime
 from lumen.sessions import SessionRepository
 from lumen.skills import Skill
 from lumen.tools.spec import EffectKind
+from lumen.trust import ApprovalRuleStore
 from lumen.work_products import EffectStatus, TaskWorkspace
 
 
@@ -41,6 +48,7 @@ class LocalResources:
         self.workspace = root
         self.session_repository = SessionRepository(root / "sessions")
         self.runtime = runtime
+        self.approval_rules = ApprovalRuleStore(root, state_root=root / "state")
         self.config = SimpleNamespace(
             agent=SimpleNamespace(name="test-agent"),
             permissions=SimpleNamespace(default_mode="manual"),
@@ -70,6 +78,9 @@ class LocalResources:
 
     def summary(self) -> dict[str, object]:
         return {"agent": "test-agent", "model": "test-model"}
+
+    def capabilities_report(self) -> dict[str, object]:
+        return {"tools": [], "skills": [], "mcp_servers": [], "agent_profiles": []}
 
     def load_skill_by_name(self, name: str) -> object | None:
         return next((skill for skill in self.skills if getattr(skill, "name", None) == name), None)
@@ -122,6 +133,183 @@ async def test_workspace_host_runs_and_replays_a_session_through_its_public_inte
     assert snapshot.active_run_id is None
     assert snapshot.timeline[-1].kind.value == "assistant"
     assert snapshot.timeline[-1].text == "web ready"
+
+
+async def test_workspace_host_manages_session_catalog_and_hides_empty_sessions(
+    tmp_path: Path,
+) -> None:
+    host = WorkspaceHost(LocalResources(tmp_path, _runtime()))  # type: ignore[arg-type]
+    await host.open()
+    try:
+        empty = await host.dispatch(CreateSession())
+        assert (await host.dispatch(ListSessions())).sessions == []
+
+        started = await host.dispatch(StartRun(empty.session_id, "catalog task", "catalog-request"))
+        _ = [event async for event in host.subscribe(started.run_id)]
+
+        renamed = await host.dispatch(RenameSession(empty.session_id, "  Catalog   review  "))
+        assert renamed.data == {"title": "Catalog review"}
+        active = await host.dispatch(ListSessions())
+        assert [(item.title, item.archived) for item in active.sessions] == [
+            ("Catalog review", False)
+        ]
+
+        await host.dispatch(SetSessionArchived(empty.session_id, True))
+        assert (await host.dispatch(ListSessions())).sessions == []
+        archived = await host.dispatch(ListSessions(include_archived=True))
+        assert [(item.title, item.archived) for item in archived.sessions] == [
+            ("Catalog review", True)
+        ]
+
+        await host.dispatch(SetSessionArchived(empty.session_id, False))
+        await host.dispatch(DeleteSession(empty.session_id))
+        assert (await host.dispatch(ListSessions(include_archived=True))).sessions == []
+        with pytest.raises(SessionNotFoundError):
+            await host.snapshot(empty.session_id)
+    finally:
+        await host.close()
+
+
+async def test_workspace_host_persists_first_prompt_and_timeline_before_run_finishes(
+    tmp_path: Path,
+) -> None:
+    entered = asyncio.Event()
+    release = asyncio.Event()
+
+    async def stream(_messages: list[ModelMessage], _info: AgentInfo):  # type: ignore[no-untyped-def]
+        entered.set()
+        await release.wait()
+        yield "done"
+
+    runtime = AgentRuntime(
+        model=FunctionModel(stream_function=stream),
+        tools=[],
+        toolsets=[],
+        instructions="help",
+        limits=LimitsConfig(),
+        tool_metadata={},
+    )
+    host = WorkspaceHost(LocalResources(tmp_path, runtime))  # type: ignore[arg-type]
+    started_run_id: str | None = None
+    await host.open()
+    try:
+        created = await host.dispatch(CreateSession())
+        started = await host.dispatch(
+            StartRun(created.session_id, "  investigate   refresh persistence  ", "refresh-request")
+        )
+        started_run_id = started.run_id
+        await asyncio.wait_for(entered.wait(), timeout=1)
+
+        summaries = await host.dispatch(ListSessions())
+        reloaded = SessionRepository(tmp_path / "sessions").load(created.session_id)
+        refreshed = await host.snapshot(created.session_id)
+
+        cold_host = WorkspaceHost(LocalResources(tmp_path, _runtime()))  # type: ignore[arg-type]
+        await cold_host.open()
+        try:
+            cold_snapshot = await cold_host.snapshot(created.session_id)
+        finally:
+            await cold_host.close()
+
+        assert [(item.session_id, item.title) for item in summaries.sessions] == [
+            (created.session_id, "investigate refresh persistence")
+        ]
+        assert reloaded.catalog.title == "investigate refresh persistence"
+        assert [(turn.user_input, turn.status) for turn in reloaded.turns] == [
+            ("  investigate   refresh persistence  ", "running")
+        ]
+        assert refreshed.active_run_id == started.run_id
+        assert [(item.kind.value, item.text) for item in refreshed.timeline] == [
+            ("user", "  investigate   refresh persistence  ")
+        ]
+        assert [(item.kind.value, item.text) for item in cold_snapshot.timeline] == [
+            ("user", "  investigate   refresh persistence  "),
+            ("system", "任务在完成前中断。你可以重新发送或重试此任务。"),
+        ]
+    finally:
+        release.set()
+        if started_run_id is not None:
+            _ = [event async for event in host.subscribe(started_run_id)]
+        await host.close()
+
+
+async def test_workspace_host_persists_terminal_failure_when_completed_turn_write_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    resources = LocalResources(tmp_path, _runtime("durable answer"))
+    original_append_turn = resources.session_repository.append_turn
+
+    def append_turn_with_terminal_failure(*args: object, **kwargs: object) -> None:
+        if kwargs.get("status") == "completed":
+            raise TypeError("provider message could not be serialized")
+        original_append_turn(*args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(resources.session_repository, "append_turn", append_turn_with_terminal_failure)
+    host = WorkspaceHost(resources)  # type: ignore[arg-type]
+    await host.open()
+    try:
+        created = await host.dispatch(CreateSession())
+        started = await host.dispatch(
+            StartRun(created.session_id, "keep this conversation", "terminal-write-failure")
+        )
+        _ = [event async for event in host.subscribe(started.run_id)]
+
+        loaded = SessionRepository(tmp_path / "sessions").load(created.session_id)
+        snapshot = await host.snapshot(created.session_id)
+
+        assert [(turn.user_input, turn.status) for turn in loaded.turns] == [
+            ("keep this conversation", "failed")
+        ]
+        assert snapshot.active_run_id is None
+        assert [item.kind.value for item in snapshot.timeline] == ["user", "assistant", "error"]
+        assert snapshot.timeline[-2].text == "durable answer"
+        assert "provider message could not be serialized" in snapshot.timeline[-1].text
+    finally:
+        await host.close()
+
+
+async def test_workspace_host_persists_decimal_enriched_usage_and_cold_reloads_answer(
+    tmp_path: Path,
+) -> None:
+    async def stream(_messages: list[ModelMessage], _info: AgentInfo):  # type: ignore[no-untyped-def]
+        yield "durable decimal answer"
+
+    runtime = AgentRuntime(
+        model=FunctionModel(stream_function=stream),
+        tools=[],
+        toolsets=[],
+        instructions="help",
+        limits=LimitsConfig(),
+        tool_metadata={},
+        usage_enricher=lambda _session_id, usage: {
+            **usage,
+            "cost": Decimal("0.0026551616"),
+        },
+    )
+    host = WorkspaceHost(LocalResources(tmp_path, runtime))  # type: ignore[arg-type]
+    await host.open()
+    try:
+        created = await host.dispatch(CreateSession())
+        started = await host.dispatch(
+            StartRun(created.session_id, "decimal provider usage", "decimal-provider-usage")
+        )
+        _ = [event async for event in host.subscribe(started.run_id)]
+    finally:
+        await host.close()
+
+    loaded = SessionRepository(tmp_path / "sessions").load(created.session_id)
+    cold_host = WorkspaceHost(LocalResources(tmp_path, _runtime()))  # type: ignore[arg-type]
+    await cold_host.open()
+    try:
+        snapshot = await cold_host.snapshot(created.session_id)
+    finally:
+        await cold_host.close()
+
+    assert loaded.turns[0].status == "completed"
+    assert loaded.turns[0].usage["cost"] == "0.0026551616"
+    assert [item.kind.value for item in snapshot.timeline] == ["user", "assistant"]
+    assert snapshot.timeline[-1].text == "durable decimal answer"
 
 
 async def test_workspace_host_deduplicates_requests_and_rejects_parallel_runs(
@@ -492,6 +680,66 @@ async def test_workspace_host_remembers_bounded_approval_for_the_session(
 
     assert pending_calls == ["call-1"]
     assert executions == ["note-1", "note-2"]
+
+
+async def test_workspace_host_persists_always_rules_across_hosts(tmp_path: Path) -> None:
+    """scope="always" survives host restarts via the project rule store."""
+
+    model_step = 0
+    executions: list[str] = []
+
+    def write_note(content: str) -> str:
+        executions.append(content)
+        return content
+
+    async def stream(_messages: list[ModelMessage], _info: AgentInfo):  # type: ignore[no-untyped-def]
+        nonlocal model_step
+        model_step += 1
+        if model_step <= 2:
+            yield {
+                0: DeltaToolCall(
+                    "write_note",
+                    f'{{"content":"note-{model_step}"}}',
+                    tool_call_id=f"call-{model_step}",
+                )
+            }
+        else:
+            yield "done"
+
+    def build_runtime() -> AgentRuntime:
+        return AgentRuntime(
+            model=FunctionModel(stream_function=stream),
+            tools=[Tool(write_note, sequential=True, requires_approval=True)],
+            toolsets=[],
+            instructions="help",
+            limits=LimitsConfig(),
+            tool_metadata={"write_note": {"origin": "plugin:test", "risk": "write"}},
+        )
+
+    async def run_once() -> list[str]:
+        nonlocal model_step
+        model_step = 0
+        host = WorkspaceHost(LocalResources(tmp_path, build_runtime()))  # type: ignore[arg-type]
+        await host.open()
+        try:
+            session = await host.dispatch(CreateSession())
+            started = await host.dispatch(StartRun(session.session_id, "write twice", "remember"))
+            pending_calls: list[str] = []
+            async for event in host.subscribe(started.run_id):
+                if event.type == "approval.pending":
+                    pending_calls.append(str(event.data["call_id"]))
+                    await host.dispatch(
+                        DecideApproval(started.run_id, str(event.data["call_id"]), True, "always")
+                    )
+            return pending_calls
+        finally:
+            await host.close()
+
+    assert await run_once() == ["call-1"]
+    # A brand-new host over the same workspace reloads the persisted rule and
+    # auto-approves both calls without prompting.
+    assert await run_once() == []
+    assert executions == ["note-1", "note-2", "note-1", "note-2"]
 
 
 async def test_workspace_host_expands_file_mentions_for_every_client_adapter(

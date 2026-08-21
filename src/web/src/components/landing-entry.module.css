@@ -1,4 +1,5 @@
 .entry {
+  position: relative;
   display: grid;
   width: min(760px, 100%);
   gap: 18px;
@@ -20,7 +21,7 @@
   grid-column: 2;
   align-self: end;
   margin: 0 0 25px;
-  color: #81766e;
+  color: #6f635b;
   font-size: 17px;
   font-weight: 500;
   letter-spacing: -.01em;

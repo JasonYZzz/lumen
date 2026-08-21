@@ -12,7 +12,7 @@ from lumen.tools.registry import (
     ToolRegistry,
     load_plugin_specs,
 )
-from lumen.tools.spec import EffectKind, Risk, ToolSpec
+from lumen.tools.spec import EffectKind, Risk, ToolConcurrency, ToolOutputSpec, ToolSpec
 
 
 def sample_tool(value: str) -> str:
@@ -79,6 +79,39 @@ def test_local_tools_are_hidden_or_marked_for_approval(tmp_path: Path) -> None:
     assert by_name["dangerous"].requires_approval is True
     assert by_name["dangerous"].sequential is True
     assert by_name["dangerous"].timeout == 10
+
+
+async def test_tool_output_contract_validates_before_returning_model_text(tmp_path: Path) -> None:
+    registry = ToolRegistry(tmp_path)
+    registry.add(
+        ToolSpec(
+            lambda: {"count": "not-an-int"},
+            name="invalid_output",
+            risk=Risk.READ,
+            output=ToolOutputSpec(dict[str, int]),
+        ),
+        origin="test",
+    )
+    tool = registry.build_local_tools(PermissionPolicy(PermissionsConfig()), default_timeout=1)[0]
+
+    with pytest.raises(ValueError):
+        await tool.function_schema.call({}, None)  # type: ignore[arg-type]
+
+
+def test_tool_concurrency_is_explicit_and_can_classify_arguments() -> None:
+    spec = ToolSpec(
+        sample_tool,
+        risk=Risk.READ,
+        concurrency=lambda args: (
+            ToolConcurrency.PARALLEL_SAFE
+            if str(args.get("value", "")).startswith("read:")
+            else ToolConcurrency.EXCLUSIVE
+        ),
+    )
+
+    assert ToolSpec(sample_tool, risk=Risk.READ).concurrency_for({}) is ToolConcurrency.EXCLUSIVE
+    assert spec.concurrency_for({"value": "read:a"}) is ToolConcurrency.PARALLEL_SAFE
+    assert spec.concurrency_for({"value": "write:a"}) is ToolConcurrency.EXCLUSIVE
 
 
 def test_registry_cannot_register_control_tool_name(tmp_path: Path) -> None:

@@ -7,7 +7,7 @@ export type CollaborationMode = NonNullable<
   components['schemas']['SessionSettingsBody']['collaborationMode']
 >
 export type QueueMode = components['schemas']['QueueInputBody']['mode']
-export type ApprovalScope = 'once' | 'session'
+export type ApprovalScope = 'once' | 'session' | 'always'
 
 export interface AgentRecord {
   id: string
@@ -44,6 +44,51 @@ export interface Bootstrap {
   warnings: string[]
   activeRunId: string | null
   liveEnabled: boolean
+}
+
+export interface ConfiguredModel {
+  name: string
+  id: string
+  api: 'chat' | 'responses' | 'openai-completions' | 'openai-responses' | 'chat-completions' | null
+  baseUrl: string | null
+  apiKeyEnv: string | null
+  settings: Record<string, unknown>
+  context: Record<string, unknown>
+  isDefault: boolean
+  source: { scope: string; path: string } | null
+  authKind: 'environment' | 'inline' | 'none'
+  authAvailable: boolean
+}
+
+export interface ConfigurationSnapshot {
+  revision: string
+  targetPath: string
+  editable: boolean
+  editReason: string | null
+  exclusive: boolean
+  sources: Array<{ scope: string; path: string }>
+  warnings: string[]
+  defaultModel: string
+  models: ConfiguredModel[]
+  restartRequired?: boolean
+}
+
+export interface CapabilityInventory {
+  tools: Array<Record<string, unknown>>
+  skills: Array<Record<string, unknown>>
+  mcp_servers: Array<Record<string, unknown>>
+  agent_profiles: Array<Record<string, unknown>>
+}
+
+export interface ModelConfigurationInput {
+  expectedRevision: string
+  id: string
+  api?: ConfiguredModel['api']
+  baseUrl?: string | null
+  apiKeyEnv?: string | null
+  settings?: Record<string, unknown>
+  context?: Record<string, unknown>
+  setDefault?: boolean
 }
 
 export interface LiveSessionState {
@@ -91,6 +136,7 @@ export interface SessionSummary {
   createdAt: string
   modelId: string
   title: string
+  archived: boolean
 }
 
 export interface PlanStep {
@@ -116,6 +162,7 @@ export type TimelineKind =
   | 'assistant'
   | 'plan'
   | 'commentary'
+  | 'thinking'
   | 'progress'
   | 'tool'
   | 'system'
@@ -138,6 +185,8 @@ export interface TimelineEntry {
   approved?: boolean
   isError?: boolean
   presentation?: { title: string; preview: string; full_text: string }
+  callView?: Record<string, unknown>
+  resultView?: Record<string, unknown>
   plan?: PlanState
 }
 
@@ -177,6 +226,7 @@ export type EventType =
   | 'assistant.delta'
   | 'assistant.retracted'
   | 'commentary.delta'
+  | 'thinking.delta'
   | 'clarification.requested'
   | 'plan.created'
   | 'plan.updated'

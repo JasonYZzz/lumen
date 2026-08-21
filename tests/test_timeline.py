@@ -20,19 +20,38 @@ from lumen.events import (
     RunStarted,
     TextDelta,
     TextRetracted,
+    ThinkingDelta,
     TimelineEventRecord,
     ToolCallFinished,
     ToolCallStarted,
     WorkProductChanged,
 )
 from lumen.plan import PlanState, PlanStep, StepStatus
-from lumen.sessions import SessionRepository
+from lumen.sessions import SessionCatalogState, SessionRepository
 from lumen.timeline import (
     InMemoryTimelineAdapter,
     RepositoryTimelineAdapter,
     TimelineKind,
     TimelineStore,
 )
+from lumen.tools.spec import EffectKind
+from lumen.work_products import EffectReceipt, EffectStatus
+
+
+def test_timeline_coalesces_thinking_deltas_into_one_segment() -> None:
+    store = TimelineStore(InMemoryTimelineAdapter())
+    store.apply(RunStarted("question"))
+    store.apply(ThinkingDelta("considering "))
+    store.apply(ThinkingDelta("options"))
+    store.apply(TextDelta("answer"))
+
+    items = store.items
+    assert [item.kind for item in items] == [
+        TimelineKind.USER,
+        TimelineKind.THINKING,
+        TimelineKind.ASSISTANT,
+    ]
+    assert items[1].text == "considering options"
 
 
 def test_timeline_window_is_bounded_after_many_events() -> None:
@@ -215,6 +234,38 @@ def test_repository_adapter_pages_failed_turns_into_visible_audit_items(tmp_path
     older = store.load_older(newest.next_cursor, limit=2)
     assert older.next_cursor is None
     assert store.window()[0].text == "request 0"
+
+
+def test_repository_adapter_recovers_pre_fix_title_only_run_with_execution_evidence(
+    tmp_path: Path,
+) -> None:
+    repository = SessionRepository(tmp_path)
+    session = repository.create(agent_name="agent", model_id="test")
+    repository.append_session_catalog(
+        session.id,
+        SessionCatalogState(title="recover this accepted input"),
+    )
+    repository.append_effect(
+        session.id,
+        EffectReceipt(
+            id="effect:orphaned",
+            effect_kind=EffectKind.EXECUTION,
+            operation="run_command",
+            status=EffectStatus.VERIFIED,
+            summary="command completed",
+        ),
+    )
+
+    store = TimelineStore(RepositoryTimelineAdapter(repository, session.id))
+    page = store.load_older(limit=20)
+
+    assert [(item.kind, item.text) for item in page.items] == [
+        (TimelineKind.USER, "recover this accepted input"),
+        (
+            TimelineKind.ERROR,
+            "任务在对话记录持久化前中断。已恢复任务输入。无法重建未写入磁盘的助手回复。",
+        ),
+    ]
 
 
 def test_run_failure_is_visible_without_becoming_assistant_history() -> None:

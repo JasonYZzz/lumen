@@ -51,7 +51,7 @@ Lumen 是通用、可配置的 Agent framework。模型 provider 是可替换实
 ### Session 与上下文
 
 - Session 是 append-only journal。修改历史事实要追加新 record，不原地改写旧 record。
-- 当前 Session schema 是 v8；v1–v7 必须可加载，且加载不能重写历史文件。
+- 当前 Session schema 是 v9；v1–v8 必须可加载，且加载不能重写历史文件。旧会话首次写入高版本 record 时只追加 `schema_upgrade`，不改写 header。
 - 大正文、transcript、diff 和结果载荷进入内容寻址 ArtifactStore；Session 只保存引用和有界摘要。
 - compaction 不能丢弃 canonical history，也不能把瞬时 Skill/Memory/MCP 内容重复写入历史。
 - 配置 schema 是 v2。v1 仅在内存中迁移并警告，不自动改写可能含凭据和注释的用户文件。
@@ -103,6 +103,8 @@ Lumen 是通用、可配置的 Agent framework。模型 provider 是可替换实
 uv sync
 uv run ruff check .
 uv run pyright
+uv run python -m lumen.contracts --check
+uv run python scripts/build_architecture_atlas.py --check
 uv run pytest
 pnpm --dir src/web test
 pnpm --dir src/web typecheck

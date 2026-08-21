@@ -20,6 +20,14 @@ from lumen.plan import (
 EventSink = Callable[[RunEvent], None] | Callable[[RunEvent], Awaitable[None]]
 _PROGRESS_MAX_CHARS = 800
 
+#: The plan/clarification control tools owned by :class:`TaskController`. This
+#: is the single authority for "which tool names are parent-loop control
+#: plane": name reservation, timeline filtering, and child-progress forwarding
+#: all consult this set.
+CONTROL_TOOL_NAMES = frozenset(
+    {"set_plan", "update_step", "link_evidence", "report_progress", "request_clarification"}
+)
+
 
 class TaskController:
     def __init__(self) -> None:

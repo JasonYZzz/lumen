@@ -9,6 +9,7 @@ gated by the standard permission system before any of them can execute.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import os
 import signal
 import time
@@ -18,7 +19,7 @@ from typing import TYPE_CHECKING, Any
 from lumen.config import SandboxConfig
 from lumen.sandbox import SandboxRunner
 from lumen.tools.spec import EffectKind, Risk, ToolSpec
-from lumen.tools.workspace import Workspace, WorkspaceViolation
+from lumen.tools.workspace import Workspace
 
 if TYPE_CHECKING:
     from lumen.work_products import TaskWorkspace
@@ -115,23 +116,14 @@ def build_capability_specs(
         crash cannot leave partially written content at the destination.
         """
 
-        resolved = workspace.resolve(path)
+        resolved = workspace.resolve_for_mutation(path)
         if resolved.exists() and not overwrite:
             raise FileExistsError(f"file already exists; pass overwrite=True to replace: {path}")
-        parent = resolved.parent
-        if not parent.exists():
-            parent.mkdir(parents=True, exist_ok=True)
-        parent.resolve(strict=True)
-        if not parent.is_dir():
-            raise NotADirectoryError(f"parent is not a directory: {parent}")
-        # Guard against symlinked parents that resolve outside the workspace.
-        if not parent.resolve().is_relative_to(workspace.root):
-            raise WorkspaceViolation(f"path escapes workspace {workspace.root}: {path}")
-
+        expected_revision = workspace.revision(resolved)
         encoded = content.encode("utf-8")
 
         def apply_write() -> str:
-            _atomic_replace(parent, resolved.name, resolved, encoded)
+            workspace.atomic_write(resolved, encoded, expected_revision=expected_revision)
             return f"Wrote {len(encoded)} bytes to {path}"
 
         if task_workspace is None:
@@ -152,7 +144,7 @@ def build_capability_specs(
         same ``write_file`` machinery.
         """
 
-        resolved = workspace.resolve(path)
+        resolved = workspace.resolve_for_mutation(path)
         if not resolved.is_file():
             raise FileNotFoundError(f"file not found: {path}")
         original = resolved.read_text(encoding="utf-8")
@@ -163,9 +155,10 @@ def build_capability_specs(
             raise ValueError(f"{count} matches for find in {path}")
         updated = original.replace(find, replace, 1)
         encoded = updated.encode("utf-8")
+        expected_revision = f"sha256:{hashlib.sha256(original.encode('utf-8')).hexdigest()}"
 
         def apply_edit() -> str:
-            _atomic_replace(resolved.parent, resolved.name, resolved, encoded)
+            workspace.atomic_write(resolved, encoded, expected_revision=expected_revision)
             return f"Edited {path}: replaced 1 occurrence"
 
         if task_workspace is None:
@@ -279,48 +272,6 @@ def build_capability_specs(
         ToolSpec(edit_file, risk=Risk.WRITE, effect_kind=EffectKind.MUTATION),
         ToolSpec(run_command, risk=Risk.EXECUTE, effect_kind=EffectKind.EXECUTION, timeout=max_timeout),
     ]
-
-
-def _atomic_replace(parent: Path, name: str, target: Path, encoded: bytes) -> None:
-    """Atomically write ``encoded`` to ``target`` via a temp file + ``os.replace``.
-
-    Creates a sibling temp file, fsyncs it, then ``os.replace``-es it into
-    place. If ``os.replace`` fails (e.g. cross-device) or the call is
-    cancelled between write and replace, the temp file is cleaned up in the
-    ``finally`` block so orphaned ``.tmp-*`` files don't accumulate.
-    """
-
-    import secrets
-
-    suffix = secrets.token_hex(8)
-    tmp_path = parent / f".{name}.tmp-{suffix}"
-    descriptor = os.open(
-        tmp_path,
-        os.O_WRONLY | os.O_CREAT | os.O_EXCL,
-        0o600,
-    )
-    try:
-        view = memoryview(encoded)
-        while view:
-            written = os.write(descriptor, view)
-            if written <= 0:
-                raise OSError("atomic write made no progress")
-            view = view[written:]
-        os.fsync(descriptor)
-        os.close(descriptor)
-        descriptor = -1
-        os.replace(tmp_path, target)
-    except BaseException:
-        # ``BaseException`` catches CancelledError too — we must not leak the
-        # temp file even on async cancellation.
-        try:
-            tmp_path.unlink(missing_ok=True)
-        except OSError:
-            pass
-        raise
-    finally:
-        if descriptor >= 0:
-            os.close(descriptor)
 
 
 async def _drain_stream(stream: asyncio.StreamReader | None, collector: BoundedCollector) -> None:

@@ -276,7 +276,11 @@ class TaskWorkspace:
         )
         self._save_effect(session_id, effect)
         try:
-            restored = adapter.restore(product.resource, target_snapshot)
+            restored = adapter.restore(
+                product.resource,
+                target_snapshot,
+                expected_revision=actual.revision,
+            )
             effect = effect.model_copy(
                 update={
                     "status": EffectStatus.APPLIED,
@@ -983,7 +987,7 @@ class TaskWorkspace:
         return WorkProductKind.TEXT
 
     def _canonical_resource(self, resource: str) -> str:
-        return self.workspace.resolve(resource).relative_to(self.workspace.root).as_posix()
+        return self.workspace.resolve_for_mutation(resource).relative_to(self.workspace.root).as_posix()
 
     def _store_change(self, change: Any, kind: WorkProductKind) -> tuple[str, str]:
         if kind is WorkProductKind.TEXT and isinstance(change, str):

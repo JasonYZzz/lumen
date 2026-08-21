@@ -20,6 +20,7 @@ lumen --resume <session-id>
 | `--resume <id>` | — | 恢复一个持久化 session |
 | `--model <name>` | `-m` | 选择 `agent.models` 中配置的逻辑模型名 |
 | `--check-config` | — | 校验配置、信任和工具发现后退出，不调用模型 |
+| `--dump-effective-config` | — | 输出脱敏后的最终配置、来源和字段 provenance 后退出 |
 | `--version` | `-V` | 输出版本号后退出 |
 | `--install-completion` | — | 为当前 shell 安装补全 |
 | `--show-completion` | — | 输出当前 shell 的补全脚本 |
@@ -54,6 +55,20 @@ lumen web --stop
 | `--status` / `--stop` | 查询或停止当前工作区的后台 Web 进程 |
 | `--access-log` | 输出逐请求访问日志 |
 
+Web 右上角设置入口始终可见。模型配置写入 `<workspace>/.lumen/agent.web.yaml` 受管覆盖层，
+不会重写已有 User/Project/Local 文件；只接受密钥环境变量名，保存后需重启 Web 才会生效。
+活动 Run、显式 `--config` 模式、并发版本冲突或未受管的同名文件会阻止写入。
+从旧的单模型形式首次添加模型时，受管层会保留原模型和原默认选择；若原模型使用内联密钥，
+必须先把它改为环境变量引用，避免凭据进入 Web 管理的复制路径。
+
+### 1.4 Capability inventory
+
+```bash
+lumen capabilities --cwd . --json
+```
+
+该命令通过与 TUI/Web 相同的 `ResourceManager.capabilities_report()` 只读 Interface，列出 Tool、Skill、MCP server 和 Agent Profile。Tool 行包含 origin、loaded/deferred/disabled 状态、Risk、EffectKind、审批决定、Sandbox mode 与输入 schema digest；报告不参与权限决策。
+
 ### 1.4 配置、信任与 MCP 审批
 
 ```bash
@@ -82,10 +97,11 @@ lumen mcp reset [--name <name>] --cwd . [--config PATH]
 | Session | `/resume <id>` | 恢复指定 session | 禁用 |
 | Session | `/clear` | 清空可见时间线，保留 session 上下文 | 禁用 |
 | Session | `/retry` | 重发上一条 prompt | 需先结束当前 run |
+| Session | `/edit` | 用 $VISUAL/$EDITOR 编辑上一条 prompt，在保留之前 turn 的新分支上重发；工作区文件不变 | 禁用 |
 | Model | `/model [name]` | 无参数列模型；有参数切换模型 | 查看可用；切换会被后端保护 |
 | Model | `/mode [manual\|accept_edits\|plan\|auto]` | 查看或切换审批模式 | 可用 |
 | Model | `/status` | 查看 workspace、session、模式、沙箱和 UI 状态 | 可用 |
-| Context | `/context [--json\|sources]` | 查看预算报告、JSON 报告或活动来源 | 可用 |
+| Context | `/context [--json\|sources\|capabilities]` | 查看预算、活动来源或统一能力清单 | 可用 |
 | Context | `/compact [focus]` | 请求强制压缩，可附 focus | 可用 |
 | Context | `/clarification cancel` | 取消待回答澄清 | 可用 |
 | MCP | `/mcp` | 查看 MCP 连接、工具数和 deferred 状态 | 可用 |
@@ -128,13 +144,13 @@ lumen mcp reset [--name <name>] --cwd . [--config PATH]
 
 ## 3. Web slash 命令支持矩阵
 
-Web 通过 FastAPI application host 执行命令；本地显示类命令不会伪造 Agent run。`/context sources`、`/prompts`、`/hooks` 使用独立只读 API，`/prompt` 在后端渲染模板后启动 run，`/copy` 使用浏览器剪贴板。
+Web 通过 FastAPI application host 执行命令；本地显示类命令不会伪造 Agent run。`/context sources`、`/context capabilities`、`/prompts`、`/hooks` 使用只读 Interface，Web 的同一能力投影位于 `GET /api/v1/capabilities`；`/prompt` 在后端渲染模板后启动 run，`/copy` 使用浏览器剪贴板。
 
 | 能力 | Web 命令 | 备注 |
 |---|---|---|
-| 会话 | `/new`、`/retry`、`/clear` | 历史列表和恢复由侧边栏提供 |
+| 会话 | `/new`、`/retry`、`/clear` | 历史列表、恢复、重命名、归档与删除由侧边栏提供；空 Session 不进入历史列表 |
 | 模型/审批 | `/model [name]`、`/mode [mode]` | `auto` 仍需显式确认 |
-| Context | `/context`、`/context sources`、`/compact [focus]`、`/clarification cancel` | sources 不依赖 context engine 报告可用性 |
+| Context | `/context`、`/context sources`、`/context capabilities`、`/compact [focus]`、`/clarification cancel` | sources/capabilities 不依赖 context engine 报告可用性 |
 | Memory | `/memory [action]` | 支持常用 list/remember/forget/use/learn/incognito 操作 |
 | MCP | `/mcp`、`/resource [refresh\|unload] <ref>`、`/prompts`、`/prompt <ref> [key=value ...]` | `/prompt` 支持单/双引号参数值 |
 | Skill | `/skills`、`/skill:<name> [args]`、`/skill unload <name>` | 动态 Skill 也进入补全 |

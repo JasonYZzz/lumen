@@ -129,19 +129,9 @@ class ToolCardHost(App[None]):
     def __init__(self, card: ToolCard) -> None:
         super().__init__()
         self.card = card
-        self.decisions: list[tuple[str, bool]] = []
-        self._decision_event = asyncio.Event()
 
     def compose(self) -> ComposeResult:
         yield Vertical(self.card)
-
-    async def next_decision(self) -> tuple[str, bool]:
-        await self._decision_event.wait()
-        return self.decisions[0]
-
-    def on_tool_card_decision(self, event: ToolCard.Decision) -> None:
-        self.decisions.append((event.call_id, event.approved))
-        self._decision_event.set()
 
 
 async def test_tool_card_renders_running_then_finished() -> None:
@@ -253,72 +243,6 @@ async def test_tool_card_non_edit_tools_keep_json_args() -> None:
         body = card.displayed_args
         assert '"path"' in body  # JSON args rendering preserved
         assert "[E to expand]" not in body  # short enough not to truncate
-
-
-async def test_tool_card_resolves_inline_denial() -> None:
-    card = ToolCard("call-2", "write_file")
-    app = ToolCardHost(card)
-    request = ToolApprovalPending(
-        call_id="call-2", name="write_file", args={"path": "x"}, origin="builtin", risk="write"
-    )
-    async with app.run_test() as pilot:
-        card.set_approval_pending(request)
-        await pilot.pause()
-        # Selector is focused on mount. Move down to highlight Deny, Enter.
-        await pilot.press("down", "enter")
-        await pilot.pause()
-        decision = await app.next_decision()
-    assert decision == ("call-2", False)
-
-
-async def test_tool_card_resolves_inline_allow() -> None:
-    card = ToolCard("call-3", "run_command")
-    app = ToolCardHost(card)
-    request = ToolApprovalPending(
-        call_id="call-3", name="run_command", args={"argv": ["ls"]}, origin="builtin", risk="execute"
-    )
-    async with app.run_test() as pilot:
-        card.set_approval_pending(request)
-        await pilot.pause()
-        await pilot.press("up", "enter")
-        await pilot.pause()
-        decision = await app.next_decision()
-    assert decision == ("call-3", True)
-
-
-async def test_tool_card_requires_explicit_selection_before_enter() -> None:
-    card = ToolCard("call-explicit", "write_file")
-    app = ToolCardHost(card)
-    request = ToolApprovalPending(
-        call_id="call-explicit", name="write_file", args={}, origin="builtin", risk="write"
-    )
-    async with app.run_test() as pilot:
-        card.set_approval_pending(request)
-        await pilot.pause()
-        await pilot.press("enter", "tab", "y", "n")
-        await pilot.pause()
-        assert app.decisions == []
-        await pilot.press("down", "enter")
-        await pilot.pause()
-    assert app.decisions == [("call-explicit", False)]
-
-
-async def test_tool_card_ignores_keys_after_first_decision() -> None:
-    card = ToolCard("call-4", "write_file")
-    app = ToolCardHost(card)
-    request = ToolApprovalPending(
-        call_id="call-4", name="write_file", args={}, origin="builtin", risk="write"
-    )
-    async with app.run_test() as pilot:
-        card.set_approval_pending(request)
-        await pilot.pause()
-        await pilot.press("up", "enter")
-        await pilot.pause()
-        # Pressing keys again must not produce a second decision — the card is
-        # already resolved.
-        await pilot.press("down", "enter")
-        await pilot.pause()
-    assert app.decisions == [("call-4", True)]
 
 
 def _panel_summary(panel: PlanPanel) -> str:

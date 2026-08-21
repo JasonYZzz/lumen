@@ -6,7 +6,12 @@ import pytest
 from pydantic_ai import Tool
 from pydantic_ai.exceptions import IncompleteToolCall, UsageLimitExceeded
 from pydantic_ai.messages import ModelMessage, ModelRequest, RetryPromptPart, ToolReturnPart
-from pydantic_ai.models.function import AgentInfo, DeltaToolCall, FunctionModel
+from pydantic_ai.models.function import (
+    AgentInfo,
+    DeltaThinkingPart,
+    DeltaToolCall,
+    FunctionModel,
+)
 
 from lumen.config import ContextConfig, LimitsConfig
 from lumen.context import ContextEngine, ContextReportCommand
@@ -24,6 +29,7 @@ from lumen.events import (
     RunWaitingForUser,
     TextDelta,
     TextRetracted,
+    ThinkingDelta,
     ToolApprovalResolved,
     ToolCallFinished,
     ToolCallStarted,
@@ -94,6 +100,39 @@ def read_file_delta(call_id: str, path: str) -> dict[int, DeltaToolCall]:
     import json
 
     return {0: DeltaToolCall("read_file", json.dumps({"path": path}), tool_call_id=call_id)}
+
+
+async def test_runtime_translates_thinking_stream_to_events() -> None:
+    async def model_function(messages: list[ModelMessage], _info: AgentInfo):  # type: ignore[no-untyped-def]
+        yield {0: DeltaThinkingPart(content="considering ")}
+        yield {0: DeltaThinkingPart(content="the options")}
+        yield "final answer"
+
+    runtime = AgentRuntime(
+        model=FunctionModel(stream_function=model_function),
+        tools=[],
+        toolsets=[],
+        instructions="Think before answering.",
+        limits=LimitsConfig(),
+        tool_metadata={},
+    )
+    events: list[RunEvent] = []
+
+    async def emit(event: RunEvent) -> None:
+        events.append(event)
+
+    async def approve(_request: Any) -> ToolApproval:
+        raise AssertionError("no approval expected")
+
+    outcome = await runtime.run("question", [], emit, approve)
+
+    assert outcome.output == "final answer"
+    thinking = "".join(event.text for event in events if isinstance(event, ThinkingDelta))
+    assert thinking == "considering the options"
+    # Reasoning never leaks into the speculative answer channel.
+    assert not any(
+        isinstance(event, TextDelta) and "considering" in event.text for event in events
+    )
 
 
 async def test_runtime_executes_tool_loop_and_emits_events() -> None:
@@ -231,13 +270,17 @@ async def test_real_request_snapshot_updates_for_each_model_step() -> None:
     async def approve(_request: Any) -> ToolApproval:
         raise AssertionError("read tool should not request approval")
 
-    await runtime.run("go", [], emit, approve, session_id="snapshot-session")
+    outcome = await runtime.run("go", [], emit, approve, session_id="snapshot-session")
     report = await engine.control(ContextReportCommand("snapshot-session"), emit)
     snapshot = report.payload["request_snapshot"]
 
     assert snapshot["model_step"] == 2
     assert "echo" in snapshot["visible_tools"]
     assert "request_clarification" in snapshot["visible_tools"]
+    assert [receipt.step for receipt in outcome.request_receipts] == [1, 2]
+    assert {receipt.route for receipt in outcome.request_receipts} == {"acme:test"}
+    assert all(receipt.context_fingerprint for receipt in outcome.request_receipts)
+    assert outcome.request_receipts[1].visible_tool_digest == snapshot["visible_tool_digest"]
 
 
 async def test_runtime_enters_waiting_state_after_blocking_clarification() -> None:

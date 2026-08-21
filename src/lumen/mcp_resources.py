@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any, cast
 
@@ -69,12 +70,17 @@ class McpContentRegistry:
     prompts: list[McpPromptDescriptor] = field(default_factory=list[McpPromptDescriptor])
     _bundles: dict[str, McpToolsetBundle] = field(default_factory=dict[str, McpToolsetBundle])
 
-    async def add_server(self, bundle: McpToolsetBundle, config: McpServerConfig) -> None:
-        self._bundles[bundle.name] = bundle
+    async def add_server(
+        self, bundle: McpToolsetBundle, config: McpServerConfig
+    ) -> Callable[[], None]:
+        if bundle.name in self._bundles:
+            raise ValueError(f"MCP content server already attached: {bundle.name}")
+        resources: list[McpResourceDescriptor] = []
+        prompts: list[McpPromptDescriptor] = []
         if config.load_resources:
             for resource in await bundle.client.list_resources():
                 raw = _dump(resource)
-                self.resources.append(
+                resources.append(
                     McpResourceDescriptor(
                         server=bundle.name,
                         uri=str(raw.get("uri", "")),
@@ -100,7 +106,7 @@ class McpContentRegistry:
                     if isinstance(raw_args, list)
                     else []
                 )
-                self.prompts.append(
+                prompts.append(
                     McpPromptDescriptor(
                         server=bundle.name,
                         name=str(raw.get("name", "")),
@@ -108,6 +114,18 @@ class McpContentRegistry:
                         arguments=tuple(str(item.get("name")) for item in args if item.get("name")),
                     )
                 )
+        self._bundles[bundle.name] = bundle
+        self.resources.extend(resources)
+        self.prompts.extend(prompts)
+
+        def dispose() -> None:
+            if self._bundles.get(bundle.name) is not bundle:
+                return
+            del self._bundles[bundle.name]
+            self.resources = [item for item in self.resources if item.server != bundle.name]
+            self.prompts = [item for item in self.prompts if item.server != bundle.name]
+
+        return dispose
 
     async def fetch_resource(self, reference: str) -> dict[str, object]:
         """Fetch a resource body without creating workspace-global active state."""

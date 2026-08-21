@@ -68,7 +68,7 @@ from lumen.ui.session_restore import SessionRestoreMixin
 from lumen.ui.slash_handlers import SlashHandlersMixin
 from lumen.ui.status_bar import StatusBarMixin
 from lumen.ui.streaming_markdown import AssistantMarkdown, StreamingMarkdownController
-from lumen.ui.themes import register_themes, theme_color
+from lumen.ui.themes import FALLBACK_COLORS, register_themes, theme_color
 from lumen.ui.tool_card import ToolCard
 from lumen.ui.transcript_blocks import CommentaryBlock, ReadToolGroup
 from lumen.ui.transcript_screen import TranscriptScreen
@@ -80,8 +80,8 @@ _PROMPT_KEYWORD = re.compile(r"(?<!\S)(@[\w./-]+|/[a-z][\w:-]*|(?:[\w.-]+/)+[\w.
 def _highlight_prompt(
     value: str,
     *,
-    command_color: str = "#F0A24A",
-    path_color: str = "#69B9AF",
+    command_color: str = FALLBACK_COLORS["activity"],
+    path_color: str = FALLBACK_COLORS["mode-edit"],
 ) -> Text:
     """Emphasize mentions, slash commands, and paths without parsing markup."""
 
@@ -187,6 +187,13 @@ class LumenApp(
         padding: 0 1;
         color: $text-muted;
     }
+    /* Error message: same quiet chrome as a system message, but in $error
+       so failures never read as routine metadata. */
+    .error-message {
+        margin: 1 0;
+        padding: 0 1;
+        color: $error;
+    }
     /* Assistant Markdown: no border, no background. The rendered prose IS
        the focal point. A top margin separates it from preceding blocks. */
     .assistant-message { margin: 1 0; }
@@ -207,6 +214,7 @@ class LumenApp(
         color: $accent;
     }
     .compaction-row { margin: 1 0; color: $text-muted; }
+    .compaction-row.is-error { color: $error; }
     .restored-notice {
         margin: 1 0;
         padding: 0 1;
@@ -260,6 +268,16 @@ class LumenApp(
         text-align: right;
     }
     #new-activity.visible { display: block; }
+
+    /* Toasts default to the bottom-right corner (Textual's ToastRack), where
+       they cover the composer and status line. Dock them top-right below the
+       topbar instead; the timeline underneath is scrollable history, so a
+       transient overlay there hides nothing interactive. */
+    ToastRack {
+        dock: top;
+        align: right top;
+        margin: 1 1 0 0;
+    }
     """
 
     # Register our command palette provider so Ctrl+P surfaces Lumen's
@@ -298,10 +316,14 @@ class LumenApp(
         # One widget represents one logical assistant Markdown document.
         self._assistant_container: AssistantMarkdown | None = None
         self._commentary_container: CommentaryBlock | None = None
+        self._thinking_container: CommentaryBlock | None = None
         # The active plan belongs to the current user turn and lives inside
         # the scrolling transcript. Older turns retain their own plan panel.
         self._active_plan_panel: PlanPanel | None = None
         self._last_assistant_output = ""
+        # Session rules stay TUI-local; cross-session "always" rules are owned
+        # by the host's project ApprovalRuleStore, which auto-approves before
+        # an approval event ever reaches this UI.
         self._session_approval_keys: set[str] = set()
         # Tool cards are mounted into the message timeline, keyed by call id so
         # multiple updates to one call render into a single card.
@@ -309,7 +331,8 @@ class LumenApp(
         self._read_tool_groups: dict[str, ReadToolGroup] = {}
         self._current_read_group: ReadToolGroup | None = None
         # Pending approval futures: one per call id. The runtime approval
-        # callback awaits the future; the card's Decision message resolves it.
+        # callback awaits the future; the ApprovalPanel's Decision message
+        # resolves it.
         self._approval_waiters: dict[str, asyncio.Future[ToolApproval]] = {}
         self._compaction_row: Static | None = None
         # Maximum number of tool cards kept in the _tool_cards dict. Old cards
@@ -463,6 +486,20 @@ class LumenApp(
         await container.mount(Static(text, classes="system-message", markup=False))
         await self._finish_timeline_update(container, follow)
 
+    async def _append_error(self, text: str) -> None:
+        """Mount a failure notice with error-level color, not muted metadata.
+
+        Same markup-safety rationale as :meth:`_append_system`: the failure
+        text comes from the provider/runtime and can contain markup-like
+        patterns. The ✗ prefix matches the tool-card error glyph vocabulary.
+        """
+
+        container = self.query_one("#messages", VerticalScroll)
+        await self._dismiss_welcome()
+        follow = self._capture_timeline_follow(container)
+        await container.mount(Static(f"✗ {text}", classes="error-message", markup=False))
+        await self._finish_timeline_update(container, follow)
+
     async def _append_user(self, text: str) -> None:
         container = self.query_one("#messages", VerticalScroll)
         await self._dismiss_welcome()
@@ -473,8 +510,8 @@ class LumenApp(
         app = cast(App[object], self)
         rendered = _highlight_prompt(
             text,
-            command_color=theme_color(app, "activity", "#F0A24A"),
-            path_color=theme_color(app, "mode-edit", "#69B9AF"),
+            command_color=theme_color(app, "activity", FALLBACK_COLORS["activity"]),
+            path_color=theme_color(app, "mode-edit", FALLBACK_COLORS["mode-edit"]),
         )
         await container.mount(Lazy(Static(rendered, classes="user-message", markup=False)))
         await self._finish_timeline_update(container, follow)
@@ -495,6 +532,24 @@ class LumenApp(
 
     def _close_commentary_segment(self) -> None:
         self._commentary_container = None
+
+    async def _append_thinking(self, text: str) -> None:
+        if not text.strip():
+            return
+        container = self.query_one("#messages", VerticalScroll)
+        await self._dismiss_welcome()
+        follow = self._capture_timeline_follow(container)
+        if self._thinking_container is None:
+            self._thinking_container = CommentaryBlock(
+                expanded=self._transcript_density == "verbose",
+                label="Model reasoning",
+            )
+            await container.mount(Lazy(self._thinking_container))
+        self._thinking_container.append(text)
+        await self._finish_timeline_update(container, follow)
+
+    def _close_thinking_segment(self) -> None:
+        self._thinking_container = None
 
     async def _dismiss_welcome(self) -> None:
         """Remove the one-shot empty state before mounting timeline content."""

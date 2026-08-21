@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useRef, useState } from 'react'
+import { EMPTY_WORKSPACE_PROMPT } from '@/lib/copy'
 import { Composer, type ComposerProps } from './composer'
 import { MascotScene } from './mascot/mascot-scene'
 import type { MascotActivity } from './mascot/mascot-types'
@@ -25,7 +26,7 @@ export function LandingEntry(props: ComposerProps) {
     <section className={styles.entry} aria-label="开始新任务">
       <div className={styles.intro}>
         <span className={styles.balance} aria-hidden="true" />
-        <p className={styles.title}>有什么需要处理？</p>
+        <p className={styles.title}>{EMPTY_WORKSPACE_PROMPT}</p>
         <MascotScene activity={activity} className={styles.mascot} />
       </div>
       <Composer

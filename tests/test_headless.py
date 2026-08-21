@@ -36,6 +36,7 @@ class LocalResources:
         self.warnings: list[str] = []
         self.skills: list[object] = []
         self.agent_orchestrator: Any = None
+        self.configuration: Any = None
 
     async def open(self) -> LocalResources:
         return self
@@ -68,6 +69,9 @@ class LocalResources:
 
     def hook_summary(self) -> list[dict[str, object]]:
         return []
+
+    def capabilities_report(self) -> dict[str, object]:
+        return {"tools": [], "skills": [], "mcp_servers": [], "agent_profiles": []}
 
     def summary(self) -> dict[str, object]:
         return {"agent": "test-agent", "model": "test-model"}

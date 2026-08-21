@@ -16,11 +16,12 @@
       if (match) visible += 1;
     });
     noResults.hidden = visible !== 0;
+    search.setAttribute('aria-invalid', visible === 0 ? 'true' : 'false');
   }
 
   search.addEventListener('input', applySearch);
   document.addEventListener('keydown', (event) => {
-    if (event.key === '/' && document.activeElement !== search) {
+    if (event.key === '/' && document.activeElement !== search && !document.body.classList.contains('inspector-open')) {
       event.preventDefault();
       search.focus();
     }
@@ -31,22 +32,6 @@
     }
   });
 
-  // Lightweight liquid-glass highlight: local pointer position controls the
-  // refracted highlight without adding a framework or animation dependency.
-  if (window.matchMedia('(pointer: fine) and (prefers-reduced-motion: no-preference)').matches) {
-    let frame = 0;
-    document.addEventListener('pointermove', (event) => {
-      const glass = event.target.closest?.('.glass');
-      if (!glass) return;
-      cancelAnimationFrame(frame);
-      frame = requestAnimationFrame(() => {
-        const rect = glass.getBoundingClientRect();
-        glass.style.setProperty('--glass-x', `${((event.clientX - rect.left) / rect.width) * 100}%`);
-        glass.style.setProperty('--glass-y', `${((event.clientY - rect.top) / rect.height) * 100}%`);
-      });
-    }, { passive: true });
-  }
-
   const observer = new IntersectionObserver((entries) => {
     const visible = entries
       .filter((entry) => entry.isIntersecting)
@@ -54,11 +39,19 @@
     if (!visible || !visible.target.id) return;
     navLinks.forEach((link) => {
       link.classList.toggle('active', link.hash === `#${visible.target.id}`);
+      if (link.hash === `#${visible.target.id}`) link.classList.add('visited');
     });
   }, { rootMargin: '-18% 0px -68% 0px', threshold: [0, 0.15, 0.4] });
 
   navLinks.forEach((link) => {
     const target = document.querySelector(link.hash);
     if (target) observer.observe(target);
+    link.addEventListener('click', () => link.classList.add('visited'));
   });
+
+  const inspectorRoot = document.querySelector('#document-inspector');
+  const manifest = window.__LUMEN_ATLAS_CONTENT__;
+  if (inspectorRoot && manifest && window.LumenDocumentInspector) {
+    window.LumenDocumentInspector.create({ root: inspectorRoot, manifest });
+  }
 })();

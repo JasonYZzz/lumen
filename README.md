@@ -33,8 +33,10 @@ flowchart LR
 - **生命周期钩子**：command/Python 钩子覆盖 prompt、工具前后与 stop，本地和 MCP 工具共用同一执行 seam。
 - **MCP resources/prompts/OAuth**：资源显式激活为当前 session 的 retrieved-context snapshot，prompt 按需渲染并标记外部来源；OAuth 使用 PKCE、刷新令牌与 0600 本地凭证。
 - 时间线 TUI：默认 Normal 信息密度会折叠 commentary，并按读取、搜索、本地探索、Web、MCP 等可见意图分别聚合低风险活动；命令、修改、失败和审批保持独立。进行态/完成态使用 `Reading/Read`、`Searching/Searched` 等明确文案，可用 `Ctrl+O` 切到 Verbose 审计视图。还提供语义化 loading、Lazy 消息渲染、流式 Markdown、工具专用卡片、固定队列式审批、可搜索 transcript、Agent 面板和请求/工具/token/耗时度量。
+- 工具展示由 Tool Contract V2 生成可重放的 `ToolCallView/ToolResultView`；TUI 与 Web 消费同一 schema intent，未知工具自动降级为通用卡片，展示失败不影响工具真实结果。
 - 结构化上下文：system、memory、Skill、MCP catalog、历史和当前输入分区计费并执行硬上限；超过软阈值时只摘要上一 checkpoint 之后的 delta，完整 JSONL 历史仍追加持久化。
 - 大工具输出 receipt 化：旧轮次的超大工具结果只留摘要与 head/tail，正文写入 0600 内容寻址 artifact；模型追问细节时可用 `read_artifact` 按 ref 分页读回全文，涉密输出（`artifact_policy="never"`）永不落盘也不可回读。
+- Provider request ledger：每个 terminal turn 持久化实际模型 route、逐 step token 预算、visible tool digest 与 context fingerprint，便于复盘“哪一个模型以哪组能力发出了请求”；不保存密钥和大正文。
 - 持久记忆：显式记忆默认可用，自动学习默认关闭；可审计 SQLite/Markdown 投影、项目隔离、敏感信息过滤、崩溃恢复与 incognito 开关。
 - 会话恢复：可恢复计划、压缩 checkpoint、活动 Skill/MCP snapshot 与待回答澄清，按用户指令 `/new`、`/resume <id>`、`/retry`。
 
@@ -43,12 +45,15 @@ flowchart LR
 - `report_progress` 仅承载面向用户的简短说明：发现、改动、错误、恢复与下一步动作。
 - 系统提示词明确禁止把私有思维链（chain-of-thought）写入进度。
 - 运行时从不读取模型专属的推理字段；进度始终是结构化、经过校验的公开文本。
+- provider 返回的 reasoning/thinking 流（如 extended thinking）以只读的 `ThinkingDelta` 事件呈现为可折叠的 "Model reasoning" 块：仅用于展示，不进入最终答案，也不会被工具调用回撤；verbose 密度下默认展开。
 
 ## 工作区能力工具
 
 - `write_file(path, content, overwrite=False)`：UTF-8 原子写入；默认拒绝覆盖，需显式 `overwrite=True`。
 - `edit_file(path, find, replace)`：要求 `find` 在文件中精确出现一次，否则失败。
 - `run_command(argv, cwd=".", timeout=None, env=None)`：以 `argv` 数组直接 `exec`，**不经过 shell**；超时或取消时终止整个进程组；stdout/stderr 并发 drain,各自只保留头尾各 64 KiB(中间丢弃但计入总字节数),所以 100 MB 的输出也不会撑爆内存,同时开头和结尾(通常是真正的报错/堆栈)都保留可见。
+- `web_fetch(url, start_char=1, max_chars=20000)`：抓取公共 http(s) URL 的一页可读文本；HTML 转 plain text，JSON/XML/YAML 原样返回，支持按 `next_start_char` 翻页。SSRF 防护：DNS 解析后拒绝 loopback/私网/链路本地地址，重定向逐跳重新校验，响应体上限 2 MiB。`Risk=external`（默认需审批），`EffectKind=observe`（可并行）。
+- `web_search(query)`：需在 `tools.web.search` 配置 provider（`tavily` 或 `brave`）与 `api_key_env` 后才会注册；返回 `title — url — snippet` 行。
 - 上述工具均受 `--cwd` 工作区约束，禁止 `..` 与符号链接越界。
 
 ```yaml
@@ -57,9 +62,17 @@ tools:
     - read_file
     - list_directory
     - search_text
+    - web_fetch
     - write_file
     - edit_file
     - run_command
+  web:
+    fetch_timeout_seconds: 20
+    fetch_max_bytes: 2097152
+    # search:                        # 配置后才会注册 web_search
+    #   provider: tavily
+    #   api_key_env: TAVILY_API_KEY
+    #   max_results: 8
 ```
 
 命令执行同时经过审批策略和 OS 沙箱。默认 `workspace_write`：macOS 使用 Seatbelt、Linux 使用 bubblewrap，网络关闭，隔离 `HOME/TMPDIR`，环境变量按 allowlist 构建；适配器缺失时 fail closed。只有显式配置 `sandbox.mode: disabled` 才放弃隔离。
@@ -75,7 +88,8 @@ tools:
 ## 内联审批
 
 - 写入、执行与外部工具默认进入审批：时间线只保留一行工具审计记录，完整参数在输入框上方的编号确认列表中展示。
-- `↑` / `↓` 移动，`Enter` 选择，也可直接按数字；单个请求支持“仅允许一次 / 本会话始终允许 / 拒绝”，批量请求支持“全部允许 / 逐个查看 / 全部拒绝”。确认后焦点自动回到输入框。`Esc` 取消运行会把所有待审请求一并置为拒绝。
+- `↑` / `↓` 移动，`Enter` 选择，也可直接按数字；单个请求支持“仅允许一次 / 本会话始终允许 / 本项目始终允许 / 拒绝”，批量请求支持“全部允许 / 逐个查看 / 全部拒绝”。确认后焦点自动回到输入框。`Esc` 取消运行会把所有待审请求一并置为拒绝。
+- “本项目始终允许”持久化到 `~/.lumen/state/approval-rules/<project>.json`（机器管理的 JSON，与含凭据/注释的 agent.yaml 分离），重启与跨会话生效；键格式与 session 规则一致（`origin:tool[:executable]`），删除该文件即全部撤销。
 - `always_allow` / `always_deny` 仍然支持,可让特定工具跳过或永远隐藏。
 
 ### 协作模式与权限模式
@@ -266,6 +280,12 @@ lumen web --cwd . --stop
 
 服务默认只监听 `127.0.0.1:8765`，并通过一次性启动链接换取本机 `HttpOnly` cookie；当前版本主动拒绝非 loopback 监听。Web 与 TUI 共用 JSONL 会话、运行时、工具审批、context、memory、Skill 和 MCP 配置，同一工作区同时只允许一个 Agent run，但运行期间仍可浏览其他会话。浏览器刷新会按 SSE sequence 重连，不会取消后台 run。
 
+Web 侧栏支持任务重命名、归档、恢复和删除。只点击“新建任务”不会提前持久化空 Session；没有 turn 且没有显式标题的历史空 Session 也不会出现在列表。首条任务输入被 Host 接受时，会先追加带唯一 `interaction_id` 的 `running` turn，再调度模型或工具；terminal turn 以相同 ID 追加并在读取投影中取代 running 状态，因此进程重启也不会得到空时间线，且完成后不会重复显示用户输入。`SessionRepository` 在统一 JSONL 写入 Seam 使用 Pydantic JSON 语义规范化 provider、MCP 和 usage 载荷；例如 provider 返回的 `Decimal` 计费值会精确保存为十进制字符串，而未知的不透明对象仍然安全失败。若完整 terminal record 仍因其他富载荷无法序列化，`RunCoordinator` 会改为追加只含已流出 timeline 与错误信息的最小 `failed` terminal record；Host 还会对协调层外的未处理异常执行同样的最终对账，避免 UI 已显示的助手文本在切换任务后静默消失。规范化标题同时追加到 v9 `session_catalog`，归档和删除状态也追加到同一 JSONL journal。旧版本遗留的“只有自动标题、没有 turn、但已有 effect/Agent 证据”的中断记录会只读恢复标题中的输入并明确提示回答不可重建，不改写历史。删除使用 tombstone 从客户端视图移除，不原地改写历史，活动 run、未处理 Agent 或未验证 Work Product 会阻止归档与删除。
+
+Web 转录按用户 turn 组织阅读层级：最终回答、计划、澄清和错误保持在主阅读流；thinking、commentary、progress、工具、MCP、Skill、Agent 与 Work Product 事件归入同一个可展开的“处理过程”。运行中或等待审批时过程自动展开，成功完成后默认收起；折叠只改变 Web 投影，不删除 Session journal 中的任何事件或工具输入输出。
+
+右上角“设置”在新任务页和已打开任务中始终可用。模型页读取脱敏后的最终配置、来源和字段状态；保存时只接受 API key 环境变量名，不接收或回显密钥明文。Web 不改写可能含注释或凭据的 User/Project/Local YAML，而是原子写入 `.lumen/agent.web.yaml` 受管覆盖层；并发修改、未受管的同名文件、无效合并结果和活动 Run 都会安全失败。首次把旧的单模型配置转换为模型注册表时会保留原模型和原默认选择；含内联密钥的单模型必须先改为环境变量引用，不能被不安全地复制进受管层。保存后需要重启 Web 才会重建模型注册表。扩展能力与 Agent 预设页当前使用 `ResourceManager.capabilities_report()` 提供真实只读清单。
+
 #### Web Live 实时语音
 
 先安装 `live` extra，并在合并后的 Lumen 配置中显式启用。密钥只从 Host 环境读取，不会通过 bootstrap、SDP、SSE 或浏览器 bundle 下发：
@@ -364,7 +384,7 @@ LUMEN_API_URL=http://127.0.0.1:8765 pnpm --dir src/web dev
 - **消息视觉层次**:用户消息带 `»` 前缀 + accent 左线,助手消息纯 prose 无边框,评论块(commentary)secondary 色斜体降权,进度块带 `↳` 前缀。
 - **状态栏三段式**:`[mode·运行态/usage] │ [model] │ [/ commands · @ files · Alt+C copy]`,删除了无法准确反映 provider 上下文的 `ctx 0%`;模型和审批模式始终可见,auto 模式用醒目色提示。
 - **语义化 loading**:运行期间在输入框上方显示动画、耗时与当前动作,例如 `Reading README.md`、`Searching query in src/`、`Writing outputs/report.md`、`Running command uv run pytest`,完成/失败/取消后自动收起。
-- **固定审批队列**:审批选择区固定在输入框上方,每次只展示一个请求和纵向 `Allow once`/`Always allow for this session`/`Deny` 选项；连续请求自动推进。`Y`/`N` 可直接决定,或 `↑`/`↓` 后按 `Enter` 确认。
+- **固定审批队列**:审批选择区固定在输入框上方,每次只展示一个请求和纵向 `Allow once`/`Always allow for this session`/`Always allow for this project`/`Deny` 选项；连续请求自动推进。`Y`/`N` 可直接决定,或 `↑`/`↓` 后按 `Enter` 确认。
 - **固定帧流式 Markdown**:每个 token 不再触发一次完整 markdown 重解析；控制器按 33ms 固定帧合并 token，更新严格串行，结束/失败/取消时强制 flush。渲染侧按顶层块增量冻结：闭合块只解析一次， fenced code 未闭合或后续块可能并入（松散列表续行、缩进代码）时不冻结，链接引用定义（`[label]: url`）晚到时只重渲染含引用占位的冻结块，长回答的解析成本从 O(n²) 降到近似 O(n)。
 - **有限 Timeline 窗口**:结构化 TimelineStore 与 Textual widget 分离，默认最多挂载 200 项（待审批卡片除外）；离开底部后保持阅读位置并显示 `New activity ↓`。
 
@@ -404,6 +424,13 @@ uv run lumen --check-config
 
 严格校验合并后的 YAML、加载已信任插件、连接已批准的 MCP、列出模型可见工具，并显示配置来源、session 目录、项目可信状态、MCP scope/审批状态及可选模型；**不会调用真实模型**。失败会以非 0 退出码返回。
 
+需要解释最终配置或能力来源时，可使用以下只读诊断入口；输出会隐藏 API key、MCP env/header 和其他 secret：
+
+```bash
+uv run lumen --dump-effective-config
+uv run lumen capabilities --json
+```
+
 ### 5. 恢复历史会话
 
 ```bash
@@ -426,6 +453,7 @@ uv run lumen --resume <session-uuid>
 | `--model` | `-m` | 配置里的 `default_model` | 启动时选定的模型名(必须是 `agent.models` 里的某个 key) |
 | `--resume` | — | — | 启动时恢复的 session UUID |
 | `--check-config` | — | `false` | 校验配置 + 发现工具后立即退出,不进 TUI |
+| `--dump-effective-config` | — | `false` | 输出脱敏的最终配置与字段 provenance 后退出 |
 | `--print` | `-p` | — | headless 单次执行:跑一轮后把最终回答写到 stdout 并退出(与 `--check-config` 互斥) |
 | `--output-format` | — | `text` | 配合 `-p`:`text` 流式输出正文,`json` 输出单个结构化结果文档 |
 | `--permission-mode` | — | `manual` | 配合 `-p` 的副作用审批模式:`manual`(全拒)/`accept_edits`/`auto`；不承载 Plan collaboration mode |
@@ -443,6 +471,7 @@ uv run lumen --resume <session-uuid>
 | Legacy | `<workspace>/agent.yaml` | 旧版兼容；会显示迁移警告 |
 | Project | `<workspace>/.lumen/agent.yaml` | 可提交的项目共享配置 |
 | Local | `<workspace>/.lumen/agent.local.yaml` | 本机覆盖，不建议提交 |
+| Managed | `<workspace>/.lumen/agent.web.yaml` | Web 设置的机器管理覆盖；最高优先级，不保存密钥明文 |
 
 各层可以只写覆盖字段，合并后才执行完整 schema 校验。普通 mapping 深度合并；`agent.models` 和 `mcp_servers` 按名称合并，同名项整项替换，YAML `null` 删除继承项；`tools.builtins` 整体替换；插件与权限列表合并去重，`always_deny` 最终优先。设置 `agent.model` 会清除继承的多模型配置，设置 `agent.models` 会清除继承的单模型配置。
 
@@ -497,7 +526,7 @@ lumen --cwd .
 lumen --config /absolute/path/to/agent.yaml --cwd .
 ```
 
-默认 workspace 是当前目录，配置按 User → Legacy → Project → Local 分层发现。因而只要 `~/.lumen/agent.yaml` 存在，就能在其他项目直接运行；workspace、默认 session 目录和 stdio MCP cwd 仍指向目标项目。`--config` 与 `LUMEN_CONFIG` 保留为独占单文件兼容模式。
+默认 workspace 是当前目录，配置按 User → Legacy → Project → Local → Managed 分层发现。因而只要 `~/.lumen/agent.yaml` 存在，就能在其他项目直接运行；workspace、默认 session 目录和 stdio MCP cwd 仍指向目标项目。`--config` 与 `LUMEN_CONFIG` 保留为独占单文件兼容模式，并在 Web 设置中只读。
 
 如果安装成功但 shell 报 `command not found: lumen`，请确认 uv 的工具目录已加入 `PATH`：
 
@@ -967,7 +996,7 @@ agent:
 
 **模型自主**:模型看到 system prompt 中的 `<available_skills>` 目录后,判断任务相关时调用 `load_skill(name)` 加载正文；若正文引用 `reference.md` 等文件，再调用 `read_skill_resource(name, path)`。
 
-加载后的 Skill 正文立即写入 0600 内容寻址 artifact，schema v5 session state 只保存 name/revision/source/ref。它只在当前 session 的后续请求中重注入；其他 session 不可见。resume 使用同一 artifact，不会因磁盘上的 `SKILL.md` 已变化而静默升级；重新激活才采用新 revision。`/context sources` 可查看当前活动来源。
+加载后的 Skill 正文立即写入 0600 内容寻址 artifact。由 schema v5 引入、并由当前 Session v9 继续承载的 `context_state` 只保存 name/revision/source/ref。它只在当前 session 的后续请求中重注入；其他 session 不可见。resume 使用同一 artifact，不会因磁盘上的 `SKILL.md` 已变化而静默升级；重新激活才采用新 revision。`/context sources` 可查看当前活动来源。
 
 **用户手动**:在输入框打 `/skill:<name> [args]`,skill body 被包装为 `<skill>` XML 块作为用户消息发送。带补全自动补全:
 
@@ -990,6 +1019,8 @@ mkdir -p .lumen/skills/my-skill
 
 `ContextEngine.prepare / commit / control` 是运行时唯一的上下文入口，但不是第二套 provider payload builder。`ContextAssembler` 负责 zone 预算、来源、trust 和裁剪；Pydantic AI 在每个模型步骤动态组合 instructions、native tools、provider history 和当前输入。稳定内容只在 provider 请求前重注入，commit 只保存 canonical history，避免恢复或压缩后重复膨胀。`/context` 按 session 给出 zone、来源、每步真实请求快照和 token 压力；未知模型窗口明确标记为估算值。完整逻辑见 [`docs/architecture-guide/03-context-and-memory.md`](docs/architecture-guide/03-context-and-memory.md)。
 
+完整的 12 章技术正文、当前实现审计与核心源码可以在 [`docs/architecture-guide/index.html`](docs/architecture-guide/index.html) 的 Trace Reader 中直接预览。它使用确定性生成的离线证据快照；正文或源码变化后，CI freshness gate 会阻止仍携带旧内容的 Atlas 通过。
+
 记忆配置默认安全值如下：
 
 ```yaml
@@ -1007,10 +1038,10 @@ memory:
 
 ## 会话与安全
 
-- 会话保存在 `.lumen/sessions/<uuid>.jsonl`；新会话使用 schema v4 记录逐事件 Timeline、计划、诊断与压缩信息，v1–v3 仍可只读兼容加载。
-- 加载会话时活动上下文以最近一次压缩前缀为起点重建，完整原始历史仍可在 `full_history` 中取得。
+- 会话保存在 `.lumen/sessions/<uuid>.jsonl`；新会话使用 schema v9。v1–v8 可兼容加载，首次追加高版本事实时只写入 `schema_upgrade`，不会改写 header 或历史记录。
+- 加载会话时活动上下文以最近一次压缩前缀为起点重建；完整 JSONL 始终是权威事实。read projection cache 只加速 materialized 读取，digest 不一致时从 journal 冷算，删除缓存不会丢失历史。
 - 内置文件工具阻止 `..` 和符号链接越过工作区。`read_file` 流式返回带 `has_more` / `next_start_line` 的分页结果，默认每页 400 行并受 64 KiB 内容预算约束；二进制、无效 UTF-8 和单行超预算会返回可恢复错误。`list_directory` / `search_text` 输出截到 64 KiB；`run_command` 并发 drain stdout/stderr，各自保留头尾各 64 KiB。
-- MCP 服务和 Python 插件仍拥有当前用户进程权限。审批用于阻止模型未经同意执行动作，不是操作系统级安全边界；不受信工具应运行在容器或沙箱中。
+- Python 插件仍在 Lumen 进程内执行，MCP 远端副作用也不受本地 workspace sandbox 代替约束；两者必须经过 Tool Registry、Risk、PermissionPolicy、Hook 与单调 `ToolGuard`。未声明的外部副作用按 `external_unknown` 处理，不能在恢复时自动重放；OS sandbox 只对进入执行 Seam 的本地进程强制实际系统权限。
 - 配置文件可启动 MCP 子进程并读取指定环境变量，只应加载可信配置。
 
 ## 开发与验证
@@ -1020,6 +1051,8 @@ uv run ruff format .
 uv run ruff format --check .
 uv run ruff check .
 uv run pyright
+uv run python -m lumen.contracts --check
+uv run python scripts/build_architecture_atlas.py --check
 uv run pytest
 ```
 

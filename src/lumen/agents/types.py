@@ -48,6 +48,7 @@ ACTIVE_AGENT_STATUSES = frozenset(
 class AgentEventKind(StrEnum):
     SPAWNED = "agent.spawned"
     STARTED = "agent.started"
+    PROGRESS = "agent.progress"
     MESSAGE = "agent.message"
     APPROVAL_REQUESTED = "agent.approval_requested"
     COMPLETED = "agent.completed"

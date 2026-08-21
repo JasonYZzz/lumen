@@ -36,6 +36,7 @@ from lumen.ui.command_gate import (
     classify_command,
     classify_model_command,
 )
+from lumen.ui.composer import edit_text_external
 from lumen.ui.file_mention import expand_file_mentions
 from lumen.ui.slash_commands import find_command, render_help
 from lumen.ui.themes import BUILTIN_THEMES
@@ -69,6 +70,12 @@ class SlashHandlersMixin:
 
     async def _render_context(self: LumenApp, parts: list[str]) -> None:
         """Render the ``/context`` budget report (``--json`` for machine output)."""
+
+        if len(parts) > 1 and parts[1] == "capabilities":
+            await self._append_system(
+                json.dumps(self.resources.capabilities_report(), ensure_ascii=False, indent=2)
+            )
+            return
 
         if len(parts) > 1 and parts[1] == "sources":
             if self.session is None:
@@ -608,7 +615,7 @@ class SlashHandlersMixin:
         )
 
     async def _cmd_context(self: LumenApp, parts: list[str], raw: str) -> None:
-        """``/context [--json|sources]`` — render the context budget report."""
+        """``/context [--json|sources|capabilities]`` — render context diagnostics."""
 
         await self._render_context(parts)
 
@@ -661,6 +668,46 @@ class SlashHandlersMixin:
             await self._append_system("There is no previous prompt to retry.")
         else:
             await self.handle_input(self.last_prompt, is_retry=True)
+
+    async def _cmd_edit(self: LumenApp, parts: list[str], raw: str) -> None:
+        """``/edit`` — edit the last prompt in $EDITOR and resend on a fresh branch.
+
+        The branch keeps every turn before the edited one, so the original
+        exchange stays intact in the source session. Workspace files are left
+        unchanged, matching /checkpoints rewind semantics.
+        """
+
+        if self.last_prompt is None:
+            await self._append_system("There is no previous prompt to edit.")
+            return
+        edited = await edit_text_external(self.last_prompt, suffix=".md")
+        if edited is None:
+            self.notify("Set $VISUAL or $EDITOR to edit the prompt", severity="warning")
+            return
+        edited = edited.strip()
+        if not edited or edited == self.last_prompt.strip():
+            self.notify("Prompt unchanged", timeout=2)
+            return
+
+        checkpoints = await self.coordinator.list_checkpoints()
+        last_index = max((int(item["index"]) for item in checkpoints), default=-1)
+        if last_index < 0:
+            await self._append_system("There is no previous turn to branch from.")
+            return
+        if last_index == 0:
+            # Nothing precedes the edited turn; start from a fresh session.
+            state = await self.coordinator.new_session()
+            await self._apply_coordinator_state(state, restored=True)
+            await self._append_system(f"Started fresh session {state.session.id} for the edited prompt.")
+        else:
+            try:
+                session_id = await self.coordinator.fork_at_checkpoint(last_index - 1)
+            except Exception as error:
+                await self._append_system(f"Cannot branch for /edit: {error}")
+                return
+            await self._resume_checkpoint_branch(session_id)
+        self._refresh_topbar()
+        await self.handle_input(edited)
 
     async def _cmd_exit(self: LumenApp, parts: list[str], raw: str) -> None:
         """``/exit`` (alias ``/quit``) — exit the app."""

@@ -9,7 +9,7 @@ from rich.text import Text
 from textual.app import App
 from textual.widgets import Static
 
-from lumen.ui.themes import theme_color
+from lumen.ui.themes import FALLBACK_COLORS, theme_color
 
 _WORDMARK_TEXT = "LUMEN"
 _WORDMARK_GLYPHS = {
@@ -156,14 +156,14 @@ class WelcomePanel(Static):
         del config_summary, project_trusted, session_directory
         self.update(
             _render_zero_state(
-                primary=theme_color(app, "primary", "#C99552"),
-                highlight=theme_color(app, "activity-shimmer", "#FFC166"),
-                soft=theme_color(app, "activity-soft", "#C77B2A"),
-                success=theme_color(app, "success", "#86A66C"),
-                foreground=theme_color(app, "foreground", "#ECE9E4"),
-                muted=theme_color(app, "activity-meta", "#948A80"),
-                tool=theme_color(app, "tool", "#C7ACE8"),
-                edit=theme_color(app, "mode-edit", "#69B9AF"),
+                primary=theme_color(app, "primary", FALLBACK_COLORS["primary"]),
+                highlight=theme_color(app, "activity-shimmer", FALLBACK_COLORS["activity-shimmer"]),
+                soft=theme_color(app, "activity-soft", FALLBACK_COLORS["activity-soft"]),
+                success=theme_color(app, "success", FALLBACK_COLORS["success"]),
+                foreground=theme_color(app, "foreground", FALLBACK_COLORS["foreground"]),
+                muted=theme_color(app, "activity-meta", FALLBACK_COLORS["activity-meta"]),
+                tool=theme_color(app, "tool", FALLBACK_COLORS["tool"]),
+                edit=theme_color(app, "mode-edit", FALLBACK_COLORS["mode-edit"]),
                 tool_count=tool_count,
                 skill_count=skill_count,
                 mcp_summary=mcp_summary,

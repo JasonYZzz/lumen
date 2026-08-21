@@ -2,6 +2,7 @@ export interface SlashCommand {
   value: string
   description: string
   keywords?: string
+  kind?: 'command' | 'skill' | 'model' | 'mode'
 }
 
 export const baseSlashCommands: SlashCommand[] = [
@@ -12,6 +13,12 @@ export const baseSlashCommands: SlashCommand[] = [
   { value: '/transcript', description: '搜索结构化 transcript', keywords: 'audit history' },
   { value: '/dequeue', description: '撤回尚未执行的排队输入', keywords: 'queue restore' },
   { value: '/clear', description: '清空当前显示', keywords: 'timeline' },
+  {
+    value: '/plan ',
+    description: '先生成计划，确认后再执行任务',
+    keywords: 'planning collaboration',
+    kind: 'mode',
+  },
   { value: '/model ', description: '切换模型' },
   { value: '/mode ', description: '切换审批模式', keywords: 'approval' },
   { value: '/context', description: '查看上下文', keywords: 'tokens' },

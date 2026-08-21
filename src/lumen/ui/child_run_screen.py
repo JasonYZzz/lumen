@@ -14,7 +14,7 @@ from textual.containers import Vertical
 from textual.screen import ModalScreen
 from textual.widgets import Input, Static
 
-from lumen.ui.themes import theme_color
+from lumen.ui.themes import FALLBACK_COLORS, theme_color
 
 
 class AgentInputScreen(ModalScreen[str | None]):
@@ -391,7 +391,7 @@ class ChildRunScreen(ModalScreen[None]):
             rendered.append(f"{marker} {item.get('id', '?')}  ")
             rendered.append(
                 f"{status_glyph} {status}",
-                style=self._theme_color(status_token, "#948A80"),
+                style=self._theme_color(status_token, FALLBACK_COLORS["activity-meta"]),
             )
             rendered.append(
                 f"  {kind} · owner {owner} · {duration}\n"

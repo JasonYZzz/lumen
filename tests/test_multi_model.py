@@ -72,6 +72,23 @@ async def test_select_model_rebuilds_runtime_and_switches_active(tmp_path: Path)
         assert manager.agent_orchestrator is orchestrator
 
 
+async def test_repeated_model_switches_keep_registrations_stable_and_quiesce_old_scope(
+    tmp_path: Path,
+) -> None:
+    config = load_config(_multi_model_config(tmp_path))
+    manager = ResourceManager(config, workspace=tmp_path)
+    async with manager:
+        before = manager.registration_report()
+        for name in ("beta", "alpha", "beta"):
+            await manager.select_model(name)
+        after = manager.registration_report()
+
+        assert after["tool_count"] == before["tool_count"]
+        assert after["hook_count"] == before["hook_count"]
+        assert after["runtime_scope"]["closed"] is False
+        assert after["cleanup_diagnostics"] == []
+
+
 async def test_select_model_unknown_name_raises_keyerror(tmp_path: Path) -> None:
     config = load_config(_multi_model_config(tmp_path))
     manager = ResourceManager(config, workspace=tmp_path)

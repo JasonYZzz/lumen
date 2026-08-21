@@ -147,6 +147,15 @@ _COMMANDS: tuple[SlashCommand, ...] = (
         while_running=QUEUE,
         in_palette=True,
     ),
+    SlashCommand(
+        name="edit",
+        usage="/edit",
+        description="Edit the last prompt in $EDITOR and resend on a fresh branch",
+        category=CATEGORY_SESSION,
+        handler="_cmd_edit",
+        while_running=BLOCK,
+        in_palette=True,
+    ),
     # --- model / approval ---------------------------------------------------
     SlashCommand(
         name="model",

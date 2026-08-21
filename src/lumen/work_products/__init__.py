@@ -1,6 +1,12 @@
 """Generic, session-scoped work products and verified effects."""
 
-from .adapters import AdapterError, ResourceAdapter, StructuredResourceAdapter, TextResourceAdapter
+from .adapters import (
+    AdapterError,
+    ResourceAdapter,
+    StaleResourceError,
+    StructuredResourceAdapter,
+    TextResourceAdapter,
+)
 from .types import (
     EffectReceipt,
     EffectStatus,
@@ -22,6 +28,7 @@ __all__ = [
     "ResourceAdapter",
     "RevisionSnapshot",
     "SessionWorkState",
+    "StaleResourceError",
     "StructuredResourceAdapter",
     "TargetCandidate",
     "TaskWorkspace",

@@ -4,6 +4,7 @@ import { ArrowUp, FileCode, Stop } from '@phosphor-icons/react'
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from 'react'
 import { lumenApi } from '@/lib/api/client'
 import type { FileSearchItem, QueueMode } from '@/lib/api/types'
+import { tokenizePrompt } from '@/lib/prompt-highlighting'
 import { filterSlashCommands, type SlashCommand } from '@/lib/slash-commands'
 
 export interface ComposerProps {
@@ -17,6 +18,7 @@ export interface ComposerProps {
   onStop: () => void
   onFocusChange?: (focused: boolean) => void
   liveControl?: ReactNode
+  settingsControl?: ReactNode
 }
 
 export function Composer({
@@ -30,8 +32,10 @@ export function Composer({
   onStop,
   onFocusChange,
   liveControl,
+  settingsControl,
 }: ComposerProps) {
   const textareaRef = useRef<HTMLTextAreaElement>(null)
+  const highlightRef = useRef<HTMLDivElement>(null)
   const [files, setFiles] = useState<FileSearchItem[]>([])
   const [commandIndex, setCommandIndex] = useState(0)
   const [commandsDismissed, setCommandsDismissed] = useState(false)
@@ -40,6 +44,7 @@ export function Composer({
     () => commandsDismissed ? [] : filterSlashCommands(slashCommands, value),
     [commandsDismissed, slashCommands, value],
   )
+  const promptTokens = useMemo(() => tokenizePrompt(value), [value])
 
   useEffect(() => {
     const textarea = textareaRef.current
@@ -121,100 +126,121 @@ export function Composer({
   }
 
   return (
-    <div className="composer composer--workspace">
-      <label className="sr-only" htmlFor="lumen-prompt">
-        给 Lumen 发送消息
-      </label>
-      <textarea
-        ref={textareaRef}
-        id="lumen-prompt"
-        className="composer-input"
-        value={value}
-        rows={1}
-        placeholder={busy ? '补充指令…' : '输入任务或 @ 文件'}
-        onChange={(event) => onChange(event.target.value)}
-        onKeyDown={handleKeyDown}
-        onFocus={() => onFocusChange?.(true)}
-        onBlur={() => onFocusChange?.(false)}
-        aria-expanded={matchingCommands.length > 0}
-        aria-controls={matchingCommands.length > 0 ? 'slash-command-menu' : undefined}
-        aria-activedescendant={matchingCommands.length > 0 ? `slash-command-${commandIndex}` : undefined}
-      />
+    <div className="composer-shell">
+      {settingsControl && (
+        <div className="composer-context" role="group" aria-label="任务设置">
+          {settingsControl}
+        </div>
+      )}
+      <div className="composer composer--workspace">
+        <label className="sr-only" htmlFor="lumen-prompt">
+          给 Lumen 发送消息
+        </label>
+        <div className="composer-editor">
+          <div ref={highlightRef} className="composer-highlight" aria-hidden="true">
+            {promptTokens.map((token, index) => (
+              <span key={`${index}-${token.value}`} className={`prompt-token-${token.kind}`}>
+                {token.value}
+              </span>
+            ))}
+            {value.endsWith('\n') && '\n'}
+          </div>
+          <textarea
+            ref={textareaRef}
+            id="lumen-prompt"
+            className="composer-input"
+            value={value}
+            rows={1}
+            placeholder={busy ? '补充指令…' : '输入任务、/ 命令或 @ 文件'}
+            onChange={(event) => onChange(event.target.value)}
+            onScroll={(event) => {
+              if (highlightRef.current) highlightRef.current.scrollTop = event.currentTarget.scrollTop
+            }}
+            onKeyDown={handleKeyDown}
+            onFocus={() => onFocusChange?.(true)}
+            onBlur={() => onFocusChange?.(false)}
+            aria-expanded={matchingCommands.length > 0}
+            aria-controls={matchingCommands.length > 0 ? 'slash-command-menu' : undefined}
+            aria-activedescendant={matchingCommands.length > 0 ? `slash-command-${commandIndex}` : undefined}
+          />
+        </div>
 
-      {matchingCommands.length > 0 && (
-        <div id="slash-command-menu" className="slash-commands" role="listbox" aria-label="命令">
-          {matchingCommands.map((command, index) => (
+        {matchingCommands.length > 0 && (
+          <div id="slash-command-menu" className="slash-commands" role="listbox" aria-label="命令">
+            {matchingCommands.map((command, index) => (
+              <button
+                id={`slash-command-${index}`}
+                key={command.value}
+                type="button"
+                role="option"
+                aria-selected={index === commandIndex}
+                data-kind={command.kind ?? 'command'}
+                className={index === commandIndex ? 'is-active' : ''}
+                onMouseDown={(event) => event.preventDefault()}
+                onMouseEnter={() => setCommandIndex(index)}
+                onClick={() => chooseCommand(command)}
+              >
+                <code>{command.value.trimEnd()}</code>
+                <span>{command.description}</span>
+              </button>
+            ))}
+          </div>
+        )}
+
+        {files.length > 0 && (
+          <div className="file-completions" role="listbox" aria-label="工作区文件">
+            {files.slice(0, 8).map((file) => (
+              <button key={file.path} type="button" role="option" onClick={() => chooseFile(file)}>
+                <FileCode size={16} />
+                <span>{file.name}{file.isDirectory ? '/' : ''}</span>
+                <small>{file.path}</small>
+              </button>
+            ))}
+          </div>
+        )}
+
+        <div className="composer-toolbar">
+          <div className="composer-tools">
+            {busy ? (
+              <div className="queue-mode" aria-label="运行中输入方式">
+                <button
+                  type="button"
+                  className={queueMode === 'steer' ? 'is-active' : ''}
+                  onClick={() => onQueueModeChange('steer')}
+                >
+                  立即补充
+                </button>
+                <button
+                  type="button"
+                  className={queueMode === 'follow_up' ? 'is-active' : ''}
+                  onClick={() => onQueueModeChange('follow_up')}
+                >
+                  完成后继续
+                </button>
+              </div>
+            ) : (
+              <span className="composer-hint">@ 文件&nbsp;&nbsp; / 命令</span>
+            )}
+          </div>
+
+          <div className="composer-actions">
+            {liveControl}
+            {busy && (
+              <button className="stop-button" type="button" onClick={onStop} aria-label="停止运行">
+                <Stop size={13} weight="fill" />
+                停止
+              </button>
+            )}
             <button
-              id={`slash-command-${index}`}
-              key={command.value}
+              className="send-button"
               type="button"
-              role="option"
-              aria-selected={index === commandIndex}
-              className={index === commandIndex ? 'is-active' : ''}
-              onMouseDown={(event) => event.preventDefault()}
-              onMouseEnter={() => setCommandIndex(index)}
-              onClick={() => chooseCommand(command)}
+              disabled={!value.trim()}
+              onClick={onSubmit}
+              aria-label={busy ? '加入运行队列' : '发送消息'}
             >
-              <code>{command.value.trimEnd()}</code>
-              <span>{command.description}</span>
+              <ArrowUp size={19} weight="bold" />
             </button>
-          ))}
-        </div>
-      )}
-
-      {files.length > 0 && (
-        <div className="file-completions" role="listbox" aria-label="工作区文件">
-          {files.slice(0, 8).map((file) => (
-            <button key={file.path} type="button" role="option" onClick={() => chooseFile(file)}>
-              <FileCode size={16} />
-              <span>{file.name}{file.isDirectory ? '/' : ''}</span>
-              <small>{file.path}</small>
-            </button>
-          ))}
-        </div>
-      )}
-
-      <div className="composer-toolbar">
-        <div className="composer-tools">
-          {busy ? (
-            <div className="queue-mode" aria-label="运行中输入方式">
-              <button
-                type="button"
-                className={queueMode === 'steer' ? 'is-active' : ''}
-                onClick={() => onQueueModeChange('steer')}
-              >
-                立即补充
-              </button>
-              <button
-                type="button"
-                className={queueMode === 'follow_up' ? 'is-active' : ''}
-                onClick={() => onQueueModeChange('follow_up')}
-              >
-                完成后继续
-              </button>
-            </div>
-          ) : (
-            <span className="composer-hint">@ 文件&nbsp;&nbsp; / 命令</span>
-          )}
-        </div>
-
-        <div className="composer-actions">
-          {liveControl}
-          {busy && (
-            <button className="stop-button" type="button" onClick={onStop} aria-label="停止运行">
-              <Stop size={13} weight="fill" />
-              停止
-            </button>
-          )}
-          <button
-            className="send-button"
-            type="button"
-            disabled={!value.trim()}
-            onClick={onSubmit}
-            aria-label={busy ? '加入运行队列' : '发送消息'}
-          >
-            <ArrowUp size={19} weight="bold" />
-          </button>
+          </div>
         </div>
       </div>
     </div>

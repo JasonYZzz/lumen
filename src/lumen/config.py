@@ -79,8 +79,9 @@ class LimitsConfig(StrictModel):
     #: the line from agent.yaml.)
     tool_timeout_seconds: float = Field(default=60.0, gt=0)
     skill_script_timeout_seconds: float = Field(default=30.0, gt=0)
-    #: Tool-call scheduling policy. ``parallel_safe`` only allows read-risk
-    #: tools to overlap, while ``parallel`` also allows write/execute tools.
+    #: Tool-call scheduling policy. ``parallel_safe`` only overlaps tools with
+    #: an explicit ``ToolConcurrency.PARALLEL_SAFE`` declaration, while
+    #: ``parallel`` also allows exclusive tools to overlap.
     #: The default preserves the pre-M6 execution order.
     parallel_tool_calls: Literal["sequential", "parallel_safe", "parallel"] = "sequential"
 
@@ -218,18 +219,32 @@ class HookConfig(StrictModel):
         return self
 
 
+class WebSearchConfig(StrictModel):
+    provider: Literal["tavily", "brave"]
+    api_key_env: str
+    max_results: int = Field(default=8, ge=1, le=20)
+
+
+class WebToolsConfig(StrictModel):
+    fetch_timeout_seconds: float = Field(default=20.0, gt=0)
+    fetch_max_bytes: int = Field(default=2 * 1024 * 1024, ge=1024)
+    search: WebSearchConfig | None = None
+
+
 class ToolsConfig(StrictModel):
     builtins: list[
         Literal[
             "read_file",
             "list_directory",
             "search_text",
+            "web_fetch",
             "write_file",
             "edit_file",
             "run_command",
         ]
-    ] = Field(default_factory=lambda: ["read_file", "list_directory", "search_text"])
+    ] = Field(default_factory=lambda: ["read_file", "list_directory", "search_text", "web_fetch"])
     plugins: list[PluginConfig] = Field(default_factory=list[PluginConfig])
+    web: WebToolsConfig = Field(default_factory=WebToolsConfig)
 
 
 class OAuthConfig(StrictModel):

@@ -5,9 +5,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
-import os
 import re
-import secrets
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any, Protocol, cast
@@ -15,7 +13,7 @@ from typing import Any, Protocol, cast
 import yaml
 
 from lumen.context.artifacts import ArtifactStore
-from lumen.tools.workspace import Workspace
+from lumen.tools.workspace import StaleWorkspaceResource, Workspace
 
 from .types import (
     RevisionSnapshot,
@@ -52,11 +50,21 @@ class ResourceAdapter(Protocol):
         target: TargetCandidate,
         change: Any,
     ) -> VerificationResult: ...
-    def restore(self, resource: str, snapshot: RevisionSnapshot) -> RevisionSnapshot: ...
+    def restore(
+        self,
+        resource: str,
+        snapshot: RevisionSnapshot,
+        *,
+        expected_revision: str,
+    ) -> RevisionSnapshot: ...
 
 
 class AdapterError(ValueError):
     """Raised when a resource cannot be located or changed safely."""
+
+
+class StaleResourceError(AdapterError):
+    """Stable work-product error for a failed expected-revision check."""
 
 
 class _FileAdapter:
@@ -98,20 +106,43 @@ class _FileAdapter:
             raise AdapterError(f"snapshot artifact is missing: {snapshot.content_ref}")
         return body.decode("utf-8")
 
-    def _write(self, resource: str, text: str) -> RevisionSnapshot:
+    def _write(
+        self,
+        resource: str,
+        text: str,
+        *,
+        expected_revision: str,
+    ) -> RevisionSnapshot:
         path = self._path(resource)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        if not path.parent.resolve().is_relative_to(self.workspace.root):
-            raise AdapterError(f"resource parent escapes workspace: {resource}")
-        _atomic_write(path, text.encode("utf-8"))
+        try:
+            self.workspace.atomic_write(
+                path,
+                text.encode("utf-8"),
+                expected_revision=expected_revision,
+            )
+        except StaleWorkspaceResource as error:
+            raise StaleResourceError(str(error)) from error
         return self.snapshot(resource)
 
-    def restore(self, resource: str, snapshot: RevisionSnapshot) -> RevisionSnapshot:
+    def restore(
+        self,
+        resource: str,
+        snapshot: RevisionSnapshot,
+        *,
+        expected_revision: str,
+    ) -> RevisionSnapshot:
         path = self._path(resource)
         if not snapshot.exists:
-            path.unlink(missing_ok=True)
+            try:
+                self.workspace.atomic_remove(path, expected_revision=expected_revision)
+            except StaleWorkspaceResource as error:
+                raise StaleResourceError(str(error)) from error
             return self.snapshot(resource)
-        return self._write(resource, self._read_snapshot(snapshot))
+        return self._write(
+            resource,
+            self._read_snapshot(snapshot),
+            expected_revision=expected_revision,
+        )
 
 
 class TextResourceAdapter(_FileAdapter):
@@ -184,7 +215,11 @@ class TextResourceAdapter(_FileAdapter):
         text = self._read_snapshot(before)
         if not 0 <= target.start <= target.end <= len(text):
             raise AdapterError("text target is outside the current revision")
-        return self._write(resource, text[: target.start] + change + text[target.end :])
+        return self._write(
+            resource,
+            text[: target.start] + change + text[target.end :],
+            expected_revision=before.revision,
+        )
 
     def verify(
         self,
@@ -319,7 +354,7 @@ class StructuredResourceAdapter(_FileAdapter):
             raise AdapterError("structured target has no JSON Pointer")
         document = self._parse(self._read_snapshot(before))
         updated = change if pointer == "" else _pointer_set(document, pointer, change)
-        return self._write(resource, self._dump(updated))
+        return self._write(resource, self._dump(updated), expected_revision=before.revision)
 
     def verify(
         self,
@@ -449,29 +484,10 @@ def _without_pointer(document: Any, pointer: str) -> Any:
     return _pointer_set(clone, pointer, "<selected-value>")
 
 
-def _atomic_write(path: Path, body: bytes) -> None:
-    suffix = secrets.token_hex(8)
-    temporary = path.parent / f".{path.name}.tmp-{suffix}"
-    descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-    try:
-        handle = os.fdopen(descriptor, "wb", closefd=True)
-        descriptor = -1
-        with handle:
-            handle.write(body)
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(temporary, path)
-    except BaseException:
-        temporary.unlink(missing_ok=True)
-        raise
-    finally:
-        if descriptor >= 0:
-            os.close(descriptor)
-
-
 __all__ = [
     "AdapterError",
     "ResourceAdapter",
+    "StaleResourceError",
     "StructuredResourceAdapter",
     "TextResourceAdapter",
 ]

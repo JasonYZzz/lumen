@@ -23,7 +23,7 @@ class ApprovalHost(App[None]):
     def __init__(self) -> None:
         super().__init__()
         self.decisions: list[tuple[str, bool]] = []
-        self.remembered: list[str] = []
+        self.remembered: list[tuple[str, str]] = []
         self.batch_decisions: list[tuple[tuple[str, ...], bool]] = []
 
     def compose(self) -> ComposeResult:
@@ -32,8 +32,8 @@ class ApprovalHost(App[None]):
     @on(ApprovalPanel.Decision)
     def handle_decision(self, event: ApprovalPanel.Decision) -> None:
         self.decisions.append((event.call_id, event.approved))
-        if event.remember:
-            self.remembered.append(event.call_id)
+        if event.scope != "once":
+            self.remembered.append((event.call_id, event.scope))
         self.query_one(ApprovalPanel).resolve(event.call_id)
 
     @on(ApprovalPanel.BatchDecision)
@@ -57,7 +57,7 @@ async def test_approval_panel_advances_numbered_vertical_queue() -> None:
         assert app.decisions == [("first", True)]
         assert panel.active_request is not None and panel.active_request.call_id == "second"
 
-        await pilot.press("3")
+        await pilot.press("4")
         await pilot.pause()
         assert app.decisions == [("first", True), ("second", False)]
         assert panel.pending_count == 0
@@ -75,7 +75,21 @@ async def test_approval_panel_can_remember_capability_for_session() -> None:
         await pilot.pause()
 
         assert app.decisions == [("remember-me", True)]
-        assert app.remembered == ["remember-me"]
+        assert app.remembered == [("remember-me", "session")]
+
+
+async def test_approval_panel_can_remember_capability_for_project() -> None:
+    app = ApprovalHost()
+    async with app.run_test(size=(80, 20)) as pilot:
+        panel = app.query_one(ApprovalPanel)
+        panel.enqueue(_request("always-me"))
+        await pilot.pause()
+
+        await pilot.press("3")
+        await pilot.pause()
+
+        assert app.decisions == [("always-me", True)]
+        assert app.remembered == [("always-me", "always")]
 
 
 async def test_approval_panel_summarizes_target_path() -> None:

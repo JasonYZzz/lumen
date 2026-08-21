@@ -54,6 +54,18 @@ class CommentaryDelta:
 
 
 @dataclass(frozen=True, slots=True)
+class ThinkingDelta:
+    """Incremental provider reasoning (thinking) content.
+
+    Emitted from ``ThinkingPart``/``ThinkingPartDelta`` stream events. It is
+    presentation-only: never part of the final answer and never retracted,
+    because tool calls do not retroactively reclassify reasoning content.
+    """
+
+    text: str
+
+
+@dataclass(frozen=True, slots=True)
 class PlanCreated:
     plan: PlanState
 
@@ -109,6 +121,7 @@ class ToolCallStarted:
     origin: str = "configured tool"
     risk: str = "external"
     started_at: float = 0.0
+    call_view: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -120,6 +133,7 @@ class ToolCallFinished:
     elapsed_seconds: float = 0.0
     preview: str | None = None
     exit_code: int | None = None
+    result_view: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -156,13 +170,6 @@ class ApprovalRequest:
     args: dict[str, Any]
     origin: str
     risk: str
-
-
-@dataclass(frozen=True, slots=True)
-class ApprovalRequested:
-    """Legacy alias for ToolApprovalPending for compatibility."""
-
-    request: ApprovalRequest
 
 
 @dataclass(frozen=True, slots=True)
@@ -247,6 +254,7 @@ RunEvent: TypeAlias = (
     | TextDelta
     | TextRetracted
     | CommentaryDelta
+    | ThinkingDelta
     | PlanCreated
     | PlanUpdated
     | PlanReviewPending
@@ -259,7 +267,6 @@ RunEvent: TypeAlias = (
     | ToolApprovalPending
     | ToolApprovalBatchPending
     | ToolApprovalResolved
-    | ApprovalRequested
     | UsageUpdated
     | ContextCompactionStarted
     | ContextCompactionCompleted
@@ -308,8 +315,6 @@ class TimelineEventRecord:
             data["plan"] = PlanState.model_validate(data["plan"])
         elif event_type is ToolApprovalBatchPending:
             data["requests"] = tuple(ApprovalRequest(**item) for item in data["requests"])
-        elif event_type is ApprovalRequested:
-            data["request"] = ApprovalRequest(**data["request"])
         return event_type(**data)
 
 
@@ -333,6 +338,7 @@ _EVENT_TYPES: dict[str, type[Any]] = {
         TextDelta,
         TextRetracted,
         CommentaryDelta,
+        ThinkingDelta,
         PlanCreated,
         PlanUpdated,
         PlanReviewPending,
@@ -345,7 +351,6 @@ _EVENT_TYPES: dict[str, type[Any]] = {
         ToolApprovalPending,
         ToolApprovalBatchPending,
         ToolApprovalResolved,
-        ApprovalRequested,
         UsageUpdated,
         ContextCompactionStarted,
         ContextCompactionCompleted,

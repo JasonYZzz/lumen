@@ -171,7 +171,7 @@ class HookBus:
                 runner = PythonHookRunner(
                     _load_python_hook(config.module, config.factory, search_path=search_path)
                 )
-            bus.hooks.append(RegisteredHook(HookEvent(config.event), config.matcher, runner))
+            bus.add(RegisteredHook(HookEvent(config.event), config.matcher, runner))
         return bus
 
     def context(
@@ -197,6 +197,19 @@ class HookBus:
         """Bind subsequent hook contexts and concurrent child tasks to a run."""
 
         self._session_id.set(session_id)
+
+    def add(self, hook: RegisteredHook) -> Callable[[], None]:
+        """Register one hook and return an identity-safe disposer."""
+
+        self.hooks.append(hook)
+
+        def dispose() -> None:
+            for index, current in enumerate(self.hooks):
+                if current is hook:
+                    del self.hooks[index]
+                    break
+
+        return dispose
 
     async def dispatch(self, context: HookContext) -> HookDecision:
         decision = HookDecision()

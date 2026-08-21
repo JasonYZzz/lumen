@@ -25,6 +25,9 @@ describe('slash commands', () => {
     expect(filterSlashCommands(baseSlashCommands, '/记忆').map((item) => item.value)).toEqual([
       '/memory ',
     ])
+    expect(filterSlashCommands(baseSlashCommands, '/planning').map((item) => item.value)).toEqual([
+      '/plan ',
+    ])
   })
 
   it('parses quoted MCP prompt arguments without losing spaces', () => {

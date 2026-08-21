@@ -22,7 +22,7 @@ from lumen.approval import ApprovalMode
 from lumen.branding import product_label
 from lumen.collaboration import CollaborationMode
 from lumen.events import UsageUpdated
-from lumen.ui.themes import theme_color
+from lumen.ui.themes import FALLBACK_COLORS, theme_color
 from lumen.ui.welcome import WelcomePanel
 
 if TYPE_CHECKING:
@@ -163,8 +163,8 @@ class StatusBarMixin:
         )
         usage = self._usage_summary()
         app = cast(App[object], self)
-        mode_color = theme_color(app, mode_token, "#948A80")
-        meta_color = theme_color(app, "activity-meta", "#948A80")
+        mode_color = theme_color(app, mode_token, FALLBACK_COLORS["mode-manual"])
+        meta_color = theme_color(app, "activity-meta", FALLBACK_COLORS["activity-meta"])
         rendered = Text()
         if "mode" in configured:
             rendered.append(mode_text, style=f"bold {mode_color}")
@@ -177,7 +177,7 @@ class StatusBarMixin:
                 if state.startswith(("Waiting", "Approval required"))
                 else "foreground"
             )
-            state_color = theme_color(app, state_token, "#ECE9E4")
+            state_color = theme_color(app, state_token, FALLBACK_COLORS["foreground"])
             if rendered:
                 rendered.append(" · ", style=meta_color)
             rendered.append(state, style=state_color)

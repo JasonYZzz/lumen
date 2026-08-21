@@ -76,7 +76,8 @@
             "default": "once",
             "enum": [
               "once",
-              "session"
+              "session",
+              "always"
             ],
             "title": "Scope",
             "type": "string"
@@ -105,6 +106,21 @@
           "action"
         ],
         "title": "ChildRunActionBody",
+        "type": "object"
+      },
+      "ConfigurationRevisionBody": {
+        "properties": {
+          "expectedRevision": {
+            "maxLength": 100,
+            "minLength": 8,
+            "title": "Expectedrevision",
+            "type": "string"
+          }
+        },
+        "required": [
+          "expectedRevision"
+        ],
+        "title": "ConfigurationRevisionBody",
         "type": "object"
       },
       "ControlBody": {
@@ -200,6 +216,85 @@
         "title": "HTTPValidationError",
         "type": "object"
       },
+      "ModelConfigurationBody": {
+        "properties": {
+          "api": {
+            "anyOf": [
+              {
+                "enum": [
+                  "chat",
+                  "responses",
+                  "openai-completions",
+                  "openai-responses",
+                  "chat-completions"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Api"
+          },
+          "apiKeyEnv": {
+            "anyOf": [
+              {
+                "pattern": "^[A-Za-z_][A-Za-z0-9_]*$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Apikeyenv"
+          },
+          "baseUrl": {
+            "anyOf": [
+              {
+                "maxLength": 2000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Baseurl"
+          },
+          "context": {
+            "additionalProperties": true,
+            "title": "Context",
+            "type": "object"
+          },
+          "expectedRevision": {
+            "maxLength": 100,
+            "minLength": 8,
+            "title": "Expectedrevision",
+            "type": "string"
+          },
+          "id": {
+            "maxLength": 300,
+            "minLength": 1,
+            "title": "Id",
+            "type": "string"
+          },
+          "setDefault": {
+            "default": false,
+            "title": "Setdefault",
+            "type": "boolean"
+          },
+          "settings": {
+            "additionalProperties": true,
+            "title": "Settings",
+            "type": "object"
+          }
+        },
+        "required": [
+          "expectedRevision",
+          "id"
+        ],
+        "title": "ModelConfigurationBody",
+        "type": "object"
+      },
       "PlanReviewBody": {
         "properties": {
           "action": {
@@ -256,6 +351,21 @@
           "text"
         ],
         "title": "QueueInputBody",
+        "type": "object"
+      },
+      "RenameSessionBody": {
+        "properties": {
+          "title": {
+            "maxLength": 80,
+            "minLength": 1,
+            "title": "Title",
+            "type": "string"
+          }
+        },
+        "required": [
+          "title"
+        ],
+        "title": "RenameSessionBody",
         "type": "object"
       },
       "RetryRunBody": {
@@ -545,6 +655,26 @@
         "summary": "Bootstrap"
       }
     },
+    "/api/v1/capabilities": {
+      "get": {
+        "operationId": "capability_inventory_api_v1_capabilities_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Capability Inventory Api V1 Capabilities Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Capability Inventory"
+      }
+    },
     "/api/v1/children/{child_id}/actions": {
       "post": {
         "operationId": "child_run_action_api_v1_children__child_id__actions_post",
@@ -594,6 +724,126 @@
           }
         },
         "summary": "Child Run Action"
+      }
+    },
+    "/api/v1/configuration": {
+      "get": {
+        "operationId": "get_configuration_api_v1_configuration_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Get Configuration Api V1 Configuration Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Get Configuration"
+      }
+    },
+    "/api/v1/configuration/models/{model_name}": {
+      "delete": {
+        "operationId": "delete_model_configuration_api_v1_configuration_models__model_name__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "model_name",
+            "required": true,
+            "schema": {
+              "title": "Model Name",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConfigurationRevisionBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Delete Model Configuration Api V1 Configuration Models  Model Name  Delete",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Delete Model Configuration"
+      },
+      "put": {
+        "operationId": "upsert_model_configuration_api_v1_configuration_models__model_name__put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "model_name",
+            "required": true,
+            "schema": {
+              "title": "Model Name",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ModelConfigurationBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Upsert Model Configuration Api V1 Configuration Models  Model Name  Put",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Upsert Model Configuration"
       }
     },
     "/api/v1/files/search": {
@@ -1167,6 +1417,18 @@
     "/api/v1/sessions": {
       "get": {
         "operationId": "list_sessions_api_v1_sessions_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "include_archived",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Include Archived",
+              "type": "boolean"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "content": {
@@ -1179,6 +1441,16 @@
               }
             },
             "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
           }
         },
         "summary": "List Sessions"
@@ -1205,6 +1477,47 @@
       }
     },
     "/api/v1/sessions/{session_id}": {
+      "delete": {
+        "operationId": "delete_session_api_v1_sessions__session_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "schema": {
+              "title": "Session Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "title": "Response Delete Session Api V1 Sessions  Session Id  Delete",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Delete Session"
+      },
       "get": {
         "operationId": "session_snapshot_api_v1_sessions__session_id__get",
         "parameters": [
@@ -1243,6 +1556,55 @@
           }
         },
         "summary": "Session Snapshot"
+      },
+      "patch": {
+        "operationId": "rename_session_api_v1_sessions__session_id__patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "schema": {
+              "title": "Session Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RenameSessionBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Rename Session Api V1 Sessions  Session Id  Patch",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Rename Session"
       }
     },
     "/api/v1/sessions/{session_id}/agents": {
@@ -1284,6 +1646,90 @@
           }
         },
         "summary": "List Agents"
+      }
+    },
+    "/api/v1/sessions/{session_id}/archive": {
+      "delete": {
+        "operationId": "restore_session_api_v1_sessions__session_id__archive_delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "schema": {
+              "title": "Session Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "title": "Response Restore Session Api V1 Sessions  Session Id  Archive Delete",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Restore Session"
+      },
+      "post": {
+        "operationId": "archive_session_api_v1_sessions__session_id__archive_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "schema": {
+              "title": "Session Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "title": "Response Archive Session Api V1 Sessions  Session Id  Archive Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Archive Session"
       }
     },
     "/api/v1/sessions/{session_id}/checkpoints": {

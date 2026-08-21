@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import time
+from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any, ClassVar, cast
@@ -11,7 +12,8 @@ from rich.text import Text
 from textual.app import App
 from textual.widgets import Static
 
-from lumen.ui.themes import theme_color
+from lumen.tools.presentation import ToolCallView
+from lumen.ui.themes import FALLBACK_COLORS, theme_color
 
 
 class ToolActivityFamily(StrEnum):
@@ -124,9 +126,7 @@ class RunActivityIndicator(Static):
         self.remove_class("running")
         self.update("")
 
-    def suspend(
-        self, label: str, detail: str | None = None, *, tone: str = "activity"
-    ) -> None:
+    def suspend(self, label: str, detail: str | None = None, *, tone: str = "activity") -> None:
         """Keep semantic phase text for audit/tests while hiding the fallback row."""
 
         self._label = label
@@ -153,11 +153,11 @@ class RunActivityIndicator(Static):
 
     def _render_line(self) -> None:
         elapsed = max(0, int(time.monotonic() - self._started_at))
-        activity = self._theme_variable(self._tone, "#F0A24A")
+        activity = self._theme_variable(self._tone, FALLBACK_COLORS["activity"])
         phase = self._FRAME_PHASES[self._frame]
         shimmer = self._theme_variable(f"{self._tone}{phase}", activity)
-        detail_color = self._theme_variable(f"{self._tone}-detail", "#D8A56B")
-        meta_color = self._theme_variable("activity-meta", "#948A80")
+        detail_color = self._theme_variable(f"{self._tone}-detail", FALLBACK_COLORS["activity-detail"])
+        meta_color = self._theme_variable("activity-meta", FALLBACK_COLORS["activity-meta"])
 
         # The glyph pulses through a narrow orange ramp while the verb stays
         # stable. This creates visible motion without making the whole line
@@ -194,8 +194,23 @@ def tool_activity_presentation(
     *,
     origin: str = "builtin",
     risk: str = "read",
+    view: Mapping[str, Any] | None = None,
 ) -> ToolActivityPresentation:
     """Classify a tool by visible intent instead of treating every read risk alike."""
+
+    if view is not None:
+        intent = ToolCallView.model_validate(view)
+        return ToolActivityPresentation(
+            family=ToolActivityFamily(intent.family.value),
+            active_verb=intent.active_verb,
+            completed_verb=intent.completed_verb,
+            detail=intent.detail,
+            groupable=intent.groupable,
+            group_key=intent.group_key,
+            singular=intent.singular,
+            plural=intent.plural,
+            tone=intent.tone,
+        )
 
     path = str(args.get("path", "")).strip() or None
     lowered = name.casefold()

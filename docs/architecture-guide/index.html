@@ -9,27 +9,35 @@
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
+  <!--
+  THESIS: Architecture is an inspectable control circuit: one state concept, one authoritative trace. Refuse the generic docs dashboard of interchangeable rounded cards.
+  OWN-WORLD: Near-black phenolic board, paper text, oxidized-copper rules, mint signal checks, fault-red blocks; clipped tabs, terminal dots, calibrated hairlines, and source-ledger panels.
+  STORY: A maintainer identifies the authority map, follows one prompt through runtime and persistence, then opens the exact source or contract evidence.
+  FIRST VIEWPORT: A narrow left chapter bus, a dominant central topology board, and a right authority ledger. The primary action follows the copper route into the runtime sequence.
+  FORM: Copper Trace Atlas, selected direction 6; seed 991d4b73.
+  FINISH: unreviewed and undocumented is unfinished; this build ends with the finish review, the verdict, DESIGN.md, and every shipping raster carrying its provenance
+  -->
   <div class="ambient" aria-hidden="true"></div>
   <div class="noise" aria-hidden="true"></div>
 
   <header class="topbar glass">
     <a class="brand" href="#overview" aria-label="返回总览">
-      <span class="brand-mark">L</span>
-      <span><strong>Lumen</strong><small>Architecture Atlas</small></span>
+      <svg class="brand-mark" viewBox="0 0 40 40" aria-hidden="true"><path d="M8 7v26h24M8 20h17M25 14v12"/><circle cx="8" cy="7" r="2"/><circle cx="32" cy="33" r="2"/></svg>
+      <span><strong>Lumen</strong><small>Architecture Atlas · Read mode</small></span>
     </a>
     <label class="search glass-inset">
-      <span aria-hidden="true">⌕</span>
+      <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="m16 16 5 5"/></svg>
       <input id="search" type="search" placeholder="搜索 module、流程或源码…" autocomplete="off">
       <kbd>/</kbd>
     </label>
     <div class="top-actions">
-      <span class="build-state"><i></i> Implementation map · 2026.07</span>
+      <span class="build-state"><i></i> Source-audited · 2026.08.19</span>
     </div>
   </header>
 
   <div class="shell">
     <aside class="sidebar glass">
-      <div class="nav-label">阅读地图</div>
+      <div class="nav-label">CHAPTER BUS · 阅读母线</div>
       <nav id="toc">
         <a class="active" href="#overview"><span>01</span>系统全景</a>
         <a href="#modules"><span>02</span>核心 Modules</a>
@@ -43,30 +51,71 @@
         <a href="#navigation"><span>10</span>源码导航</a>
       </nav>
       <div class="legend glass-inset">
-        <p><i class="dot cyan"></i>核心运行路径</p>
-        <p><i class="dot coral"></i>审批 / 失败分支</p>
-        <p><i class="dot mint"></i>持久化 / 完成</p>
-        <p><i class="dot violet"></i>外部能力</p>
+        <p><i class="trace solid"></i>实线 · 执行路径</p>
+        <p><i class="trace dashed"></i>虚线 · 事件 / 待处理</p>
+        <p><i class="trace double"></i>双线 · 读写关系</p>
+        <p><i class="trace blocked"></i>截断 · 阻止完成</p>
       </div>
-      <p class="sidebar-note">精确图层由 HTML/CSS 绘制，可复制文字、缩放、打印和离线阅读。</p>
+      <p class="sidebar-note">HTML/CSS 可检查图层 · Trace Reader 内嵌 MD 与源码 · 可复制、搜索、打印与离线阅读。</p>
+      <div class="sidebar-links">
+        <a href="README.md" data-inspect-path="docs/architecture-guide/README.md"><span>12 章技术正文</span><small>MD · 当前页预览</small></a>
+        <a href="12-current-implementation-audit.md" data-inspect-path="docs/architecture-guide/12-current-implementation-audit.md"><span>当前实现审计</span><small>MD · 当前页预览</small></a>
+      </div>
     </aside>
 
     <main id="content">
       <section id="overview" class="hero searchable" data-title="系统全景 architecture overview">
-        <div class="hero-copy">
-          <p class="kicker">LUMEN ATLAS · 实现全景</p>
-          <h1>从一次 Prompt，理解整个 Agent 系统。</h1>
-          <p class="hero-lede">面向维护者的完整实现地图：应用层、模型循环、上下文、工具安全、事件持久化与扩展 seam。</p>
+        <div class="hero-copy hero-board">
+          <div class="hero-titleline"><h1>Lumen Architecture Atlas</h1><span>权威运行拓扑 · AUTHORITY MAP</span></div>
+          <p class="hero-lede">一次 Prompt 穿过唯一权威 Module 的实际路径；实线是执行，双线是读写，虚线是事件与恢复。</p>
+          <div class="hero-topology" role="img" aria-label="从客户端到 WorkspaceHost、RunCoordinator、AgentRuntime、ContextEngine 与持久状态的权威拓扑">
+            <div class="topology-clients">
+              <div><b>Textual TUI</b><small>client adapter</small></div>
+              <div><b>Next.js Web</b><small>client adapter</small></div>
+              <div><b>Headless</b><small>client adapter</small></div>
+            </div>
+            <div class="topology-bridge"><span>WorkspaceCommand ↓</span><i></i><span>↑ RunEvent</span></div>
+            <div class="topology-spine">
+              <div class="topology-module authority"><em>APPLICATION</em><b>WorkspaceHost</b><small>commands · runs · approvals</small></div>
+              <span class="route-arrow">→</span>
+              <div class="topology-module authority"><em>SESSION</em><b>RunCoordinator</b><small>turn · resume · append</small></div>
+              <span class="route-arrow">→</span>
+              <div class="topology-module authority"><em>EXECUTION</em><b>AgentRuntime</b><small>model ↔ tool loop</small></div>
+              <span class="route-arrow double-route">⇄</span>
+              <div class="topology-module authority"><em>CONTEXT</em><b>ContextEngine</b><small>prepare · commit · control</small></div>
+            </div>
+            <div class="topology-forks">
+              <div class="topology-module"><b>TaskWorkspace</b><small>effect · verify · gate</small></div>
+              <div class="topology-module"><b>AgentOrchestrator</b><small>threads · evidence · import</small></div>
+              <div class="topology-module"><b>CapabilityGateway</b><small>guard · approval · receipt</small></div>
+              <div class="topology-module"><b>SessionRepository</b><small>v9 append-only JSONL</small></div>
+            </div>
+            <div class="topology-contracts">
+              <span><b>ProviderRequestReceipt</b> route · tokens · tool digest</span>
+              <span><b>Tool Contract V2</b> canonical · model · client</span>
+              <span><b>RegistrationScope</b> task quiescence · LIFO disposer</span>
+            </div>
+          </div>
+          <div class="hero-sources"><span>SOURCE REFERENCES</span><a href="../../src/lumen/application/host.py">host.py</a><a href="../../src/lumen/runtime.py">runtime.py</a><a href="../../src/lumen/sessions.py">sessions.py</a><a href="../../docs/generated/contracts.json">contracts.json</a></div>
           <div class="hero-actions">
-            <a class="primary-button" href="#agent-flow">进入主流程 <span>↓</span></a>
-            <a class="secondary-button" href="README.md">查看 Markdown 源</a>
+            <a class="primary-button" href="#agent-flow">沿权威路径阅读 <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h13M14 7l5 5-5 5"/></svg></a>
+            <a class="secondary-button" href="12-current-implementation-audit.md">打开实现审计</a>
           </div>
         </div>
-        <div class="hero-metrics glass">
-          <div><strong>1</strong><span>Workspace<br>当前主运行</span></div>
-          <div><strong>5</strong><span>工具风险<br>分类</span></div>
-          <div><strong>12</strong><span>预算 / 保留<br>分区 Zones</span></div>
-          <div><strong>3</strong><span>客户端 / 运行时<br>核心边界</span></div>
+        <div class="hero-ledger glass" aria-label="当前架构契约摘要">
+          <div class="ledger-head"><span>AUTHORITY LEDGER</span><strong>REV · 2026.08</strong></div>
+          <dl>
+            <div><dt>Session</dt><dd>v9 · append-only</dd></div>
+            <div><dt>Config</dt><dd>v2 · strict</dd></div>
+            <div><dt>Sandbox</dt><dd>workspace_write</dd></div>
+            <div><dt>Tool contract</dt><dd>V2 · 3 projections</dd></div>
+            <div><dt>Catalog</dt><dd>contracts.json · v2</dd></div>
+            <div><dt>Request receipt</dt><dd>terminal turn ledger</dd></div>
+            <div><dt>Capabilities</dt><dd>CLI · TUI · Web</dd></div>
+            <div><dt>Lifecycle</dt><dd>scoped · reversible</dd></div>
+            <div><dt>Mutation</dt><dd>expected revision</dd></div>
+          </dl>
+          <p><span></span>源码、schema 与契约测试已交叉核对</p>
         </div>
       </section>
 
@@ -107,16 +156,16 @@
             <div class="layer foundations">
               <div class="layer-name">CAPABILITIES &amp; STATE · 能力与持久状态</div>
               <div class="node"><b>Local Tools</b><small>工作区范围约束</small></div>
-              <div class="node violet"><b>MCP / Skills / Hooks</b><small>外部能力适配器</small></div>
+              <div class="node violet"><b>Tool Contract V2</b><small>canonical · model · client projections</small></div>
               <div class="node mint"><b>SessionRepository</b><small>只追加的 JSONL 会话事实</small></div>
-              <div class="node mint"><b>Memory + Artifacts</b><small>SQLite 记忆 / 内容寻址制品</small></div>
+              <div class="node mint"><b>TaskWorkspace</b><small>effect journal · verification gate</small></div>
             </div>
           </div>
         </figure>
         <div class="callout-row">
           <article class="callout glass"><b>单一状态权威</b><p>TUI 与 Web 不各自保存 Agent 状态，全部跨越 WorkspaceHost seam。</p></article>
           <article class="callout glass"><b>事实与上下文分离</b><p>JSONL 保留完整事实；模型只收到 token 预算内的 active history。</p></article>
-          <article class="callout glass"><b>权限不等于沙箱</b><p>审批决定是否执行；操作系统隔离仍需外部 sandbox adapter。</p></article>
+          <article class="callout glass"><b>权限与沙箱正交</b><p>审批授权意图；Seatbelt / bubblewrap 强制限制进程实际能力。</p></article>
         </div>
       </section>
 
@@ -170,11 +219,11 @@
             <div class="seq-row"><i>2</i><b style="--from:2;--to:3">构造运行输入 RunInput →</b><em>恢复会话状态</em></div>
             <div class="seq-row"><i>3</i><b style="--from:3;--to:4">历史 + 计划 history + plan →</b><em>创建 runtime run</em></div>
             <div class="seq-row"><i>4</i><b style="--from:4;--to:5">装配上下文 prepare(...) →</b><em>生成有界 ContextEnvelope</em></div>
-            <div class="seq-row accent"><i>5</i><b style="--from:4;--to:6">请求模型 model request →</b><em>返回文本或工具调用</em></div>
-            <div class="seq-row warning"><i>6</i><b style="--from:4;--to:6">Hook → 审批 → 执行工具 ↻</b><em>观察结果回到模型</em></div>
-            <div class="seq-row accent"><i>7</i><b style="--from:4;--to:5">提交新消息 commit(...) →</b><em>构造候选 active history</em></div>
-            <div class="seq-row"><i>8</i><b style="--from:4;--to:3">运行结果 RunOutcome ←</b><em>append + fsync 后发布 checkpoint</em></div>
-            <div class="seq-row success"><i>9</i><b style="--from:3;--to:1">事件流 + 最终结果 ←</b><em>发布 CoordinatorState</em></div>
+            <div class="seq-row accent"><i>5</i><b style="--from:4;--to:6">请求预检 + ProviderRequestReceipt →</b><em>冻结 route · token 分区 · tool digest</em></div>
+            <div class="seq-row warning"><i>6</i><b style="--from:4;--to:6">Hook → 审批 → ToolGuard → 执行 ↻</b><em>canonical 结果回到模型</em></div>
+            <div class="seq-row accent"><i>7</i><b style="--from:4;--to:5">提交新消息 commit(...) →</b><em>ToolCallView / ToolResultView 只做展示</em></div>
+            <div class="seq-row"><i>8</i><b style="--from:4;--to:3">运行结果 RunOutcome ←</b><em>turn + receipts append + fsync</em></div>
+            <div class="seq-row success"><i>9</i><b style="--from:3;--to:1">事件流 + 最终结果 ←</b><em>持久化后发布 CoordinatorState</em></div>
           </div>
         </figure>
 
@@ -287,13 +336,13 @@
         <figure class="diagram glass">
           <figcaption><strong>工具调用安全管线 · Tool Call Guardrail</strong><span>模型请求和执行结果都必须穿过统一 seam。</span></figcaption>
           <div class="security-flow">
-            <div class="security-node"><i>1</i><b>工具定义 ToolSpec</b><small>名称 · 参数 Schema · 超时</small></div><span>→</span>
-            <div class="security-node"><i>2</i><b>风险分类 Risk</b><small>读取 / 写入 / 执行 / 外部</small></div><span>→</span>
+            <div class="security-node"><i>1</i><b>Tool Contract V2</b><small>参数 · 输出 · 展示 · 并发</small></div><span>→</span>
+            <div class="security-node"><i>2</i><b>三轴分类</b><small>Risk · EffectKind · ToolConcurrency</small></div><span>→</span>
             <div class="security-node"><i>3</i><b>执行前 Hook</b><small>拒绝调用或修改参数</small></div><span>→</span>
             <div class="security-node gate"><i>4</i><b>用户审批 Gate</b><small>manual / edits / auto 策略</small></div><span>→</span>
             <div class="security-node"><i>5</i><b>执行 Execute</b><small>限制在 workspace 范围</small></div><span>→</span>
             <div class="security-node"><i>6</i><b>执行后 Hook</b><small>审计或变换工具结果</small></div><span>→</span>
-            <div class="security-node success"><i>7</i><b>观察结果 Observation</b><small>发布 ToolCallFinished</small></div>
+            <div class="security-node success"><i>7</i><b>三种投影</b><small>canonical · model text · ToolResultView</small></div>
           </div>
         </figure>
         <div class="risk-grid">
@@ -307,7 +356,12 @@
           <div><b>审批</b><span>是否允许此次操作</span></div><div class="plus">+</div>
           <div><b>Confinement</b><span>文件工具能访问哪里</span></div><div class="not-equal">≠</div>
           <div><b>OS Sandbox</b><span>进程真实系统与网络权限</span></div>
-          <p>Lumen 当前实现前两项；不可信仓库应在容器、Seatbelt 或 bubblewrap 中运行。</p>
+          <p>三层均已实现：默认 workspace_write 使用 Seatbelt / bubblewrap，adapter 缺失时 fail closed；仅显式 disabled 才放弃 OS 隔离。</p>
+        </div>
+        <div class="three-cols contract-notes">
+          <article class="info-panel glass"><h3>Expected revision</h3><p>文件 mutation 先取得 <code>sha256:</code> revision 或 <code>missing</code>；冲突返回 <code>STALE_RESOURCE</code>，不会猜测覆盖。</p><code>tools/workspace.py</code></article>
+          <article class="info-panel glass"><h3>Monotonic guard</h3><p><code>ToolGuard</code> 只有 abstain / deny。任一拒绝都不能被后续 Hook 或 Adapter 放宽。</p><code>tools/gateway.py</code></article>
+          <article class="info-panel glass"><h3>Replayable view</h3><p>工具卡片从 durable args/result 纯函数派生；renderer 失败只回退展示，不改变真实结果。</p><code>tools/presentation.py</code></article>
         </div>
       </section>
 
@@ -320,10 +374,10 @@
           <div class="event-track">
             <div class="event"><i>01</i><b>运行开始</b><small>RunStarted</small></div><div class="event"><i>02</i><b>文本增量</b><small>TextDelta</small></div><div class="event"><i>03</i><b>工具开始</b><small>ToolCallStarted</small></div><div class="event coral"><i>04</i><b>等待审批</b><small>ToolApprovalPending</small></div><div class="event"><i>05</i><b>工具完成</b><small>ToolCallFinished</small></div><div class="event mint"><i>06</i><b>运行完成</b><small>RunCompleted</small></div>
           </div>
-          <div class="event-bottom"><div class="node">EventJournal<small>内存有序事件流</small></div><span>→</span><div class="node mint">SessionRepository<small>只追加的 JSONL turn</small></div><span>→</span><div class="node">恢复 resume()<small>消息 · 计划 · checkpoint</small></div></div>
+          <div class="event-bottom"><div class="node">EventJournal<small>内存有序事件流</small></div><span>→</span><div class="node mint">Session v9 Journal<small>只追加的类型化 JSONL records</small></div><span>→</span><div class="node">恢复 resume()<small>消息 · 计划 · checkpoint · Agent · Live</small></div></div>
         </figure>
         <div class="data-record glass">
-          <div><span>TurnRecord</span><code>user_input</code><code>status</code><code>messages</code><code>timeline_events</code></div>
+          <div><span>TurnRecord</span><code>user_input</code><code>status</code><code>messages</code><code>request_receipts[]</code></div>
           <div><span>Audit</span><code>approvals</code><code>usage</code><code>diagnostics</code><code>partial_text</code></div>
           <div><span>Recovery</span><code>active_prefix</code><code>summary</code><code>checkpoint</code><code>plan</code></div>
         </div>
@@ -344,16 +398,16 @@
           </div>
         </figure>
         <figure class="diagram glass delegation-board">
-          <figcaption><strong>单层子 Agent 委派 · Depth-One Delegation</strong><span>子 Agent 是隔离的只读调研者，不是共享任务列表的 Agent team。</span></figcaption>
-          <div class="parent-agent"><b>主 Agent · Parent</b><small>delegate_task（独立调研任务）</small></div>
+          <figcaption><strong>原生 Agent Thread · Depth-One Runtime</strong><span>Orchestrator 统一拥有线程、消息、调度、导入、恢复和完成门禁。</span></figcaption>
+          <div class="parent-agent"><b>根 Agent · Root</b><small>spawn / message / follow-up / wait / close</small></div>
           <div class="fanout"><span>↙</span><span>↓</span><span>↘</span></div>
           <div class="children">
-            <div class="child"><b>子 Agent A</b><small>隔离的上下文</small><em>只允许只读工具</em></div>
-            <div class="child"><b>子 Agent B</b><small>隔离的上下文</small><em>只允许只读工具</em></div>
-            <div class="child"><b>子 Agent C</b><small>隔离的上下文</small><em>只允许只读工具</em></div>
+            <div class="child"><b>Explorer</b><small>共享 workspace</small><em>observe 工具交集</em></div>
+            <div class="child"><b>Default</b><small>隔离 worktree</small><em>能力只收窄</em></div>
+            <div class="child"><b>Worker</b><small>隔离 worktree</small><em>显式导入结果</em></div>
           </div>
           <div class="return-flow">精简调研结果 ↑ · 受并发数 / 请求数 / 工具数 / 超时共同限制</div>
-          <div class="denied-strip"><span>× 禁止写入</span><span>× 禁止执行</span><span>× 禁止 MCP</span><span>× 禁止递归委派</span></div>
+          <div class="denied-strip"><span>× 禁止递归委派</span><span>× 禁止扩大权限</span><span>× 禁止覆盖 dirty path</span><span>× 未验证不得完成</span></div>
         </figure>
       </section>
 
@@ -438,10 +492,15 @@
         <header class="section-heading"><div><span class="section-index">09</span><h2>配置与资源生命周期</h2></div><p>分层配置先解析来源与信任，再由 StrictModel 验证；运行资源按事务式生命周期打开和切换。</p></header>
         <div class="split-diagrams">
           <figure class="diagram glass compact"><figcaption><strong>配置解析</strong><span>后层覆盖前层，路径按声明位置解析。</span></figcaption><div class="config-flow"><div><b>全局 Global</b><small>~/.lumen</small></div><div><b>项目 Project</b><small>.lumen/agent.yaml</small></div><div><b>本地 Local</b><small>agent.local.yaml</small></div><span>→</span><div class="merge"><b>配置合并器</b><small>来源 · 信任 · fingerprint</small></div><span>→</span><div class="validated"><b>AppConfig</b><small>严格校验 · 禁止未知字段</small></div></div></figure>
-          <figure class="diagram glass compact"><figcaption><strong>ResourceManager 生命周期</strong><span>模型切换先构建候选 runtime，成功后才关闭旧实例。</span></figcaption><div class="lifecycle"><div>已构造<br>Constructed</div><span>打开 open()</span><div>MCP 已连接</div><span>构建 build</span><div class="active">Runtime 就绪</div><span>事务切换</span><div>新模型生效</div><span>关闭 close()</span><div>已关闭</div></div></figure>
+          <figure class="diagram glass compact"><figcaption><strong>ResourceManager 生命周期</strong><span>候选 runtime 先验证；RegistrationScope 再原子替换旧注册。</span></figcaption><div class="lifecycle"><div>已构造<br>Constructed</div><span>打开 open()</span><div>MCP 已连接</div><span>构建 build</span><div class="active">Runtime 就绪</div><span>发布 Scope</span><div>LIFO disposer</div><span>关闭 close()</span><div>已关闭</div></div></figure>
         </div>
         <div class="config-matrix glass">
-          <div><b>agent</b><span>model profiles · overrides · limits · skills</span></div><div><b>tools</b><span>builtin · Python plugins</span></div><div><b>mcp_servers</b><span>transport · risk · OAuth</span></div><div><b>permissions</b><span>mode · always allow/deny</span></div><div><b>context</b><span>ratio policy · recent · summary · background</span></div><div><b>memory</b><span>recall · learn · work queue</span></div><div><b>delegation</b><span>concurrency · child limits</span></div><div><b>hooks</b><span>events · matcher · adapter</span></div>
+          <div><b>agent</b><span>model profiles · overrides · limits · skills</span></div><div><b>tools</b><span>builtin · plugins · web fetch/search</span></div><div><b>mcp_servers</b><span>transport · risk · OAuth</span></div><div><b>permissions</b><span>mode · allow/deny · project rules</span></div><div><b>context</b><span>ratio policy · recent · summary · background</span></div><div><b>memory</b><span>recall · learn · work queue</span></div><div><b>agents</b><span>profiles · concurrency · run limits</span></div><div><b>sandbox / live</b><span>OS isolation · Realtime routes</span></div>
+        </div>
+        <div class="three-cols contract-notes">
+          <article class="info-panel glass"><h3>RegistrationScope</h3><p>只拥有 disposer 与后台 task；关闭时取消并等待 task，再按 LIFO 撤销注册。它不保存任何领域状态。</p><code>lifecycle.py</code></article>
+          <article class="info-panel glass"><h3>Capability observation</h3><p>CLI、TUI、Web 共用一个只读投影，解释 tool/skill/MCP/profile 的实际可见性，不参与授权。</p><code>GET /api/v1/capabilities</code></article>
+          <article class="info-panel glass"><h3>Generated catalog</h3><p>从运行时类型确定性生成；CI 检查 freshness，删除后可重建，不能反向成为运行 schema。</p><code>docs/generated/contracts.json</code></article>
         </div>
       </section>
 
@@ -459,17 +518,53 @@
           <article class="glass"><h3>审批或越权</h3><p><code>tools/registry.py</code> → <code>approval.py</code> → <code>hooks.py</code></p></article>
           <article class="glass"><h3>长期记忆污染</h3><p><code>memory/manager.py</code> → <code>redaction.py</code></p></article>
         </div>
-        <div class="quality-gate glass"><div><span>ruff</span><b>lint</b></div><div><span>pyright</span><b>strict types</b></div><div><span>pytest</span><b>644 tests</b></div><div><span>snapshots</span><b>52 TUI</b></div><div><span>web</span><b>test + typecheck</b></div><div><span>uv build</span><b>wheel + sdist</b></div></div>
+        <div class="quality-gate glass"><div><span>ruff</span><b>lint</b></div><div><span>pyright</span><b>strict types</b></div><div><span>pytest</span><b>contract suite</b></div><div><span>contracts</span><b>catalog freshness</b></div><div><span>web</span><b>test + typecheck + build</b></div><div><span>uv build</span><b>wheel + sdist</b></div></div>
       </section>
 
       <section id="no-results" class="no-results glass" hidden><h2>没有匹配的章节</h2><p>尝试搜索“ContextEngine”“审批”“MCP”或“session”。</p></section>
 
       <footer>
-        <div><strong>Lumen Architecture Atlas</strong><span>Implementation-grounded · Offline-ready · Liquid Glass approximation</span></div>
+        <div><strong>Lumen Architecture Atlas</strong><span>Source-audited · Offline-ready · Copper Trace edition</span></div>
         <a href="#overview">回到顶部 ↑</a>
       </footer>
     </main>
   </div>
+  <aside id="document-inspector" class="document-inspector" aria-labelledby="inspector-title" aria-hidden="true">
+    <header class="inspector-header">
+      <div class="inspector-route">
+        <span id="inspector-kind">TRACE READER</span>
+        <strong id="inspector-title">技术正文与源码</strong>
+        <code id="inspector-path">等待选择文件</code>
+      </div>
+      <div class="inspector-header-actions">
+        <button id="inspector-back" type="button" aria-label="返回上一个预览" disabled>
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 5-7 7 7 7"/></svg>
+        </button>
+        <button id="inspector-close" type="button" aria-label="关闭预览">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg>
+        </button>
+      </div>
+    </header>
+    <div class="inspector-toolbar">
+      <div class="inspector-tabs" role="tablist" aria-label="预览模式">
+        <button id="inspector-rendered" type="button" role="tab" aria-controls="inspector-content" aria-selected="true" data-view="rendered">阅读</button>
+        <button id="inspector-raw" type="button" role="tab" aria-controls="inspector-content" aria-selected="false" data-view="raw">原文</button>
+      </div>
+      <label class="inspector-find">
+        <span>文内定位</span>
+        <input id="inspector-find" type="search" placeholder="输入后按 Enter 查找下一处" autocomplete="off">
+        <output id="inspector-find-count" for="inspector-find">0</output>
+      </label>
+    </div>
+    <div id="inspector-status" class="inspector-status" role="status" aria-live="polite"></div>
+    <div id="inspector-content" class="inspector-content" role="tabpanel" aria-labelledby="inspector-rendered" tabindex="0"></div>
+    <footer class="inspector-footer">
+      <div id="inspector-evidence"></div>
+      <a id="inspector-original" href="#" target="_blank" rel="noopener">打开原文件</a>
+    </footer>
+  </aside>
+  <script src="content.generated.js"></script>
+  <script src="document-inspector.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

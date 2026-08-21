@@ -48,7 +48,9 @@ Skill 发现优先级为 builtin < user < project。`SKILL.md` frontmatter 描�
 
 ## 6.4 Tool 插件与 Hook
 
-Python tool plugin 返回 `list[ToolSpec]`，适合增加模型可调用能力。Hook 面向生命周期拦截，适合策略、审计、格式化和通知。二者不是同一抽象：plugin 提供“做什么”，hook 改变“何时允许以及前后发生什么”。
+Python tool plugin 返回 `list[ToolSpec]`，适合增加模型可调用能力。Tool Contract V2 允许它显式声明 canonical `ToolOutputSpec`、per-invocation `ToolConcurrency` 和纯展示 `ToolPresentationSpec`；未迁移 plugin 仍通过 legacy constructor Adapter 运行。Hook 面向生命周期拦截，适合策略、审计、格式化和通知。二者不是同一抽象：plugin 提供“做什么”，hook 改变“何时允许以及前后发生什么”。
+
+Tool、Hook、MCP 与 Capability 注册必须返回 disposer 并加入当前 `RegistrationScope`。Scope 关闭只撤销注册、取消后台 task 并保存有界清理 diagnostic，不拥有领域状态；这使插件重载和模型切换不会累积第二份 schema、listener 或执行入口。
 
 ## 6.5 原生多 Agent Runtime
 
@@ -56,7 +58,7 @@ Python tool plugin 返回 `list[ToolSpec]`，适合增加模型可调用能力�
 sequenceDiagram
     participant Parent as Root Agent
     participant AO as AgentOrchestrator
-    participant SR as Session v8 Journal
+    participant SR as Session v9 Journal
     participant Child as Isolated AgentRuntime
 
     Parent->>AO: spawn_agent(task, profile, plan targets)
@@ -79,7 +81,8 @@ sequenceDiagram
 - `default` 与 `worker` 在独立 Git worktree 中执行写操作；
 - 角色只能收窄父级模型、工具、审批与 sandbox 能力，不能扩大；
 - Session 级并发、每 Run Agent 数、request、tool call 与 timeout 均有独立上限；
-- 消息、事件、结果和不可伪造 evidence 追加写入 Session v8，大正文进入 ArtifactStore；
+- 消息、事件、结果和不可伪造 evidence 追加写入 Session v9，大正文进入 ArtifactStore；
+- child 的非控制工具调用与 `report_progress` 被压缩为有界 `agent.progress` 事件，每个 Agent 最多 60 条；完整 child transcript 仍在自己的 history artifact 中；
 - worktree 导入先检查父工作区 dirty path 和三方冲突，重叠时进入协调状态；
 - 活动、待审批、未送达结果、未处理失败、待导入、冲突或未通过证据都会阻止根 Agent 完成。
 

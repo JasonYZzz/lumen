@@ -39,7 +39,7 @@ from lumen.resources import ResourceManager
 from lumen.runtime import AgentRuntime, ToolApproval
 from lumen.skills import SkillLoader, load_skill
 from lumen.tools.registry import PermissionPolicy, ToolRegistry
-from lumen.tools.spec import Risk, ToolSpec
+from lumen.tools.spec import Risk, ToolConcurrency, ToolSpec
 
 
 def _last_returns(messages: list[ModelMessage]) -> list[ToolReturnPart]:
@@ -73,7 +73,15 @@ sessions:
 
 def test_parallel_modes_set_per_tool_sequential_flag(tmp_path: Path) -> None:
     registry = ToolRegistry(tmp_path)
-    registry.add(ToolSpec(lambda: "read", name="read", risk=Risk.READ), origin="test")
+    registry.add(
+        ToolSpec(
+            lambda: "read",
+            name="read",
+            risk=Risk.READ,
+            concurrency=lambda _args: ToolConcurrency.PARALLEL_SAFE,
+        ),
+        origin="test",
+    )
     registry.add(ToolSpec(lambda: "write", name="write", risk=Risk.WRITE), origin="test")
     policy = PermissionPolicy(PermissionsConfig(always_allow=["write"]))
 

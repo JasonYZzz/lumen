@@ -471,15 +471,20 @@ def test_repo_example_config_loads_without_drift(monkeypatch: pytest.MonkeyPatch
     assert all(not server.read_only_tools for server in config.mcp_servers.values())
 
 
-def test_project_config_uses_canonical_deepseek_flash_name() -> None:
+def test_project_config_uses_expected_model_registry() -> None:
     """Displayed logical name, default selection and backend family must agree."""
 
     project_config = Path(__file__).resolve().parents[1] / "agent.yaml"
     config = load_config(project_config)
-    assert config.agent.default_model == "deepseek-v4-flash"
-    assert "deepseek-v4-flash" in config.agent.models
-    assert "deepseek-v4-pro" not in config.agent.models
-    assert config.agent.models["deepseek-v4-flash"].id == "openai:deepseek-v4-flash"
+    assert config.agent.default_model_name() == "deepseek-v4-flash"
+    assert set(config.agent.model_registry()) == {
+        "deepseek-v4-flash",
+        "deepseek-v4-pro",
+        "kimi-k3",
+    }
+    assert config.agent.model_registry()["deepseek-v4-flash"].id == "openai:deepseek-v4-flash"
+    assert config.agent.model_registry()["deepseek-v4-pro"].id == "openai:deepseek-v4-pro"
+    assert config.agent.model_registry()["kimi-k3"].id == "openai:k3"
 
 
 @pytest.mark.parametrize("legacy_mode", ["plan", "ask"])

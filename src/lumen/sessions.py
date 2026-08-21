@@ -6,13 +6,15 @@ import os
 import re
 from collections import deque
 from collections.abc import Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, cast
 from uuid import UUID, uuid4
 
+from pydantic import BaseModel, ConfigDict, Field
 from pydantic_ai.messages import ModelMessage, ModelMessagesTypeAdapter
+from pydantic_core import to_jsonable_python
 
 from lumen.agents.types import (
     ACTIVE_AGENT_STATUSES,
@@ -25,12 +27,31 @@ from lumen.agents.types import (
 )
 from lumen.collaboration import SessionSettingsState
 from lumen.context.session_state import SessionContextState
-from lumen.events import TimelineEventRecord
+from lumen.context.types import ProviderRequestReceipt
+from lumen.events import RunStarted, TimelineEventRecord
 from lumen.live.types import LiveSessionState, SessionLiveState
 from lumen.plan import PlanState
 from lumen.work_products import EffectReceipt, SessionWorkState
 
 SCHEMA_VERSION = 9
+SUPPORTED_SCHEMA_VERSIONS = tuple(range(1, SCHEMA_VERSION + 1))
+SCHEMA_UPGRADE_TARGETS = (7, 8, 9)
+SESSION_RECORD_TYPES = (
+    "agent_event",
+    "agent_message",
+    "agent_result",
+    "agent_thread",
+    "context_state",
+    "effect",
+    "live_session",
+    "plan_state",
+    "schema_upgrade",
+    "session",
+    "session_catalog",
+    "session_settings",
+    "turn",
+    "work_state",
+)
 
 
 class SessionCorruptError(ValueError):
@@ -67,6 +88,9 @@ class TurnRecord:
     input_provenance: str | None = None
     provider_item_ids: list[str] = field(default_factory=list[str])
     live_metadata: dict[str, Any] = field(default_factory=dict[str, Any])
+    request_receipts: list[ProviderRequestReceipt] = field(
+        default_factory=list[ProviderRequestReceipt]
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -75,6 +99,16 @@ class TurnPage:
 
     turns: list[TurnRecord]
     next_before: int | None
+
+
+class SessionCatalogState(BaseModel):
+    """Latest append-only projection for user-managed Session metadata."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    title: str | None = Field(default=None, max_length=80)
+    archived_at: str | None = None
+    deleted_at: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -90,6 +124,7 @@ class SessionData:
     """
     history: list[ModelMessage]
     full_history: list[ModelMessage]
+    catalog: SessionCatalogState = field(default_factory=SessionCatalogState)
     plan: PlanState = field(default_factory=PlanState)
     #: The most recent compaction's summary, materialised from the last turn
     #: that carried a compaction record. Restored on /resume so iterative
@@ -106,10 +141,36 @@ class SessionData:
     live_state: SessionLiveState = field(default_factory=SessionLiveState)
 
 
+def recoverable_orphaned_input(session: SessionData) -> str | None:
+    """Recover a pre-fix accepted input only when durable execution evidence exists.
+
+    Older Web sessions persisted the auto-generated title and tool/work facts
+    before their terminal turn. The exact transcript cannot be reconstructed,
+    but the title is a safe bounded projection of the first accepted prompt.
+    """
+
+    if session.turns or session.catalog.title is None:
+        return None
+    has_execution_evidence = bool(
+        session.work_state.effects
+        or session.work_state.work_products
+        or session.agent_state.threads
+        or session.agent_state.events
+        or session.agent_state.messages
+    )
+    return session.catalog.title if has_execution_evidence else None
+
+
 class SessionRepository:
     def __init__(self, directory: str | Path) -> None:
         self.directory = Path(directory).expanduser().resolve()
         self.directory.mkdir(parents=True, exist_ok=True)
+        self._projection_cache: dict[Path, tuple[str, SessionData]] = {}
+
+    def clear_projection_cache(self) -> None:
+        """Delete the optional read model; canonical JSONL remains untouched."""
+
+        self._projection_cache.clear()
 
     def _path(self, session_id: str) -> Path:
         try:
@@ -128,7 +189,15 @@ class SessionRepository:
             flags |= os.O_EXCL
         descriptor = os.open(path, flags, 0o600)
         try:
-            encoded = (json.dumps(record, ensure_ascii=False, separators=(",", ":")) + "\n").encode()
+            # Provider, MCP and usage payloads may contain JSON-compatible domain
+            # scalars such as Decimal. Normalize through Pydantic's strict JSON
+            # encoder at the journal Seam instead of teaching every caller about
+            # every provider-specific scalar. Unknown opaque objects still fail
+            # serialization; this is deliberately narrower than ``default=str``.
+            json_record = to_jsonable_python(record)
+            encoded = (
+                json.dumps(json_record, ensure_ascii=False, separators=(",", ":")) + "\n"
+            ).encode()
             view = memoryview(encoded)
             while view:
                 written = os.write(descriptor, view)
@@ -188,6 +257,7 @@ class SessionRepository:
                 input_provenance=turn.input_provenance,
                 provider_item_ids=turn.provider_item_ids,
                 live_metadata=turn.live_metadata,
+                request_receipts=turn.request_receipts,
             )
         self.append_session_settings(created.id, source.settings)
         if source.work_state.work_products or source.work_state.effects:
@@ -238,6 +308,7 @@ class SessionRepository:
         input_provenance: str | None = None,
         provider_item_ids: Sequence[str] = (),
         live_metadata: dict[str, Any] | None = None,
+        request_receipts: Sequence[ProviderRequestReceipt] = (),
     ) -> None:
         path = self._path(session_id)
         if not path.is_file():
@@ -257,6 +328,7 @@ class SessionRepository:
             "channel": channel,
             "provider_item_ids": list(provider_item_ids),
             "live_metadata": dict(live_metadata or {}),
+            "request_receipts": [item.model_dump(mode="json") for item in request_receipts],
         }
         if interaction_id is not None:
             record["interaction_id"] = interaction_id
@@ -271,6 +343,34 @@ class SessionRepository:
         if retryable:
             record["retryable"] = True
         self._append(path, record)
+
+    def append_turn_started(
+        self,
+        session_id: str,
+        *,
+        user_input: str,
+        interaction_id: str,
+        plan: PlanState | None = None,
+    ) -> None:
+        """Persist an accepted input before its run can produce side effects.
+
+        A later terminal turn with the same ``interaction_id`` supersedes this
+        running projection without rewriting the append-only journal.
+        """
+
+        self.append_turn(
+            session_id,
+            user_input=user_input,
+            messages=[],
+            approvals=[],
+            usage={},
+            status="running",
+            plan=plan,
+            timeline_events=[
+                TimelineEventRecord.from_event(RunStarted(user_input), sequence=1)
+            ],
+            interaction_id=interaction_id,
+        )
 
     def append_context_state(self, session_id: str, state: SessionContextState) -> None:
         """Append a v5 source-state snapshot without rewriting prior records."""
@@ -297,6 +397,22 @@ class SessionRepository:
             path,
             {
                 "type": "session_settings",
+                "created_at": self._now(),
+                "state": state.model_dump(mode="json"),
+            },
+        )
+
+    def append_session_catalog(self, session_id: str, state: SessionCatalogState) -> None:
+        """Append the latest title/archive/delete projection without rewriting history."""
+
+        path = self._path(session_id)
+        if not path.is_file():
+            raise FileNotFoundError(f"session not found: {session_id}")
+        self._ensure_schema_v9(path)
+        self._append(
+            path,
+            {
+                "type": "session_catalog",
                 "created_at": self._now(),
                 "state": state.model_dump(mode="json"),
             },
@@ -447,7 +563,7 @@ class SessionRepository:
         )
 
     def _ensure_schema_v9(self, path: Path) -> None:
-        """Append a non-destructive v9 marker before Live records."""
+        """Append a non-destructive v9 marker before Live or catalog records."""
 
         effective = self._effective_schema_version(path)
         if effective >= 9:
@@ -608,21 +724,29 @@ class SessionRepository:
         path = self._path(session_id)
         if not path.is_file():
             raise FileNotFoundError(f"session not found: {session_id}")
+        payload = path.read_bytes()
+        projection_digest = hashlib.sha256(payload).hexdigest()
+        cached = self._projection_cache.get(path)
+        if cached is not None and cached[0] == projection_digest:
+            return _copy_session_data(cached[1])
         records: list[dict[str, Any]] = []
-        with path.open(encoding="utf-8") as file:
-            for line_number, line in enumerate(file, 1):
-                try:
-                    raw_record: Any = json.loads(line)
-                except json.JSONDecodeError as error:
-                    raise SessionCorruptError(f"invalid JSON at line {line_number} in {path.name}") from error
-                if not isinstance(raw_record, dict):
-                    raise SessionCorruptError(f"record at line {line_number} is not an object")
-                records.append(cast(dict[str, Any], raw_record))
+        try:
+            text = payload.decode("utf-8")
+        except UnicodeDecodeError as error:
+            raise SessionCorruptError(f"session {path.name} is not UTF-8") from error
+        for line_number, line in enumerate(text.splitlines(), 1):
+            try:
+                raw_record: Any = json.loads(line)
+            except json.JSONDecodeError as error:
+                raise SessionCorruptError(f"invalid JSON at line {line_number} in {path.name}") from error
+            if not isinstance(raw_record, dict):
+                raise SessionCorruptError(f"record at line {line_number} is not an object")
+            records.append(cast(dict[str, Any], raw_record))
         if not records or records[0].get("type") != "session":
             raise SessionCorruptError("missing session header")
         header = records[0]
         schema_version = header.get("schema_version")
-        if schema_version not in {1, 2, 3, 4, 5, 6, 7, 8, 9}:
+        if schema_version not in SUPPORTED_SCHEMA_VERSIONS:
             raise SessionCorruptError(f"unsupported session schema: {schema_version}")
         metadata = SessionMetadata(
             id=str(header["id"]),
@@ -632,6 +756,7 @@ class SessionRepository:
             path=path,
         )
         turns: list[TurnRecord] = []
+        running_turn_positions: dict[str, int] = {}
         # ``active_history`` is rebuilt turn-by-turn; whenever a compaction
         # record is present we restart from its compacted prefix so the model
         # doesn't see older turns it has already summarised.
@@ -644,6 +769,7 @@ class SessionRepository:
         compacted_source_end = 0
         context_state = SessionContextState()
         settings = SessionSettingsState()
+        catalog = SessionCatalogState()
         work_state = SessionWorkState()
         agent_state = SessionAgentState()
         live_state = SessionLiveState()
@@ -651,7 +777,7 @@ class SessionRepository:
         for line_number, record in enumerate(records[1:], 2):
             if record.get("type") == "schema_upgrade":
                 to_version = int(record.get("to_version", 0))
-                if to_version not in {7, 8, 9} or to_version <= effective_schema:
+                if to_version not in SCHEMA_UPGRADE_TARGETS or to_version <= effective_schema:
                     raise SessionCorruptError(f"invalid schema_upgrade at line {line_number}")
                 effective_schema = to_version
                 continue
@@ -667,6 +793,19 @@ class SessionRepository:
                 if live_session.ref.session_id != metadata.id:
                     raise SessionCorruptError(f"live_session ownership mismatch at line {line_number}")
                 live_state = live_state.upsert(live_session)
+                continue
+            if record.get("type") == "session_catalog":
+                if effective_schema < 9:
+                    raise SessionCorruptError(
+                        f"session_catalog is not valid for schema v{effective_schema} "
+                        f"at line {line_number}"
+                    )
+                try:
+                    catalog = SessionCatalogState.model_validate(record.get("state"))
+                except ValueError as error:
+                    raise SessionCorruptError(
+                        f"invalid session_catalog at line {line_number}"
+                    ) from error
                 continue
             if record.get("type") == "work_state":
                 if effective_schema < 7:
@@ -780,7 +919,17 @@ class SessionRepository:
                 continue
             turn = _parse_turn(record, line_number=line_number)
             messages = turn.messages
-            turns.append(turn)
+            pending_position = (
+                running_turn_positions.pop(turn.interaction_id, None)
+                if turn.interaction_id is not None and turn.status != "running"
+                else None
+            )
+            if pending_position is None:
+                turns.append(turn)
+                if turn.interaction_id is not None and turn.status == "running":
+                    running_turn_positions[turn.interaction_id] = len(turns) - 1
+            else:
+                turns[pending_position] = turn
             if turn.status in {"completed", "waiting_for_user"}:
                 if turn.compaction is not None:
                     candidate = _load_checkpoint(turn.compaction)
@@ -825,11 +974,12 @@ class SessionRepository:
             # Model history only accepts completed turns, but the latest plan
             # is diagnostic state and remains useful after failure/cancel.
             latest_plan = turn.plan
-        return SessionData(
+        projection = SessionData(
             metadata=metadata,
             turns=turns,
             history=active_history,
             full_history=full_history,
+            catalog=catalog,
             plan=latest_plan,
             latest_compaction_summary=latest_compaction_summary,
             latest_compaction_checkpoint=latest_compaction_checkpoint,
@@ -841,6 +991,8 @@ class SessionRepository:
             agent_state=agent_state,
             live_state=live_state,
         )
+        self._projection_cache[path] = (projection_digest, projection)
+        return _copy_session_data(projection)
 
     def load_turn_page(
         self,
@@ -861,8 +1013,9 @@ class SessionRepository:
         if not path.is_file():
             raise FileNotFoundError(f"session not found: {session_id}")
 
-        selected: deque[tuple[dict[str, Any], int]] = deque(maxlen=limit)
+        selected: deque[tuple[dict[str, Any], int, int]] = deque(maxlen=limit)
         turn_count = 0
+        running_turn_ordinals: dict[str, int] = {}
         with path.open(encoding="utf-8") as file:
             header_line = file.readline()
             if not header_line:
@@ -871,7 +1024,7 @@ class SessionRepository:
             if header.get("type") != "session":
                 raise SessionCorruptError("missing session header")
             schema_version = header.get("schema_version")
-            if schema_version not in {1, 2, 3, 4, 5, 6, 7, 8, 9}:
+            if schema_version not in SUPPORTED_SCHEMA_VERSIONS:
                 raise SessionCorruptError(f"unsupported session schema: {schema_version}")
 
             effective_schema = int(schema_version)
@@ -880,7 +1033,7 @@ class SessionRepository:
                 record = _parse_json_record(line, line_number=line_number, path=path)
                 if record.get("type") == "schema_upgrade":
                     to_version = int(record.get("to_version", 0))
-                    if to_version not in {7, 8, 9} or to_version <= effective_schema:
+                    if to_version not in SCHEMA_UPGRADE_TARGETS or to_version <= effective_schema:
                         raise SessionCorruptError(f"invalid schema_upgrade at line {line_number}")
                     effective_schema = to_version
                     continue
@@ -922,6 +1075,13 @@ class SessionRepository:
                             f"v{schema_version} at line {line_number}"
                         )
                     continue
+                if record.get("type") == "session_catalog":
+                    if effective_schema < 9:
+                        raise SessionCorruptError(
+                            "session_catalog is not valid for schema "
+                            f"v{effective_schema} at line {line_number}"
+                        )
+                    continue
                 if record.get("type") == "plan_state":
                     if schema_version < 6:
                         raise SessionCorruptError(
@@ -930,15 +1090,32 @@ class SessionRepository:
                     continue
                 if record.get("type") != "turn":
                     raise SessionCorruptError(f"unknown record type at line {line_number}")
-                if before is None or turn_count < before:
-                    selected.append((record, line_number))
-                turn_count += 1
+                interaction_id = record.get("interaction_id")
+                status = record.get("status")
+                pending_ordinal = (
+                    running_turn_ordinals.pop(str(interaction_id), None)
+                    if interaction_id is not None and status != "running"
+                    else None
+                )
+                if pending_ordinal is None:
+                    ordinal = turn_count
+                    turn_count += 1
+                    if interaction_id is not None and status == "running":
+                        running_turn_ordinals[str(interaction_id)] = ordinal
+                    if before is None or ordinal < before:
+                        selected.append((record, line_number, ordinal))
+                    continue
+
+                for index, (_, _, selected_ordinal) in enumerate(selected):
+                    if selected_ordinal == pending_ordinal:
+                        selected[index] = (record, line_number, pending_ordinal)
+                        break
 
         end = turn_count if before is None else before
         if not 0 <= end <= turn_count:
             raise ValueError(f"invalid turn page cursor: {before}")
         start = max(0, end - limit)
-        turns = [_parse_turn(record, line_number=line) for record, line in selected]
+        turns = [_parse_turn(record, line_number=line) for record, line, _ in selected]
         return TurnPage(turns=turns, next_before=start if start > 0 else None)
 
     def list(self) -> list[SessionMetadata]:
@@ -975,6 +1152,17 @@ def _parse_json_record(line: str, *, line_number: int, path: Path) -> dict[str, 
     if not isinstance(raw_record, dict):
         raise SessionCorruptError(f"record at line {line_number} is not an object")
     return cast(dict[str, Any], raw_record)
+
+
+def _copy_session_data(value: SessionData) -> SessionData:
+    """Return a caller-owned projection shell around immutable domain state."""
+
+    return replace(
+        value,
+        turns=list(value.turns),
+        history=list(value.history),
+        full_history=list(value.full_history),
+    )
 
 
 def _collect_artifact_refs(value: object, output: set[str]) -> None:
@@ -1023,6 +1211,10 @@ def _parse_turn(record: dict[str, Any], *, line_number: int) -> TurnRecord:
             ),
             provider_item_ids=[str(item) for item in list(record.get("provider_item_ids") or [])],
             live_metadata=dict(record.get("live_metadata") or {}),
+            request_receipts=[
+                ProviderRequestReceipt.model_validate(item)
+                for item in list(record.get("request_receipts") or [])
+            ],
         )
     except (KeyError, TypeError, ValueError) as error:
         raise SessionCorruptError(f"invalid turn at line {line_number}") from error

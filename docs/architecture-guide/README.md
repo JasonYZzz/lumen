@@ -1,6 +1,15 @@
 # Lumen 架构与核心实现指南
 
-> **网页版入口：** 直接打开 [`index.html`](index.html)。它是无外部依赖的离线液态玻璃架构手册，包含可搜索导航、响应式布局、打印样式和精确技术图。以下 Markdown 文件保留为文字源和轻量阅读版本。
+> **网页版入口：** 直接打开 [`index.html`](index.html)。它是无外部运行时依赖的离线 Architecture Atlas，包含可搜索导航、响应式布局、打印样式、精确技术图，以及在当前页面打开 Markdown 与源码的 Trace Reader。以下 Markdown 文件仍是可审计的文字事实来源。
+
+Atlas 不维护第二套技术正文。`content.generated.js` 是 Markdown、核心 Python/Web 源码、相关契约测试和生成契约的确定性只读快照；无论通过 HTTP 还是直接打开 `index.html`，Trace Reader 都读取这份经过 freshness 校验的离线证据。修改相关正文或源码后运行：
+
+```bash
+uv run python scripts/build_architecture_atlas.py
+uv run python scripts/build_architecture_atlas.py --check
+```
+
+CI 会执行 freshness 检查，防止新版实现已经落地但网页版仍携带旧内容。
 
 这套文档面向希望真正理解 Lumen 实现逻辑的维护者。它不按文件列表复述代码，而是围绕系统中的深 module、interface、seam、状态变化和失败路径展开。
 
@@ -17,10 +26,13 @@
 9. [源码导航与调试指南](08-code-navigation.md)：修改功能时应该从哪里进入、如何验证。
 10. [原生多 Agent Runtime 决策记录](10-native-multi-agent-runtime.md)：控制面、Runtime Factory、安全恢复与兼容性不变量。
 11. [Web Realtime 语音 Runtime 决策记录](11-realtime-voice-runtime.md)：WebRTC、sideband、能力网关、恢复与完成门禁。
+12. [当前实现审计](12-current-implementation-audit.md)：按源码、schema 与契约测试核对状态权威、兼容版本和文档漂移。
 
 ## 一句话架构
 
 Lumen 是一个本地优先、事件驱动的 coding-agent 框架：`WorkspaceHost` 统一承接客户端命令，`RunCoordinator` 管理可恢复会话，`AgentRuntime` 执行模型—工具循环，`ContextEngine` 在每次模型调用前后管理有界上下文，所有公开状态通过类型化 `RunEvent` 投影给 TUI、Web 和 JSONL 会话仓库。
+
+当前实现还用 Tool Contract V2 统一 canonical 输出、模型文本与客户端展示，用 `RegistrationScope` 管理可逆注册，并将 provider 请求回执、能力观测和 generated contract catalog 作为可审计但非权威的只读投影。
 
 ## 关键术语
 
@@ -36,8 +48,12 @@ Lumen 是一个本地优先、事件驱动的 coding-agent 框架：`WorkspaceHo
 ## 当前实现边界
 
 - 单个 workspace 同时只允许一个主 Agent run。
-- 本地 `run_command` 有工作区约束、超时和有界输出，但不是 OS 级沙箱。
+- 本地 `run_command` 同时经过审批与 OS sandbox：默认 `workspace_write`，macOS 使用 Seatbelt、Linux 使用 bubblewrap；adapter 缺失时 fail closed。只有显式 `sandbox.mode: disabled` 才放弃隔离。
 - 子 Agent 当前是 Session 内持久化的单层 Agent Thread；读任务共享只读工作区，写任务使用隔离 worktree，并由根 Agent 负责协调和综合。
 - TUI 与 Web 共用运行逻辑，但 UI 渲染分别由 Textual 和 Next.js 实现。
 - Realtime 语音是可选 Web transport；它共用 Host 能力和 Session，但原始音频默认不持久化，进程重启后也不会自动重放未确认的远端动作。
 - MCP 工具可以延迟暴露 schema；MCP resource 和 prompt 只有显式激活后才进入上下文。
+- 当前 Session schema 是 v9；v1–v8 只读加载，首次写入较新 record 时追加 `schema_upgrade`，不会重写 header 或历史行。
+- `Risk`、`EffectKind`、`ToolConcurrency` 分别负责审批、效果追踪/验证与调用重叠；三者不能互相推断。
+- 所有文件 mutation 经过 expected revision 与无符号链接 hop 的 `Workspace.atomic_write/remove`；冲突返回 `STALE_RESOURCE`，不会猜测覆盖。
+- `lumen capabilities --json`、TUI `/context capabilities` 与 Web `/api/v1/capabilities` 使用同一只读能力投影。

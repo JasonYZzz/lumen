@@ -20,11 +20,11 @@ TUI 与 Web 不各自维护一套 Agent 状态。它们通过 `WorkspaceHost` �
 
 应用层命令定义在 `application/models.py`：
 
-- session：`CreateSession`、`ListSessions`；
+- session：`CreateSession`、`ForkSessionAtTurn`、`ListSessions`、`RenameSession`、`SetSessionArchived`、`DeleteSession`；
 - run：`StartRun`、`RetryRun`、`CancelRun`；
 - interaction：`QueueRunInput`、`DecideApproval`；
 - settings：`SetApprovalMode`、`SelectModel`；
-- capability：`InvokeSkill`、`ContextControl`。
+- capability：`InvokeSkill`、`ContextControl`、Agent/Work Product/Live 命令。
 
 `dispatch` 的重载让每类命令拥有确定返回类型。客户端只需要理解这些 command/result，不需要操作 coordinator 内部对象。
 
@@ -53,12 +53,18 @@ sequenceDiagram
 
 会话文件是 append-only JSONL：
 
-- 第一条记录保存 session metadata；
+- 第一条记录保存 session metadata 和创建时 schema；当前新会话写 v9；
 - 后续每条 turn 保存 user input、状态、messages、timeline events、approval、usage、plan、diagnostics 与 compaction；
+- 每个 terminal turn 还保存有界 `request_receipts[]`：实际 provider/model route、step、instructions/messages/tools token、visible tool 名称与 digest、context fingerprint、output reserve、hard limit 和 estimated 标记；不复制 secret 或大正文；
+- context、settings、plan、Work Product/effect、Agent Thread/event/message/result 与 Live call 都使用独立类型化 record 追加，不挤入可变聚合对象；
+- 标题、归档和删除状态由最新的 `session_catalog` record 投影；删除是 tombstone，不改写或物理移除 journal；
+- v1–v8 文件加载时不重写。首次写入 v7/v8/v9 才有的事实前追加 `schema_upgrade`，读取时以有效 schema 校验后续 record；
 - `load` 对不完整/非法 JSON 行明确报 `SessionCorruptError`，避免把损坏文件静默解释为合法状态；
 - active prefix、rolling summary 和 checkpoint 可从 turn 中恢复；V2 checkpoint 必须通过 parent/range/cursor/digest/full-history 校验，V1 只读兼容并映射为绝对 transcript 边界；
 - checkpoint 状态只在 append + `fsync` 成功后发布到运行中内存；
 - 分页读取用于长时间线，不要求一次挂载全部 UI widget。
+
+`SessionRepository.load` 始终以 JSONL 字节为权威，通过内容 digest 命中可删除的 read projection cache。缓存只保存 materialized read model；digest 不一致或调用 `clear_projection_cache()` 时从 JSONL 冷算。删除缓存不会丢数据，也不会改写 v1–v9 文件。
 
 ## 5.5 TUI adapter
 
@@ -81,3 +87,11 @@ FastAPI 提供 bootstrap、session、run、approval、context 和文件搜索端
 - SSE 通过 sequence 恢复；
 - 浏览器刷新不取消后台 run；
 - OpenAPI schema 生成 TypeScript contract，CI 检查漂移。
+
+Session 管理端点只向 `WorkspaceHost` 派发 command。历史列表默认过滤归档、删除墓碑和没有 turn/显式标题的空 Session；归档列表可显式请求。活动 run、未处理 Agent 或未验证 Work Product 会阻止归档与删除，Web Adapter 不直接修改 journal。
+
+`WorkspaceHost` 接受 `StartRun` 时，会在调度模型或工具前通过 `RunCoordinator` 追加一个带唯一 `interaction_id` 的 `running` turn，并把首条规范化输入追加为 `session_catalog.title`。terminal turn 使用相同 ID 继续追加；`SessionRepository` 的读取投影以 terminal 记录取代 running 记录，JSONL 字节仍全部保留。Repository 在唯一 JSONL 写入 Seam 先使用 Pydantic JSON 语义规范化整条 record，因此 provider usage 中的 `Decimal` cost 会按精确十进制字符串持久化，日期、UUID 等标准领域标量也不要求每个调用者重复转换；不认识的不透明对象仍会使写入安全失败。若完整 terminal record 仍因其他富载荷无法序列化，Coordinator 会舍弃未提交的 Context fingerprint，并追加只含已流出 timeline 与错误信息的最小 `failed` terminal record；Host 在发出 `RunFailed` 前还会对仍处于 `running` 的同一 interaction 做最终对账。这保证已通过 SSE 展示的助手文本不会因终态持久化异常在切换 Session 后静默消失。执行中冷启动可以恢复用户输入，完成或失败后又不会出现重复 turn。Web 刷新按 URL 中的 Session ID 直接恢复 snapshot，再通过 `active_run_id` 重连同一进程内仍在执行的事件流，不以侧栏列表是否已投影为恢复前提。对于修复前已经形成的 title-only Session，只有存在 effect、Work Product 或 Agent 等执行证据时，Timeline Adapter 才从自动标题恢复有界输入并显示“回答不可重建”的中断提示；纯手动标题的空 Session 不会被误判为历史消息。
+
+Web Adapter 将每个用户 turn 的 timeline 投影为两层：assistant 最终输出、计划、澄清与错误属于前景阅读层；thinking、commentary、progress、Tool、MCP、Skill、Agent 和 Work Product 属于可展开的活动层。活动层在执行或审批中展开，在成功 terminal 后默认折叠。该分组是纯客户端 presentation，不修改事件顺序、Session journal 或恢复权威。
+
+CLI `lumen capabilities --json`、TUI `/context capabilities` 与 Web `GET /api/v1/capabilities` 消费同一个 `ResourceManager.capabilities_report()` 只读 Interface。它解释 Tool、Skill、MCP server 与 Agent Profile 的实际可见性、来源、Risk、EffectKind、ToolConcurrency、审批决定、Sandbox mode 与 schema digest；该报告不参与权限决策，因此不会形成第二套 capability authority。

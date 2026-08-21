@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import json
 import subprocess
 import sys
 from contextlib import AsyncExitStack
@@ -23,6 +25,8 @@ from lumen.agents.runtime_factory import NativeAgentRuntimeFactory
 from lumen.branding import FRAMEWORK_NAME
 from lumen.completion import CompletionGate
 from lumen.config import AppConfig, ModelSettingsConfig
+from lumen.config_resolver import ConfigScope
+from lumen.configuration import WorkspaceConfiguration
 from lumen.context import ArtifactStore, ArtifactStoreError, ContextEngine
 from lumen.context.memory import (
     ExtractionProvenance,
@@ -37,6 +41,7 @@ from lumen.context.rendering import render_mcp_prompt
 from lumen.context.session_manager import SessionContextManager
 from lumen.events import ToolCallFinished, ToolCallStarted
 from lumen.hooks import HookBus
+from lumen.lifecycle import RegistrationScope, ScopeDiagnostic
 from lumen.live.factory import build_live_router
 from lumen.live.manager import LiveSessionManager
 from lumen.mcp_resources import McpContentRegistry
@@ -53,10 +58,19 @@ from lumen.skills import (
     expand_skill_for_message,
     format_skills_for_prompt,
 )
+from lumen.task_control import CONTROL_TOOL_NAMES
 from lumen.tools.builtin import build_builtin_specs
 from lumen.tools.gateway import CapabilityDescriptor, CapabilityGateway
-from lumen.tools.registry import DuplicateToolError, PermissionPolicy, ToolRegistry, load_plugin_specs
+from lumen.tools.presentation import ToolPresentationCatalog
+from lumen.tools.registry import (
+    DuplicateToolError,
+    PermissionDecision,
+    PermissionPolicy,
+    ToolRegistry,
+    load_plugin_specs,
+)
 from lumen.tools.spec import EffectKind, Risk, ToolSpec
+from lumen.tools.web import build_web_fetch_spec, build_web_search_spec
 from lumen.tools.workspace import WorkspaceViolation
 from lumen.trust import canonical_project_identity
 from lumen.work_products import TaskWorkspace
@@ -86,9 +100,6 @@ When the task is complete, answer the user directly.
 # Names the runtime reserves for control tools; the resource manager refuses to
 # register any builtin/plugin/MCP tool that collides so a misconfigured plugin
 # cannot shadow the planning and progress channel.
-CONTROL_TOOL_NAMES = frozenset(
-    {"set_plan", "update_step", "link_evidence", "report_progress", "request_clarification"}
-)
 CHILD_TOOL_NAMES = frozenset({"spawn_child", "wait_children", "cancel_child"})
 AGENT_TOOL_NAMES = frozenset(
     {
@@ -128,6 +139,19 @@ class ResourceManager:
     def __init__(self, config: AppConfig, *, workspace: str | Path) -> None:
         self.config = config
         self.workspace = Path(workspace).expanduser().resolve()
+        explicit_source = next(
+            (
+                source
+                for source in config.config_sources
+                if getattr(source, "scope", None) is ConfigScope.EXPLICIT
+            ),
+            None,
+        )
+        self.configuration = WorkspaceConfiguration(
+            self.workspace,
+            explicit_path=getattr(explicit_source, "path", None),
+            project_trusted=config.project_trusted,
+        )
         self.warnings: list[str] = []
         self.hooks = HookBus.from_config(
             config.hooks,
@@ -224,16 +248,30 @@ class ResourceManager:
             )
         builtins = {
             spec.name: spec
-            for spec in build_builtin_specs(
-                self.workspace,
-                max_timeout=config.agent.limits.tool_timeout_seconds,
-                sandbox_config=config.sandbox,
-                task_workspace=self.task_workspace,
-            )
+            for spec in [
+                *build_builtin_specs(
+                    self.workspace,
+                    max_timeout=config.agent.limits.tool_timeout_seconds,
+                    sandbox_config=config.sandbox,
+                    task_workspace=self.task_workspace,
+                ),
+                build_web_fetch_spec(
+                    timeout=config.tools.web.fetch_timeout_seconds,
+                    max_bytes=config.tools.web.fetch_max_bytes,
+                ),
+            ]
         }
         for name in config.tools.builtins:
             spec = builtins[name]
             self.registry.add(spec, origin="builtin")
+        if config.tools.web.search is not None:
+            self.registry.add(
+                build_web_search_spec(
+                    config.tools.web.search,
+                    timeout=config.tools.web.fetch_timeout_seconds,
+                ),
+                origin="builtin:web",
+            )
         for plugin in config.tools.plugins:
             self.registry.add_many(
                 load_plugin_specs(plugin, search_path=plugin.source_dir or config.config_path.parent),
@@ -265,6 +303,9 @@ class ResourceManager:
             self.policy,
             default_timeout=config.agent.limits.tool_timeout_seconds,
             parallel_mode=config.agent.limits.parallel_tool_calls,
+        )
+        self.tool_presenter = ToolPresentationCatalog(
+            {name: entry.spec for name, entry in self.registry.entries.items()}
         )
         # Initialised before the bundles so the reconnect status sink has a
         # mapping to write into once servers start flapping at runtime.
@@ -348,7 +389,10 @@ class ResourceManager:
             parent_tools=lambda: tuple(self.local_tools),
             parent_tool_metadata=lambda: dict(self.tool_metadata),
             parent_toolsets=lambda: tuple(self._active_toolsets),
-            enabled_builtins=config.tools.builtins,
+            enabled_builtins=[
+                *config.tools.builtins,
+                *(["web_search"] if config.tools.web.search is not None else []),
+            ],
             artifacts=self._artifact_store,
             task_workspace=self.task_workspace,
         )
@@ -446,7 +490,9 @@ class ResourceManager:
         # runtime without reconnecting remote services. The runtime agent lives
         # on its own inner stack so it can be torn down in isolation.
         self._stack: AsyncExitStack | None = None
-        self._runtime_stack: AsyncExitStack | None = None
+        self._resource_scope: RegistrationScope | None = None
+        self._runtime_scope: RegistrationScope | None = None
+        self._cleanup_diagnostics: list[dict[str, str]] = []
 
     # -- model registry ----------------------------------------------------
 
@@ -819,29 +865,29 @@ class ResourceManager:
         if self._stack is None:
             raise RuntimeError("_rebuild_runtime_for requires the resource stack to be open")
         old_runtime = self.runtime
-        old_runtime_stack = self._runtime_stack
+        old_runtime_scope = self._runtime_scope
         # Tentatively build the new runtime WITHOUT closing the old one first,
         # so a build failure can't leave us runtime-less. _build_runtime
         # refuses to run while a runtime stack is open, so temporarily detach
         # the bookkeeping references and restore them on failure.
-        self._runtime_stack = None
+        self._runtime_scope = None
         self.runtime = None
         try:
             await self._build_runtime(for_name=name)
         except BaseException:
             # Restore the previous runtime exactly as it was.
-            self._runtime_stack = old_runtime_stack
+            self._runtime_scope = old_runtime_scope
             self.runtime = old_runtime
             raise
         # Build succeeded: publish the new runtime, then close the old stack
         # (which is still referenced by old_runtime_stack) to avoid a leak.
         new_runtime = self.runtime
-        new_runtime_stack = self._runtime_stack
-        self._runtime_stack = old_runtime_stack
+        new_runtime_scope = self._runtime_scope
+        self._runtime_scope = old_runtime_scope
         self.runtime = old_runtime
         await self._close_runtime()
         self.runtime = new_runtime
-        self._runtime_stack = new_runtime_stack
+        self._runtime_scope = new_runtime_scope
 
     def _load_instructions(self) -> str:
         path = self.config.agent.instructions_file
@@ -872,6 +918,8 @@ class ResourceManager:
         # Mark the outer stack active early so ``_build_runtime``'s guard
         # passes and so the except path below can rely on it.
         self._stack = stack
+        resource_scope = RegistrationScope("resources")
+        self._resource_scope = resource_scope
         known_names = set(self.registry.entries) | RESERVED_TOOL_NAMES
         try:
             for bundle in self.mcp_bundles:
@@ -895,7 +943,11 @@ class ResourceManager:
                     continue
                 self.mcp_status[bundle.name] = "ok"
                 try:
-                    await self.mcp_content.add_server(bundle, bundle.config)
+                    dispose_content = await self.mcp_content.add_server(bundle, bundle.config)
+                    resource_scope.add_disposer(
+                        dispose_content,
+                        label=f"mcp-content:{bundle.name}",
+                    )
                 except Exception as error:
                     self.warnings.append(f"MCP server {bundle.name!r} content discovery failed: {error}")
                 raw_names = {tool.name for tool in remote_tools}
@@ -946,24 +998,31 @@ class ResourceManager:
                             "risk": bundle.risk_for(public_name).value,
                             "effect": bundle.effect_for(public_name).value,
                         }
+                        resource_scope.add_disposer(
+                            partial(self.tool_metadata.pop, public_name, None),
+                            label=f"tool-metadata:{public_name}",
+                        )
                     remote_tool = next(tool for tool in remote_tools if tool.name == raw_name)
-                    self._remote_tool_schema_documents.append(
-                        {
-                            "name": public_name,
-                            "description": getattr(remote_tool, "description", None) or "",
-                            "parameters": getattr(
-                                remote_tool,
-                                "inputSchema",
-                                getattr(remote_tool, "input_schema", {}),
-                            ),
-                            "returns": getattr(
-                                remote_tool,
-                                "outputSchema",
-                                getattr(remote_tool, "output_schema", None),
-                            ),
-                            "origin": f"mcp:{bundle.name}",
-                            "deferred": bundle.is_deferred(public_name),
-                        }
+                    schema_document = {
+                        "name": public_name,
+                        "description": getattr(remote_tool, "description", None) or "",
+                        "parameters": getattr(
+                            remote_tool,
+                            "inputSchema",
+                            getattr(remote_tool, "input_schema", {}),
+                        ),
+                        "returns": getattr(
+                            remote_tool,
+                            "outputSchema",
+                            getattr(remote_tool, "output_schema", None),
+                        ),
+                        "origin": f"mcp:{bundle.name}",
+                        "deferred": bundle.is_deferred(public_name),
+                    }
+                    self._remote_tool_schema_documents.append(schema_document)
+                    resource_scope.add_disposer(
+                        partial(self._remove_remote_schema_document, schema_document),
+                        label=f"tool-schema:{public_name}",
                     )
                     if public_name not in self.policy.always_deny:
                         parameters = getattr(
@@ -971,7 +1030,7 @@ class ResourceManager:
                             "inputSchema",
                             getattr(remote_tool, "input_schema", {}),
                         )
-                        self.capability_gateway.register(
+                        dispose_capability = self.capability_gateway.register(
                             CapabilityDescriptor(
                                 name=public_name,
                                 description=getattr(remote_tool, "description", None) or "",
@@ -984,7 +1043,15 @@ class ResourceManager:
                             ),
                             partial(self._invoke_live_mcp, bundle, public_name),
                         )
+                        resource_scope.add_disposer(
+                            dispose_capability,
+                            label=f"capability:{public_name}",
+                        )
                 self._active_toolsets.append(bundle.toolset)
+                resource_scope.add_disposer(
+                    partial(self._remove_active_toolset, bundle.toolset),
+                    label=f"toolset:{bundle.name}",
+                )
 
             configured_permissions = self.policy.always_allow | self.policy.always_deny
             unknown_permissions = configured_permissions - known_names
@@ -996,6 +1063,10 @@ class ResourceManager:
             # Build the runtime on its own inner stack so model switches can
             # tear it down without disconnecting MCP clients.
             await self._build_runtime()
+            invariant_report = self.runtime_invariant_report()
+            if invariant_report["status"] != "ok":
+                failures = ", ".join(cast(list[str], invariant_report["failures"]))
+                raise ResourceStartupError(f"runtime invariant violation: {failures}")
         except BaseException:
             await self.close()
             raise
@@ -1012,7 +1083,7 @@ class ResourceManager:
 
         if self._stack is None:
             raise RuntimeError("_build_runtime requires the resource stack to be open")
-        if self._runtime_stack is not None:
+        if self._runtime_scope is not None:
             raise RuntimeError("runtime stack already open; close it before rebuilding")
         model_name = for_name if for_name is not None else self._active_model_name
         model_cfg = self.model_registry[model_name]
@@ -1025,8 +1096,7 @@ class ResourceManager:
             "Report these fields exactly when the user asks about framework or model identity.\n"
             "</runtime_identity>\n"
         )
-        runtime_stack = AsyncExitStack()
-        await runtime_stack.__aenter__()
+        runtime_scope = RegistrationScope(f"runtime:{model_name}")
         try:
             active_model = build_model(model_cfg)
             self.memory_manager.configure_learning(extractor=self._memory_extractor(active_model))
@@ -1141,22 +1211,68 @@ class ResourceManager:
                 clarification_setter=self.request_clarification,
                 clarification_clearer=self.clear_clarification,
                 hooks=self.hooks,
+                tool_presenter=self.tool_presenter,
             )
-            await runtime_stack.enter_async_context(self.runtime.agent)
+            agent_context = self.runtime.agent
+            await agent_context.__aenter__()
+            runtime_scope.add_disposer(
+                partial(agent_context.__aexit__, None, None, None),
+                label="agent-runtime",
+            )
         except BaseException:
-            await runtime_stack.aclose()
+            self._record_scope_diagnostics(await runtime_scope.close_and_wait())
             self.runtime = None
             raise
-        self._runtime_stack = runtime_stack
+        self._runtime_scope = runtime_scope
         self.memory_manager.start()
 
     async def _close_runtime(self) -> None:
         """Tear down the runtime-only stack, leaving MCP clients connected."""
 
-        if self._runtime_stack is not None:
-            await self._runtime_stack.aclose()
-            self._runtime_stack = None
+        if self._runtime_scope is not None:
+            self._record_scope_diagnostics(await self._runtime_scope.close_and_wait())
+            self._runtime_scope = None
         self.runtime = None
+
+    def _remove_remote_schema_document(self, document: dict[str, Any]) -> None:
+        self._remote_tool_schema_documents = [
+            item for item in self._remote_tool_schema_documents if item is not document
+        ]
+
+    def _remove_active_toolset(self, toolset: AbstractToolset[None]) -> None:
+        self._active_toolsets = [item for item in self._active_toolsets if item is not toolset]
+
+    def _record_scope_diagnostics(self, diagnostics: tuple[ScopeDiagnostic, ...]) -> None:
+        remaining = max(0, 32 - len(self._cleanup_diagnostics))
+        self._cleanup_diagnostics.extend(
+            {
+                "label": item.label,
+                "error_type": item.error_type,
+                "message": item.message,
+            }
+            for item in diagnostics[:remaining]
+        )
+
+    def registration_report(self) -> dict[str, Any]:
+        """Read-only lifetime diagnostics for reload and shutdown audits."""
+
+        scope = self._runtime_scope
+        return {
+            "tool_count": len(self.registry.entries),
+            "hook_count": len(self.hooks.hooks),
+            "runtime_scope": {
+                "name": scope.name if scope is not None else None,
+                "closed": scope.closed if scope is not None else True,
+                "active_tasks": scope.active_task_count if scope is not None else 0,
+            },
+            "resource_scope": {
+                "closed": self._resource_scope.closed if self._resource_scope is not None else True,
+                "active_tasks": (
+                    self._resource_scope.active_task_count if self._resource_scope is not None else 0
+                ),
+            },
+            "cleanup_diagnostics": list(self._cleanup_diagnostics),
+        }
 
     async def close(self) -> None:
         if self.live_manager is not None:
@@ -1164,6 +1280,9 @@ class ResourceManager:
         await self.agent_orchestrator.shutdown()
         if self._stack is not None:
             await self._close_runtime()
+            if self._resource_scope is not None:
+                self._record_scope_diagnostics(await self._resource_scope.close_and_wait())
+                self._resource_scope = None
             await self._stack.aclose()
             self._stack = None
             self.runtime = None
@@ -1195,6 +1314,113 @@ class ResourceManager:
             "warnings": [*self.config.config_warnings, *self.warnings],
             "hooks": self.hooks.summary(),
             "live_enabled": self.config.live.enabled,
+            "invariants": self.runtime_invariant_report(),
+        }
+
+    def runtime_invariant_report(self) -> dict[str, Any]:
+        """Check relationships owned by ResourceManager and report failures."""
+
+        visible = set(self.tool_metadata)
+        local = {tool.name for tool in self.local_tools}
+        gateway = {item.name for item in self.capability_gateway.catalog()}
+        denied_registered = set(self.registry.entries) & self.policy.always_deny
+        checks = {
+            "active_model_registered": self._active_model_name in self.model_registry,
+            "local_tools_have_metadata": local <= visible,
+            "gateway_tools_have_metadata": gateway <= visible,
+            "denied_registered_tools_hidden": not (denied_registered & visible),
+            "opened_runtime_exists": self._stack is None or self.runtime is not None,
+        }
+        failures = [name for name, passed in checks.items() if not passed]
+        return {
+            "status": "ok" if not failures else "failed",
+            "checks": checks,
+            "failures": failures,
+        }
+
+    def capability_inventory(self) -> list[dict[str, Any]]:
+        """Explain effective visibility without becoming a second policy authority."""
+
+        local_schemas = {tool.name: tool.function_schema.json_schema for tool in self.local_tools}
+        remote_schemas = {
+            str(document["name"]): cast(dict[str, Any], document.get("parameters") or {})
+            for document in self._remote_tool_schema_documents
+        }
+        entries = self.registry.entries
+        names = set(entries) | set(self.tool_metadata) | self.policy.always_deny
+        rows: list[dict[str, Any]] = []
+        for name in sorted(names):
+            entry = entries.get(name)
+            metadata = self.tool_metadata.get(name, {})
+            risk = entry.spec.risk if entry is not None else Risk(metadata.get("risk", Risk.READ.value))
+            effect = (
+                entry.spec.effect
+                if entry is not None
+                else EffectKind(metadata.get("effect", EffectKind.OBSERVE.value))
+            )
+            try:
+                concurrency = entry.spec.concurrency_for({}).value if entry is not None else "exclusive"
+            except (KeyError, TypeError, ValueError):
+                concurrency = "exclusive"
+            decision = self.policy.decide(name, risk)
+            schema = local_schemas.get(name) or remote_schemas.get(name)
+            schema_digest = None
+            if schema is not None:
+                encoded = json.dumps(
+                    schema,
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ).encode("utf-8")
+                schema_digest = f"sha256:{hashlib.sha256(encoded).hexdigest()}"
+            document = next(
+                (item for item in self._remote_tool_schema_documents if item.get("name") == name),
+                None,
+            )
+            status = "disabled" if decision is PermissionDecision.DENY else "loaded"
+            if document is not None and document.get("deferred") is True:
+                status = "deferred"
+            origin = entry.origin if entry is not None else metadata.get("origin", "configured")
+            rows.append(
+                {
+                    "name": name,
+                    "origin": origin,
+                    "status": status,
+                    "risk": risk.value,
+                    "effect": effect.value,
+                    "concurrency": concurrency,
+                    "approval": decision.value,
+                    "workspace_required": str(origin).startswith("builtin"),
+                    "sandbox_mode": self.config.sandbox.mode,
+                    "schema_digest": schema_digest,
+                }
+            )
+        return rows
+
+    def capabilities_report(self) -> dict[str, Any]:
+        """Return the shared CLI/TUI/Web capability observation projection."""
+
+        return {
+            "tools": self.capability_inventory(),
+            "skills": [
+                {
+                    "name": skill.name,
+                    "source": skill.source,
+                    "status": "manual" if skill.disable_model_invocation else "loaded",
+                    "revision": "sha256:" + hashlib.sha256(skill.body.encode("utf-8")).hexdigest(),
+                }
+                for skill in sorted(self.skills, key=lambda item: item.name)
+            ],
+            "mcp_servers": self.mcp_summary(),
+            "agent_profiles": [
+                {
+                    "name": profile.name,
+                    "source": profile.source,
+                    "workspace_mode": profile.workspace_mode.value,
+                    "revision": profile.revision,
+                }
+                for profile in sorted(self.agent_profiles.values(), key=lambda item: item.name)
+            ],
         }
 
     def hook_summary(self) -> list[dict[str, object]]:

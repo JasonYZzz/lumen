@@ -30,6 +30,7 @@ from lumen.events import (
     RunWaitingForUser,
     TextDelta,
     TextRetracted,
+    ThinkingDelta,
     ToolApprovalBatchPending,
     ToolApprovalPending,
     ToolApprovalResolved,
@@ -48,6 +49,7 @@ _EVENT_NAMES: dict[type[object], str] = {
     TextDelta: "assistant.delta",
     TextRetracted: "assistant.retracted",
     CommentaryDelta: "commentary.delta",
+    ThinkingDelta: "thinking.delta",
     PlanCreated: "plan.created",
     PlanUpdated: "plan.updated",
     PlanReviewPending: "plan.review_pending",
@@ -77,7 +79,7 @@ _EVENT_TYPES = {name: event_type for event_type, name in _EVENT_NAMES.items()}
 
 def event_payload(event: RunEvent) -> tuple[str, dict[str, Any]]:
     name = _EVENT_NAMES[type(event)]
-    if isinstance(event, TextDelta | CommentaryDelta):
+    if isinstance(event, TextDelta | CommentaryDelta | ThinkingDelta):
         key = "text"
         value = event.text
         return name, {key: value}

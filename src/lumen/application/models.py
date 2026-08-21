@@ -18,8 +18,50 @@ class GetBootstrap:
 
 
 @dataclass(frozen=True, slots=True)
+class GetConfiguration:
+    type: Literal["get_configuration"] = "get_configuration"
+
+
+@dataclass(frozen=True, slots=True)
+class UpsertModelConfiguration:
+    expected_revision: str
+    name: str
+    definition: dict[str, Any]
+    set_default: bool = False
+    type: Literal["upsert_model_configuration"] = "upsert_model_configuration"
+
+
+@dataclass(frozen=True, slots=True)
+class DeleteModelConfiguration:
+    expected_revision: str
+    name: str
+    type: Literal["delete_model_configuration"] = "delete_model_configuration"
+
+
+@dataclass(frozen=True, slots=True)
 class ListSessions:
+    include_archived: bool = False
     type: Literal["list_sessions"] = "list_sessions"
+
+
+@dataclass(frozen=True, slots=True)
+class RenameSession:
+    session_id: str
+    title: str
+    type: Literal["rename_session"] = "rename_session"
+
+
+@dataclass(frozen=True, slots=True)
+class SetSessionArchived:
+    session_id: str
+    archived: bool
+    type: Literal["set_session_archived"] = "set_session_archived"
+
+
+@dataclass(frozen=True, slots=True)
+class DeleteSession:
+    session_id: str
+    type: Literal["delete_session"] = "delete_session"
 
 
 @dataclass(frozen=True, slots=True)
@@ -63,7 +105,7 @@ class DecideApproval:
     run_id: str
     call_id: str
     approved: bool
-    scope: Literal["once", "session"] = "once"
+    scope: Literal["once", "session", "always"] = "once"
     type: Literal["decide_approval"] = "decide_approval"
 
 
@@ -166,8 +208,6 @@ class CloseAgent:
     resolution: str | None = None
     reason: str | None = None
     type: Literal["close_agent"] = "close_agent"
-
-
 @dataclass(frozen=True, slots=True)
 class ApproveAgentImport:
     agent_id: str
@@ -293,7 +333,13 @@ class ContextControl:
 WorkspaceCommand: TypeAlias = (
     CreateSession
     | GetBootstrap
+    | GetConfiguration
+    | UpsertModelConfiguration
+    | DeleteModelConfiguration
     | ListSessions
+    | RenameSession
+    | SetSessionArchived
+    | DeleteSession
     | StartRun
     | CancelRun
     | StartLiveSession
@@ -385,6 +431,7 @@ class SessionSummary:
     created_at: str
     model_id: str
     title: str
+    archived: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -445,6 +492,10 @@ class WorkspaceHostError(RuntimeError):
 
 class WorkspaceBusyError(WorkspaceHostError):
     code = "workspace_busy"
+
+
+class ConfigurationConflictHostError(WorkspaceHostError):
+    code = "configuration_conflict"
 
 
 class SessionNotFoundError(WorkspaceHostError):

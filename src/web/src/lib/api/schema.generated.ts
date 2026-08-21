@@ -38,6 +38,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/capabilities": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Capability Inventory */
+        get: operations["capability_inventory_api_v1_capabilities_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/children/{child_id}/actions": {
         parameters: {
             query?: never;
@@ -50,6 +67,41 @@ export interface paths {
         /** Child Run Action */
         post: operations["child_run_action_api_v1_children__child_id__actions_post"];
         delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/configuration": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Configuration */
+        get: operations["get_configuration_api_v1_configuration_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/configuration/models/{model_name}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Upsert Model Configuration */
+        put: operations["upsert_model_configuration_api_v1_configuration_models__model_name__put"];
+        post?: never;
+        /** Delete Model Configuration */
+        delete: operations["delete_model_configuration_api_v1_configuration_models__model_name__delete"];
         options?: never;
         head?: never;
         patch?: never;
@@ -306,10 +358,12 @@ export interface paths {
         get: operations["session_snapshot_api_v1_sessions__session_id__get"];
         put?: never;
         post?: never;
-        delete?: never;
+        /** Delete Session */
+        delete: operations["delete_session_api_v1_sessions__session_id__delete"];
         options?: never;
         head?: never;
-        patch?: never;
+        /** Rename Session */
+        patch: operations["rename_session_api_v1_sessions__session_id__patch"];
         trace?: never;
     };
     "/api/v1/sessions/{session_id}/agents": {
@@ -324,6 +378,24 @@ export interface paths {
         put?: never;
         post?: never;
         delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/sessions/{session_id}/archive": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Archive Session */
+        post: operations["archive_session_api_v1_sessions__session_id__archive_post"];
+        /** Restore Session */
+        delete: operations["restore_session_api_v1_sessions__session_id__archive_delete"];
         options?: never;
         head?: never;
         patch?: never;
@@ -596,7 +668,7 @@ export interface components {
              * @default once
              * @enum {string}
              */
-            scope: "once" | "session";
+            scope: "once" | "session" | "always";
         };
         /** ChildRunActionBody */
         ChildRunActionBody: {
@@ -605,6 +677,11 @@ export interface components {
              * @enum {string}
              */
             action: "cancel" | "approve_import" | "reject_import" | "close";
+        };
+        /** ConfigurationRevisionBody */
+        ConfigurationRevisionBody: {
+            /** Expectedrevision */
+            expectedRevision: string;
         };
         /** ControlBody */
         ControlBody: {
@@ -639,6 +716,32 @@ export interface components {
             /** Detail */
             detail?: components["schemas"]["ValidationError"][];
         };
+        /** ModelConfigurationBody */
+        ModelConfigurationBody: {
+            /** Api */
+            api?: ("chat" | "responses" | "openai-completions" | "openai-responses" | "chat-completions") | null;
+            /** Apikeyenv */
+            apiKeyEnv?: string | null;
+            /** Baseurl */
+            baseUrl?: string | null;
+            /** Context */
+            context?: {
+                [key: string]: unknown;
+            };
+            /** Expectedrevision */
+            expectedRevision: string;
+            /** Id */
+            id: string;
+            /**
+             * Setdefault
+             * @default false
+             */
+            setDefault: boolean;
+            /** Settings */
+            settings?: {
+                [key: string]: unknown;
+            };
+        };
         /** PlanReviewBody */
         PlanReviewBody: {
             /**
@@ -666,6 +769,11 @@ export interface components {
             mode: "steer" | "follow_up";
             /** Text */
             text: string;
+        };
+        /** RenameSessionBody */
+        RenameSessionBody: {
+            /** Title */
+            title: string;
         };
         /** RetryRunBody */
         RetryRunBody: {
@@ -790,6 +898,28 @@ export interface operations {
             };
         };
     };
+    capability_inventory_api_v1_capabilities_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+        };
+    };
     child_run_action_api_v1_children__child_id__actions_post: {
         parameters: {
             query?: never;
@@ -802,6 +932,102 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": components["schemas"]["ChildRunActionBody"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_configuration_api_v1_configuration_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+        };
+    };
+    upsert_model_configuration_api_v1_configuration_models__model_name__put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                model_name: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ModelConfigurationBody"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_model_configuration_api_v1_configuration_models__model_name__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                model_name: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ConfigurationRevisionBody"];
             };
         };
         responses: {
@@ -1269,7 +1495,9 @@ export interface operations {
     };
     list_sessions_api_v1_sessions_get: {
         parameters: {
-            query?: never;
+            query?: {
+                include_archived?: boolean;
+            };
             header?: never;
             path?: never;
             cookie?: never;
@@ -1285,6 +1513,15 @@ export interface operations {
                     "application/json": {
                         [key: string]: unknown;
                     };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
@@ -1344,6 +1581,76 @@ export interface operations {
             };
         };
     };
+    delete_session_api_v1_sessions__session_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: string;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    rename_session_api_v1_sessions__session_id__patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RenameSessionBody"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     list_agents_api_v1_sessions__session_id__agents_get: {
         parameters: {
             query?: never;
@@ -1363,6 +1670,72 @@ export interface operations {
                 content: {
                     "application/json": {
                         [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    archive_session_api_v1_sessions__session_id__archive_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: string;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    restore_session_api_v1_sessions__session_id__archive_delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: string;
                     };
                 };
             };

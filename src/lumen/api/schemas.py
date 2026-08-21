@@ -31,11 +31,36 @@ class QueueInputBody(WebModel):
 
 class ApprovalBody(WebModel):
     approved: bool
-    scope: Literal["once", "session"] = "once"
+    scope: Literal["once", "session", "always"] = "once"
 
 
 class WorkspaceSettingsBody(WebModel):
     model: str | None = None
+
+
+class ModelConfigurationBody(WebModel):
+    expected_revision: str = Field(alias="expectedRevision", min_length=8, max_length=100)
+    id: str = Field(min_length=1, max_length=300)
+    api: Literal[
+        "chat",
+        "responses",
+        "openai-completions",
+        "openai-responses",
+        "chat-completions",
+    ] | None = None
+    base_url: str | None = Field(default=None, alias="baseUrl", max_length=2000)
+    api_key_env: str | None = Field(
+        default=None,
+        alias="apiKeyEnv",
+        pattern=r"^[A-Za-z_][A-Za-z0-9_]*$",
+    )
+    settings: dict[str, Any] = Field(default_factory=dict[str, Any])
+    context: dict[str, Any] = Field(default_factory=dict[str, Any])
+    set_default: bool = Field(default=False, alias="setDefault")
+
+
+class ConfigurationRevisionBody(WebModel):
+    expected_revision: str = Field(alias="expectedRevision", min_length=8, max_length=100)
 
 
 class SessionSettingsBody(WebModel):
@@ -44,6 +69,10 @@ class SessionSettingsBody(WebModel):
     )
     collaboration_mode: Literal["default", "plan"] | None = Field(default=None, alias="collaborationMode")
     transcript_density: Literal["normal", "verbose"] | None = Field(default=None, alias="transcriptDensity")
+
+
+class RenameSessionBody(WebModel):
+    title: str = Field(min_length=1, max_length=80)
 
 
 class ForkSessionBody(WebModel):

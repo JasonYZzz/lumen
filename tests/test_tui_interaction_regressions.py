@@ -9,6 +9,7 @@ from textual.widgets import Static
 from lumen.config import load_config
 from lumen.events import (
     ApprovalRequest,
+    ContextCompactionFailed,
     PlanCreated,
     PlanReviewPending,
     RunCompleted,
@@ -309,7 +310,8 @@ async def test_failure_layout_shrink_keeps_error_at_tail(tmp_path: Path) -> None
         assert messages.is_vertical_scroll_end
         assert any(
             "Run failed: provider interrupted" in str(widget.content)
-            for widget in app.query(".system-message").results(Static)
+            and "/retry to resend" in str(widget.content)
+            for widget in app.query(".error-message").results(Static)
         )
 
         await app.render_event(RunStarted("long answer"))
@@ -318,6 +320,20 @@ async def test_failure_layout_shrink_keeps_error_at_tail(tmp_path: Path) -> None
         await pilot.pause()
 
         assert messages.is_vertical_scroll_end
+
+
+async def test_compaction_failure_row_uses_error_styling(tmp_path: Path) -> None:
+    """A failed compaction renders in the error tier, not muted metadata."""
+
+    app = _app(tmp_path)
+    async with app.run_test() as pilot:
+        await app.render_event(RunStarted("long run"))
+        await app.render_event(ContextCompactionFailed("summarizer unavailable"))
+        await pilot.pause()
+
+        row = app.query_one(".compaction-row", Static)
+        assert row.has_class("is-error")
+        assert "✗ Context compaction failed: summarizer unavailable" in str(row.content)
 
 
 async def test_long_markdown_answer_keeps_one_top_level_widget(tmp_path: Path) -> None:

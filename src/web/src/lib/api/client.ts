@@ -3,7 +3,9 @@ import type {
   ApprovalScope,
   AgentRecord,
   CheckpointRecord,
+  CapabilityInventory,
   CollaborationMode,
+  ConfigurationSnapshot,
   ApiErrorBody,
   Bootstrap,
   EventEnvelope,
@@ -14,6 +16,7 @@ import type {
   LiveEventEnvelope,
   LiveStartResponse,
   McpPromptItem,
+  ModelConfigurationInput,
   QueueMode,
   RunStartedResponse,
   SessionSnapshot,
@@ -65,10 +68,41 @@ export async function exchangeLaunchToken() {
 
 export const lumenApi = {
   bootstrap: () => requestJson<Bootstrap>('/api/v1/bootstrap'),
-  listSessions: async () =>
-    (await requestJson<{ sessions: SessionSummary[] }>('/api/v1/sessions')).sessions,
+  capabilities: () => requestJson<CapabilityInventory>('/api/v1/capabilities'),
+  configuration: () => requestJson<ConfigurationSnapshot>('/api/v1/configuration'),
+  upsertModelConfiguration: (name: string, input: ModelConfigurationInput) =>
+    requestJson<ConfigurationSnapshot & { status: string }>(
+      `/api/v1/configuration/models/${encodeURIComponent(name)}`,
+      { method: 'PUT', body: JSON.stringify(input) },
+    ),
+  deleteModelConfiguration: (name: string, expectedRevision: string) =>
+    requestJson<ConfigurationSnapshot & { status: string }>(
+      `/api/v1/configuration/models/${encodeURIComponent(name)}`,
+      { method: 'DELETE', body: JSON.stringify({ expectedRevision }) },
+    ),
+  listSessions: async (includeArchived = false) =>
+    (await requestJson<{ sessions: SessionSummary[] }>(
+      `/api/v1/sessions${includeArchived ? '?include_archived=true' : ''}`,
+    )).sessions.map((session) => ({ ...session, archived: session.archived ?? false })),
   createSession: () =>
     requestJson<{ sessionId: string }>('/api/v1/sessions', { method: 'POST' }),
+  renameSession: (sessionId: string, title: string) =>
+    requestJson<{ status: string; title: string }>(`/api/v1/sessions/${sessionId}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ title }),
+    }),
+  archiveSession: (sessionId: string) =>
+    requestJson<{ status: string }>(`/api/v1/sessions/${sessionId}/archive`, {
+      method: 'POST',
+    }),
+  restoreSession: (sessionId: string) =>
+    requestJson<{ status: string }>(`/api/v1/sessions/${sessionId}/archive`, {
+      method: 'DELETE',
+    }),
+  deleteSession: (sessionId: string) =>
+    requestJson<{ status: string }>(`/api/v1/sessions/${sessionId}`, {
+      method: 'DELETE',
+    }),
   session: (sessionId: string) =>
     requestJson<SessionSnapshot>(`/api/v1/sessions/${sessionId}`),
   listAgents: async (sessionId: string) =>
@@ -263,6 +297,7 @@ const eventTypes: EventType[] = [
   'assistant.delta',
   'assistant.retracted',
   'commentary.delta',
+  'thinking.delta',
   'clarification.requested',
   'plan.created',
   'plan.updated',

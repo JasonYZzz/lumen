@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING, TypeAlias
 from lumen.config import SandboxConfig
 from lumen.constants import IGNORED_DIRS
 from lumen.tools.capability import build_capability_specs
-from lumen.tools.spec import Risk, ToolSpec
+from lumen.tools.spec import Risk, ToolConcurrency, ToolSpec
 from lumen.tools.workspace import Workspace, WorkspaceViolation
 
 if TYPE_CHECKING:
@@ -237,9 +237,21 @@ def build_builtin_specs(
         return _truncate("\n".join(matches) if matches else "[no matches]")
 
     read_specs = [
-        ToolSpec(read_file, risk=Risk.READ),
-        ToolSpec(list_directory, risk=Risk.READ),
-        ToolSpec(search_text, risk=Risk.READ),
+        ToolSpec(
+            read_file,
+            risk=Risk.READ,
+            concurrency=lambda _args: ToolConcurrency.PARALLEL_SAFE,
+        ),
+        ToolSpec(
+            list_directory,
+            risk=Risk.READ,
+            concurrency=lambda _args: ToolConcurrency.PARALLEL_SAFE,
+        ),
+        ToolSpec(
+            search_text,
+            risk=Risk.READ,
+            concurrency=lambda _args: ToolConcurrency.PARALLEL_SAFE,
+        ),
     ]
     return [
         *read_specs,

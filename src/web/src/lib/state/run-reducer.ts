@@ -9,6 +9,7 @@ import type {
 const CONTROL_TOOL_NAMES = new Set([
   'set_plan',
   'update_step',
+  'link_evidence',
   'report_progress',
   'request_clarification',
 ])
@@ -86,7 +87,11 @@ function replaceTool(
   return timeline.map((item) => (item.callId === callId ? update(item) : item))
 }
 
-function appendText(timeline: TimelineEntry[], kind: 'assistant' | 'commentary', text: string) {
+function appendText(
+  timeline: TimelineEntry[],
+  kind: 'assistant' | 'commentary' | 'thinking',
+  text: string,
+) {
   const last = timeline.at(-1)
   if (last?.kind === kind) {
     return [...timeline.slice(0, -1), { ...last, text: `${last.text}${text}` }]
@@ -123,6 +128,8 @@ function snapshotTimeline(items: Array<Record<string, unknown>>): TimelineEntry[
     status: item.status == null ? null : string(item.status),
     pendingApproval: boolean(item.pending_approval ?? item.pendingApproval),
     isError: boolean(item.is_error ?? item.isError),
+    callView: object(item.call_view ?? item.callView),
+    resultView: object(item.result_view ?? item.resultView),
     plan: item.plan && typeof item.plan === 'object'
       ? item.plan as unknown as PlanState
       : undefined,
@@ -214,6 +221,9 @@ export function runReducer(state: RunState, action: RunAction): RunState {
   if (event.type === 'commentary.delta') {
     return { ...state, timeline: appendText(state.timeline, 'commentary', string(data.text)) }
   }
+  if (event.type === 'thinking.delta') {
+    return { ...state, timeline: appendText(state.timeline, 'thinking', string(data.text)) }
+  }
   if (event.type === 'clarification.requested') {
     const choices = Array.isArray(data.choices)
       ? data.choices.map((item) => `- ${String(item)}`).join('\n')
@@ -291,6 +301,7 @@ export function runReducer(state: RunState, action: RunAction): RunState {
           toolName: string(data.name),
           args: object(data.args),
           status: 'running',
+          callView: object(data.call_view),
         },
       ],
     }
@@ -402,6 +413,7 @@ export function runReducer(state: RunState, action: RunAction): RunState {
         isError: boolean(data.is_error),
         pendingApproval: false,
         status: 'completed',
+        resultView: object(data.result_view),
       })),
     }
   }

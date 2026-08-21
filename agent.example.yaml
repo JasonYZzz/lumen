@@ -76,9 +76,18 @@ tools:
     - read_file
     - list_directory
     - search_text
+    - web_fetch
     - write_file
     - edit_file
     - run_command
+  web:
+    fetch_timeout_seconds: 20
+    fetch_max_bytes: 2097152
+    # web_search is only registered when a provider + API key env are set.
+    # search:
+    #   provider: tavily          # tavily | brave
+    #   api_key_env: TAVILY_API_KEY
+    #   max_results: 8
 
 # Native session-scoped depth-one Agent Threads. Explicit user/project/Skill
 # instructions require delegation; otherwise the root Agent delegates only

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, Literal, cast
 
 from rich.text import Text
 from textual.app import App, ComposeResult
@@ -14,7 +14,7 @@ from textual.widgets import Static
 from lumen.approval import ApprovalPresenter, ApprovalViewModel
 from lumen.events import ApprovalRequest, ToolApprovalBatchPending, ToolApprovalPending
 from lumen.ui.diff_view import style_diff_text
-from lumen.ui.themes import theme_color
+from lumen.ui.themes import FALLBACK_COLORS, theme_color
 
 _CURSOR = "❯"  # noqa: RUF001 - matches the established terminal list cursor
 
@@ -56,11 +56,13 @@ class ApprovalPanel(Vertical):
     """
 
     class Decision(Message):
-        def __init__(self, call_id: str, approved: bool, *, remember: bool = False) -> None:
+        def __init__(
+            self, call_id: str, approved: bool, *, scope: Literal["once", "session", "always"] = "once"
+        ) -> None:
             super().__init__()
             self.call_id = call_id
             self.approved = approved
-            self.remember = remember
+            self.scope: Literal["once", "session", "always"] = scope
 
     class BatchDecision(Message):
         def __init__(self, call_ids: tuple[str, ...], approved: bool) -> None:
@@ -78,8 +80,9 @@ class ApprovalPanel(Vertical):
         self._title = Static("", classes="approval-title", markup=False)
         self._args = Static("", classes="approval-args", markup=False)
         self._allow = Static(f"{_CURSOR} 1. Allow once", classes="approval-option", markup=False)
-        self._deny = Static("  2. Always allow for this session", classes="approval-option", markup=False)
-        self._deny_all = Static("  3. Deny", classes="approval-option", markup=False)
+        self._session = Static("  2. Always allow for this session", classes="approval-option", markup=False)
+        self._project = Static("  3. Always allow for this project", classes="approval-option", markup=False)
+        self._deny_all = Static("  4. Deny", classes="approval-option", markup=False)
         self._keys = Static(
             "Enter select · ↑↓ move · Esc cancel",
             classes="approval-keys",
@@ -90,7 +93,8 @@ class ApprovalPanel(Vertical):
         yield self._title
         yield self._args
         yield self._allow
-        yield self._deny
+        yield self._session
+        yield self._project
         yield self._deny_all
         yield self._keys
 
@@ -169,7 +173,10 @@ class ApprovalPanel(Vertical):
         if self.active_request is None or self._decision_posted:
             return
         key = getattr(event, "key", "")
-        option_count = 3
+        # Batch decisions keep three options; single requests offer a fourth
+        # (project-persistent "always allow") between the session rule and deny.
+        option_count = 3 if self._batch_mode else 4
+        deny_index = option_count - 1
         if key in {"up", "left", "h"}:
             self._selection = (
                 option_count - 1
@@ -195,8 +202,11 @@ class ApprovalPanel(Vertical):
         elif key == "3":
             self._selection = 2
             self._confirm()
+        elif key == "4" and not self._batch_mode:
+            self._selection = 3
+            self._confirm()
         elif key == "n":
-            self._selection = 2
+            self._selection = deny_index
             self._confirm()
         elif key == "enter":
             self._confirm()
@@ -225,11 +235,12 @@ class ApprovalPanel(Vertical):
             )
             return
         self._decision_posted = True
+        single_scopes = ("once", "session", "always")
         self.post_message(
             self.Decision(
                 request.call_id,
-                self._selection in {0, 1},
-                remember=self._selection == 1,
+                self._selection in {0, 1, 2},
+                scope=single_scopes[self._selection] if self._selection in {0, 1, 2} else "once",
             )
         )
 
@@ -287,16 +298,21 @@ class ApprovalPanel(Vertical):
         app = cast(App[object], self.app)  # type: ignore[reportUnknownMemberType]
         return style_diff_text(
             clipped,
-            add_color=theme_color(app, "success", "green"),
-            del_color=theme_color(app, "error", "red"),
+            add_color=theme_color(app, "success", FALLBACK_COLORS["success"]),
+            del_color=theme_color(app, "error", FALLBACK_COLORS["error"]),
         )
 
     def _set_selected(self, index: int | None) -> None:
-        widgets = (self._allow, self._deny, self._deny_all)
+        widgets = (self._allow, self._session, self._project, self._deny_all)
         labels = (
-            ("Allow all", "Review individually", "Deny all")
+            ("Allow all", "Review individually", "Deny all", "")
             if self._batch_mode
-            else ("Allow once", "Always allow for this session", "Deny")
+            else (
+                "Allow once",
+                "Always allow for this session",
+                "Always allow for this project",
+                "Deny",
+            )
         )
         for option_index, widget in enumerate(widgets):
             selected = option_index == index

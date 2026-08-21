@@ -96,6 +96,57 @@ mcp_servers:
     assert result.warnings and "Legacy configuration" in result.warnings[0]
 
 
+def test_resolution_report_redacts_runtime_secrets_and_tracks_winning_source(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    home = tmp_path / "home"
+    workspace = tmp_path / "project"
+    workspace.mkdir()
+    user_config = home / ".lumen" / "agent.yaml"
+    project_config = workspace / ".lumen" / "agent.yaml"
+    _write(
+        user_config,
+        """version: 2
+agent:
+  name: user-name
+  model:
+    id: test
+    api_key_env: MODEL_TOKEN
+    context: {window_tokens: 32000, tokenizer: {kind: conservative}}
+mcp_servers:
+  docs:
+    transport: stdio
+    command: python
+    args: ["--token=${MCP_TOKEN}"]
+    env: {ACCESS_TOKEN: "${MCP_TOKEN}"}
+""",
+    )
+    _write(project_config, "agent: {name: project-name}\n")
+    monkeypatch.setenv("MODEL_TOKEN", "model-secret-value")
+    monkeypatch.setenv("MCP_TOKEN", "mcp-secret-value")
+
+    report = ConfigResolver(workspace, home=home).resolve().report().as_dict()
+    encoded = str(report)
+
+    assert "model-secret-value" not in encoded
+    assert "mcp-secret-value" not in encoded
+    assert report["effective_config"]["agent"]["model"]["api_key_env"] == "MODEL_TOKEN"
+    assert report["effective_config"]["agent"]["model"]["context"]["window_tokens"] == 32000
+    assert report["effective_config"]["agent"]["model"]["context"]["tokenizer"] == {
+        "kind": "conservative",
+        "encoding": None,
+    }
+    server_env = report["effective_config"]["mcp_servers"]["docs"]["env"]
+    assert server_env["ACCESS_TOKEN"] == "<redacted>"
+    assert set(server_env.values()) == {"<redacted>"}
+    assert report["effective_config"]["mcp_servers"]["docs"]["args"] == ["<redacted>"]
+    assert report["provenance"]["agent.name"] == {
+        "scope": "project",
+        "path": str(project_config),
+    }
+
+
 def test_higher_single_model_clears_inherited_models(tmp_path: Path) -> None:
     home = tmp_path / "home"
     workspace = tmp_path / "project"
@@ -116,11 +167,53 @@ agent:
 """,
     )
 
-    config = ConfigResolver(workspace, home=home).resolve(project_trusted=True).config
+    result = ConfigResolver(workspace, home=home).resolve(project_trusted=True)
+    config = result.config
 
     assert config.agent.model is not None
     assert config.agent.models == {}
     assert config.agent.default_model is None
+    provenance = result.report().as_dict()["provenance"]
+    assert not any(field.startswith("agent.models") for field in provenance)
+    assert provenance["agent.model.id"]["scope"] == "local"
+
+
+def test_managed_source_override_participates_in_validation_and_provenance(
+    tmp_path: Path,
+) -> None:
+    home = tmp_path / "home"
+    workspace = tmp_path / "project"
+    workspace.mkdir()
+    _write(
+        workspace / ".lumen" / "agent.yaml",
+        """version: 2
+agent:
+  models:
+    first: {id: test}
+  default_model: first
+""",
+    )
+    managed = workspace / ".lumen" / "agent.web.yaml"
+
+    result = ConfigResolver(workspace, home=home).resolve(
+        source_overrides={
+            managed: {
+                "version": 2,
+                "agent": {
+                    "models": {"second": {"id": "test"}},
+                    "default_model": "second",
+                },
+            }
+        }
+    )
+
+    assert result.sources[-1].scope is ConfigScope.MANAGED
+    assert set(result.config.agent.models) == {"first", "second"}
+    assert result.config.agent.default_model == "second"
+    assert result.report().as_dict()["provenance"]["agent.models.second.id"] == {
+        "scope": "managed",
+        "path": str(managed),
+    }
 
 
 def test_explicit_file_is_exclusive_and_cli_wins_environment(tmp_path: Path) -> None:

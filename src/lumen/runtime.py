@@ -7,7 +7,7 @@ import time
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from contextvars import ContextVar
 from dataclasses import asdict, dataclass, field
-from typing import Any, cast
+from typing import Any, Literal, cast
 from uuid import uuid4
 from xml.sax.saxutils import escape
 
@@ -34,6 +34,8 @@ from pydantic_ai.messages import (
     ModelMessage,
     TextPart,
     TextPartDelta,
+    ThinkingPart,
+    ThinkingPartDelta,
 )
 from pydantic_ai.models import Model, ModelRequestContext
 from pydantic_ai.settings import ModelSettings
@@ -50,6 +52,7 @@ from lumen.context import (
     ContextEnvelope,
     ContextRequest,
     PreviousSummary,
+    ProviderRequestReceipt,
     RuntimeContextSnapshot,
     SessionRef,
     TaskSnapshot,
@@ -68,6 +71,7 @@ from lumen.events import (
     RunWaitingForUser,
     TextDelta,
     TextRetracted,
+    ThinkingDelta,
     ToolApprovalResolved,
     ToolCallFinished,
     ToolCallStarted,
@@ -80,6 +84,7 @@ from lumen.interactive_queue import InteractiveInputCapability, InteractiveMessa
 from lumen.plan import EvidenceKind, EvidenceReceipt, PlanState
 from lumen.task_control import TaskController
 from lumen.tools.execution import RecoverableToolErrors
+from lumen.tools.presentation import ToolPresentationCatalog
 from lumen.tools.spec import EffectKind
 from lumen.work_products.types import WorkProductEvent
 
@@ -102,12 +107,13 @@ class ProviderRequestPreflight(AbstractCapability):
         envelope: ContextEnvelope,
         session_id: str,
         output_reserve_tokens: int,
+        receipts: list[ProviderRequestReceipt],
     ) -> None:
         self.engine = engine
         self.envelope = envelope
         self.session_id = session_id
         self.output_reserve_tokens = output_reserve_tokens
-        self.step = 0
+        self.receipts = receipts
 
     async def before_model_request(
         self,
@@ -115,7 +121,6 @@ class ProviderRequestPreflight(AbstractCapability):
         request_context: ModelRequestContext,
     ) -> ModelRequestContext:
         del ctx
-        self.step += 1
         instructions = "\n".join(
             str(getattr(message, "instructions", "") or "")
             for message in request_context.messages
@@ -129,11 +134,18 @@ class ProviderRequestPreflight(AbstractCapability):
             tool_schemas=schemas,
             output_reserve_tokens=self.output_reserve_tokens,
             session_id=self.session_id,
-            model_step=self.step,
+            model_step=len(self.receipts) + 1,
         )
         if fitted_messages != request_context.messages:
             request_context.messages[:] = fitted_messages
         self.engine.ensure_request_fits(snapshot)
+        self.receipts.append(
+            ProviderRequestReceipt.from_snapshot(
+                snapshot,
+                route=self.engine.model_id or "unknown:model",
+                context_fingerprint=self.envelope.fingerprint,
+            )
+        )
         return request_context
 
 
@@ -299,7 +311,7 @@ def _render_tool_content(content: object) -> str:
 class ToolApproval:
     approved: bool
     message: str = "The user denied this tool call."
-    remember: bool = False
+    remember_scope: Literal["once", "session", "always"] = "once"
 
 
 ApprovalHandler = Callable[[ApprovalRequest], Awaitable[ToolApproval]]
@@ -498,6 +510,7 @@ class RunOutcome:
     pending_clarification: PendingClarification | None = None
     recovery_receipts: list[dict[str, object]] = field(default_factory=list[dict[str, object]])
     context_fingerprint: str | None = None
+    request_receipts: list[ProviderRequestReceipt] = field(default_factory=list[ProviderRequestReceipt])
 
 
 @dataclass(frozen=True, slots=True)
@@ -523,6 +536,7 @@ class PartialRunOutcome:
     retryable: bool = False
     pending_clarification: PendingClarification | None = None
     recovery_receipts: list[dict[str, object]] = field(default_factory=list[dict[str, object]])
+    request_receipts: list[ProviderRequestReceipt] = field(default_factory=list[ProviderRequestReceipt])
 
 
 def attach_partial_outcome(error: BaseException, partial: PartialRunOutcome) -> BaseException:
@@ -573,6 +587,7 @@ class AgentRuntime:
         clarification_setter: ClarificationSetter | None = None,
         clarification_clearer: ClarificationClearer | None = None,
         hooks: HookBus | None = None,
+        tool_presenter: ToolPresentationCatalog | None = None,
     ) -> None:
         self.limits = limits
         self.tool_metadata = tool_metadata
@@ -588,6 +603,7 @@ class AgentRuntime:
         self.context_engine = context_engine
         self.interactive_queue = InteractiveMessageQueue()
         self.hooks = hooks
+        self.tool_presenter = tool_presenter or ToolPresentationCatalog()
         self._clarification_loader = clarification_loader
         self._clarification_clearer = clarification_clearer
         self._clarification_gate = ClarificationGate(clarification_setter)
@@ -709,9 +725,11 @@ class AgentRuntime:
         approval_log: list[dict[str, Any]] = []
         diagnostics: list[dict[str, Any]] = []
         recovery = RecoveryReceiptCapability(self.tool_metadata, recovery_receipts)
+        request_receipts: list[ProviderRequestReceipt] = []
         started_at = time.monotonic()
         start_times: dict[str, float] = {}
         tool_names: dict[str, str] = {}
+        tool_arguments: dict[str, dict[str, Any]] = {}
         finished_calls: set[str] = set()
         tool_call_count = 0
         run_usage = RunUsage()
@@ -743,9 +761,7 @@ class AgentRuntime:
                         [
                             *(
                                 dict(document)
-                                for document in self._retrieved_context_documents(
-                                    resolved_session_id
-                                )
+                                for document in self._retrieved_context_documents(resolved_session_id)
                             ),
                             *(dict(document) for document in episode_documents),
                         ]
@@ -927,6 +943,7 @@ class AgentRuntime:
                 retryable=retryable,
                 pending_clarification=self._clarification_gate.pending,
                 recovery_receipts=list(recovery.completed),
+                request_receipts=list(request_receipts),
             )
 
         try:
@@ -958,6 +975,7 @@ class AgentRuntime:
                                                 and envelope.request_snapshot is not None
                                                 else 0
                                             ),
+                                            request_receipts,
                                         )
                                     ]
                                     if self.context_engine is not None
@@ -996,10 +1014,20 @@ class AgentRuntime:
                                         else:
                                             response_text_buffer.append(event.delta.content_delta)
                                             await emit(TextDelta(event.delta.content_delta))
-                                elif (
-                                    isinstance(event, PartEndEvent)
-                                    and event.next_part_kind == "tool-call"
+                                elif isinstance(event, PartStartEvent) and isinstance(
+                                    event.part, ThinkingPart
                                 ):
+                                    # Reasoning content is presentation-only: it never
+                                    # feeds the speculative-text buffer and is never
+                                    # reclassified, so tool calls can't invalidate it.
+                                    if event.part.content:
+                                        await emit(ThinkingDelta(event.part.content))
+                                elif isinstance(event, PartDeltaEvent) and isinstance(
+                                    event.delta, ThinkingPartDelta
+                                ):
+                                    if event.delta.content_delta:
+                                        await emit(ThinkingDelta(event.delta.content_delta))
+                                elif isinstance(event, PartEndEvent) and event.next_part_kind == "tool-call":
                                     candidate_output_complete = False
                                 elif isinstance(event, FunctionToolCallEvent):
                                     await _discard_retried_output()
@@ -1010,6 +1038,8 @@ class AgentRuntime:
                                     call_id = event.part.tool_call_id
                                     start_times[call_id] = time.monotonic()
                                     tool_names[call_id] = event.part.tool_name
+                                    arguments = event.part.args_as_dict()
+                                    tool_arguments[call_id] = arguments
                                     metadata = self.tool_metadata.get(event.part.tool_name, {})
                                     is_control_tool = event.part.tool_name in {
                                         "set_plan",
@@ -1021,7 +1051,7 @@ class AgentRuntime:
                                         ToolCallStarted(
                                             call_id=call_id,
                                             name=event.part.tool_name,
-                                            args=event.part.args_as_dict(),
+                                            args=arguments,
                                             origin=metadata.get(
                                                 "origin",
                                                 "control" if is_control_tool else "unregistered tool",
@@ -1030,6 +1060,18 @@ class AgentRuntime:
                                                 "risk", "read" if is_control_tool else "external_unknown"
                                             ),
                                             started_at=start_times[call_id] - started_at,
+                                            call_view=self.tool_presenter.call_view(
+                                                event.part.tool_name,
+                                                arguments,
+                                                origin=metadata.get(
+                                                    "origin",
+                                                    "control" if is_control_tool else "unregistered tool",
+                                                ),
+                                                risk=metadata.get(
+                                                    "risk",
+                                                    "read" if is_control_tool else "external_unknown",
+                                                ),
+                                            ).model_dump(mode="json"),
                                         )
                                     )
                                 elif isinstance(event, FunctionToolResultEvent):
@@ -1068,7 +1110,8 @@ class AgentRuntime:
                                     metadata = self.tool_metadata.get(tool_name, {})
                                     if (
                                         self._effect_recorder is not None
-                                        and tool_name not in {
+                                        and tool_name
+                                        not in {
                                             "write_file",
                                             "edit_file",
                                             "open_work_product",
@@ -1134,6 +1177,12 @@ class AgentRuntime:
                                             elapsed_seconds=elapsed,
                                             preview=preview,
                                             exit_code=exit_code,
+                                            result_view=self.tool_presenter.result_view(
+                                                tool_name,
+                                                tool_arguments.get(call_id, {}),
+                                                content_str,
+                                                is_error=is_error,
+                                            ).model_dump(mode="json"),
                                         )
                                     )
                                     response_finished_with_tool = True
@@ -1236,6 +1285,7 @@ class AgentRuntime:
                 pending_clarification=pending_clarification,
                 recovery_receipts=list(recovery.completed),
                 context_fingerprint=envelope.fingerprint if envelope is not None else None,
+                request_receipts=list(request_receipts),
             )
         except asyncio.CancelledError as error:
             # Flush any buffered text so the user sees partial output before
@@ -1270,6 +1320,7 @@ class AgentRuntime:
                     retryable=False,
                     pending_clarification=self._clarification_gate.pending,
                     recovery_receipts=list(recovery.completed),
+                    request_receipts=list(request_receipts),
                 ),
             ) from None
         except IncompleteToolCall as error:
@@ -1304,13 +1355,9 @@ class AgentRuntime:
                 await _flush_response_text(as_final=False)
             message = str(error)
             if isinstance(error, UnexpectedModelBehavior) and self._last_completion_gate_issues:
-                message = "completion_gate_failed: " + "; ".join(
-                    self._last_completion_gate_issues
-                )
+                message = "completion_gate_failed: " + "; ".join(self._last_completion_gate_issues)
             await emit(RunFailed(message))
-            raise attach_partial_outcome(
-                error, _build_partial("failed", message, retryable=False)
-            ) from None
+            raise attach_partial_outcome(error, _build_partial("failed", message, retryable=False)) from None
 
     def _completion_gate_issues(self, plan: PlanState | None = None) -> list[str]:
         return self._completion_gate.evaluate(

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib
 import sys
+from collections.abc import Callable
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
@@ -10,7 +11,7 @@ from typing import Any, Literal, cast
 from pydantic_ai import Tool
 
 from lumen.config import PermissionsConfig, PluginConfig
-from lumen.tools.spec import EffectKind, Risk, ToolSpec
+from lumen.tools.spec import Risk, ToolConcurrency, ToolSpec
 
 
 class DuplicateToolError(ValueError):
@@ -85,7 +86,7 @@ class ToolRegistry:
     def entries(self) -> dict[str, RegisteredTool]:
         return dict(self._entries)
 
-    def add(self, spec: ToolSpec, *, origin: str) -> None:
+    def add(self, spec: ToolSpec, *, origin: str) -> Callable[[], None]:
         name = spec.name
         if name is None:  # ToolSpec fills this, but keep the registry defensive.
             raise ValueError("tool has no name")
@@ -94,9 +95,21 @@ class ToolRegistry:
             raise DuplicateToolError(f"tool {name!r} from {origin} conflicts with {previous.origin}")
         self._entries[name] = RegisteredTool(spec, origin)
 
-    def add_many(self, specs: list[ToolSpec], *, origin: str) -> None:
-        for spec in specs:
-            self.add(spec, origin=origin)
+        def dispose() -> None:
+            current = self._entries.get(name)
+            if current is not None and current.spec is spec and current.origin == origin:
+                del self._entries[name]
+
+        return dispose
+
+    def add_many(self, specs: list[ToolSpec], *, origin: str) -> Callable[[], None]:
+        disposers = [self.add(spec, origin=origin) for spec in specs]
+
+        def dispose() -> None:
+            for item in reversed(disposers):
+                item()
+
+        return dispose
 
     def build_local_tools(
         self,
@@ -112,10 +125,10 @@ class ToolRegistry:
                 continue
             tools.append(
                 Tool(
-                    entry.spec.function,
+                    entry.spec.model_callable(),
                     name=name,
                     description=entry.spec.description,
-                    sequential=not _allows_parallel(parallel_mode, entry.spec.effect),
+                    sequential=not _allows_parallel(parallel_mode, entry.spec),
                     requires_approval=decision is PermissionDecision.CONFIRM,
                     timeout=entry.spec.timeout or default_timeout,
                     metadata={
@@ -128,11 +141,14 @@ class ToolRegistry:
         return tools
 
 
-def _allows_parallel(
-    mode: Literal["sequential", "parallel_safe", "parallel"], effect: EffectKind
-) -> bool:
+def _allows_parallel(mode: Literal["sequential", "parallel_safe", "parallel"], spec: ToolSpec) -> bool:
     if mode == "sequential":
         return False
     if mode == "parallel_safe":
-        return effect is EffectKind.OBSERVE
+        try:
+            return spec.concurrency_for({}) is ToolConcurrency.PARALLEL_SAFE
+        except (KeyError, TypeError, ValueError):
+            # Parameter-sensitive policies cannot prove safety before the
+            # invocation exists, so the provider scheduler stays exclusive.
+            return False
     return True

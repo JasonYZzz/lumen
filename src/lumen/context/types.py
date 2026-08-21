@@ -256,6 +256,53 @@ class ProviderRequestSnapshot(_Contract):
     estimated: bool = True
 
 
+class ProviderRequestReceipt(_Contract):
+    """Bounded durable ledger entry for one provider-bound model step."""
+
+    step: int = Field(ge=1)
+    route: str
+    provider: str
+    model: str
+    instructions_tokens: int = Field(ge=0)
+    messages_tokens: int = Field(ge=0)
+    tools_tokens: int = Field(ge=0)
+    output_reserve_tokens: int = Field(ge=0)
+    total_tokens: int = Field(ge=0)
+    hard_limit_tokens: int = Field(gt=0)
+    visible_tools: tuple[str, ...] = Field(default_factory=tuple)
+    visible_tool_digest: str
+    context_fingerprint: str
+    estimated: bool = True
+
+    @classmethod
+    def from_snapshot(
+        cls,
+        snapshot: ProviderRequestSnapshot,
+        *,
+        route: str,
+        context_fingerprint: str,
+    ) -> ProviderRequestReceipt:
+        provider, separator, model = route.partition(":")
+        if not separator:
+            provider, model = "unknown", route
+        return cls(
+            step=snapshot.model_step,
+            route=route,
+            provider=provider,
+            model=model,
+            instructions_tokens=snapshot.instructions_tokens,
+            messages_tokens=snapshot.messages_tokens,
+            tools_tokens=snapshot.tools_tokens,
+            output_reserve_tokens=snapshot.output_reserve_tokens,
+            total_tokens=snapshot.total_tokens,
+            hard_limit_tokens=snapshot.hard_limit_tokens,
+            visible_tools=snapshot.visible_tools,
+            visible_tool_digest=snapshot.visible_tool_digest,
+            context_fingerprint=context_fingerprint,
+            estimated=snapshot.estimated,
+        )
+
+
 # --------------------------------------------------------------------------- #
 # Tool receipts (plan §9.3)
 # --------------------------------------------------------------------------- #

@@ -141,6 +141,8 @@ min(recent_max, target - fixed_context - rolling_summary - output_reserve)
 
 它使用 ContextEngine 同一 provider-aware token counter 生成 `ProviderRequestSnapshot`，包括步骤号、instructions/messages/tools/reserve token、可见工具名与 digest、窗口、hard limit 和 `estimated` 标记。快照按 session 更新 `/context`，不会建立第二套工具 schema 权威。计数不包含 provider 私有协议开销，因此始终表述为估算。
 
+每个真正准备发往 provider 的 snapshot 会连同已冻结的 route、provider/model 与 Context fingerprint 转成有界 `ProviderRequestReceipt`。Runtime 把 receipt 附在完整或 partial outcome 上，`RunCoordinator` 与 terminal turn 一起追加到 Session v9；因此正常完成、取消和失败都保留实际请求证据。receipt 只保存 token 分区、可见工具名称/digest 和路由元数据，不保存 secret、工具 schema 正文或完整消息。
+
 ### Token 计量器（tokenizer adapter）
 
 `ContextEngine` 持有一份共享 counter，同时驱动 zone 预算装配和压缩软触发，避免"触发用一套系数、限额用另一套系数"的不一致：
@@ -171,6 +173,7 @@ sequenceDiagram
   loop 每个模型步骤
     P->>A: before_model_request(final messages/tools)
     A->>E: snapshot + adaptive old-history trim + hard preflight
+    A->>A: snapshot → ProviderRequestReceipt
     P->>M: provider request
     M-->>P: text / tool call
     P->>M: approved tool execution
@@ -179,7 +182,7 @@ sequenceDiagram
   A->>E: commit(fingerprint, new_messages)
   E-->>R: candidate canonical transition
   R->>R: construct next state
-  R->>R: append terminal turn + fsync JSONL
+  R->>R: append terminal turn + request receipts + fsync JSONL
   R->>E: confirm_persisted(fingerprint)
   E->>E: publish checkpoint/cursor + maybe background compact
   R->>R: publish CoordinatorState
@@ -190,7 +193,7 @@ sequenceDiagram
 
 ## 3.8 SessionContextState：Skill/MCP 激活、恢复与卸载
 
-新 session 使用 schema v5，并可追加 `context_state` snapshot：
+`SessionContextState` 由 schema v5 引入；当前新 session 是 v9，仍沿用同一 `context_state` record：
 
 ```text
 SessionContextState
