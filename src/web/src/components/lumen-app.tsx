@@ -40,6 +40,7 @@ import { exchangeLaunchToken, lumenApi, subscribeRun } from '@/lib/api/client'
 import type {
   AgentRecord,
   ApprovalMode,
+  AttachmentRef,
   Bootstrap,
   CapabilityInventory,
   CheckpointRecord,
@@ -100,6 +101,7 @@ export function LumenApp() {
   const [sessionManagementBusy, setSessionManagementBusy] = useState(false)
   const [run, dispatch] = useReducer(runReducer, initialRunState)
   const [input, setInput] = useState('')
+  const [attachments, setAttachments] = useState<AttachmentRef[]>([])
   const [queueMode, setQueueMode] = useState<QueueMode>('steer')
   const [loading, setLoading] = useState(true)
   const [sidebarOpen, setSidebarOpen] = useState(false)
@@ -617,28 +619,45 @@ export function LumenApp() {
   )
 
   const submit = useCallback(async () => {
-    const prompt = input.trim()
+    const prompt = input.trim() || (attachments.length ? '请分析这些图片。' : '')
     if (!prompt) return
+    if (attachments.length && !bootstrap?.inputModalities.includes('image')) {
+      dispatch({ type: 'local-error', message: '当前模型不支持图片输入，请先切换到视觉模型。' })
+      return
+    }
     try {
       if (prompt.startsWith('/') && (await handleSlashCommand(prompt))) return
       if (run.runId) {
-        await lumenApi.queueInput(run.runId, prompt, queueMode)
+        await lumenApi.queueInput(run.runId, prompt, queueMode, attachments)
         setInput('')
+        setAttachments([])
         return
       }
       const targetSession = sessionId ?? (await createSession())
-      const started = await lumenApi.startRun(targetSession, prompt, requestId())
+      const started = await lumenApi.startRun(targetSession, prompt, requestId(), attachments)
       dispatch({ type: 'run-registered', runId: started.runId })
       attachRun(started.runId)
       await refreshChrome()
       setInput('')
+      setAttachments([])
     } catch (error) {
       dispatch({
         type: 'local-error',
         message: error instanceof Error ? error.message : '无法启动运行',
       })
     }
-  }, [attachRun, createSession, handleSlashCommand, input, queueMode, refreshChrome, run.runId, sessionId])
+  }, [
+    attachRun,
+    attachments,
+    bootstrap?.inputModalities,
+    createSession,
+    handleSlashCommand,
+    input,
+    queueMode,
+    refreshChrome,
+    run.runId,
+    sessionId,
+  ])
 
   const stop = useCallback(async () => {
     if (!run.runId) return
@@ -1110,8 +1129,11 @@ export function LumenApp() {
               busy={false}
               queueMode={queueMode}
               slashCommands={slashCommands}
+              attachments={attachments}
+              imageInputEnabled={bootstrap?.inputModalities.includes('image') ?? false}
               onChange={setInput}
               onQueueModeChange={setQueueMode}
+              onAttachmentsChange={setAttachments}
               onSubmit={() => void submit()}
               onStop={() => void stop()}
               settingsControl={composerSettings}
@@ -1193,8 +1215,11 @@ export function LumenApp() {
                   busy={Boolean(run.runId)}
                   queueMode={queueMode}
                   slashCommands={slashCommands}
+                  attachments={attachments}
+                  imageInputEnabled={bootstrap?.inputModalities.includes('image') ?? false}
                   onChange={setInput}
                   onQueueModeChange={setQueueMode}
+                  onAttachmentsChange={setAttachments}
                   onSubmit={() => void submit()}
                   onStop={() => void stop()}
                   settingsControl={composerSettings}
@@ -1574,7 +1599,7 @@ function SettingsDialog({
                       <div className="model-form-grid">
                         <label><span>配置名称</span><input value={draft.name} disabled={draft.originalName !== null || busy || !editable} onChange={(event) => setDraft({ ...draft, name: event.target.value })} placeholder="例如 local-qwen" /></label>
                         <label><span>模型 ID</span><input value={draft.id} disabled={busy || !editable} onChange={(event) => setDraft({ ...draft, id: event.target.value })} placeholder="例如 openai:qwen3" /></label>
-                        <label><span>API 协议</span><select value={draft.api} disabled={busy || !editable} onChange={(event) => setDraft({ ...draft, api: event.target.value as ModelDraft['api'] })}><option value="">自动选择</option><option value="responses">Responses API</option><option value="chat">Chat Completions</option><option value="openai-responses">OpenAI Responses 兼容</option><option value="openai-completions">OpenAI Completions 兼容</option><option value="chat-completions">Chat Completions 兼容别名</option></select></label>
+                        <label><span>API 协议</span><select value={draft.api} disabled={busy || !editable} onChange={(event) => setDraft({ ...draft, api: event.target.value as ModelDraft['api'] })}><option value="">自动选择（默认 Responses）</option><option value="responses">Responses API</option><option value="chat">Chat Completions</option><option value="openai-responses">OpenAI Responses 兼容</option><option value="openai-completions">OpenAI Completions 兼容</option><option value="chat-completions">Chat Completions 兼容别名</option></select></label>
                         <label><span>API 地址</span><input value={draft.baseUrl} disabled={busy || !editable} onChange={(event) => setDraft({ ...draft, baseUrl: event.target.value })} placeholder="提供方默认或 http://127.0.0.1:11434/v1" /></label>
                         <label className="model-form-wide"><span>API 密钥环境变量</span><input value={draft.apiKeyEnv} disabled={busy || !editable} onChange={(event) => setDraft({ ...draft, apiKeyEnv: event.target.value })} placeholder="例如 OPENAI_API_KEY；本地模型可留空" /><small>Web 不读取、显示或保存密钥明文。</small></label>
                         <label><span>最大输出 Token</span><input type="number" min="1" value={String(draft.settings.max_tokens ?? '')} disabled={busy || !editable} onChange={(event) => setDraft({ ...draft, settings: { ...draft.settings, max_tokens: event.target.value ? Number(event.target.value) : undefined } })} placeholder="提供方默认" /></label>

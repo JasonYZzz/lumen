@@ -1,6 +1,7 @@
 import type {
   ApprovalMode,
   ApprovalScope,
+  AttachmentRef,
   AgentRecord,
   CheckpointRecord,
   CapabilityInventory,
@@ -117,10 +118,20 @@ export const lumenApi = {
     method: 'POST',
     body: JSON.stringify({ action, ...payload }),
   }),
-  startRun: (sessionId: string, input: string, clientRequestId: string) =>
+  uploadAttachment: (file: File) =>
+    requestJson<AttachmentRef>(
+      `/api/v1/attachments?filename=${encodeURIComponent(file.name)}`,
+      { method: 'POST', body: file, headers: { 'Content-Type': file.type } },
+    ),
+  startRun: (
+    sessionId: string,
+    input: string,
+    clientRequestId: string,
+    attachments: AttachmentRef[] = [],
+  ) =>
     requestJson<RunStartedResponse>(`/api/v1/sessions/${sessionId}/runs`, {
       method: 'POST',
-      body: JSON.stringify({ input, clientRequestId }),
+      body: JSON.stringify({ input, clientRequestId, attachments }),
     }),
   retryRun: (sessionId: string, clientRequestId: string) =>
     requestJson<RunStartedResponse>(`/api/v1/sessions/${sessionId}/retry`, {
@@ -156,10 +167,15 @@ export const lumenApi = {
   ),
   cancelRun: (runId: string) =>
     requestJson<{ status: string }>(`/api/v1/runs/${runId}/cancel`, { method: 'POST' }),
-  queueInput: (runId: string, text: string, mode: QueueMode) =>
+  queueInput: (
+    runId: string,
+    text: string,
+    mode: QueueMode,
+    attachments: AttachmentRef[] = [],
+  ) =>
     requestJson<{ status: string; message_id?: string }>(`/api/v1/runs/${runId}/input`, {
       method: 'POST',
-      body: JSON.stringify({ text, mode }),
+      body: JSON.stringify({ text, mode, attachments }),
     }),
   decideApproval: (
     runId: string,

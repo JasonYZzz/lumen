@@ -16,6 +16,7 @@ import lumen.cli as cli
 from lumen.approval import ApprovalMode
 from lumen.cli import app
 from lumen.config import LimitsConfig
+from lumen.context import ArtifactStore
 from lumen.headless import HeadlessResult, run_headless
 from lumen.runtime import AgentRuntime
 from lumen.sessions import SessionRepository
@@ -27,6 +28,7 @@ class LocalResources:
     def __init__(self, root: Path, runtime: AgentRuntime) -> None:
         self.workspace = root
         self.session_repository = SessionRepository(root / "sessions")
+        self.artifact_store = ArtifactStore(root / "artifacts")
         self.runtime: AgentRuntime | None = runtime
         self.config = SimpleNamespace(
             agent=SimpleNamespace(name="test-agent"),

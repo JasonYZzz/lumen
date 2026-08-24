@@ -21,6 +21,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/attachments": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Store Attachment */
+        post: operations["store_attachment_api_v1_attachments_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/bootstrap": {
         parameters: {
             query?: never;
@@ -670,6 +687,23 @@ export interface components {
              */
             scope: "once" | "session" | "always";
         };
+        /** AttachmentBody */
+        AttachmentBody: {
+            /** Artifactref */
+            artifactRef: string;
+            /** Bytesize */
+            byteSize: number;
+            /** Filename */
+            filename: string;
+            /**
+             * Kind
+             * @default image
+             * @constant
+             */
+            kind: "image";
+            /** Mediatype */
+            mediaType: string;
+        };
         /** ChildRunActionBody */
         ChildRunActionBody: {
             /**
@@ -732,6 +766,8 @@ export interface components {
             expectedRevision: string;
             /** Id */
             id: string;
+            /** Inputmodalities */
+            inputModalities?: ("text" | "image")[];
             /**
              * Setdefault
              * @default false
@@ -761,6 +797,8 @@ export interface components {
         };
         /** QueueInputBody */
         QueueInputBody: {
+            /** Attachments */
+            attachments?: components["schemas"]["AttachmentBody"][];
             /**
              * Mode
              * @default steer
@@ -800,6 +838,8 @@ export interface components {
         };
         /** StartRunBody */
         StartRunBody: {
+            /** Attachments */
+            attachments?: components["schemas"]["AttachmentBody"][];
             /** Clientrequestid */
             clientRequestId: string;
             /** Input */
@@ -856,6 +896,39 @@ export interface operations {
         responses: {
             /** @description Successful Response */
             200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    store_attachment_api_v1_attachments_post: {
+        parameters: {
+            query: {
+                filename: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            201: {
                 headers: {
                     [name: string]: unknown;
                 };

@@ -89,6 +89,47 @@
         "title": "ApprovalBody",
         "type": "object"
       },
+      "AttachmentBody": {
+        "properties": {
+          "artifactRef": {
+            "pattern": "^sha256:[0-9a-f]{64}$",
+            "title": "Artifactref",
+            "type": "string"
+          },
+          "byteSize": {
+            "maximum": 20971520.0,
+            "minimum": 1.0,
+            "title": "Bytesize",
+            "type": "integer"
+          },
+          "filename": {
+            "maxLength": 255,
+            "minLength": 1,
+            "title": "Filename",
+            "type": "string"
+          },
+          "kind": {
+            "const": "image",
+            "default": "image",
+            "title": "Kind",
+            "type": "string"
+          },
+          "mediaType": {
+            "maxLength": 100,
+            "minLength": 1,
+            "title": "Mediatype",
+            "type": "string"
+          }
+        },
+        "required": [
+          "artifactRef",
+          "mediaType",
+          "filename",
+          "byteSize"
+        ],
+        "title": "AttachmentBody",
+        "type": "object"
+      },
       "ChildRunActionBody": {
         "properties": {
           "action": {
@@ -277,6 +318,17 @@
             "title": "Id",
             "type": "string"
           },
+          "inputModalities": {
+            "items": {
+              "enum": [
+                "text",
+                "image"
+              ],
+              "type": "string"
+            },
+            "title": "Inputmodalities",
+            "type": "array"
+          },
           "setDefault": {
             "default": false,
             "title": "Setdefault",
@@ -332,6 +384,14 @@
       },
       "QueueInputBody": {
         "properties": {
+          "attachments": {
+            "items": {
+              "$ref": "#/components/schemas/AttachmentBody"
+            },
+            "maxItems": 8,
+            "title": "Attachments",
+            "type": "array"
+          },
           "mode": {
             "default": "steer",
             "enum": [
@@ -478,6 +538,14 @@
       },
       "StartRunBody": {
         "properties": {
+          "attachments": {
+            "items": {
+              "$ref": "#/components/schemas/AttachmentBody"
+            },
+            "maxItems": 8,
+            "title": "Attachments",
+            "type": "array"
+          },
           "clientRequestId": {
             "maxLength": 200,
             "minLength": 1,
@@ -633,6 +701,47 @@
           }
         },
         "summary": "Agent Action"
+      }
+    },
+    "/api/v1/attachments": {
+      "post": {
+        "operationId": "store_attachment_api_v1_attachments_post",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "filename",
+            "required": true,
+            "schema": {
+              "title": "Filename",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Store Attachment Api V1 Attachments Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Store Attachment"
       }
     },
     "/api/v1/bootstrap": {

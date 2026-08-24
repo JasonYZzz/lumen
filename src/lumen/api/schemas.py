@@ -9,9 +9,18 @@ class WebModel(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
 
+class AttachmentBody(WebModel):
+    artifact_ref: str = Field(alias="artifactRef", pattern=r"^sha256:[0-9a-f]{64}$")
+    kind: Literal["image"] = "image"
+    media_type: str = Field(alias="mediaType", min_length=1, max_length=100)
+    filename: str = Field(min_length=1, max_length=255)
+    byte_size: int = Field(alias="byteSize", ge=1, le=20 * 1024 * 1024)
+
+
 class StartRunBody(WebModel):
     input: str = Field(min_length=1)
     client_request_id: str = Field(alias="clientRequestId", min_length=1, max_length=200)
+    attachments: list[AttachmentBody] = Field(default_factory=list[AttachmentBody], max_length=8)
 
 
 class RetryRunBody(WebModel):
@@ -27,6 +36,7 @@ class StartLiveBody(WebModel):
 class QueueInputBody(WebModel):
     text: str = Field(min_length=1)
     mode: Literal["steer", "follow_up"] = "steer"
+    attachments: list[AttachmentBody] = Field(default_factory=list[AttachmentBody], max_length=8)
 
 
 class ApprovalBody(WebModel):
@@ -56,6 +66,9 @@ class ModelConfigurationBody(WebModel):
     )
     settings: dict[str, Any] = Field(default_factory=dict[str, Any])
     context: dict[str, Any] = Field(default_factory=dict[str, Any])
+    input_modalities: list[Literal["text", "image"]] = Field(
+        default_factory=lambda: ["text"], alias="inputModalities"
+    )
     set_default: bool = Field(default=False, alias="setDefault")
 
 

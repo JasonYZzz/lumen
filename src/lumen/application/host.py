@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import mimetypes
 from collections import Counter
 from collections.abc import AsyncIterator
 from dataclasses import asdict, dataclass, field
@@ -10,6 +11,12 @@ from typing import Any, Protocol, cast, overload
 from uuid import uuid4
 
 from lumen.approval import ApprovalDecision, ApprovalMode, ApprovalPolicy
+from lumen.attachments import (
+    MAX_ATTACHMENTS_PER_INPUT,
+    AttachmentError,
+    AttachmentRef,
+    AttachmentStore,
+)
 from lumen.collaboration import (
     CollaborationMode,
     PlanReviewStatus,
@@ -72,6 +79,7 @@ from .models import (
     ForkSessionAtTurn,
     GetBootstrap,
     GetConfiguration,
+    ImportAttachmentPath,
     InterruptAgent,
     InterruptLiveSession,
     InvalidStateError,
@@ -83,6 +91,7 @@ from .models import (
     ListContextSources,
     ListHooks,
     ListMcpPrompts,
+    ListMcpResources,
     ListSessions,
     LiveStartedResult,
     QueueRunInput,
@@ -107,6 +116,7 @@ from .models import (
     SetTranscriptDensity,
     StartLiveSession,
     StartRun,
+    StoreAttachment,
     UpsertModelConfiguration,
     WaivePlanVerification,
     WorkspaceBootstrap,
@@ -118,6 +128,7 @@ from .models import (
 class WorkspaceResources(Protocol):
     workspace: Path
     session_repository: SessionRepository
+    artifact_store: Any
     runtime: AgentRuntime | None
     config: Any
     tool_metadata: dict[str, dict[str, str]]
@@ -195,6 +206,7 @@ class WorkspaceHost:
         self._live_execution_id: str | None = None
         self._live_approvals: dict[str, dict[str, _PendingApproval]] = {}
         self._live_manager = getattr(resources, "live_manager", None)
+        self._attachment_store = AttachmentStore(resources.artifact_store)
         if self._live_manager is not None:
             self._live_manager.bind_approval_handler(self._request_live_approval)
             self._live_manager.bind_execution_lease(
@@ -278,6 +290,7 @@ class WorkspaceHost:
             | CancelClarification
             | ListContextSources
             | ListMcpPrompts
+            | ListMcpResources
             | ListHooks
             | ListChildRuns
             | ListAgents
@@ -296,12 +309,45 @@ class WorkspaceHost:
             | GetConfiguration
             | UpsertModelConfiguration
             | DeleteModelConfiguration
+            | StoreAttachment
+            | ImportAttachmentPath
         ),
     ) -> CommandAcknowledged: ...
 
     async def dispatch(self, command: WorkspaceCommand) -> CommandResult:
         if isinstance(command, GetBootstrap):
             return self._bootstrap()
+        if isinstance(command, StoreAttachment):
+            try:
+                attachment = self._attachment_store.store_image(
+                    filename=command.filename,
+                    media_type=command.media_type,
+                    content=command.content,
+                )
+            except AttachmentError as error:
+                raise InvalidStateError(str(error)) from error
+            return CommandAcknowledged(
+                "stored",
+                {"attachment": attachment.model_dump(mode="json")},
+            )
+        if isinstance(command, ImportAttachmentPath):
+            try:
+                target = Workspace(self.resources.workspace).resolve(command.path)
+                if not target.is_file():
+                    raise AttachmentError(f"image attachment is not a file: {command.path}")
+                media_type = mimetypes.guess_type(target.name)[0] or "application/octet-stream"
+                content = await asyncio.to_thread(target.read_bytes)
+                attachment = self._attachment_store.store_image(
+                    filename=target.name,
+                    media_type=media_type,
+                    content=content,
+                )
+            except (AttachmentError, OSError, ValueError) as error:
+                raise InvalidStateError(str(error)) from error
+            return CommandAcknowledged(
+                "stored",
+                {"attachment": attachment.model_dump(mode="json")},
+            )
         if isinstance(command, GetConfiguration):
             return CommandAcknowledged("ok", self.resources.configuration.inspect().as_dict())
         if isinstance(command, UpsertModelConfiguration):
@@ -493,6 +539,11 @@ class WorkspaceHost:
             return self._list_context_sources(command)
         if isinstance(command, ListMcpPrompts):
             return CommandAcknowledged("ok", {"items": self.resources.mcp_prompt_summary()})
+        if isinstance(command, ListMcpResources):
+            summary = getattr(self.resources, "mcp_resource_summary", None)
+            if summary is None:
+                return CommandAcknowledged("ok", {"items": []})
+            return CommandAcknowledged("ok", {"items": summary(command.session_id)})
         if isinstance(command, ListHooks):
             return CommandAcknowledged("ok", {"items": self.resources.hook_summary()})
         if isinstance(command, SetContextSource):
@@ -525,6 +576,9 @@ class WorkspaceHost:
             workspace=str(self.resources.workspace),
             active_model=self.resources.active_model_name(),
             model_id=str(self.resources.active_model_config().id),
+            input_modalities=list(
+                getattr(self.resources.active_model_config(), "input_modalities", ("text",))
+            ),
             available_models=self.resources.available_models(),
             approval_mode=str(self.resources.config.permissions.default_mode),
             collaboration_mode=self._default_collaboration_mode().value,
@@ -835,6 +889,7 @@ class WorkspaceHost:
         completion_revision: int | None = None,
     ) -> RunStartedResult:
         model_prompt = model_prompt if model_prompt is not None else command.model_prompt
+        attachments = self._validated_attachments(command.attachments)
         request_key = (command.session_id, command.client_request_id)
         async with self._state_lock:
             previous_id = self._requests.get(request_key)
@@ -863,7 +918,7 @@ class WorkspaceHost:
                 client_request_id=command.client_request_id,
                 journal=EventJournal(session_id=command.session_id, run_id=run_id),
             )
-            actor.coordinator.persist_run_start(command.input, run_id)
+            actor.coordinator.persist_run_start(command.input, run_id, attachments)
             self._runs[run_id] = record
             self._requests[request_key] = run_id
             self._active_run_id = run_id
@@ -878,6 +933,7 @@ class WorkspaceHost:
                     model_prompt=model_prompt,
                     is_retry=is_retry,
                     completion_revision=completion_revision,
+                    attachments=attachments,
                 ),
                 name=f"lumen-run-{run_id}",
             )
@@ -892,6 +948,7 @@ class WorkspaceHost:
         model_prompt: str | None = None,
         is_retry: bool = False,
         completion_revision: int | None = None,
+        attachments: tuple[AttachmentRef, ...] = (),
     ) -> None:
         terminal_seen = False
         deferred_completion: RunCompleted | None = None
@@ -1004,6 +1061,7 @@ class WorkspaceHost:
                     prepared_prompt,
                     is_retry=is_retry,
                     interaction_id=record.id,
+                    attachments=attachments,
                 ),
                 emit,
                 approve,
@@ -1230,6 +1288,7 @@ class WorkspaceHost:
         if record.status != "running":
             raise InvalidStateError("run is not active")
         actor = self._actor(record.session_id)
+        attachments = self._validated_attachments(command.attachments)
         prompt = apply_collaboration_context(
             expand_file_mentions(
                 command.model_prompt if command.model_prompt is not None else command.text,
@@ -1239,11 +1298,44 @@ class WorkspaceHost:
         )
         try:
             message = await actor.coordinator.enqueue_interactive(
-                RunInput(command.text, prompt), QueueMode(command.mode)
+                RunInput(command.text, prompt, attachments=attachments), QueueMode(command.mode)
             )
         except ValueError as error:
             raise InvalidStateError(str(error)) from error
         return CommandAcknowledged("queued", {"message_id": message.id})
+
+    def _validated_attachments(
+        self,
+        values: tuple[AttachmentRef | dict[str, Any], ...],
+    ) -> tuple[AttachmentRef, ...]:
+        if len(values) > MAX_ATTACHMENTS_PER_INPUT:
+            raise InvalidStateError(
+                f"each input supports at most {MAX_ATTACHMENTS_PER_INPUT} image attachments"
+            )
+        try:
+            attachments = tuple(
+                item if isinstance(item, AttachmentRef) else AttachmentRef.model_validate(item)
+                for item in values
+            )
+        except ValueError as error:
+            raise InvalidStateError(f"invalid attachment: {error}") from error
+        if not attachments:
+            return ()
+        modalities = cast(
+            tuple[str, ...],
+            tuple(getattr(self.resources.active_model_config(), "input_modalities", ("text",))),
+        )
+        if "image" not in modalities:
+            raise InvalidStateError(
+                "the active model does not declare image input support; "
+                "set input_modalities: [text, image] only for a verified vision model"
+            )
+        for attachment in attachments:
+            try:
+                self._attachment_store.read(attachment)
+            except AttachmentError as error:
+                raise InvalidStateError(str(error)) from error
+        return attachments
 
     def _set_approval_mode(self, command: SetApprovalMode) -> CommandAcknowledged:
         mode = ApprovalMode.parse(command.mode)

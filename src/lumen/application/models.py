@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any, Literal, TypeAlias
 
+from lumen.attachments import AttachmentRef
 from lumen.timeline import TimelineItem
 
 
@@ -70,6 +71,7 @@ class StartRun:
     input: str
     client_request_id: str
     model_prompt: str | None = None
+    attachments: tuple[AttachmentRef | dict[str, Any], ...] = ()
     type: Literal["start_run"] = "start_run"
 
 
@@ -115,6 +117,7 @@ class QueueRunInput:
     text: str
     mode: Literal["steer", "follow_up"]
     model_prompt: str | None = None
+    attachments: tuple[AttachmentRef | dict[str, Any], ...] = ()
     type: Literal["queue_input"] = "queue_input"
 
 
@@ -301,6 +304,12 @@ class ListMcpPrompts:
 
 
 @dataclass(frozen=True, slots=True)
+class ListMcpResources:
+    session_id: str | None = None
+    type: Literal["list_mcp_resources"] = "list_mcp_resources"
+
+
+@dataclass(frozen=True, slots=True)
 class ListHooks:
     type: Literal["list_hooks"] = "list_hooks"
 
@@ -328,6 +337,20 @@ class ContextControl:
     action: str | None = None
     payload: dict[str, Any] = field(default_factory=dict[str, Any])
     type: Literal["context_control"] = "context_control"
+
+
+@dataclass(frozen=True, slots=True)
+class StoreAttachment:
+    filename: str
+    media_type: str
+    content: bytes
+    type: Literal["store_attachment"] = "store_attachment"
+
+
+@dataclass(frozen=True, slots=True)
+class ImportAttachmentPath:
+    path: str
+    type: Literal["import_attachment_path"] = "import_attachment_path"
 
 
 WorkspaceCommand: TypeAlias = (
@@ -374,10 +397,13 @@ WorkspaceCommand: TypeAlias = (
     | InvokePrompt
     | ListContextSources
     | ListMcpPrompts
+    | ListMcpResources
     | ListHooks
     | SetContextSource
     | CancelClarification
     | ContextControl
+    | StoreAttachment
+    | ImportAttachmentPath
 )
 
 
@@ -414,6 +440,7 @@ class WorkspaceBootstrap:
     workspace: str
     active_model: str
     model_id: str
+    input_modalities: list[str]
     available_models: list[str]
     approval_mode: str
     collaboration_mode: str

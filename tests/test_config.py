@@ -446,6 +446,7 @@ def test_repo_example_config_loads_without_drift(monkeypatch: pytest.MonkeyPatch
         "DASHSCOPE_API_KEY",
         "KIMI_API_KEY",
         "OPENAI_API_KEY",
+        "OMLX_API_KEY",
         "TYC_TOKEN",
         "EXA_API_KEY",
     ):
@@ -462,6 +463,7 @@ def test_repo_example_config_loads_without_drift(monkeypatch: pytest.MonkeyPatch
     assert policy.context_window_tokens == 1_000_000
     assert policy.architectural_max_output_tokens == 384_000
     assert policy.output_reserve_tokens == 65_536
+    assert config.agent.models["kimi-k3"].input_modalities == ("text", "image")
     # The example demonstrates tool_risks on optional remote servers.
     tyc = config.mcp_servers["tyc-mcp"]
     assert tyc.tool_risks.get("search_companies") == "read"
@@ -481,10 +483,18 @@ def test_project_config_uses_expected_model_registry() -> None:
         "deepseek-v4-flash",
         "deepseek-v4-pro",
         "kimi-k3",
+        "omlx-qwen3.8-27b-4bit",
     }
     assert config.agent.model_registry()["deepseek-v4-flash"].id == "openai:deepseek-v4-flash"
     assert config.agent.model_registry()["deepseek-v4-pro"].id == "openai:deepseek-v4-pro"
-    assert config.agent.model_registry()["kimi-k3"].id == "openai:k3"
+    kimi = config.agent.model_registry()["kimi-k3"]
+    assert kimi.id == "openai:k3"
+    assert kimi.api == "responses"
+    assert kimi.input_modalities == ("text", "image")
+    omlx = config.agent.model_registry()["omlx-qwen3.8-27b-4bit"]
+    assert omlx.id == "openai:Qwen3.8-27B-4bit"
+    assert omlx.api == "responses"
+    assert omlx.context.window_tokens == 262_144
 
 
 @pytest.mark.parametrize("legacy_mode", ["plan", "ask"])

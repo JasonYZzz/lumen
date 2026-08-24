@@ -32,6 +32,7 @@ from lumen.application import (
     WorkspaceHost,
 )
 from lumen.application.events import event_from_payload
+from lumen.attachments import AttachmentRef
 from lumen.context import CompactionCheckpointV1, CompactionCheckpointV2, ContextSummary
 from lumen.events import (
     ApprovalRequest,
@@ -125,6 +126,7 @@ class HostSessionAdapter:
                 run_input.display_text,
                 mode.value,
                 model_prompt=run_input.model_prompt,
+                attachments=run_input.attachments,
             )
         )
 
@@ -139,6 +141,10 @@ class HostSessionAdapter:
                 model_prompt=str(item["model_prompt"]),
                 mode=QueueMode(str(item["mode"])),
                 byte_size=int(item["byte_size"]),
+                attachments=tuple(
+                    AttachmentRef.model_validate(value)
+                    for value in item.get("attachments", [])
+                ),
             )
             for item in result.data["items"]
         )
@@ -225,6 +231,7 @@ class HostSessionAdapter:
                 run_input.display_text,
                 f"tui-{uuid4()}",
                 model_prompt=run_input.model_prompt,
+                attachments=run_input.attachments,
             )
         )
         return await self._consume(started.run_id, emit, approve, approve_batch)
@@ -329,3 +336,14 @@ class HostSessionAdapter:
         finally:
             self.active_run_id = None
         return None if status == "failed" else HostRunOutcome(status)
+
+    async def consume_run(
+        self,
+        run_id: str,
+        emit: EventSink,
+        approve: ApprovalHandler,
+        approve_batch: ApprovalBatchHandler | None = None,
+    ) -> HostRunOutcome | None:
+        """Consume a run started by another WorkspaceHost command."""
+
+        return await self._consume(run_id, emit, approve, approve_batch)

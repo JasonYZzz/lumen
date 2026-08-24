@@ -9,6 +9,14 @@ export type CollaborationMode = NonNullable<
 export type QueueMode = components['schemas']['QueueInputBody']['mode']
 export type ApprovalScope = 'once' | 'session' | 'always'
 
+export interface AttachmentRef {
+  artifactRef: string
+  kind: 'image'
+  mediaType: string
+  filename: string
+  byteSize: number
+}
+
 export interface AgentRecord {
   id: string
   status: string
@@ -35,6 +43,7 @@ export interface Bootstrap {
   workspace: string
   activeModel: string
   modelId: string
+  inputModalities: Array<'text' | 'image'>
   availableModels: string[]
   approvalMode: ApprovalMode
   collaborationMode: CollaborationMode
@@ -54,6 +63,7 @@ export interface ConfiguredModel {
   apiKeyEnv: string | null
   settings: Record<string, unknown>
   context: Record<string, unknown>
+  inputModalities: Array<'text' | 'image'>
   isDefault: boolean
   source: { scope: string; path: string } | null
   authKind: 'environment' | 'inline' | 'none'
@@ -88,6 +98,7 @@ export interface ModelConfigurationInput {
   apiKeyEnv?: string | null
   settings?: Record<string, unknown>
   context?: Record<string, unknown>
+  inputModalities?: Array<'text' | 'image'>
   setDefault?: boolean
 }
 

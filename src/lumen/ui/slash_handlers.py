@@ -17,27 +17,32 @@ from __future__ import annotations
 import json
 import shlex
 from typing import TYPE_CHECKING, Any, cast
+from uuid import uuid4
 
 from textual.widgets import Static
 
-from lumen.application import CancelClarification, SelectModel
+from lumen.application import (
+    CancelClarification,
+    ContextControl,
+    GetBootstrap,
+    InvokePrompt,
+    InvokeSkill,
+    ListContextSources,
+    ListHooks,
+    ListMcpPrompts,
+    ListMcpResources,
+    SelectModel,
+    SetContextSource,
+)
 from lumen.approval import ApprovalMode
 from lumen.collaboration import CollaborationMode
-from lumen.context import (
-    ContextCompactCommand,
-    ContextEngine,
-    ContextMemoryCommand,
-    ContextReportCommand,
-)
-from lumen.run_coordinator import RunInput
-from lumen.tools.workspace import Workspace
+from lumen.context import ContextControlResult
 from lumen.ui.command_gate import (
     CommandPolicy,
     classify_command,
     classify_model_command,
 )
 from lumen.ui.composer import edit_text_external
-from lumen.ui.file_mention import expand_file_mentions
 from lumen.ui.slash_commands import find_command, render_help
 from lumen.ui.themes import BUILTIN_THEMES
 
@@ -48,32 +53,41 @@ if TYPE_CHECKING:
 class SlashHandlersMixin:
     """Dispatch and implement the ``/`` commands registered in slash_commands."""
 
-    def _context_engine(self: LumenApp) -> ContextEngine | None:
-        """The active session's context engine, if a runtime is open."""
+    async def _run_context_control(
+        self: LumenApp,
+        control: str,
+        *,
+        focus: str | None = None,
+        action: str | None = None,
+        payload: dict[str, Any] | None = None,
+    ) -> None:
+        """Run context control through the shared WorkspaceHost Seam."""
 
-        runtime = self.resources.runtime
-        return runtime.context_engine if runtime is not None else None
-
-    async def _run_context_control(self: LumenApp, command: Any) -> None:
-        """Run a read-only/stub context control command and display its result."""
-
-        engine = self._context_engine()
-        if engine is None:
-            await self._append_system("Context engine is not available yet.")
+        if self.session is None:
+            await self._append_system("No active session.")
             return
-
-        async def _noop(_event: Any) -> None:
-            return None
-
-        result = await engine.control(command, _noop)
-        await self._append_system(self.format_context_result(result))
+        result = await self.workspace_host.dispatch(
+            ContextControl(
+                self.session.id,
+                cast(Any, control),
+                focus=focus,
+                action=action,
+                payload=payload or {},
+            )
+        )
+        rendered = ContextControlResult(
+            status=cast(Any, result).status,
+            message=str(cast(Any, result).data.get("message", "")),
+            payload=dict(cast(Any, result).data.get("payload", {})),
+        )
+        await self._append_system(self.format_context_result(rendered))
 
     async def _render_context(self: LumenApp, parts: list[str]) -> None:
         """Render the ``/context`` budget report (``--json`` for machine output)."""
 
         if len(parts) > 1 and parts[1] == "capabilities":
             await self._append_system(
-                json.dumps(self.resources.capabilities_report(), ensure_ascii=False, indent=2)
+                json.dumps(self.workspace_host.capabilities(), ensure_ascii=False, indent=2)
             )
             return
 
@@ -81,7 +95,8 @@ class SlashHandlersMixin:
             if self.session is None:
                 await self._append_system("No active session.")
                 return
-            sources = self.resources.context_source_summary(self.session.id)
+            listed = await self.workspace_host.dispatch(ListContextSources(self.session.id))
+            sources = cast(list[dict[str, str]], cast(Any, listed).data.get("items", []))
             await self._append_system(
                 "\n".join(
                     f"{source['kind']}  {source['reference']}  {source['revision'][:16]}  {source['status']}"
@@ -91,17 +106,14 @@ class SlashHandlersMixin:
             )
             return
 
-        engine = self._context_engine()
-        if engine is None:
-            await self._append_system("Context engine is not available yet.")
+        if self.session is None:
+            await self._append_system("No active session.")
             return
-
-        async def _noop(_event: Any) -> None:
-            return None
-
-        result = await engine.control(
-            ContextReportCommand(session_id=self.session.id if self.session is not None else None),
-            _noop,
+        response = await self.workspace_host.dispatch(ContextControl(self.session.id, "report"))
+        result = ContextControlResult(
+            status=cast(Any, response).status,
+            message=str(cast(Any, response).data.get("message", "")),
+            payload=dict(cast(Any, response).data.get("payload", {})),
         )
         if len(parts) > 1 and parts[1] == "--json":
             await self._append_system(json.dumps(result.payload, ensure_ascii=False, indent=2))
@@ -171,14 +183,29 @@ class SlashHandlersMixin:
                 return
             key, value = item.split("=", 1)
             arguments[key] = value
+        await self._append_user(raw)
+        if self.session is None:
+            await self._append_system("No active session.")
+            return
         try:
-            rendered = await self.resources.render_mcp_prompt(parts[1], arguments)
+            await self.coordinator.set_modes(
+                self._approval_mode.value,
+                self._collaboration_mode.value,
+            )
+            started = await self.workspace_host.dispatch(
+                InvokePrompt(
+                    self.session.id,
+                    parts[1],
+                    arguments,
+                    raw,
+                    f"tui-prompt-{uuid4()}",
+                )
+            )
         except Exception as error:
             await self._append_system(f"Cannot render MCP prompt: {error}")
             return
-        await self._append_user(raw)
         self.current_worker = self.run_worker(
-            self._run_prompt(RunInput(display_text=raw, model_prompt=rendered)),
+            self._consume_started_run(started.run_id),
             name="agent-run",
             exclusive=True,
         )
@@ -193,23 +220,32 @@ class SlashHandlersMixin:
 
         command = parts[0].lower()
         skill_name = command[len("/skill:") :]
-        skill = self.resources.load_skill_by_name(skill_name)
-        if skill is None:
-            await self._append_system(f"Unknown skill: {skill_name}. Use /skills to list available skills.")
+        if self.session is None:
+            await self._append_system("No active session.")
             return
-        if self.session is not None:
-            self.resources.activate_skill(self.session.id, skill_name)
         args = shlex.join(parts[1:]) if len(parts) > 1 else ""
         # Persist the exact user input. Skill instructions are model-only,
         # so timeline browsing and /retry never expose expanded XML.
         display = raw
         await self._append_user(display)
-        invocation = f"Apply the active Skill `{skill.name}` to this request."
-        if args:
-            invocation = f"{invocation}\n\nUser arguments:\n{args}"
-        expanded_prompt = expand_file_mentions(invocation, Workspace(self.resources.workspace))
+        try:
+            await self.coordinator.set_modes(
+                self._approval_mode.value,
+                self._collaboration_mode.value,
+            )
+            started = await self.workspace_host.dispatch(
+                InvokeSkill(
+                    self.session.id,
+                    skill_name,
+                    args,
+                    f"tui-skill-{uuid4()}",
+                )
+            )
+        except Exception as error:
+            await self._append_system(f"Cannot invoke Skill: {error}")
+            return
         self.current_worker = self.run_worker(
-            self._run_prompt(RunInput(display_text=display, model_prompt=expanded_prompt)),
+            self._consume_started_run(started.run_id),
             name="agent-run",
             exclusive=True,
         )
@@ -217,13 +253,15 @@ class SlashHandlersMixin:
     async def _cmd_skills(self: LumenApp, parts: list[str], raw: str) -> None:
         """``/skills`` — list the discovered Agent Skills."""
 
-        if not self.resources.skills:
+        bootstrap = await self.workspace_host.dispatch(GetBootstrap())
+        skills = cast(Any, bootstrap).skills
+        if not skills:
             await self._append_system(
                 "No skills found. Add SKILL.md files to .lumen/skills/ or ~/.lumen/skills/."
             )
             return
-        rows = [f"  {s.name}  —  {s.description[:80]}" for s in self.resources.skills]
-        await self._append_system(f"{len(self.resources.skills)} skill(s) available:\n" + "\n".join(rows))
+        rows = [f"  {skill['name']}  —  {skill['description'][:80]}" for skill in skills]
+        await self._append_system(f"{len(skills)} skill(s) available:\n" + "\n".join(rows))
 
     async def _cmd_skill(self: LumenApp, parts: list[str], raw: str) -> None:
         """``/skill unload <name>`` — unload a skill from this session."""
@@ -234,7 +272,9 @@ class SlashHandlersMixin:
         if self.session is None:
             await self._append_system("No active session.")
             return
-        self.resources.deactivate_context_source(self.session.id, "skill", parts[2])
+        await self.workspace_host.dispatch(
+            SetContextSource(self.session.id, "skill", parts[2], False)
+        )
         await self._append_system(f"Unloaded Skill {parts[2]!r} from this session.")
 
     async def _cmd_clarification(self: LumenApp, parts: list[str], raw: str) -> None:
@@ -521,7 +561,8 @@ class SlashHandlersMixin:
     async def _cmd_mcp(self: LumenApp, parts: list[str], raw: str) -> None:
         """``/mcp`` — show MCP connections and deferred schema status."""
 
-        mcp_rows = self.resources.mcp_summary()
+        bootstrap = await self.workspace_host.dispatch(GetBootstrap())
+        mcp_rows = cast(Any, bootstrap).mcp
         if not mcp_rows:
             await self._append_system("No MCP servers configured.")
         else:
@@ -538,7 +579,8 @@ class SlashHandlersMixin:
     async def _cmd_hooks(self: LumenApp, parts: list[str], raw: str) -> None:
         """``/hooks`` — list configured hooks and statistics."""
 
-        hooks = self.resources.hook_summary()
+        response = await self.workspace_host.dispatch(ListHooks())
+        hooks = cast(list[dict[str, Any]], cast(Any, response).data.get("items", []))
         if not hooks:
             await self._append_system("No hooks configured.")
         else:
@@ -553,7 +595,10 @@ class SlashHandlersMixin:
     async def _cmd_resources(self: LumenApp, parts: list[str], raw: str) -> None:
         """``/resources`` — list MCP resources available for explicit context loading."""
 
-        resources = self.resources.mcp_resource_summary(self.session.id if self.session is not None else None)
+        response = await self.workspace_host.dispatch(
+            ListMcpResources(self.session.id if self.session is not None else None)
+        )
+        resources = cast(list[dict[str, Any]], cast(Any, response).data.get("items", []))
         await self._append_system(
             "\n".join(
                 f"{'*' if row['active'] else ' '} {row['reference']}  {row['description']}"
@@ -570,12 +615,14 @@ class SlashHandlersMixin:
                 await self._append_system("No active session.")
                 return
             try:
-                document = await self.resources.activate_mcp_resource(self.session.id, parts[1])
+                result = await self.workspace_host.dispatch(
+                    SetContextSource(self.session.id, "resource", parts[1], True)
+                )
             except Exception as error:
                 await self._append_system(f"Cannot load MCP resource: {error}")
             else:
                 await self._append_system(
-                    f"Loaded {document['server']}::{document['uri']} into retrieved context."
+                    f"Loaded {cast(Any, result).data['reference']} into retrieved context."
                 )
             return
         if len(parts) == 3 and parts[1] == "refresh":
@@ -583,19 +630,23 @@ class SlashHandlersMixin:
                 await self._append_system("No active session.")
                 return
             try:
-                document = await self.resources.activate_mcp_resource(self.session.id, parts[2])
+                result = await self.workspace_host.dispatch(
+                    SetContextSource(self.session.id, "resource", parts[2], True)
+                )
             except Exception as error:
                 await self._append_system(f"Cannot refresh MCP resource: {error}")
             else:
                 await self._append_system(
-                    f"Refreshed {document['server']}::{document['uri']} for this session."
+                    f"Refreshed {cast(Any, result).data['reference']} for this session."
                 )
             return
         if len(parts) == 3 and parts[1] == "unload":
             if self.session is None:
                 await self._append_system("No active session.")
                 return
-            self.resources.deactivate_context_source(self.session.id, "resource", parts[2])
+            await self.workspace_host.dispatch(
+                SetContextSource(self.session.id, "resource", parts[2], False)
+            )
             await self._append_system(f"Unloaded MCP resource {parts[2]!r} from this session.")
             return
         await self._unknown_command(parts[0].lower())
@@ -603,7 +654,8 @@ class SlashHandlersMixin:
     async def _cmd_prompts(self: LumenApp, parts: list[str], raw: str) -> None:
         """``/prompts`` — list MCP prompt templates."""
 
-        prompts = self.resources.mcp_prompt_summary()
+        response = await self.workspace_host.dispatch(ListMcpPrompts())
+        prompts = cast(list[dict[str, Any]], cast(Any, response).data.get("items", []))
         await self._append_system(
             "\n".join(
                 f"{row['reference']}  "
@@ -623,8 +675,7 @@ class SlashHandlersMixin:
         """``/compact [focus]`` — force a compaction."""
 
         focus = shlex.join(parts[1:]) if len(parts) > 1 else None
-        session_id = self.session.id if self.session is not None else None
-        await self._run_context_control(ContextCompactCommand(focus=focus, session_id=session_id))
+        await self._run_context_control("compact", focus=focus)
 
     async def _cmd_memory(self: LumenApp, parts: list[str], raw: str) -> None:
         """``/memory <action> [...]`` — memory control (list, remember, edit, forget, use, learn, …)."""
@@ -659,7 +710,7 @@ class SlashHandlersMixin:
                 await self._append_system(f"Use /memory {action} on|off")
                 return
             payload["enabled"] = value == "on"
-        await self._run_context_control(ContextMemoryCommand(action=action, payload=payload))
+        await self._run_context_control("memory", action=action, payload=payload)
 
     async def _cmd_retry(self: LumenApp, parts: list[str], raw: str) -> None:
         """``/retry`` — re-send the last prompt."""

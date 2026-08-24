@@ -733,7 +733,7 @@ agent:
     deepseek-v4-flash:
       id: openai:deepseek-v4-flash
       api_key_env: DEEPSEEK_API_KEY           # 或 api_key: sk-...(明文,仅本地)
-      base_url: https://api.deepseek.com/v1
+      base_url: https://api.deepseek.com
       settings: {max_tokens: 4096}
     glm-5.2:
       id: openai:glm-5.2
@@ -756,42 +756,71 @@ agent:
 | `google:` / `gemini:` | Google AI。 |
 | `ollama:` | Ollama 本地服务(走 OpenAI 兼容协议,需配 `base_url`)。 |
 
-### `api` 字段:Chat vs Responses 路径选择
+### `api` 字段：Responses（默认）与 Chat 兼容路径
 
-OpenAI 兼容端点有两条等价路径,用 `api` 字段显式选择:
+`openai:` provider 支持两条可选路径，用 `api` 字段显式选择：
 
 | `api` 值 | 走的端点 | Pydantic AI 模型 | 适用场景 |
 |----------|---------|-----------------|---------|
-| `chat`(默认) | `/chat/completions` | `OpenAIChatModel` | DeepSeek、阿里云百炼 Chat、绝大多数 OpenAI 兼容服务 |
-| `responses` | `/responses` | `OpenAIResponsesModel` | 阿里云百炼 Responses API、OpenAI 官方 Responses |
+| `responses`（默认） | `/responses` | `OpenAIResponsesModel` | OpenAI、DeepSeek、Kimi、阿里云百炼及其他 Responses-compatible 服务 |
+| `chat`（可选兼容） | `/chat/completions` | `OpenAIChatModel` | 仅实现 Chat Completions 的旧服务、代理或本地网关 |
 
 也接受外部工具(Roo Code 等)用的别名:`openai-completions` → chat,`openai-responses` → responses,`chat-completions` → chat,粘贴现成配置不用改。
 
-**省略 `api` 字段时的默认行为**(向后兼容):
-- 配了 `base_url` → chat
-- 没配 `base_url`(走官方 OpenAI) → responses
+**省略 `api` 字段时默认走 Responses**，无论是否配置自定义 `base_url`。若目标服务只实现
+Chat Completions，必须显式写 `api: chat`；`ollama:` provider 仍固定使用其 Chat-compatible Adapter。
 
 ```yaml
 agent:
   models:
     deepseek-v4-flash:
       id: openai:deepseek-v4-flash
-      base_url: https://api.deepseek.com/v1
-      api: chat                # 显式(可省略,有 base_url 默认就是 chat)
-    qwen3-max-via-responses:
-      id: openai:qwen3-max
-      base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
-      api: responses           # 走阿里云百炼 Responses API
+      base_url: https://api.deepseek.com
+      # api: responses         # 可省略；这是默认值
+    legacy-chat-gateway:
+      id: openai:legacy-model
+      base_url: https://gateway.example.com/v1
+      api: chat                # 仅在目标端点没有 /responses 时显式选择
 ```
 
-> **关于 Responses API 的 `previous_response_id` 和内置工具**：阿里云 Responses API 支持[服务端会话托管](https://help.aliyun.com/zh/model-studio/compatibility-with-openai-responses-api)和内置工具（`web_search` 等），但 Lumen **自己管理会话历史（JSONL）和工具注册**，两条机制并存会冲突。因此我们走 Responses 路径时**不开** `previous_response_id` 和内置工具 —— 每次请求自带完整历史，Lumen 的 `set_plan` / `report_progress` / 工具审批 / MCP 工具都照常工作。
+> **关于 Responses API 的状态与内置工具**：Lumen 自己拥有 Session journal、ContextEngine、
+> ToolRegistry、审批和 Sandbox，因此 Responses 路径默认不开 `previous_response_id` / `conversation`
+> 和 provider 内置工具；每次请求携带 Lumen 准备的历史与 function tools。这样 OpenAI 的有状态实现、
+> DeepSeek 的无状态部分兼容实现以及第三方 provider 都投影到同一套 Lumen 运行时权威。
 
-### DeepSeek / 阿里云百炼示例
+### DeepSeek / Kimi / 阿里云百炼示例
 
-两者都是 OpenAI 兼容端点,直接用 `openai:` 前缀 + `base_url` 即可:
+它们都是 OpenAI-compatible 端点，直接使用 `openai:` 前缀和对应 `base_url`：
 
-- **DeepSeek V4 Flash**:`id: openai:deepseek-v4-flash`,`base_url: https://api.deepseek.com/v1`,`api: chat`([官方文档](https://api-docs.deepseek.com/))。
-- **阿里云百炼 GLM-5.2 / Qwen**:`base_url: https://dashscope.aliyuncs.com/compatible-mode/v1`,`api: chat`(默认)或 `api: responses`([Chat Completions 文档](https://help.aliyun.com/zh/model-studio/compatibility-of-openai-with-dashscope) / [Responses API 文档](https://help.aliyun.com/zh/model-studio/compatibility-with-openai-responses-api))。已验证的合法 model id:`glm-5.2`、`qwen3.7-max`、`qwen3-max` 等。
+- **DeepSeek V4 Flash / Pro**：`base_url: https://api.deepseek.com`，默认 `api: responses`。其 Responses 实现支持 function tools、reasoning Items 和语义化 SSE，但不支持 `previous_response_id`、`conversation`、`store` 或 background（[官方兼容性明细](https://api-docs.deepseek.com/zh-cn/guides/responses_api/)）。
+- **Kimi Code K3**：`id: openai:k3`，`base_url: https://api.kimi.com/coding/v1`，默认 `api: responses`；K3 已验证支持 `input_image`，应声明 `input_modalities: [text, image]`；需要回退时显式 `api: chat`（[Kimi K3 模型能力](https://www.kimi.com/code/docs/kimi-code/models.html) / [provider 协议配置](https://www.kimi.com/code/docs/kimi-code-cli/configuration/providers.html#openai-responses)）。
+- **阿里云百炼 GLM-5.2 / Qwen**：`base_url: https://dashscope.aliyuncs.com/compatible-mode/v1`，默认 `api: responses`；旧 Chat 路径可显式设 `api: chat`（[Chat Completions 文档](https://help.aliyun.com/zh/model-studio/compatibility-of-openai-with-dashscope) / [Responses API 文档](https://help.aliyun.com/zh/model-studio/compatibility-with-openai-responses-api)）。已验证的合法 model id：`glm-5.2`、`qwen3.7-max`、`qwen3-max` 等。
+
+### 本地 oMLX / Qwen3.8
+
+oMLX 也作为 OpenAI-compatible provider 配置，不要使用固定走 Chat Completions 的
+`ollama:` 前缀。模型 `Qwen3.8-27B-4bit` 已在 oMLX 0.6.2 上完成 `/v1/responses`
+非流式、SSE 流式、reasoning Item、function call 和 Pydantic AI 工具回传测试：
+
+```yaml
+agent:
+  models:
+    omlx-qwen3.8-27b-4bit:
+      id: openai:Qwen3.8-27B-4bit
+      api_key_env: OMLX_API_KEY
+      base_url: http://127.0.0.1:8091/v1
+      api: responses
+      input_modalities: [text, image]
+      context:
+        window_tokens: 262144
+        max_output_tokens: 32768
+        tokenizer: {kind: conservative}
+      settings: {max_tokens: 32768}
+```
+
+`id` 必须使用 oMLX `GET /v1/models` 返回的模型 ID（本机返回
+`Qwen3.8-27B-4bit`），不是 Hugging Face 仓库路径。端口和每次请求的输出预算应按本机 oMLX
+设置调整；启动后执行 `/model omlx-qwen3.8-27b-4bit` 即可切换。
 
 模型必须原生支持 function/tool calling,才能自主使用工具。
 

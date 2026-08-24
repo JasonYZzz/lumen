@@ -48,17 +48,27 @@ class ModelSettingsConfig(StrictModel):
     api_key_env: str | None = None
     api_key: str | None = Field(default=None, exclude=True, repr=False)
     base_url: str | None = None
-    # OpenAI-compatible API path selector. ``chat`` = /chat/completions,
-    # ``responses`` = /responses (阿里云百炼 Responses API, OpenAI Responses API).
+    # OpenAI-compatible API path selector. ``responses`` = /responses (the
+    # default for OpenAI-compatible providers), ``chat`` = /chat/completions.
     # Accepts aliases used by external tools (openai-completions, openai-responses,
-    # chat-completions) for paste-friendly config. When unset, the legacy default
-    # applies: a custom base_url selects chat, the default OpenAI endpoint selects
-    # responses.
+    # chat-completions) for paste-friendly config. ``None`` remains accepted for
+    # old or generated configs and resolves to Responses as well.
     api: Literal["chat", "responses", "openai-completions", "openai-responses", "chat-completions"] | None = (
-        None
+        "responses"
     )
     settings: dict[str, Any] = Field(default_factory=dict)
     context: ModelContextOverride = Field(default_factory=ModelContextOverride)
+    input_modalities: tuple[Literal["text", "image"], ...] = ("text",)
+
+    @field_validator("input_modalities")
+    @classmethod
+    def validate_input_modalities(
+        cls, value: tuple[Literal["text", "image"], ...]
+    ) -> tuple[Literal["text", "image"], ...]:
+        normalized = tuple(dict.fromkeys(value))
+        if "text" not in normalized:
+            raise ValueError("input_modalities must include 'text'")
+        return normalized
 
 
 class LimitsConfig(StrictModel):

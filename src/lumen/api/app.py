@@ -70,6 +70,7 @@ from lumen.application import (
     SetTranscriptDensity,
     StartLiveSession,
     StartRun,
+    StoreAttachment,
     UpsertModelConfiguration,
     WaivePlanVerification,
     WorkspaceBusyError,
@@ -151,6 +152,7 @@ def _camel_configuration(raw: dict[str, Any]) -> dict[str, Any]:
                 "apiKeyEnv": model["api_key_env"],
                 "settings": model["settings"],
                 "context": model["context"],
+                "inputModalities": model.get("input_modalities", ("text",)),
                 "isDefault": model["is_default"],
                 "source": model["source"],
                 "authKind": model["auth_kind"],
@@ -264,6 +266,7 @@ def create_web_app(
             "workspace": raw["workspace"],
             "activeModel": raw["active_model"],
             "modelId": raw["model_id"],
+            "inputModalities": raw["input_modalities"],
             "availableModels": raw["available_models"],
             "approvalMode": raw["approval_mode"],
             "collaborationMode": raw["collaboration_mode"],
@@ -392,11 +395,39 @@ def create_web_app(
 
     @app.post("/api/v1/sessions/{session_id}/runs", status_code=202)
     async def start_run(session_id: str, body: StartRunBody) -> dict[str, str]:
-        result = await host.dispatch(StartRun(session_id, body.input, body.client_request_id))
+        result = await host.dispatch(
+            StartRun(
+                session_id,
+                body.input,
+                body.client_request_id,
+                attachments=tuple(item.model_dump() for item in body.attachments),
+            )
+        )
         return {
             "runId": cast(Any, result).run_id,
             "sessionId": cast(Any, result).session_id,
             "status": cast(Any, result).status,
+        }
+
+    @app.post("/api/v1/attachments", status_code=201)
+    async def store_attachment(request: Request, filename: str) -> dict[str, Any]:
+        content_length = request.headers.get("content-length")
+        if content_length is not None:
+            try:
+                if int(content_length) > 20 * 1024 * 1024:
+                    raise InvalidStateError("image attachment exceeds 20971520 bytes")
+            except ValueError as error:
+                raise InvalidStateError("invalid Content-Length header") from error
+        media_type = request.headers.get("content-type", "").split(";", 1)[0].strip().lower()
+        content = await request.body()
+        result = await host.dispatch(StoreAttachment(filename, media_type, content))
+        attachment = dict(cast(Any, result).data["attachment"])
+        return {
+            "artifactRef": attachment["artifact_ref"],
+            "kind": attachment["kind"],
+            "mediaType": attachment["media_type"],
+            "filename": attachment["filename"],
+            "byteSize": attachment["byte_size"],
         }
 
     @app.post("/api/v1/sessions/{session_id}/live", status_code=201)
@@ -635,7 +666,14 @@ def create_web_app(
 
     @app.post("/api/v1/runs/{run_id}/input")
     async def queue_input(run_id: str, body: QueueInputBody) -> dict[str, Any]:
-        result = await host.dispatch(QueueRunInput(run_id, body.text, body.mode))
+        result = await host.dispatch(
+            QueueRunInput(
+                run_id,
+                body.text,
+                body.mode,
+                attachments=tuple(item.model_dump() for item in body.attachments),
+            )
+        )
         return {"status": cast(Any, result).status, **cast(Any, result).data}
 
     @app.post("/api/v1/runs/{run_id}/input/dequeue")

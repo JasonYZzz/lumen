@@ -12,8 +12,8 @@ agent:
     deepseek-v4-flash:
       id: openai:deepseek-v4-flash
       api_key_env: DEEPSEEK_API_KEY
-      base_url: https://api.deepseek.com/v1
-      api: chat                 # OpenAI-compatible /chat/completions path
+      base_url: https://api.deepseek.com
+      api: responses            # 默认路径；DeepSeek Responses 是无状态的部分兼容实现
       context:
         # Exact ID from src/lumen/context/profiles.py. The profile supplies
         # window_tokens=1000000 and max_output_tokens=384000.
@@ -29,14 +29,15 @@ agent:
       id: openai:glm-5.2
       api_key_env: DASHSCOPE_API_KEY
       base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
-      api: chat                 # 阿里云百炼 Chat Completions(最稳)
+      api: responses
       context:
         profile: glm-5.2        # 部署端输出上限可用 max_output_tokens 显式覆盖
     kimi-k3:
-      id: openai:kimi-k3
+      id: openai:k3
       api_key_env: KIMI_API_KEY
-      base_url: https://api.moonshot.cn/v1
-      api: chat
+      base_url: https://api.kimi.com/coding/v1
+      api: responses
+      input_modalities: [text, image]
       context:
         profile: kimi-k3
         max_output_tokens: 65536 # 按实际部署能力显式配置
@@ -50,7 +51,21 @@ agent:
       id: openai:qwen3-max
       api_key_env: DASHSCOPE_API_KEY
       base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
-      api: responses            # 阿里云百炼 Responses API(可选;不开 previous_response_id/内置工具)
+      api: responses            # 状态和工具仍由 Lumen 管理
+    omlx-qwen3.8-27b-4bit:
+      # oMLX uses the model ID returned by GET /v1/models, not the Hugging Face repo path.
+      id: openai:Qwen3.8-27B-4bit
+      api_key_env: OMLX_API_KEY
+      base_url: http://127.0.0.1:8091/v1
+      api: responses
+      input_modalities: [text, image]
+      context:
+        window_tokens: 262144
+        max_output_tokens: 32768
+        tokenizer:
+          kind: conservative
+      settings:
+        max_tokens: 32768
   # Legacy single-model form is still accepted. Use either `model:` or
   # `models:`, never both.
   # model:

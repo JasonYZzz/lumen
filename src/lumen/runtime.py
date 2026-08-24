@@ -6,7 +6,7 @@ import json
 import time
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from contextvars import ContextVar
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from typing import Any, Literal, cast
 from uuid import uuid4
 from xml.sax.saxutils import escape
@@ -31,11 +31,17 @@ from pydantic_ai import (
 from pydantic_ai.capabilities import AbstractCapability, HandleDeferredToolCalls
 from pydantic_ai.exceptions import IncompleteToolCall, UnexpectedModelBehavior, UsageLimitExceeded
 from pydantic_ai.messages import (
+    BinaryContent,
     ModelMessage,
+    ModelRequest,
+    ModelRequestPart,
+    TextContent,
     TextPart,
     TextPartDelta,
     ThinkingPart,
     ThinkingPartDelta,
+    UserContent,
+    UserPromptPart,
 )
 from pydantic_ai.models import Model, ModelRequestContext
 from pydantic_ai.settings import ModelSettings
@@ -43,6 +49,12 @@ from pydantic_ai.tools import DeferredToolApprovalResult
 from pydantic_ai.toolsets import AbstractToolset
 from pydantic_ai.usage import RunUsage
 
+from lumen.attachments import (
+    AttachmentRef,
+    AttachmentStore,
+    attachment_from_marker,
+    attachment_marker,
+)
 from lumen.completion import CompletionGate, CompletionPolicy
 from lumen.config import LimitsConfig
 from lumen.context import (
@@ -588,6 +600,7 @@ class AgentRuntime:
         clarification_clearer: ClarificationClearer | None = None,
         hooks: HookBus | None = None,
         tool_presenter: ToolPresentationCatalog | None = None,
+        attachment_store: AttachmentStore | None = None,
     ) -> None:
         self.limits = limits
         self.tool_metadata = tool_metadata
@@ -604,6 +617,7 @@ class AgentRuntime:
         self.interactive_queue = InteractiveMessageQueue()
         self.hooks = hooks
         self.tool_presenter = tool_presenter or ToolPresentationCatalog()
+        self.attachment_store = attachment_store
         self._clarification_loader = clarification_loader
         self._clarification_clearer = clarification_clearer
         self._clarification_gate = ClarificationGate(clarification_setter)
@@ -690,6 +704,7 @@ class AgentRuntime:
         force_compaction: bool = False,
         recovery_receipts: Sequence[Mapping[str, object]] = (),
         completion_policy: CompletionPolicy | None = None,
+        attachments: Sequence[AttachmentRef] = (),
     ) -> RunOutcome:
         await emit(RunStarted(prompt))
         resolved_session_id = session_id or "default"
@@ -718,6 +733,7 @@ class AgentRuntime:
                 f'<clarification-answer question-id="{escape(previous_clarification.id)}">\n'
                 f"{escape(prompt)}\n</clarification-answer>"
             )
+        provider_prompt = self._provider_prompt(prompt, attachments)
         self.controller.start(plan or PlanState(), emit)
         self._completion_policy = completion_policy or CompletionPolicy()
         self._last_completion_gate_issues = []
@@ -799,6 +815,7 @@ class AgentRuntime:
             context_estimate = envelope.budget.used_tokens if envelope.budget is not None else 0
         else:
             active_history_input = history
+        provider_history_input = self._provider_history(active_history_input)
 
         async def handle_deferred(_ctx: object, requests: DeferredToolRequests) -> DeferredToolResults | None:
             if not requests.approvals:
@@ -958,8 +975,8 @@ class AgentRuntime:
                     )
                     with self.agent.parallel_tool_call_execution_mode(scheduling):
                         async with self.agent.run_stream_events(
-                            prompt,
-                            message_history=active_history_input,
+                            provider_prompt,
+                            message_history=provider_history_input,
                             usage_limits=limits,
                             usage=run_usage,
                             capabilities=[
@@ -985,7 +1002,11 @@ class AgentRuntime:
                                 recovery,
                                 HandleDeferredToolCalls(handle_deferred),  # type: ignore[arg-type]
                                 RecoverableToolErrors(),
-                                InteractiveInputCapability(self.interactive_queue, emit),
+                                InteractiveInputCapability(
+                                    self.interactive_queue,
+                                    emit,
+                                    self._provider_prompt,
+                                ),
                             ],
                         ) as stream:
                             async for event in stream:
@@ -1257,7 +1278,7 @@ class AgentRuntime:
             # active history (the model-consumed envelope plus the new messages).
             # The full raw history is still preserved by the caller via the
             # session repository.
-            new_messages = result.new_messages()
+            new_messages = self._canonical_messages(result.new_messages(), attachments)
             if envelope is not None and self.context_engine is not None:
                 transition = await self.context_engine.commit(
                     ContextCommit(
@@ -1358,6 +1379,104 @@ class AgentRuntime:
                 message = "completion_gate_failed: " + "; ".join(self._last_completion_gate_issues)
             await emit(RunFailed(message))
             raise attach_partial_outcome(error, _build_partial("failed", message, retryable=False)) from None
+
+    def _provider_prompt(
+        self,
+        prompt: str,
+        attachments: Sequence[AttachmentRef],
+    ) -> str | list[UserContent]:
+        if not attachments:
+            return prompt
+        if self.attachment_store is None:
+            raise ValueError("image attachments are unavailable for this runtime")
+        content: list[UserContent] = [TextContent(prompt)]
+        for attachment in attachments:
+            content.extend(
+                (
+                    TextContent(f"Attached image {attachment.filename!r}:"),
+                    BinaryContent(
+                        self.attachment_store.read(attachment),
+                        media_type=attachment.media_type,
+                        identifier=attachment.artifact_ref,
+                    ),
+                )
+            )
+        return content
+
+    def _provider_history(self, messages: Sequence[ModelMessage]) -> list[ModelMessage]:
+        """Resolve canonical attachment markers only at the Provider boundary."""
+
+        if self.attachment_store is None:
+            return list(messages)
+        resolved: list[ModelMessage] = []
+        for message in messages:
+            if not isinstance(message, ModelRequest):
+                resolved.append(message)
+                continue
+            parts: list[ModelRequestPart] = []
+            for part in message.parts:
+                if not isinstance(part, UserPromptPart) or isinstance(part.content, str):
+                    parts.append(part)
+                    continue
+                content: list[UserContent] = []
+                for item in part.content:
+                    if isinstance(item, str):
+                        marker_text = item
+                    elif isinstance(item, TextContent):
+                        marker_text = item.content
+                    else:
+                        marker_text = None
+                    attachment = (
+                        attachment_from_marker(marker_text) if marker_text is not None else None
+                    )
+                    if attachment is None:
+                        content.append(item)
+                        continue
+                    content.extend(
+                        (
+                            TextContent(f"Attached image {attachment.filename!r}:"),
+                            BinaryContent(
+                                self.attachment_store.read(attachment),
+                                media_type=attachment.media_type,
+                                identifier=attachment.artifact_ref,
+                            ),
+                        )
+                    )
+                parts.append(replace(part, content=content))
+            resolved.append(replace(message, parts=parts))
+        return resolved
+
+    @staticmethod
+    def _canonical_messages(
+        messages: Sequence[ModelMessage],
+        attachments: Sequence[AttachmentRef],
+    ) -> list[ModelMessage]:
+        """Replace request-only image bytes with durable ArtifactRef markers."""
+
+        by_digest = {item.artifact_ref: item for item in attachments}
+        canonical: list[ModelMessage] = []
+        for message in messages:
+            if not isinstance(message, ModelRequest):
+                canonical.append(message)
+                continue
+            parts: list[ModelRequestPart] = []
+            for part in message.parts:
+                if not isinstance(part, UserPromptPart) or isinstance(part.content, str):
+                    parts.append(part)
+                    continue
+                content: list[UserContent] = []
+                for item in part.content:
+                    if not isinstance(item, BinaryContent):
+                        content.append(item)
+                        continue
+                    ref = f"sha256:{hashlib.sha256(item.data).hexdigest()}"
+                    attachment = by_digest.get(ref)
+                    if attachment is None:
+                        raise ValueError("provider returned unregistered binary content")
+                    content.append(TextContent(attachment_marker(attachment)))
+                parts.append(replace(part, content=content))
+            canonical.append(replace(message, parts=parts))
+        return canonical
 
     def _completion_gate_issues(self, plan: PlanState | None = None) -> list[str]:
         return self._completion_gate.evaluate(

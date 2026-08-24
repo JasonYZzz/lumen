@@ -1,6 +1,6 @@
 # 12. 当前实现审计
 
-> 审计日期：2026-08-19。本文是源码与契约测试的横截面，不是新的架构决策；Accepted 决策仍以 10、11 章为准。
+> 审计日期：2026-08-21。本文是源码与契约测试的横截面，不是新的架构决策；Accepted 决策仍以 10、11 章为准。
 
 ## 12.1 审计方法
 
@@ -68,6 +68,12 @@
 11. **能力与配置可解释但不双轨。** `capabilities_report()` 和 config resolution report 为 CLI/TUI/Web 提供脱敏只读投影，运行时仍以 Registry/Policy 与 `AppConfig` 为权威。
 12. **契约目录由源码生成。** catalog v2 覆盖配置、命令、事件、工具、Session 与关键不变量；CI 的 `python -m lumen.contracts --check` 阻止生成物漂移。
 13. **Architecture Atlas 不再复制第二套正文。** `DocumentInspector` 用一个 `open(path)` Interface 统一 Markdown、原文、源码、搜索和阅读历史；确定性 `content.generated.js` 只保存可重建证据快照，CI 的 `scripts/build_architecture_atlas.py --check` 在相关文档、源码、测试或生成契约变化时阻止旧 Web 内容通过。
+14. **TUI capability mutation 已收口到 Host。** Skill、MCP Prompt/Resource、Hook 与 Context control
+    不再直接操作 `ResourceManager` / `ContextEngine`；Web 与 TUI 共享同一 command/result Seam。
+15. **用户图片输入使用 ArtifactRef。** Web 上传、TUI 图片路径、交互队列和普通 run 共享
+    `AttachmentRef`；Runtime 仅在 Provider boundary 解析字节，并在持久化前恢复为引用 marker。
+    Session v9 turn 的可选 `attachments` 字段保存引用和有界 metadata，不保存 Base64；缺少显式
+    `input_modalities: [text, image]` 时在 Provider I/O 前安全失败。
 
 ## 12.5 兼容、安全与恢复结论
 
@@ -80,6 +86,9 @@
 - fork 不复制运行中执行；active/pending Agent 在新 Session 标为 `not_carried`。
 - Live 重启不恢复 Provider call；存在 pending 动作时进入 `reconciliation_required`。
 - completion 同时受 Plan evidence、TaskWorkspace verification 和 AgentOrchestrator unresolved state 阻止。
+- 图片限于 PNG/JPEG/GIF/WebP、单张 20 MiB、每个输入最多 8 张；Artifact 内容、声明 MIME、
+  magic signature 和 byte size 必须一致。Responses Adapter 映射为 `input_image`，显式 Chat
+  compatibility Adapter 映射为 `image_url`。
 
 ## 12.6 文档维护规则
 

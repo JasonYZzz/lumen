@@ -377,9 +377,15 @@
           <div class="event-bottom"><div class="node">EventJournal<small>内存有序事件流</small></div><span>→</span><div class="node mint">Session v9 Journal<small>只追加的类型化 JSONL records</small></div><span>→</span><div class="node">恢复 resume()<small>消息 · 计划 · checkpoint · Agent · Live</small></div></div>
         </figure>
         <div class="data-record glass">
-          <div><span>TurnRecord</span><code>user_input</code><code>status</code><code>messages</code><code>request_receipts[]</code></div>
+          <div><span>TurnRecord</span><code>user_input</code><code>status</code><code>messages</code><code>attachments[]</code><code>request_receipts[]</code></div>
           <div><span>Audit</span><code>approvals</code><code>usage</code><code>diagnostics</code><code>partial_text</code></div>
           <div><span>Recovery</span><code>active_prefix</code><code>summary</code><code>checkpoint</code><code>plan</code></div>
+        </div>
+        <div class="data-record glass" aria-label="客户端能力矩阵">
+          <div><span>Core shared</span><code>Session / Run / Approval</code><code>Skill / MCP / Context</code><code>AttachmentRef 图片</code></div>
+          <div><span>Web-only</span><code>Realtime voice</code><code>图片选择 / 拖放 / 剪贴板</code></div>
+          <div><span>TUI-only</span><code>! command</code><code>@图片路径 / 路径粘贴</code></div>
+          <div><span>Unsupported / Planned</span><code>终端二进制剪贴板</code><code>图片预览与裁剪</code></div>
         </div>
       </section>
 

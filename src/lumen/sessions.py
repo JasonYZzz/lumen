@@ -25,6 +25,7 @@ from lumen.agents.types import (
     AgentThreadState,
     SessionAgentState,
 )
+from lumen.attachments import AttachmentRef
 from lumen.collaboration import SessionSettingsState
 from lumen.context.session_state import SessionContextState
 from lumen.context.types import ProviderRequestReceipt
@@ -91,6 +92,7 @@ class TurnRecord:
     request_receipts: list[ProviderRequestReceipt] = field(
         default_factory=list[ProviderRequestReceipt]
     )
+    attachments: list[AttachmentRef] = field(default_factory=list[AttachmentRef])
 
 
 @dataclass(frozen=True, slots=True)
@@ -258,6 +260,7 @@ class SessionRepository:
                 provider_item_ids=turn.provider_item_ids,
                 live_metadata=turn.live_metadata,
                 request_receipts=turn.request_receipts,
+                attachments=turn.attachments,
             )
         self.append_session_settings(created.id, source.settings)
         if source.work_state.work_products or source.work_state.effects:
@@ -309,6 +312,7 @@ class SessionRepository:
         provider_item_ids: Sequence[str] = (),
         live_metadata: dict[str, Any] | None = None,
         request_receipts: Sequence[ProviderRequestReceipt] = (),
+        attachments: Sequence[AttachmentRef] = (),
     ) -> None:
         path = self._path(session_id)
         if not path.is_file():
@@ -329,6 +333,7 @@ class SessionRepository:
             "provider_item_ids": list(provider_item_ids),
             "live_metadata": dict(live_metadata or {}),
             "request_receipts": [item.model_dump(mode="json") for item in request_receipts],
+            "attachments": [item.model_dump(mode="json") for item in attachments],
         }
         if interaction_id is not None:
             record["interaction_id"] = interaction_id
@@ -351,6 +356,7 @@ class SessionRepository:
         user_input: str,
         interaction_id: str,
         plan: PlanState | None = None,
+        attachments: Sequence[AttachmentRef] = (),
     ) -> None:
         """Persist an accepted input before its run can produce side effects.
 
@@ -370,6 +376,7 @@ class SessionRepository:
                 TimelineEventRecord.from_event(RunStarted(user_input), sequence=1)
             ],
             interaction_id=interaction_id,
+            attachments=attachments,
         )
 
     def append_context_state(self, session_id: str, state: SessionContextState) -> None:
@@ -1214,6 +1221,10 @@ def _parse_turn(record: dict[str, Any], *, line_number: int) -> TurnRecord:
             request_receipts=[
                 ProviderRequestReceipt.model_validate(item)
                 for item in list(record.get("request_receipts") or [])
+            ],
+            attachments=[
+                AttachmentRef.model_validate(item)
+                for item in list(record.get("attachments") or [])
             ],
         )
     except (KeyError, TypeError, ValueError) as error:

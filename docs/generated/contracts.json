@@ -1013,7 +1013,7 @@
                 "type": "null"
               }
             ],
-            "default": null,
+            "default": "responses",
             "title": "Api"
           },
           "api_key": {
@@ -1058,6 +1058,20 @@
           "id": {
             "title": "Id",
             "type": "string"
+          },
+          "input_modalities": {
+            "default": [
+              "text"
+            ],
+            "items": {
+              "enum": [
+                "text",
+                "image"
+              ],
+              "type": "string"
+            },
+            "title": "Input Modalities",
+            "type": "array"
           },
           "settings": {
             "additionalProperties": true,
@@ -3168,6 +3182,47 @@
         "title": "ApprovePlan",
         "type": "object"
       },
+      "AttachmentRef": {
+        "additionalProperties": false,
+        "description": "Provider-neutral reference to one immutable user attachment.",
+        "properties": {
+          "artifact_ref": {
+            "pattern": "^sha256:[0-9a-f]{64}$",
+            "title": "Artifact Ref",
+            "type": "string"
+          },
+          "byte_size": {
+            "maximum": 20971520,
+            "minimum": 1,
+            "title": "Byte Size",
+            "type": "integer"
+          },
+          "filename": {
+            "maxLength": 255,
+            "minLength": 1,
+            "title": "Filename",
+            "type": "string"
+          },
+          "kind": {
+            "const": "image",
+            "default": "image",
+            "title": "Kind",
+            "type": "string"
+          },
+          "media_type": {
+            "title": "Media Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "artifact_ref",
+          "media_type",
+          "filename",
+          "byte_size"
+        ],
+        "title": "AttachmentRef",
+        "type": "object"
+      },
       "CancelChildRun": {
         "properties": {
           "child_id": {
@@ -3549,6 +3604,25 @@
         "title": "GetConfiguration",
         "type": "object"
       },
+      "ImportAttachmentPath": {
+        "properties": {
+          "path": {
+            "title": "Path",
+            "type": "string"
+          },
+          "type": {
+            "const": "import_attachment_path",
+            "default": "import_attachment_path",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "path"
+        ],
+        "title": "ImportAttachmentPath",
+        "type": "object"
+      },
       "InterruptAgent": {
         "properties": {
           "agent_id": {
@@ -3763,6 +3837,30 @@
         "title": "ListMcpPrompts",
         "type": "object"
       },
+      "ListMcpResources": {
+        "properties": {
+          "session_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Session Id"
+          },
+          "type": {
+            "const": "list_mcp_resources",
+            "default": "list_mcp_resources",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "title": "ListMcpResources",
+        "type": "object"
+      },
       "ListSessions": {
         "properties": {
           "include_archived": {
@@ -3782,6 +3880,22 @@
       },
       "QueueRunInput": {
         "properties": {
+          "attachments": {
+            "default": [],
+            "items": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/AttachmentRef"
+                },
+                {
+                  "additionalProperties": true,
+                  "type": "object"
+                }
+              ]
+            },
+            "title": "Attachments",
+            "type": "array"
+          },
           "mode": {
             "enum": [
               "steer",
@@ -4185,6 +4299,22 @@
       },
       "StartRun": {
         "properties": {
+          "attachments": {
+            "default": [],
+            "items": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/AttachmentRef"
+                },
+                {
+                  "additionalProperties": true,
+                  "type": "object"
+                }
+              ]
+            },
+            "title": "Attachments",
+            "type": "array"
+          },
           "client_request_id": {
             "title": "Client Request Id",
             "type": "string"
@@ -4222,6 +4352,36 @@
           "client_request_id"
         ],
         "title": "StartRun",
+        "type": "object"
+      },
+      "StoreAttachment": {
+        "properties": {
+          "content": {
+            "format": "binary",
+            "title": "Content",
+            "type": "string"
+          },
+          "filename": {
+            "title": "Filename",
+            "type": "string"
+          },
+          "media_type": {
+            "title": "Media Type",
+            "type": "string"
+          },
+          "type": {
+            "const": "store_attachment",
+            "default": "store_attachment",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "filename",
+          "media_type",
+          "content"
+        ],
+        "title": "StoreAttachment",
         "type": "object"
       },
       "UpsertModelConfiguration": {
@@ -4423,6 +4583,9 @@
         "$ref": "#/$defs/ListMcpPrompts"
       },
       {
+        "$ref": "#/$defs/ListMcpResources"
+      },
+      {
         "$ref": "#/$defs/ListHooks"
       },
       {
@@ -4433,6 +4596,12 @@
       },
       {
         "$ref": "#/$defs/ContextControl"
+      },
+      {
+        "$ref": "#/$defs/StoreAttachment"
+      },
+      {
+        "$ref": "#/$defs/ImportAttachmentPath"
       }
     ]
   },
@@ -4619,6 +4788,13 @@
             "title": "Collaboration Mode",
             "type": "string"
           },
+          "input_modalities": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Input Modalities",
+            "type": "array"
+          },
           "live_enabled": {
             "default": false,
             "title": "Live Enabled",
@@ -4673,6 +4849,7 @@
           "workspace",
           "active_model",
           "model_id",
+          "input_modalities",
           "available_models",
           "approval_mode",
           "collaboration_mode",

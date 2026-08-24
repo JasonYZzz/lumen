@@ -24,8 +24,9 @@ from textual.lazy import Lazy
 from textual.widgets import Static
 from textual.worker import Worker
 
-from lumen.application import WorkspaceHost
+from lumen.application import ImportAttachmentPath, WorkspaceHost
 from lumen.approval import ApprovalMode, ApprovalPolicy
+from lumen.attachments import AttachmentRef
 from lumen.branding import FRAMEWORK_NAME
 from lumen.collaboration import CollaborationMode, apply_collaboration_context
 from lumen.config import AppConfig
@@ -607,6 +608,7 @@ class LumenApp(
         if text.startswith("!"):
             await self._handle_shell_input(text)
             return
+        attachments = await self._import_image_paths(text)
         if (
             self._plan_review_revision is not None
             and self._collaboration_mode is CollaborationMode.PLAN
@@ -629,7 +631,12 @@ class LumenApp(
             expanded = self._apply_permission_mode_context(expanded)
             try:
                 await self.coordinator.enqueue_interactive(
-                    RunInput(display_text=text, model_prompt=expanded),
+                    RunInput(
+                        display_text=text,
+                        model_prompt=expanded,
+                        attachments=attachments,
+                    ),
+                    # Image bytes stay in ArtifactStore; the queue carries refs.
                     queue_mode,
                 )
             except (QueueLimitError, RuntimeError) as error:
@@ -655,10 +662,48 @@ class LumenApp(
             Workspace(self.resources.workspace),
         )
         self.current_worker = self.run_worker(
-            self._run_prompt(RunInput(display_text=text, model_prompt=expanded, is_retry=is_retry)),
+            self._run_prompt(
+                RunInput(
+                    display_text=text,
+                    model_prompt=expanded,
+                    is_retry=is_retry,
+                    attachments=attachments,
+                )
+            ),
             name="agent-run",
             exclusive=True,
         )
+
+    async def _import_image_paths(self, text: str) -> tuple[AttachmentRef, ...]:
+        """Resolve @image mentions and pasted image paths through WorkspaceHost."""
+
+        supported_suffixes = {".gif", ".jpeg", ".jpg", ".png", ".webp"}
+        candidates: list[tuple[str, bool]] = []
+        for quoted, bare in re.findall(r'@"([^"\n]+)"|(?:^|\s)@([^\s]+)', text):
+            candidates.append(((quoted or bare).rstrip(".,;"), True))
+        try:
+            tokens = shlex.split(text)
+        except ValueError:
+            tokens = []
+        for token in tokens:
+            path = token.removeprefix("@").rstrip(".,;")
+            if any(path.lower().endswith(suffix) for suffix in supported_suffixes):
+                candidates.append((path, token.startswith("@")))
+        attachments: list[AttachmentRef] = []
+        seen: set[str] = set()
+        for path, explicit in candidates:
+            if path in seen or not any(
+                path.lower().endswith(suffix) for suffix in supported_suffixes
+            ):
+                continue
+            seen.add(path)
+            try:
+                result = await self.workspace_host.dispatch(ImportAttachmentPath(path))
+                attachments.append(AttachmentRef.model_validate(result.data["attachment"]))
+            except Exception as error:
+                if explicit:
+                    await self._append_system(f"Cannot attach image {path!r}: {error}")
+        return tuple(attachments)
 
     async def _handle_shell_input(self, text: str) -> None:
         """Execute explicit ``! argv`` input through the same fail-closed OS sandbox."""
@@ -784,6 +829,7 @@ class LumenApp(
             display_text=run_input.display_text,
             model_prompt=self._apply_permission_mode_context(run_input.model_prompt),
             is_retry=run_input.is_retry,
+            attachments=run_input.attachments,
         )
         try:
             await self.coordinator.set_modes(
@@ -791,6 +837,32 @@ class LumenApp(
                 self._collaboration_mode.value,
             )
             outcome = await self.coordinator.run(effective_input, emit, approve, approve_batch)
+        except asyncio.CancelledError:
+            self._resolve_all_pending_approvals(approved=False, message="run cancelled")
+            raise
+        else:
+            if outcome is None:
+                self._resolve_all_pending_approvals(approved=False, message="run failed")
+            await self._apply_coordinator_state(self.coordinator.state)
+        finally:
+            self._refresh_topbar()
+
+    async def _consume_started_run(self, run_id: str) -> None:
+        """Render a run started by a non-text WorkspaceHost command."""
+
+        async def emit(event: RunEvent) -> None:
+            await self.render_event(event)
+
+        async def approve(request: ApprovalRequest) -> ToolApproval:
+            return await self._await_inline_approval(request)
+
+        async def approve_batch(
+            requests: tuple[ApprovalRequest, ...],
+        ) -> dict[str, ToolApproval]:
+            return await self._await_inline_approval_batch(requests)
+
+        try:
+            outcome = await self.coordinator.consume_run(run_id, emit, approve, approve_batch)
         except asyncio.CancelledError:
             self._resolve_all_pending_approvals(approved=False, message="run cancelled")
             raise

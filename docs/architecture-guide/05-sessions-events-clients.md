@@ -78,6 +78,11 @@ Textual UI 的核心职责是把 `RunEvent` 投影为 timeline：
 - prompt history、`@file` 和 `/` 补全；
 - 离开底部后停止自动滚动，保留阅读位置。
 
+Skill、MCP Prompt/Resource、Hook 列表与 Context control 都通过 `WorkspaceHost` command；TUI
+不再直接调用 `ResourceManager` 或 `ContextEngine` 的 mutation Interface。普通图片输入支持工作区内
+`@path.png` 和终端粘贴出的图片路径，两者先经 `ImportAttachmentPath` 转成 canonical
+`AttachmentRef`。
+
 ## 5.6 Web adapter
 
 FastAPI 提供 bootstrap、session、run、approval、context 和文件搜索端点。安全策略包括：
@@ -86,7 +91,11 @@ FastAPI 提供 bootstrap、session、run、approval、context 和文件搜索端
 - 一次性启动 token 换取 HttpOnly cookie；
 - SSE 通过 sequence 恢复；
 - 浏览器刷新不取消后台 run；
+- bootstrap 投影当前模型的 `inputModalities`，Web 在上传前禁用不受支持的图片输入；
 - OpenAPI schema 生成 TypeScript contract，CI 检查漂移。
+
+Web Composer 支持图片选择、拖放和剪贴板图片。浏览器使用原始二进制请求上传，Host 校验格式、大小和
+magic signature 后写入 ArtifactStore；`StartRun` / `QueueRunInput` 只携带 AttachmentRef。
 
 Session 管理端点只向 `WorkspaceHost` 派发 command。历史列表默认过滤归档、删除墓碑和没有 turn/显式标题的空 Session；归档列表可显式请求。活动 run、未处理 Agent 或未验证 Work Product 会阻止归档与删除，Web Adapter 不直接修改 journal。
 
@@ -95,3 +104,20 @@ Session 管理端点只向 `WorkspaceHost` 派发 command。历史列表默认�
 Web Adapter 将每个用户 turn 的 timeline 投影为两层：assistant 最终输出、计划、澄清与错误属于前景阅读层；thinking、commentary、progress、Tool、MCP、Skill、Agent 和 Work Product 属于可展开的活动层。活动层在执行或审批中展开，在成功 terminal 后默认折叠。该分组是纯客户端 presentation，不修改事件顺序、Session journal 或恢复权威。
 
 CLI `lumen capabilities --json`、TUI `/context capabilities` 与 Web `GET /api/v1/capabilities` 消费同一个 `ResourceManager.capabilities_report()` 只读 Interface。它解释 Tool、Skill、MCP server 与 Agent Profile 的实际可见性、来源、Risk、EffectKind、ToolConcurrency、审批决定、Sandbox mode 与 schema digest；该报告不参与权限决策，因此不会形成第二套 capability authority。
+
+## 5.7 客户端能力矩阵
+
+| 能力 | Core shared | Web Adapter | TUI Adapter | 分类 / 说明 |
+|---|---|---|---|---|
+| Session、run、审批、Plan、Agent、Work Product | `WorkspaceHost` command/event | FastAPI + SSE | `HostSessionAdapter` | **Core shared** |
+| Skill、MCP Prompt/Resource、Context control | 同一 Host command | HTTP control endpoint | slash command | **Core shared**；TUI 无内部 mutation 旁路 |
+| 文本与交互队列 | `StartRun` / `QueueRunInput` | Composer | PromptEditor | **Core shared** |
+| 图片输入 | AttachmentRef + ArtifactStore + Runtime Adapter | 文件选择、拖放、剪贴板 | `@path`、粘贴图片路径 | **Core shared**；UI 获取方式不同 |
+| Responses / Chat 图片 wire format | `BinaryContent` provider boundary | 无协议分支 | 无协议分支 | **Core shared**；Responses=`input_image`，Chat=`image_url` |
+| Realtime voice | Live canonical Interface | WebRTC / WebSocket controls | 无 | **Web-only** |
+| 直接 `! command` | Sandbox / approval | 无 | PromptEditor shortcut | **TUI-only** |
+| 浏览器原生图片预览/裁剪 | 无 | 当前仅附件 chip | 无 | **Planned** |
+| 终端原生二进制剪贴板协议 | 无 | 不适用 | 终端通常只提供路径/文本 | **Unsupported**；使用图片路径 |
+
+矩阵中的 “Core shared” 表示状态和行为权威在共享 Module；Web-only/TUI-only 只描述 transport 或交互
+能力，不能反向成为第二套 Runtime 状态。

@@ -22,6 +22,7 @@ from lumen.agents.compat import LegacyChildRunAdapter
 from lumen.agents.orchestrator import AgentOrchestrator
 from lumen.agents.profiles import AgentProfileLoader
 from lumen.agents.runtime_factory import NativeAgentRuntimeFactory
+from lumen.attachments import AttachmentStore
 from lumen.branding import FRAMEWORK_NAME
 from lumen.completion import CompletionGate
 from lumen.config import AppConfig, ModelSettingsConfig
@@ -188,6 +189,7 @@ class ResourceManager:
         # so legacy mutations can cross the same seam without changing their
         # public interface.
         self._artifact_store = ArtifactStore(Path.home() / ".lumen" / "artifacts")
+        self.artifact_store = self._artifact_store
         self.session_repository = SessionRepository(config.sessions.directory)
         self.task_workspace = TaskWorkspace(
             self.workspace,
@@ -1212,6 +1214,7 @@ class ResourceManager:
                 clarification_clearer=self.clear_clarification,
                 hooks=self.hooks,
                 tool_presenter=self.tool_presenter,
+                attachment_store=AttachmentStore(self.artifact_store),
             )
             agent_context = self.runtime.agent
             await agent_context.__aenter__()

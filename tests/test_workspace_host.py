@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 from collections.abc import Sequence
 from decimal import Decimal
 from pathlib import Path
@@ -8,7 +9,7 @@ from types import SimpleNamespace
 
 import pytest
 from pydantic_ai import Tool
-from pydantic_ai.messages import ModelMessage, ModelRequest, ToolReturnPart
+from pydantic_ai.messages import BinaryContent, ModelMessage, ModelRequest, ToolReturnPart, UserPromptPart
 from pydantic_ai.models.function import AgentInfo, DeltaToolCall, FunctionModel
 
 from lumen.agents import AgentConfigSnapshot, AgentThreadRef, AgentThreadState
@@ -21,6 +22,7 @@ from lumen.application import (
     DecideApproval,
     DeleteSession,
     EventEnvelope,
+    InvalidStateError,
     InvokeSkill,
     ListSessions,
     RenameSession,
@@ -28,10 +30,12 @@ from lumen.application import (
     SetCollaborationMode,
     SetSessionArchived,
     StartRun,
+    StoreAttachment,
     WaivePlanVerification,
     WorkspaceBusyError,
     WorkspaceHost,
 )
+from lumen.attachments import AttachmentStore
 from lumen.config import LimitsConfig
 from lumen.context import ArtifactStore
 from lumen.plan import EvidenceKind, EvidenceReceipt, PlanState, PlanStep, StepStatus
@@ -44,9 +48,16 @@ from lumen.work_products import EffectStatus, TaskWorkspace
 
 
 class LocalResources:
-    def __init__(self, root: Path, runtime: AgentRuntime) -> None:
+    def __init__(
+        self,
+        root: Path,
+        runtime: AgentRuntime,
+        *,
+        artifact_store: ArtifactStore | None = None,
+    ) -> None:
         self.workspace = root
         self.session_repository = SessionRepository(root / "sessions")
+        self.artifact_store = artifact_store or ArtifactStore(root / "artifacts")
         self.runtime = runtime
         self.approval_rules = ApprovalRuleStore(root, state_root=root / "state")
         self.config = SimpleNamespace(
@@ -65,7 +76,7 @@ class LocalResources:
         return None
 
     def active_model_config(self) -> SimpleNamespace:
-        return SimpleNamespace(id="test-model")
+        return SimpleNamespace(id="test-model", input_modalities=("text", "image"))
 
     def active_model_name(self) -> str:
         return "test"
@@ -98,6 +109,128 @@ def _runtime(output: str = "web ready") -> AgentRuntime:
         limits=LimitsConfig(),
         tool_metadata={},
     )
+
+
+async def test_workspace_host_sends_image_artifacts_without_persisting_base64(
+    tmp_path: Path,
+) -> None:
+    image_bytes = b"\x89PNG\r\n\x1a\n" + b"lumen-image-payload"
+    received_images: list[list[BinaryContent]] = []
+
+    async def stream(messages: list[ModelMessage], _info: AgentInfo):  # type: ignore[no-untyped-def]
+        call_images: list[BinaryContent] = []
+        for request in messages:
+            if not isinstance(request, ModelRequest):
+                continue
+            for user_part in request.parts:
+                if not isinstance(user_part, UserPromptPart) or isinstance(user_part.content, str):
+                    continue
+                call_images.extend(
+                    item for item in user_part.content if isinstance(item, BinaryContent)
+                )
+        received_images.append(call_images)
+        yield "image received"
+
+    artifact_store = ArtifactStore(tmp_path / "artifacts")
+    runtime = AgentRuntime(
+        model=FunctionModel(stream_function=stream),
+        tools=[],
+        toolsets=[],
+        instructions="help",
+        limits=LimitsConfig(),
+        tool_metadata={},
+        attachment_store=AttachmentStore(artifact_store),
+    )
+    resources = LocalResources(tmp_path, runtime, artifact_store=artifact_store)
+    host = WorkspaceHost(resources)  # type: ignore[arg-type]
+    await host.open()
+    try:
+        created = await host.dispatch(CreateSession())
+        stored = await host.dispatch(
+            StoreAttachment(
+                filename="diagram.png",
+                media_type="image/png",
+                content=image_bytes,
+            )
+        )
+        attachment = stored.data["attachment"]
+        started = await host.dispatch(
+            StartRun(
+                created.session_id,
+                "What is in this image?",
+                "image-request",
+                attachments=(attachment,),
+            )
+        )
+        _ = [event async for event in host.subscribe(started.run_id)]
+        follow_up = await host.dispatch(
+            StartRun(created.session_id, "Use the same image context.", "image-follow-up")
+        )
+        _ = [event async for event in host.subscribe(follow_up.run_id)]
+    finally:
+        await host.close()
+
+    assert [[image.data for image in call] for call in received_images] == [
+        [image_bytes],
+        [image_bytes],
+    ]
+    loaded = resources.session_repository.load(created.session_id)
+    assert loaded.turns[0].attachments[0].artifact_ref == attachment["artifact_ref"]
+    persisted = loaded.metadata.path.read_text(encoding="utf-8")
+    assert base64.b64encode(image_bytes).decode() not in persisted
+    assert attachment["artifact_ref"] in persisted
+
+
+async def test_workspace_host_rejects_images_before_provider_io_when_model_is_text_only(
+    tmp_path: Path,
+) -> None:
+    provider_called = False
+
+    async def stream(_messages: list[ModelMessage], _info: AgentInfo):  # type: ignore[no-untyped-def]
+        nonlocal provider_called
+        provider_called = True
+        yield "unexpected"
+
+    resources = LocalResources(
+        tmp_path,
+        AgentRuntime(
+            model=FunctionModel(stream_function=stream),
+            tools=[],
+            toolsets=[],
+            instructions="help",
+            limits=LimitsConfig(),
+            tool_metadata={},
+        ),
+    )
+    resources.active_model_config = lambda: SimpleNamespace(  # type: ignore[method-assign]
+        id="text-only",
+        input_modalities=("text",),
+    )
+    host = WorkspaceHost(resources)  # type: ignore[arg-type]
+    await host.open()
+    try:
+        created = await host.dispatch(CreateSession())
+        stored = await host.dispatch(
+            StoreAttachment(
+                filename="diagram.png",
+                media_type="image/png",
+                content=b"\x89PNG\r\n\x1a\ntext-only-gate",
+            )
+        )
+        with pytest.raises(InvalidStateError, match="does not declare image input support"):
+            await host.dispatch(
+                StartRun(
+                    created.session_id,
+                    "inspect",
+                    "text-only-image",
+                    attachments=(stored.data["attachment"],),
+                )
+            )
+    finally:
+        await host.close()
+
+    assert provider_called is False
+    assert resources.session_repository.load(created.session_id).turns == []
 
 
 async def test_workspace_host_runs_and_replays_a_session_through_its_public_interface(

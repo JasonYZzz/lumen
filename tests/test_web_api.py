@@ -11,9 +11,11 @@ from pydantic_ai.models.function import AgentInfo, FunctionModel
 
 from lumen.api import create_web_app
 from lumen.application import WorkspaceHost
+from lumen.attachments import AttachmentStore
 from lumen.completion import CompletionGate
 from lumen.config import LimitsConfig, LiveConfig, PermissionsConfig
 from lumen.configuration import ConfigurationConflictError
+from lumen.context import ArtifactStore
 from lumen.live.manager import LiveSessionManager
 from lumen.live.protocol import LiveCompletionControl, LiveMediaKind
 from lumen.live.testing import FakeRealtimeTransport
@@ -142,6 +144,7 @@ class ApiResources:
 
         self.workspace = root
         self.session_repository = SessionRepository(root / "sessions")
+        self.artifact_store = ArtifactStore(root / "artifacts")
         self.agent_orchestrator = ApiAgentOrchestrator()
         self.configuration = ApiConfiguration()
         self.runtime = AgentRuntime(
@@ -151,6 +154,7 @@ class ApiResources:
             instructions="help",
             limits=LimitsConfig(),
             tool_metadata={},
+            attachment_store=AttachmentStore(self.artifact_store),
         )
         self.config = SimpleNamespace(
             agent=SimpleNamespace(name="api-agent"),
@@ -168,7 +172,7 @@ class ApiResources:
         return None
 
     def active_model_config(self) -> SimpleNamespace:
-        return SimpleNamespace(id="test-model")
+        return SimpleNamespace(id="test-model", input_modalities=("text", "image"))
 
     def active_model_name(self) -> str:
         return "test"
@@ -303,6 +307,7 @@ def test_web_api_authenticates_and_streams_a_run(tmp_path: Path) -> None:
         bootstrap = client.get("/api/v1/bootstrap")
         assert bootstrap.status_code == 200
         assert bootstrap.json()["activeModel"] == "test"
+        assert bootstrap.json()["inputModalities"] == ["text", "image"]
         assert bootstrap.json()["approvalMode"] == "manual"
         assert bootstrap.json()["liveEnabled"] is False
 
@@ -347,10 +352,22 @@ def test_web_api_authenticates_and_streams_a_run(tmp_path: Path) -> None:
         assert created.status_code == 201
         session_id = created.json()["sessionId"]
 
+        uploaded = client.post(
+            "/api/v1/attachments?filename=diagram.png",
+            headers={**headers, "content-type": "image/png"},
+            content=b"\x89PNG\r\n\x1a\nweb-image",
+        )
+        assert uploaded.status_code == 201
+        assert uploaded.json()["artifactRef"].startswith("sha256:")
+
         started = client.post(
             f"/api/v1/sessions/{session_id}/runs",
             headers=headers,
-            json={"input": "hello", "clientRequestId": "web-request-1"},
+            json={
+                "input": "hello",
+                "clientRequestId": "web-request-1",
+                "attachments": [uploaded.json()],
+            },
         )
         assert started.status_code == 202
         run_id = started.json()["runId"]

@@ -1,0 +1,108 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1920" height="1080" viewBox="0 0 1920 1080" role="img" aria-labelledby="title desc">
+  <title id="title">Pi Agent 与 DeepSeek Harness 详细原理技术分析对比图</title>
+  <desc id="desc">从架构中心、状态权威、请求重建、持久化、工具调度、扩展生命周期、安全、压缩、多 Agent 与完成语义九个维度对比 Pi Agent 和 DeepSeek Harness。</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#08111d"/><stop offset=".5" stop-color="#101725"/><stop offset="1" stop-color="#09151c"/></linearGradient>
+    <linearGradient id="piGrad" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#ffb06e"/><stop offset="1" stop-color="#ff7248"/></linearGradient>
+    <linearGradient id="dsGrad" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#42dfbd"/><stop offset="1" stop-color="#4aa4ff"/></linearGradient>
+    <pattern id="grid" width="32" height="32" patternUnits="userSpaceOnUse"><path d="M32 0H0V32" fill="none" stroke="#a9bfd1" stroke-opacity=".045"/></pattern>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%"><feDropShadow dx="0" dy="10" stdDeviation="14" flood-color="#000" flood-opacity=".25"/></filter>
+    <style>
+      .sans{font-family:Inter,"SF Pro Display","PingFang SC","Microsoft YaHei",sans-serif}.mono{font-family:"SFMono-Regular",Consolas,"PingFang SC",monospace}
+      .h1{font-size:43px;font-weight:760;fill:#f5f8fb;letter-spacing:-1px}.sub{font-size:17px;fill:#95a8ba}.eyebrow{font-size:13px;font-weight:750;letter-spacing:2px;fill:#91a5b8}
+      .piHead{font-size:26px;font-weight:760;fill:#ff9a61}.dsHead{font-size:26px;font-weight:760;fill:#4ad7c3}.status{font-size:12px;font-weight:650;fill:#dfe7ee}.axis{font-size:13px;font-weight:750;letter-spacing:.7px;fill:#c5d0db}
+      .cardPi{fill:#211c1d;stroke:#6f4030;stroke-width:1.15}.cardDs{fill:#10232b;stroke:#2f5c62;stroke-width:1.15}.cardCore{fill:#121d2b;stroke:#314054;stroke-width:1.2}
+      .label{font-size:16px;font-weight:680;fill:#f1f5f8}.body{font-size:13px;fill:#a9b7c6}.micro{font-size:11px;fill:#788da3}.accentPi{font-size:13px;font-weight:650;fill:#ffad7c}.accentDs{font-size:13px;font-weight:650;fill:#75e4d1}.bottomTitle{font-size:20px;font-weight:720;fill:#f2f6f9}.bottomBody{font-size:14px;fill:#afbfcd}
+      .line{stroke:#314054;stroke-width:1}.dotPi{fill:#ff8752}.dotDs{fill:#48d8c2}
+    </style>
+  </defs>
+  <rect width="1920" height="1080" fill="url(#bg)"/><rect width="1920" height="1080" fill="url(#grid)"/>
+  <circle cx="220" cy="-90" r="390" fill="#ff7848" opacity=".045"/><circle cx="1730" cy="-100" r="390" fill="#43e0c0" opacity=".045"/>
+
+  <g class="sans">
+    <text x="70" y="54" class="eyebrow">详细原理对比 · 固定提交源码审阅</text>
+    <text x="70" y="107" class="h1">Pi Agent × DeepSeek Harness：底层原理与技术取舍</text>
+    <text x="70" y="139" class="sub">相同 ReAct 外形之下，真正差异在状态权威、事实落点、能力生命周期与失败语义</text>
+
+    <!-- column headers -->
+    <g transform="translate(70 169)" filter="url(#shadow)">
+      <rect width="775" height="76" rx="18" class="cardPi"/>
+      <rect width="7" height="76" rx="4" fill="url(#piGrad)"/>
+      <text x="26" y="33" class="piHead">Pi Agent · 经典生产路径</text>
+      <text x="26" y="57" class="body">生产路径成熟 · Harness v2 仍为脚手架</text>
+      <rect x="536" y="20" width="211" height="36" rx="18" fill="#36251f" stroke="#86513b"/>
+      <text x="557" y="43" class="status mono">0.84.2 · a470b121…</text>
+    </g>
+    <g transform="translate(1075 169)" filter="url(#shadow)">
+      <rect width="775" height="76" rx="18" class="cardDs"/>
+      <rect x="768" width="7" height="76" rx="4" fill="url(#dsGrad)"/>
+      <text x="26" y="33" class="dsHead">DeepSeek Harness</text>
+      <text x="26" y="57" class="body">核心体系已实现 · RC / 开发者预览</text>
+      <rect x="526" y="20" width="221" height="36" rx="18" fill="#153640" stroke="#33727b"/>
+      <text x="547" y="43" class="status mono">0.1.1-rc.2 · b150a551…</text>
+    </g>
+
+    <!-- center spine -->
+    <line x1="960" y1="272" x2="960" y2="909" class="line"/>
+
+    <!-- row 1 -->
+    <g transform="translate(70 272)">
+      <rect width="775" height="65" rx="14" class="cardPi"/><circle cx="753" cy="32" r="5" class="dotPi"/>
+      <text x="20" y="26" class="label">运行中的 Agent 是执行中心</text><text x="20" y="49" class="body">Agent.state.messages + agentLoop；AgentSession 负责产品层桥接</text>
+    </g>
+    <g transform="translate(1075 272)">
+      <rect width="775" height="65" rx="14" class="cardDs"/><circle cx="22" cy="32" r="5" class="dotDs"/>
+      <text x="42" y="26" class="label">Cordis 插件微内核</text><text x="42" y="49" class="body">Agent 接口 + 包内 ReactLoopAgent 实现 + 作用域插件</text>
+    </g>
+    <g transform="translate(866 285)"><rect width="188" height="38" rx="19" class="cardCore"/><text x="41" y="24" class="axis">架构中心</text></g>
+
+    <!-- row 2 -->
+    <g transform="translate(70 344)"><rect width="775" height="65" rx="14" class="cardPi"/><circle cx="753" cy="32" r="5" class="dotPi"/><text x="20" y="26" class="label">可变消息状态</text><text x="20" y="49" class="body">模型、工具、steering / follow-up 队列直接改变运行状态</text></g>
+    <g transform="translate(1075 344)"><rect width="775" height="65" rx="14" class="cardDs"/><circle cx="22" cy="32" r="5" class="dotDs"/><text x="42" y="26" class="label">类型化 SessionEvent[]</text><text x="42" y="49" class="body">内存规范交互日志；表面投影决定模型可见历史</text></g>
+    <g transform="translate(866 357)"><rect width="188" height="38" rx="19" class="cardCore"/><text x="41" y="24" class="axis">状态权威</text></g>
+
+    <!-- row 3 -->
+    <g transform="translate(70 416)"><rect width="775" height="65" rx="14" class="cardPi"/><circle cx="753" cy="32" r="5" class="dotPi"/><text x="20" y="26" class="label">直接读取 Agent.messages</text><text x="20" y="49" class="body">路径短、理解成本低；恢复依赖 SessionManager 重放后重建运行状态</text></g>
+    <g transform="translate(1075 416)"><rect width="775" height="65" rx="14" class="cardDs"/><circle cx="22" cy="32" r="5" class="dotDs"/><text x="42" y="26" class="label">每步调用 deriveMessages()</text><text x="42" y="49" class="body">从事件表面重建请求；请求头 / 上下文也进入事件语义</text></g>
+    <g transform="translate(866 429)"><rect width="188" height="38" rx="19" class="cardCore"/><text x="35" y="24" class="axis">请求重建</text></g>
+
+    <!-- row 4 -->
+    <g transform="translate(70 488)"><rect width="775" height="65" rx="14" class="cardPi"/><circle cx="753" cy="32" r="5" class="dotPi"/><text x="20" y="26" class="label">SessionManager JSONL 会话树</text><text x="20" y="49" class="body">parentId 分支优秀；事件可先发布，message_end 后才追加，未见 fsync</text></g>
+    <g transform="translate(1075 488)"><rect width="775" height="65" rx="14" class="cardDs"/><circle cx="22" cy="32" r="5" class="dotDs"/><text x="42" y="26" class="label">独立持久化控制器</text><text x="42" y="49" class="body">异步回写 + session/flush + 普通轮次屏障；修复崩溃尾部</text></g>
+    <g transform="translate(866 501)"><rect width="188" height="38" rx="19" class="cardCore"/><text x="35" y="24" class="axis">持久与恢复</text></g>
+
+    <!-- row 5 -->
+    <g transform="translate(70 560)"><rect width="775" height="65" rx="14" class="cardPi"/><circle cx="753" cy="32" r="5" class="dotPi"/><text x="20" y="26" class="label">循环内执行工具调用批次</text><text x="20" y="49" class="body">并行 / 顺序策略直接；副作用与审批语义由工具或扩展自定</text></g>
+    <g transform="translate(1075 560)"><rect width="775" height="65" rx="14" class="cardDs"/><circle cx="22" cy="32" r="5" class="dotDs"/><text x="42" y="26" class="label">ToolRuntime 管线 + 滚动并发池</text><text x="42" y="49" class="body">前置 / 守卫 / 环绕 / 后置；独占屏障；结果按模型源顺序提交</text></g>
+    <g transform="translate(866 573)"><rect width="188" height="38" rx="19" class="cardCore"/><text x="35" y="24" class="axis">工具调度</text></g>
+
+    <!-- row 6 -->
+    <g transform="translate(70 632)"><rect width="775" height="65" rx="14" class="cardPi"/><circle cx="753" cy="32" r="5" class="dotPi"/><text x="20" y="26" class="label">任意 TypeScript 扩展</text><text x="20" y="49" class="body">自由度极高；钩子 / 命令 / 工具可直接组合进产品进程</text></g>
+    <g transform="translate(1075 632)"><rect width="775" height="65" rx="14" class="cardDs"/><circle cx="22" cy="32" r="5" class="dotDs"/><text x="42" y="26" class="label">Scope + ScopedLayers + 销毁器</text><text x="42" y="49" class="body">能力可见性、覆盖、生命周期、热更新 / 回滚使用同一机制</text></g>
+    <g transform="translate(866 645)"><rect width="188" height="38" rx="19" class="cardCore"/><text x="35" y="24" class="axis">扩展生命周期</text></g>
+
+    <!-- row 7 -->
+    <g transform="translate(70 704)"><rect width="775" height="65" rx="14" class="cardPi"/><circle cx="753" cy="32" r="5" class="dotPi"/><text x="20" y="26" class="label">安全主要是宿主责任</text><text x="20" y="49" class="body">默认无统一审批 / 沙箱；拥有进程权限的扩展建议放入容器或 VM</text></g>
+    <g transform="translate(1075 704)"><rect width="775" height="65" rx="14" class="cardDs"/><circle cx="22" cy="32" r="5" class="dotDs"/><text x="42" y="26" class="label">安全失败审批 + 强制事实</text><text x="42" y="49" class="body">询问 / 拒绝 / 允许；沙箱逐调用报告完整 / 部分强制，但插件仍可信</text></g>
+    <g transform="translate(866 717)"><rect width="188" height="38" rx="19" class="cardCore"/><text x="41" y="24" class="axis">安全模型</text></g>
+
+    <!-- row 8 -->
+    <g transform="translate(70 776)"><rect width="775" height="65" rx="14" class="cardPi"/><circle cx="753" cy="32" r="5" class="dotPi"/><text x="20" y="26" class="label">摘要 + 保留尾部</text><text x="20" y="49" class="body">CompactionEntry 与分支摘要简洁实用；事务状态较弱</text></g>
+    <g transform="translate(1075 776)"><rect width="775" height="65" rx="14" class="cardDs"/><circle cx="22" cy="32" r="5" class="dotDs"/><text x="42" y="26" class="label">开始 → 摘要 → 结束的事件括号</text><text x="42" y="49" class="body">表面替换；耐久性由持久化屏障提供；保持工具调用 / 结果配对</text></g>
+    <g transform="translate(866 789)"><rect width="188" height="38" rx="19" class="cardCore"/><text x="41" y="24" class="axis">上下文压缩</text></g>
+
+    <!-- row 9 -->
+    <g transform="translate(70 848)"><rect width="775" height="65" rx="14" class="cardPi"/><circle cx="753" cy="32" r="5" class="dotPi"/><text x="20" y="26" class="label">默认不内置系统级编排</text><text x="20" y="49" class="body">可由扩展 / 包构建；没有统一完成门禁</text></g>
+    <g transform="translate(1075 848)"><rect width="775" height="65" rx="14" class="cardDs"/><circle cx="22" cy="32" r="5" class="dotDs"/><text x="42" y="26" class="label">命名提供器 + 可续接子 Agent + 团队</text><text x="42" y="49" class="body">SessionId 是子 Agent 标识；有能力静止点，缺少统一工作对象门禁</text></g>
+    <g transform="translate(866 861)"><rect width="188" height="38" rx="19" class="cardCore"/><text x="25" y="24" class="axis">多 Agent / 完成</text></g>
+
+    <!-- Bottom synthesis -->
+    <g transform="translate(70 945)" filter="url(#shadow)">
+      <rect width="1780" height="90" rx="20" class="cardCore"/>
+      <rect width="8" height="90" rx="4" fill="url(#piGrad)"/><rect x="1772" width="8" height="90" rx="4" fill="url(#dsGrad)"/>
+      <text x="28" y="32" class="accentPi">PI 的优化目标</text><text x="28" y="61" class="bottomTitle">最短反馈环 · 多 Provider · 最大定制自由</text>
+      <text x="645" y="31" class="micro">核心取舍</text><text x="645" y="59" class="bottomBody">可读性与自由度</text><text x="756" y="59" class="bottomBody">⇄</text><text x="790" y="59" class="bottomBody">可重建语义与生命周期一致性</text>
+      <text x="1260" y="32" class="accentDs">DEEPSEEK 的优化目标</text><text x="1260" y="61" class="bottomTitle">事件投影 · 插件组合 · 可替换实现</text>
+    </g>
+  </g>
+</svg>

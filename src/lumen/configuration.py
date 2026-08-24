@@ -35,6 +35,7 @@ class ModelConfigurationView:
     api_key_env: str | None
     settings: dict[str, Any]
     context: dict[str, Any]
+    input_modalities: tuple[str, ...]
     is_default: bool
     source: dict[str, str] | None
     auth_kind: str
@@ -206,6 +207,13 @@ class WorkspaceConfiguration:
                     api_key_env=cast(str | None, reported_model.get("api_key_env")),
                     settings=cast(dict[str, Any], reported_model.get("settings", {})),
                     context=cast(dict[str, Any], reported_model.get("context", {})),
+                    input_modalities=tuple(
+                        str(item)
+                        for item in cast(
+                            list[str] | tuple[str, ...],
+                            reported_model.get("input_modalities", ("text",)),
+                        )
+                    ),
                     is_default=name == default_model,
                     source=provenance.get(source_key),
                     auth_kind=auth_kind,

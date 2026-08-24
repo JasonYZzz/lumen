@@ -8,8 +8,10 @@ from enum import StrEnum
 from uuid import uuid4
 
 from pydantic_ai.capabilities import AbstractCapability
+from pydantic_ai.messages import UserContent
 from pydantic_ai.tools import RunContext
 
+from lumen.attachments import AttachmentRef
 from lumen.events import InputDelivered, RunEvent
 
 
@@ -29,6 +31,7 @@ class QueuedMessage:
     model_prompt: str
     mode: QueueMode
     byte_size: int
+    attachments: tuple[AttachmentRef, ...] = ()
 
 
 class InteractiveMessageQueue:
@@ -41,14 +44,20 @@ class InteractiveMessageQueue:
         self.max_bytes = max_bytes
         self._messages: list[QueuedMessage] = []
 
-    def enqueue(self, text: str, model_prompt: str, mode: QueueMode | str) -> QueuedMessage:
+    def enqueue(
+        self,
+        text: str,
+        model_prompt: str,
+        mode: QueueMode | str,
+        attachments: tuple[AttachmentRef, ...] = (),
+    ) -> QueuedMessage:
         parsed = mode if isinstance(mode, QueueMode) else QueueMode(mode)
         size = len(model_prompt.encode("utf-8"))
         if len(self._messages) >= self.max_messages:
             raise QueueLimitError(f"interactive queue is limited to {self.max_messages} messages")
         if sum(item.byte_size for item in self._messages) + size > self.max_bytes:
             raise QueueLimitError(f"interactive queue is limited to {self.max_bytes} bytes")
-        message = QueuedMessage(str(uuid4()), text, model_prompt, parsed, size)
+        message = QueuedMessage(str(uuid4()), text, model_prompt, parsed, size, attachments)
         self._messages.append(message)
         return message
 
@@ -71,14 +80,20 @@ class InteractiveInputCapability(AbstractCapability[None]):
         self,
         queue: InteractiveMessageQueue,
         emit: Callable[[RunEvent], Awaitable[None]],
+        build_content: Callable[[str, tuple[AttachmentRef, ...]], str | list[UserContent]],
     ) -> None:
         self.queue = queue
         self.emit = emit
+        self.build_content = build_content
 
     async def before_node_run(self, ctx: RunContext[None], *, node: object) -> object:  # type: ignore[override]
         steering = [message for message in self.queue.snapshot() if message.mode is QueueMode.STEER]
         for message in steering:
-            ctx.enqueue(message.model_prompt, priority="asap")
+            content = self.build_content(message.model_prompt, message.attachments)
+            if isinstance(content, list):
+                ctx.enqueue(*content, priority="asap")
+            else:
+                ctx.enqueue(content, priority="asap")
             self.queue.mark_delivered(message.id)
             await self.emit(InputDelivered(message.id, message.text, message.mode.value))
 
@@ -89,7 +104,11 @@ class InteractiveInputCapability(AbstractCapability[None]):
             follow_ups = [message for message in self.queue.snapshot() if message.mode is QueueMode.FOLLOW_UP]
             if follow_ups:
                 message = follow_ups[0]
-                ctx.enqueue(message.model_prompt, priority="when_idle")
+                content = self.build_content(message.model_prompt, message.attachments)
+                if isinstance(content, list):
+                    ctx.enqueue(*content, priority="when_idle")
+                else:
+                    ctx.enqueue(content, priority="when_idle")
                 self.queue.mark_delivered(message.id)
                 await self.emit(InputDelivered(message.id, message.text, message.mode.value))
         return node

@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 
 from pydantic_ai.messages import ModelMessage
 
+from lumen.attachments import AttachmentRef
 from lumen.context import CompactionCheckpointV1, CompactionCheckpointV2, ContextSummary
 from lumen.events import (
     InputDequeued,
@@ -51,6 +52,7 @@ class RunInput:
     model_prompt: str
     is_retry: bool = False
     interaction_id: str | None = None
+    attachments: tuple[AttachmentRef, ...] = ()
 
 
 class RunCoordinator:
@@ -127,7 +129,12 @@ class RunCoordinator:
             last_recovery_receipts=state.last_recovery_receipts,
         )
 
-    def persist_run_start(self, user_input: str, interaction_id: str) -> None:
+    def persist_run_start(
+        self,
+        user_input: str,
+        interaction_id: str,
+        attachments: tuple[AttachmentRef, ...] = (),
+    ) -> None:
         """Durably accept one input before model execution or tool effects begin."""
 
         state = self.state
@@ -136,6 +143,7 @@ class RunCoordinator:
             user_input=user_input,
             interaction_id=interaction_id,
             plan=state.plan,
+            attachments=attachments,
         )
 
     def persist_unhandled_failure(
@@ -181,6 +189,7 @@ class RunCoordinator:
             error_message=error_message,
             timeline_events=timeline_events,
             interaction_id=interaction_id,
+            attachments=tuple(running.attachments),
         )
         self._state = CoordinatorState(
             session=state.session,
@@ -255,6 +264,7 @@ class RunCoordinator:
                 session_id=state.session.id,
                 recovery_receipts=state.last_recovery_receipts if run_input.is_retry else (),
                 completion_policy=completion_policy,
+                attachments=run_input.attachments,
             )
         except asyncio.CancelledError as error:
             self._append_partial(run_input, error, status="cancelled", timeline_events=timeline_events)
@@ -308,6 +318,7 @@ class RunCoordinator:
                 recovery_receipts=outcome.recovery_receipts,
                 request_receipts=outcome.request_receipts,
                 interaction_id=run_input.interaction_id,
+                attachments=run_input.attachments,
             )
         except BaseException as error:
             if runtime.context_engine is not None and outcome.context_fingerprint is not None:
@@ -364,6 +375,7 @@ class RunCoordinator:
                 error_message=message,
                 timeline_events=fallback_events,
                 interaction_id=run_input.interaction_id,
+                attachments=run_input.attachments,
             )
         except Exception:
             # The Host has one final minimal running-turn reconciliation path.
@@ -378,6 +390,7 @@ class RunCoordinator:
             run_input.display_text,
             run_input.model_prompt,
             mode,
+            run_input.attachments,
         )
         await self._active_emit(InputQueued(message.id, message.text, message.mode.value))
         return message
@@ -433,6 +446,7 @@ class RunCoordinator:
             recovery_receipts=partial.recovery_receipts if partial is not None else (),
             request_receipts=partial.request_receipts if partial is not None else (),
             interaction_id=run_input.interaction_id,
+            attachments=run_input.attachments,
         )
         self._state = next_state
 
