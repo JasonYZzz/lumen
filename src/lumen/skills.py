@@ -31,8 +31,11 @@ the skill's ``base_dir`` (parent of SKILL.md) is the resolution root.
 
 from __future__ import annotations
 
+import hashlib
 import re
-from dataclasses import dataclass
+from collections.abc import Callable
+from dataclasses import dataclass, field
+from importlib.resources import files
 from pathlib import Path
 from typing import cast
 
@@ -92,6 +95,85 @@ class Skill:
     body: str
     source: str
     disable_model_invocation: bool = False
+    scripts: dict[str, Path] = field(default_factory=dict[str, Path])
+
+
+@dataclass(frozen=True, slots=True)
+class SkillActivation:
+    """One active skill body eligible for stable context re-injection."""
+
+    name: str
+    body: str
+    revision: str
+    tokens: int
+    truncated: bool
+
+
+def _default_token_count(text: str) -> int:
+    # Conservative for both ASCII and CJK without coupling skills to a model
+    # adapter. ContextEngine re-counts the rendered body with its real counter.
+    ascii_chars = sum(1 for char in text if ord(char) < 128)
+    non_ascii = len(text) - ascii_chars
+    return max(1, (ascii_chars + 3) // 4 + non_ascii)
+
+
+class SkillWorkingSet:
+    """LRU working set for active skill bodies (M7)."""
+
+    def __init__(
+        self,
+        *,
+        max_skill_tokens: int = 5_000,
+        max_total_tokens: int = 25_000,
+        token_counter: Callable[[str], int] = _default_token_count,
+    ) -> None:
+        if max_skill_tokens < 1 or max_total_tokens < 1:
+            raise ValueError("skill working-set budgets must be positive")
+        self.max_skill_tokens = max_skill_tokens
+        self.max_total_tokens = max_total_tokens
+        self._count = token_counter
+        self._active: dict[str, SkillActivation] = {}
+
+    def activate(self, skill: Skill) -> SkillActivation:
+        body, truncated = self._fit(skill.body, self.max_skill_tokens)
+        activation = SkillActivation(
+            name=skill.name,
+            body=body,
+            revision=hashlib.sha256(skill.body.encode()).hexdigest()[:16],
+            tokens=self._count(body),
+            truncated=truncated,
+        )
+        self._active.pop(skill.name, None)
+        self._active[skill.name] = activation
+        while sum(item.tokens for item in self._active.values()) > self.max_total_tokens:
+            oldest_name = next(iter(self._active))
+            self._active.pop(oldest_name)
+        return activation
+
+    def active(self) -> tuple[SkillActivation, ...]:
+        return tuple(self._active.values())
+
+    def documents(self) -> tuple[dict[str, object], ...]:
+        return tuple(
+            {
+                "name": item.name,
+                "body": item.body,
+                "revision": item.revision,
+            }
+            for item in self._active.values()
+        )
+
+    def _fit(self, body: str, limit: int) -> tuple[str, bool]:
+        if self._count(body) <= limit:
+            return body, False
+        low, high = 0, len(body)
+        while low < high:
+            middle = (low + high + 1) // 2
+            if self._count(body[:middle]) <= limit:
+                low = middle
+            else:
+                high = middle - 1
+        return body[:low], True
 
 
 def _parse_frontmatter(text: str) -> tuple[dict[str, object], str]:
@@ -145,7 +227,11 @@ def _validate_name(raw: str | None, fallback: str) -> str | None:
     return name
 
 
-def load_skill(file_path: Path, source: str) -> Skill | None:
+def load_skill(
+    file_path: Path,
+    source: str,
+    warnings: list[str] | None = None,
+) -> Skill | None:
     """Parse a single ``SKILL.md`` file into a ``Skill``, or None on failure.
 
     Returns None (caller should warn) when:
@@ -175,6 +261,7 @@ def load_skill(file_path: Path, source: str) -> Skill | None:
     if name is None:
         return None
     disable = bool(frontmatter.get("disable-model-invocation", False))
+    scripts = _parse_scripts(file_path, name, frontmatter.get("scripts"), warnings)
     return Skill(
         name=name,
         description=description[:_MAX_DESCRIPTION],
@@ -183,7 +270,43 @@ def load_skill(file_path: Path, source: str) -> Skill | None:
         body=body,
         source=source,
         disable_model_invocation=disable,
+        scripts=scripts,
     )
+
+
+def _parse_scripts(
+    file_path: Path,
+    skill_name: str,
+    raw: object,
+    warnings: list[str] | None,
+) -> dict[str, Path]:
+    if raw is None:
+        return {}
+    if not isinstance(raw, dict):
+        if warnings is not None:
+            warnings.append(f"skill {skill_name!r}: scripts must be a mapping")
+        return {}
+    base_dir = file_path.parent.resolve()
+    scripts: dict[str, Path] = {}
+    for raw_name, raw_path in cast(dict[object, object], raw).items():
+        script_name = str(raw_name).strip()
+        relative = Path(str(raw_path))
+        resolved = (base_dir / relative).resolve(strict=False)
+        reason: str | None = None
+        if not script_name:
+            reason = "script name is empty"
+        elif relative.is_absolute() or not resolved.is_relative_to(base_dir):
+            reason = f"script {relative} escapes base_dir"
+        elif resolved.suffix.lower() not in {".sh", ".bash", ".py"}:
+            reason = f"script {relative} has a disallowed interpreter"
+        elif not resolved.is_file():
+            reason = f"script {relative} does not exist"
+        if reason is not None:
+            if warnings is not None:
+                warnings.append(f"skill {skill_name!r}: {reason}; dropped")
+            continue
+        scripts[script_name] = resolved
+    return scripts
 
 
 class SkillLoader:
@@ -204,10 +327,19 @@ class SkillLoader:
     #: Shared via ``lumen.constants.IGNORED_DIRS``.
     _SKIP_DIRS = IGNORED_DIRS
 
-    def __init__(self, workspace: Path) -> None:
+    def __init__(
+        self,
+        workspace: Path,
+        *,
+        include_project: bool = True,
+        include_builtin: bool = False,
+    ) -> None:
         self.workspace = Path(workspace).expanduser().resolve()
         self._project_dir = self.workspace / ".lumen" / "skills"
         self._user_dir = Path.home() / ".lumen" / "skills"
+        self._builtin_dir = Path(str(files("lumen").joinpath("builtin_skills")))
+        self.include_project = include_project
+        self.include_builtin = include_builtin
         self.warnings: list[str] = []
 
     def discover(self) -> list[Skill]:
@@ -218,11 +350,16 @@ class SkillLoader:
         user-level skill is dropped with a warning.
         """
 
-        project = self._scan_root(self._project_dir, "project")
+        builtin = self._scan_root(self._builtin_dir, "builtin") if self.include_builtin else []
+        project = self._scan_root(self._project_dir, "project") if self.include_project else []
         user = self._scan_root(self._user_dir, "user")
-        # Merge: project wins on name collision.
+        # Merge: project > user > builtin.
         by_name: dict[str, Skill] = {}
+        for skill in builtin:
+            by_name[skill.name] = skill
         for skill in user:
+            if skill.name in by_name:
+                self.warnings.append(f"skill '{skill.name}' overrides builtin version ({skill.file_path})")
             by_name[skill.name] = skill
         for skill in project:
             if skill.name in by_name:
@@ -259,14 +396,14 @@ class SkillLoader:
                 self.warnings.append(f"ignored symlinked skill path outside trusted roots: {entry}")
                 continue
             if entry.is_file() and entry.suffix == ".md":
-                skill = load_skill(entry, source)
+                skill = load_skill(entry, source, self.warnings)
                 if skill is not None:
                     skills.append(skill)
                 continue
             if entry.is_dir():
                 skill_md = entry / "SKILL.md"
                 if skill_md.is_file():
-                    skill = load_skill(skill_md, source)
+                    skill = load_skill(skill_md, source, self.warnings)
                     if skill is not None:
                         skills.append(skill)
                 else:
@@ -288,7 +425,7 @@ class SkillLoader:
                 if entry.is_dir():
                     skill_md = entry / "SKILL.md"
                     if skill_md.is_file():
-                        skill = load_skill(skill_md, source)
+                        skill = load_skill(skill_md, source, self.warnings)
                         if skill is not None:
                             skills.append(skill)
                     else:
@@ -355,6 +492,9 @@ def expand_skill_for_message(skill: Skill, args: str = "") -> str:
         skill.body,
         "</skill>",
     ]
+    if skill.scripts:
+        declared = ", ".join(sorted(skill.scripts))
+        parts.insert(3, f"Declared scripts ({declared}) may be run with run_skill_script.")
     if args:
         parts.append(args)
     return "\n".join(parts)
@@ -362,7 +502,9 @@ def expand_skill_for_message(skill: Skill, args: str = "") -> str:
 
 __all__ = [
     "Skill",
+    "SkillActivation",
     "SkillLoader",
+    "SkillWorkingSet",
     "expand_skill_for_message",
     "format_skills_for_prompt",
     "load_skill",

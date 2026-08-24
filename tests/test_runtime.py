@@ -6,10 +6,17 @@ import pytest
 from pydantic_ai import Tool
 from pydantic_ai.exceptions import IncompleteToolCall, UsageLimitExceeded
 from pydantic_ai.messages import ModelMessage, ModelRequest, RetryPromptPart, ToolReturnPart
-from pydantic_ai.models.function import AgentInfo, DeltaToolCall, FunctionModel
+from pydantic_ai.models.function import (
+    AgentInfo,
+    DeltaThinkingPart,
+    DeltaToolCall,
+    FunctionModel,
+)
 
-from lumen.config import LimitsConfig
+from lumen.config import ContextConfig, LimitsConfig
+from lumen.context import ContextEngine, ContextReportCommand
 from lumen.events import (
+    ClarificationRequested,
     CommentaryDelta,
     PlanCreated,
     PlanUpdated,
@@ -19,14 +26,17 @@ from lumen.events import (
     RunEvent,
     RunFailed,
     RunStarted,
+    RunWaitingForUser,
     TextDelta,
     TextRetracted,
+    ThinkingDelta,
     ToolApprovalResolved,
     ToolCallFinished,
     ToolCallStarted,
 )
 from lumen.plan import PlanState, PlanStep, PlanStepInput, StepStatus
 from lumen.runtime import AgentRuntime, PartialRunOutcome, ToolApproval, get_partial_outcome
+from lumen.tools.spec import EffectKind
 
 
 def last_tool_return(messages: Sequence[ModelMessage]) -> ToolReturnPart | None:
@@ -92,6 +102,39 @@ def read_file_delta(call_id: str, path: str) -> dict[int, DeltaToolCall]:
     return {0: DeltaToolCall("read_file", json.dumps({"path": path}), tool_call_id=call_id)}
 
 
+async def test_runtime_translates_thinking_stream_to_events() -> None:
+    async def model_function(messages: list[ModelMessage], _info: AgentInfo):  # type: ignore[no-untyped-def]
+        yield {0: DeltaThinkingPart(content="considering ")}
+        yield {0: DeltaThinkingPart(content="the options")}
+        yield "final answer"
+
+    runtime = AgentRuntime(
+        model=FunctionModel(stream_function=model_function),
+        tools=[],
+        toolsets=[],
+        instructions="Think before answering.",
+        limits=LimitsConfig(),
+        tool_metadata={},
+    )
+    events: list[RunEvent] = []
+
+    async def emit(event: RunEvent) -> None:
+        events.append(event)
+
+    async def approve(_request: Any) -> ToolApproval:
+        raise AssertionError("no approval expected")
+
+    outcome = await runtime.run("question", [], emit, approve)
+
+    assert outcome.output == "final answer"
+    thinking = "".join(event.text for event in events if isinstance(event, ThinkingDelta))
+    assert thinking == "considering the options"
+    # Reasoning never leaks into the speculative answer channel.
+    assert not any(
+        isinstance(event, TextDelta) and "considering" in event.text for event in events
+    )
+
+
 async def test_runtime_executes_tool_loop_and_emits_events() -> None:
     def echo(value: str) -> str:
         """Echo a value."""
@@ -128,6 +171,196 @@ async def test_runtime_executes_tool_loop_and_emits_events() -> None:
     assert any(isinstance(event, ToolCallFinished) and event.name == "echo" for event in events)
     assert any(isinstance(event, TextDelta) and "final:" in event.text for event in events)
     assert isinstance(events[-1], RunCompleted)
+
+
+async def test_runtime_records_declared_non_observe_effect() -> None:
+    def execute() -> str:
+        return "done"
+
+    async def model_function(messages: list[ModelMessage], _info: AgentInfo):  # type: ignore[no-untyped-def]
+        if last_tool_return(messages) is None:
+            yield {0: DeltaToolCall("execute", "{}", tool_call_id="effect-1")}
+        else:
+            yield "complete"
+
+    recorded: list[dict[str, object]] = []
+
+    def record_effect(**values: object) -> None:
+        recorded.append(values)
+
+    runtime = AgentRuntime(
+        model=FunctionModel(stream_function=model_function),
+        tools=[Tool(execute, sequential=True)],
+        toolsets=[],
+        instructions="Use tools.",
+        limits=LimitsConfig(),
+        tool_metadata={
+            "execute": {
+                "origin": "test",
+                "risk": "execute",
+                "effect": EffectKind.EXECUTION.value,
+            }
+        },
+        effect_recorder=record_effect,
+    )
+
+    async def emit(_event: RunEvent) -> None:
+        return None
+
+    async def approve(_request: Any) -> ToolApproval:
+        raise AssertionError("tool should not request approval")
+
+    await runtime.run("go", [], emit, approve, session_id="effect-session")
+
+    assert recorded == [
+        {
+            "tool_name": "execute",
+            "effect_kind": EffectKind.EXECUTION,
+            "success": True,
+            "summary": "execute succeeded",
+        }
+    ]
+
+
+def test_work_completion_gate_applies_without_an_approved_plan() -> None:
+    runtime = AgentRuntime(
+        model="test",
+        tools=[],
+        toolsets=[],
+        instructions="Answer.",
+        limits=LimitsConfig(),
+        tool_metadata={},
+        work_completion_issues=lambda _session_id: ["effect pending"],
+    )
+
+    assert runtime._completion_gate_issues() == [  # pyright: ignore[reportPrivateUsage]
+        "effect pending"
+    ]
+
+
+async def test_real_request_snapshot_updates_for_each_model_step() -> None:
+    def echo(value: str) -> str:
+        return value
+
+    async def model_function(messages: list[ModelMessage], _info: AgentInfo):  # type: ignore[no-untyped-def]
+        if last_tool_return(messages) is None:
+            yield {0: DeltaToolCall("echo", '{"value":"ok"}', tool_call_id="echo-1")}
+        else:
+            yield "done"
+
+    model = FunctionModel(stream_function=model_function)
+    engine = ContextEngine(
+        ContextConfig(enabled=True, soft_token_limit=1_000_000),
+        model=model,
+        model_id="acme:test",
+    )
+    runtime = AgentRuntime(
+        model=model,
+        tools=[Tool(echo, sequential=True)],
+        toolsets=[],
+        instructions="Use tools.",
+        limits=LimitsConfig(),
+        tool_metadata={"echo": {"origin": "test", "risk": "read"}},
+        context_engine=engine,
+    )
+
+    async def emit(_event: RunEvent) -> None:
+        return None
+
+    async def approve(_request: Any) -> ToolApproval:
+        raise AssertionError("read tool should not request approval")
+
+    outcome = await runtime.run("go", [], emit, approve, session_id="snapshot-session")
+    report = await engine.control(ContextReportCommand("snapshot-session"), emit)
+    snapshot = report.payload["request_snapshot"]
+
+    assert snapshot["model_step"] == 2
+    assert "echo" in snapshot["visible_tools"]
+    assert "request_clarification" in snapshot["visible_tools"]
+    assert [receipt.step for receipt in outcome.request_receipts] == [1, 2]
+    assert {receipt.route for receipt in outcome.request_receipts} == {"acme:test"}
+    assert all(receipt.context_fingerprint for receipt in outcome.request_receipts)
+    assert outcome.request_receipts[1].visible_tool_digest == snapshot["visible_tool_digest"]
+
+
+async def test_runtime_enters_waiting_state_after_blocking_clarification() -> None:
+    async def model_function(messages: list[ModelMessage], _info: AgentInfo):  # type: ignore[no-untyped-def]
+        result = last_tool_return(messages)
+        if result is None:
+            yield {
+                0: DeltaToolCall(
+                    "request_clarification",
+                    '{"question":"Which target?","choices":["A","B"]}',
+                    tool_call_id="clarify-1",
+                )
+            }
+        else:
+            yield "Please choose A or B."
+
+    runtime = AgentRuntime(
+        model=FunctionModel(stream_function=model_function),
+        tools=[],
+        toolsets=[],
+        instructions="Ask when blocked.",
+        limits=LimitsConfig(),
+        tool_metadata={"request_clarification": {"origin": "control", "risk": "read"}},
+    )
+    events: list[RunEvent] = []
+
+    async def emit(event: RunEvent) -> None:
+        events.append(event)
+
+    async def approve(_request: Any) -> ToolApproval:
+        raise AssertionError("clarification does not require approval")
+
+    outcome = await runtime.run("continue", [], emit, approve)
+
+    assert outcome.status == "waiting_for_user"
+    assert outcome.pending_clarification is not None
+    assert outcome.pending_clarification.choices == ("A", "B")
+    assert any(isinstance(event, ClarificationRequested) for event in events)
+    assert isinstance(events[-1], RunWaitingForUser)
+
+
+async def test_runtime_preserves_structured_tool_results_and_renders_them_as_json() -> None:
+    def inspect_file() -> dict[str, object]:
+        """Return a representative paginated file result."""
+        return {"content": "1: hello", "has_more": True, "next_start_line": 2}
+
+    async def model_function(messages: list[ModelMessage], _info: AgentInfo):  # type: ignore[no-untyped-def]
+        result = last_tool_return(messages)
+        if result is None:
+            yield {0: DeltaToolCall("inspect_file", "{}", tool_call_id="structured-1")}
+        else:
+            assert result.content == {
+                "content": "1: hello",
+                "has_more": True,
+                "next_start_line": 2,
+            }
+            yield "structured result received"
+
+    runtime = AgentRuntime(
+        model=FunctionModel(stream_function=model_function),
+        tools=[Tool(inspect_file, sequential=True)],
+        toolsets=[],
+        instructions="Use tools when useful.",
+        limits=LimitsConfig(),
+        tool_metadata={"inspect_file": {"origin": "test", "risk": "read"}},
+    )
+    events: list[RunEvent] = []
+
+    async def emit(event: RunEvent) -> None:
+        events.append(event)
+
+    async def approve(_request: Any) -> ToolApproval:
+        raise AssertionError("read tool should not request approval")
+
+    outcome = await runtime.run("inspect", [], emit, approve)
+
+    finished = next(event for event in events if isinstance(event, ToolCallFinished))
+    assert outcome.output == "structured result received"
+    assert finished.result.startswith('{\n  "content": "1: hello"')
+    assert '"has_more": true' in finished.result
 
 
 async def test_runtime_requests_approval_and_returns_denial_to_model() -> None:
@@ -172,6 +405,40 @@ async def test_runtime_requests_approval_and_returns_denial_to_model() -> None:
     # short-circuit in auto mode). The runtime only guarantees the resolved
     # event reaches the timeline.
     assert any(isinstance(event, ToolApprovalResolved) and event.approved is False for event in events)
+
+
+async def test_runtime_treats_unregistered_approval_tool_as_unknown_external_risk() -> None:
+    def dynamic_tool() -> str:
+        """A tool discovered after the initial metadata snapshot."""
+        return "executed"
+
+    async def model_function(messages: list[ModelMessage], _info: AgentInfo):  # type: ignore[no-untyped-def]
+        result = last_tool_return(messages)
+        if result is None:
+            yield {0: DeltaToolCall("dynamic_tool", "{}", tool_call_id="dynamic-call")}
+        else:
+            yield f"handled:{result.outcome}"
+
+    runtime = AgentRuntime(
+        model=FunctionModel(stream_function=model_function),
+        tools=[Tool(dynamic_tool, sequential=True, requires_approval=True)],
+        toolsets=[],
+        instructions="Use tools when useful.",
+        limits=LimitsConfig(),
+        tool_metadata={},
+    )
+
+    async def emit(_event: RunEvent) -> None:
+        return None
+
+    async def deny(request: Any) -> ToolApproval:
+        assert request.origin == "unregistered remote tool"
+        assert request.risk == "external_unknown"
+        return ToolApproval(approved=False, message="unknown tool denied")
+
+    outcome = await runtime.run("use dynamic tool", [], emit, deny)
+
+    assert outcome.output == "handled:denied"
 
 
 async def test_recoverable_tool_error_is_fed_back_to_model() -> None:
@@ -319,10 +586,107 @@ async def test_runtime_emits_structured_plan_and_progress() -> None:
     event_order = [
         type(event) for event in events if isinstance(event, (PlanCreated, ProgressReported, PlanUpdated))
     ]
-    assert event_order == [PlanCreated, ProgressReported, PlanUpdated]
+    assert event_order[:2] == [PlanCreated, ProgressReported]
+    assert event_order[-1] is PlanUpdated
+    assert len(outcome.plan.evidence) == 1
     assert outcome.plan.steps[0].status is StepStatus.COMPLETED
     assert outcome.plan.steps[0].id == "inspect"
     assert outcome.active_history == outcome.new_messages
+
+
+async def test_completion_gate_retries_visible_observation_then_allows_fix() -> None:
+    attempt = 0
+
+    async def model_function(messages: list[ModelMessage], _info: AgentInfo):  # type: ignore[no-untyped-def]
+        nonlocal attempt
+        attempt += 1
+        if attempt == 1:
+            yield "premature"
+        elif attempt == 2:
+            retry = last_retry_prompt(messages)
+            assert retry is not None
+            assert "completion_gate_failed" in str(retry.content)
+            yield update_step_delta(
+                "finish-after-gate",
+                step_id="implement",
+                status=StepStatus.COMPLETED,
+            )
+        else:
+            yield "done"
+
+    runtime = AgentRuntime(
+        model=FunctionModel(stream_function=model_function),
+        tools=[],
+        toolsets=[],
+        instructions="help",
+        limits=LimitsConfig(),
+        tool_metadata={},
+    )
+    events: list[RunEvent] = []
+
+    async def emit(event: RunEvent) -> None:
+        events.append(event)
+
+    outcome = await runtime.run(
+        "execute",
+        [],
+        emit,
+        lambda _request: pytest.fail("approval should not be requested"),  # type: ignore[arg-type]
+        plan=PlanState(
+            revision=1,
+            approved_revision=1,
+            steps=[PlanStep(id="implement", title="Implement")],
+        ),
+    )
+
+    assert outcome.status == "completed"
+    assert outcome.output == "done"
+    assert attempt == 3
+    assert projected_assistant_text(events) == "done"
+    assert any(isinstance(event, TextRetracted) for event in events)
+
+
+async def test_completion_gate_fails_after_two_retries() -> None:
+    attempts = 0
+
+    async def model_function(_messages: list[ModelMessage], _info: AgentInfo):  # type: ignore[no-untyped-def]
+        nonlocal attempts
+        attempts += 1
+        yield "still premature"
+
+    runtime = AgentRuntime(
+        model=FunctionModel(stream_function=model_function),
+        tools=[],
+        toolsets=[],
+        instructions="help",
+        limits=LimitsConfig(),
+        tool_metadata={},
+    )
+    events: list[RunEvent] = []
+
+    async def emit(event: RunEvent) -> None:
+        events.append(event)
+
+    async def approve(_request: Any) -> ToolApproval:
+        raise AssertionError("approval should not be requested")
+
+    with pytest.raises(Exception, match="maximum output retries"):
+        await runtime.run(
+            "execute",
+            [],
+            emit,
+            approve,
+            plan=PlanState(
+                revision=1,
+                approved_revision=1,
+                steps=[PlanStep(id="implement", title="Implement")],
+            ),
+        )
+
+    assert attempts == 3
+    assert isinstance(events[-1], RunFailed)
+    assert "completion_gate_failed" in events[-1].message
+    assert projected_assistant_text(events) == ""
 
 
 def test_control_tools_are_sequential_and_visible() -> None:
@@ -809,6 +1173,61 @@ async def test_failed_run_after_tool_approval_preserves_approval() -> None:
     # direct run that captures it.
     failures = [e for e in events if isinstance(e, RunFailed)]
     assert len(failures) == 1
+
+
+async def test_explicit_retry_replays_exact_successful_side_effect_receipt() -> None:
+    executions = 0
+    fail_after_tool = True
+
+    def write_note(content: str) -> dict[str, str]:
+        """Write a note."""
+
+        nonlocal executions
+        executions += 1
+        return {"written": content}
+
+    async def model_function(messages: list[ModelMessage], _info: AgentInfo):  # type: ignore[no-untyped-def]
+        if last_tool_return(messages) is None:
+            yield {0: DeltaToolCall("write_note", '{"content":"once"}', tool_call_id="write-1")}
+        elif fail_after_tool:
+            raise RuntimeError("provider failed after write")
+        else:
+            yield "recovered"
+
+    runtime = AgentRuntime(
+        model=FunctionModel(stream_function=model_function),
+        tools=[Tool(write_note, sequential=True, requires_approval=True)],
+        toolsets=[],
+        instructions="write once",
+        limits=LimitsConfig(),
+        tool_metadata={"write_note": {"origin": "test", "risk": "write"}},
+    )
+
+    async def emit(_event: RunEvent) -> None:
+        return None
+
+    async def approve(_request: Any) -> ToolApproval:
+        return ToolApproval(True, "allowed")
+
+    with pytest.raises(RuntimeError) as exc_info:
+        await runtime.run("write it", [], emit, approve)
+    partial = get_partial_outcome(exc_info.value)
+    assert partial is not None
+    assert len(partial.recovery_receipts) == 1
+    assert executions == 1
+
+    fail_after_tool = False
+    outcome = await runtime.run(
+        "write it",
+        [],
+        emit,
+        approve,
+        recovery_receipts=partial.recovery_receipts,
+    )
+
+    assert outcome.output == "recovered"
+    assert executions == 1
+    assert outcome.recovery_receipts[0]["replayed"] is True
 
 
 async def test_cancelled_run_carries_partial_outcome() -> None:

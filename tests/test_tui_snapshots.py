@@ -25,7 +25,12 @@ from lumen.plan import PlanState, PlanStep, StepStatus
 from lumen.resources import ResourceManager
 from lumen.ui.activity_indicator import RunActivityIndicator
 from lumen.ui.app import LumenApp
-from lumen.ui.welcome import WelcomePanel
+from lumen.ui.welcome import (
+    _WORDMARK_GLYPHS,  # pyright: ignore[reportPrivateUsage]
+    _WORDMARK_TEXT,  # pyright: ignore[reportPrivateUsage]
+    WelcomePanel,
+    _render_wordmark,  # pyright: ignore[reportPrivateUsage]
+)
 
 STATES = (
     "idle",
@@ -46,6 +51,17 @@ SIZES = ((80, 24), (120, 36))
 THEMES = ("lumen-dark", "lumen-light")
 
 
+def test_welcome_wordmark_is_a_compact_lumen_glyph_set() -> None:
+    assert tuple(_WORDMARK_GLYPHS) == tuple(_WORDMARK_TEXT)
+    assert all(len(rows) == 7 for rows in _WORDMARK_GLYPHS.values())
+    assert all(len(row) == 5 for rows in _WORDMARK_GLYPHS.values() for row in rows)
+
+    rendered = _render_wordmark(highlight="#FFC166", primary="#C99552")
+    lines = rendered.plain.splitlines()
+    assert len(lines) == 4
+    assert all(len(line) == 29 for line in lines)
+
+
 def _snapshot_app(tmp_path: Path) -> LumenApp:
     # Keep the model-invocable skill tools deterministic instead of depending
     # on whichever user-global skills happen to exist on the test machine.
@@ -58,7 +74,7 @@ def _snapshot_app(tmp_path: Path) -> LumenApp:
     config_path = tmp_path / "agent.yaml"
     config_path.write_text(
         """
-version: 1
+version: 2
 agent:
   name: snapshot-agent
   model: {id: test}
@@ -88,9 +104,7 @@ def test_tui_state_snapshot(
         # Snapshot fixtures must not include per-run UUIDs or pytest's
         # generated temporary path. Dynamic-value behaviour is covered by
         # integration tests; these images guard the visual contract.
-        app.query_one("#topbar", Static).update(
-            "◆ Lumen / snapshot-agent  ·  model test  ·  manual mode  ·  session a1b2c3d4"
-        )
+        app.query_one("#topbar", Static).update("◆ Lumen / snapshot-agent  ·  lumen")
         app.query_one(WelcomePanel).update_context(
             agent_name="snapshot-agent",
             model="test",
@@ -107,7 +121,7 @@ def test_tui_state_snapshot(
         if state in {"slash-menu", "slash-filter"}:
             editor = app.query_one("#prompt")
             editor.focus()
-            keys = "/" if state == "slash-menu" else "/qu"
+            keys = "/" if state == "slash-menu" else "/ex"
             for key in keys:
                 await pilot.press(key)
         elif state == "loading":
@@ -122,6 +136,8 @@ def test_tui_state_snapshot(
                 )
             )
         elif state == "todo":
+            await app._append_user("Implement the requested UI change")  # type: ignore[reportPrivateUsage]
+            await app.render_event(RunStarted("Implement the requested UI change"))
             await app.render_event(
                 PlanCreated(
                     PlanState(
@@ -146,6 +162,7 @@ def test_tui_state_snapshot(
                 )
             )
         elif state == "stream":
+            await app._append_user("Explain the architecture")  # type: ignore[reportPrivateUsage]
             await app.render_event(RunStarted("Explain the architecture"))
             await app.render_event(TextDelta("## Architecture\n\nThe agent is streaming **Markdown**."))
             await app.render_event(RunCompleted("done"))

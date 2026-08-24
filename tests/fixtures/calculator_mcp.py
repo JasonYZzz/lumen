@@ -15,6 +15,12 @@ def add(a: float, b: float) -> float:
     return a + b
 
 
+@mcp.tool()
+def explode() -> str:
+    """Always raise a server-side error, to exercise error feedback."""
+    raise ValueError("boom")
+
+
 if __name__ == "__main__":
     if os.environ.get("MCP_TEST_TRANSPORT", "stdio") == "streamable-http":
         mcp.run(transport="streamable-http")

@@ -12,12 +12,21 @@ from lumen.tools.registry import (
     ToolRegistry,
     load_plugin_specs,
 )
-from lumen.tools.spec import Risk, ToolSpec
+from lumen.tools.spec import EffectKind, Risk, ToolConcurrency, ToolOutputSpec, ToolSpec
 
 
 def sample_tool(value: str) -> str:
     """Return the supplied value."""
     return value
+
+
+def test_tool_spec_keeps_legacy_positional_field_order() -> None:
+    spec = ToolSpec(sample_tool, Risk.READ, "legacy", "description", 3.0)
+
+    assert spec.name == "legacy"
+    assert spec.description == "description"
+    assert spec.timeout == 3.0
+    assert spec.effect is EffectKind.OBSERVE
 
 
 def test_plugin_factory_must_return_tool_specs(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -27,6 +36,14 @@ def test_plugin_factory_must_return_tool_specs(monkeypatch: pytest.MonkeyPatch) 
 
     with pytest.raises(TypeError, match="ToolSpec"):
         load_plugin_specs(PluginConfig(module="bad_plugin"))
+
+
+def test_missing_plugin_reports_module_and_search_path(tmp_path: Path) -> None:
+    with pytest.raises(
+        RuntimeError,
+        match=rf"plugin 'missing_tools' was not found under {tmp_path}",
+    ):
+        load_plugin_specs(PluginConfig(module="missing_tools"), search_path=tmp_path)
 
 
 def test_registry_rejects_duplicate_names(tmp_path: Path) -> None:
@@ -62,6 +79,39 @@ def test_local_tools_are_hidden_or_marked_for_approval(tmp_path: Path) -> None:
     assert by_name["dangerous"].requires_approval is True
     assert by_name["dangerous"].sequential is True
     assert by_name["dangerous"].timeout == 10
+
+
+async def test_tool_output_contract_validates_before_returning_model_text(tmp_path: Path) -> None:
+    registry = ToolRegistry(tmp_path)
+    registry.add(
+        ToolSpec(
+            lambda: {"count": "not-an-int"},
+            name="invalid_output",
+            risk=Risk.READ,
+            output=ToolOutputSpec(dict[str, int]),
+        ),
+        origin="test",
+    )
+    tool = registry.build_local_tools(PermissionPolicy(PermissionsConfig()), default_timeout=1)[0]
+
+    with pytest.raises(ValueError):
+        await tool.function_schema.call({}, None)  # type: ignore[arg-type]
+
+
+def test_tool_concurrency_is_explicit_and_can_classify_arguments() -> None:
+    spec = ToolSpec(
+        sample_tool,
+        risk=Risk.READ,
+        concurrency=lambda args: (
+            ToolConcurrency.PARALLEL_SAFE
+            if str(args.get("value", "")).startswith("read:")
+            else ToolConcurrency.EXCLUSIVE
+        ),
+    )
+
+    assert ToolSpec(sample_tool, risk=Risk.READ).concurrency_for({}) is ToolConcurrency.EXCLUSIVE
+    assert spec.concurrency_for({"value": "read:a"}) is ToolConcurrency.PARALLEL_SAFE
+    assert spec.concurrency_for({"value": "write:a"}) is ToolConcurrency.EXCLUSIVE
 
 
 def test_registry_cannot_register_control_tool_name(tmp_path: Path) -> None:

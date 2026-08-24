@@ -1,0 +1,1658 @@
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml" lang="zh-CN" xml:lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="generator" content="pandoc" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes" />
+  <title>Lumen × Pi × DeepSeek Harness</title>
+  <style>
+    /* Default styles provided by pandoc.
+    ** See https://pandoc.org/MANUAL.html#variables-for-html for config info.
+    */
+    html {
+      color: #1a1a1a;
+      background-color: #fdfdfd;
+    }
+    body {
+      margin: 0 auto;
+      max-width: 36em;
+      padding-left: 50px;
+      padding-right: 50px;
+      padding-top: 50px;
+      padding-bottom: 50px;
+      hyphens: auto;
+      overflow-wrap: break-word;
+      text-rendering: optimizeLegibility;
+      font-kerning: normal;
+    }
+    @media (max-width: 600px) {
+      body {
+        font-size: 0.9em;
+        padding: 12px;
+      }
+      h1 {
+        font-size: 1.8em;
+      }
+    }
+    @media print {
+      html {
+        background-color: white;
+      }
+      body {
+        background-color: transparent;
+        color: black;
+        font-size: 12pt;
+      }
+      p, h2, h3 {
+        orphans: 3;
+        widows: 3;
+      }
+      h2, h3, h4 {
+        page-break-after: avoid;
+      }
+    }
+    p {
+      margin: 1em 0;
+    }
+    a {
+      color: #1a1a1a;
+    }
+    a:visited {
+      color: #1a1a1a;
+    }
+    img {
+      max-width: 100%;
+    }
+    svg {
+      height: auto;
+      max-width: 100%;
+    }
+    h1, h2, h3, h4, h5, h6 {
+      margin-top: 1.4em;
+    }
+    h5, h6 {
+      font-size: 1em;
+      font-style: italic;
+    }
+    h6 {
+      font-weight: normal;
+    }
+    ol, ul {
+      padding-left: 1.7em;
+      margin-top: 1em;
+    }
+    li > ol, li > ul {
+      margin-top: 0;
+    }
+    blockquote {
+      margin: 1em 0 1em 1.7em;
+      padding-left: 1em;
+      border-left: 2px solid #e6e6e6;
+      color: #606060;
+    }
+    code {
+      white-space: pre-wrap;
+      font-family: Menlo, Monaco, Consolas, 'Lucida Console', monospace;
+      font-size: 85%;
+      margin: 0;
+      hyphens: manual;
+    }
+    pre {
+      margin: 1em 0;
+      overflow: auto;
+    }
+    pre code {
+      padding: 0;
+      overflow: visible;
+      overflow-wrap: normal;
+    }
+    .sourceCode {
+     background-color: transparent;
+     overflow: visible;
+    }
+    hr {
+      border: none;
+      border-top: 1px solid #1a1a1a;
+      height: 1px;
+      margin: 1em 0;
+    }
+    table {
+      margin: 1em 0;
+      border-collapse: collapse;
+      width: 100%;
+      overflow-x: auto;
+      display: block;
+      font-variant-numeric: lining-nums tabular-nums;
+    }
+    table caption {
+      margin-bottom: 0.75em;
+    }
+    tbody {
+      margin-top: 0.5em;
+      border-top: 1px solid #1a1a1a;
+      border-bottom: 1px solid #1a1a1a;
+    }
+    th {
+      border-top: 1px solid #1a1a1a;
+      padding: 0.25em 0.5em 0.25em 0.5em;
+    }
+    td {
+      padding: 0.125em 0.5em 0.25em 0.5em;
+    }
+    header {
+      margin-bottom: 4em;
+      text-align: center;
+    }
+    #TOC li {
+      list-style: none;
+    }
+    #TOC ul {
+      padding-left: 1.3em;
+    }
+    #TOC > ul {
+      padding-left: 0;
+    }
+    #TOC a:not(:hover) {
+      text-decoration: none;
+    }
+    span.smallcaps{font-variant: small-caps;}
+    div.columns{display: flex; gap: min(4vw, 1.5em);}
+    div.column{flex: auto; overflow-x: auto;}
+    div.hanging-indent{margin-left: 1.5em; text-indent: -1.5em;}
+    /* The extra [class] is a hack that increases specificity enough to
+       override a similar rule in reveal.js */
+    ul.task-list[class]{list-style: none;}
+    ul.task-list li input[type="checkbox"] {
+      font-size: inherit;
+      width: 0.8em;
+      margin: 0 0.8em 0.2em -1.6em;
+      vertical-align: middle;
+    }
+    .display.math{display: block; text-align: center; margin: 0.5rem auto;}
+  </style>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f4f3ee;
+      --paper: #fbfaf7;
+      --ink: #17201d;
+      --muted: #64706b;
+      --line: #d9ddd7;
+      --accent: #0a6b57;
+      --accent-soft: #ddefe9;
+      --pi: #b35420;
+      --deepseek: #355ec9;
+      --shadow: 0 18px 50px rgba(31, 43, 38, .08);
+      --mono: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+      --sans: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    }
+    html[data-theme="dark"] {
+      color-scheme: dark;
+      --bg: #111512;
+      --paper: #171d19;
+      --ink: #e8eee9;
+      --muted: #99a69f;
+      --line: #303a34;
+      --accent: #62d2b2;
+      --accent-soft: #173c32;
+      --pi: #f0a06c;
+      --deepseek: #91adff;
+      --shadow: 0 18px 55px rgba(0, 0, 0, .32);
+    }
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; scroll-padding-top: 22px; }
+    body {
+      margin: 0;
+      max-width: none;
+      padding: 0;
+      background:
+        radial-gradient(circle at 9% 0%, color-mix(in srgb, var(--accent) 10%, transparent), transparent 27rem),
+        var(--bg);
+      color: var(--ink);
+      font: 16px/1.78 var(--sans);
+      text-rendering: optimizeLegibility;
+    }
+    body::before {
+      content: "";
+      position: fixed;
+      inset: 0 auto 0 0;
+      width: 6px;
+      background: linear-gradient(180deg, var(--accent), var(--deepseek), var(--pi));
+      z-index: 20;
+    }
+    #reading-progress {
+      position: fixed;
+      inset: 0 auto auto 0;
+      height: 4px;
+      width: 0;
+      background: var(--accent);
+      z-index: 40;
+      box-shadow: 0 0 12px color-mix(in srgb, var(--accent) 55%, transparent);
+    }
+    #title-block-header, body > section, body > h1, body > h2, body > p, body > table, body > pre, body > ul, body > ol, body > blockquote {
+      max-width: 980px;
+      margin-left: calc(300px + max(28px, (100vw - 1320px) / 2));
+      margin-right: max(28px, (100vw - 1320px) / 2);
+    }
+    #title-block-header {
+      margin-top: 64px;
+      margin-bottom: 34px;
+      padding: 46px 50px 38px;
+      border: 1px solid var(--line);
+      border-radius: 24px;
+      background: linear-gradient(145deg, var(--paper), color-mix(in srgb, var(--accent-soft) 35%, var(--paper)));
+      box-shadow: var(--shadow);
+      overflow: hidden;
+      position: relative;
+    }
+    #title-block-header::after {
+      content: "SOURCE-LEVEL ARCHITECTURE REVIEW · 2026";
+      display: block;
+      margin-top: 24px;
+      color: var(--accent);
+      font: 700 12px/1.3 var(--mono);
+      letter-spacing: .13em;
+    }
+    .title { margin: 0; max-width: 850px; font-size: clamp(36px, 5vw, 66px); line-height: 1.02; letter-spacing: -.05em; }
+    #TOC {
+      position: fixed;
+      inset: 28px auto 28px 28px;
+      width: 272px;
+      padding: 72px 16px 20px;
+      overflow: auto;
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      background: color-mix(in srgb, var(--paper) 92%, transparent);
+      backdrop-filter: blur(16px);
+      box-shadow: var(--shadow);
+      z-index: 10;
+    }
+    #TOC::before {
+      content: "ARCHITECTURE INDEX";
+      position: absolute;
+      top: 22px;
+      left: 22px;
+      color: var(--accent);
+      font: 700 11px/1 var(--mono);
+      letter-spacing: .13em;
+    }
+    #TOC ul { list-style: none; padding-left: 0; margin: 0; }
+    #TOC ul ul { padding-left: 13px; margin-top: 4px; border-left: 1px solid var(--line); }
+    #TOC a {
+      display: block;
+      padding: 5px 7px;
+      border-radius: 7px;
+      color: var(--muted);
+      text-decoration: none;
+      font-size: 12px;
+      line-height: 1.35;
+    }
+    #TOC a:hover, #TOC a.active { color: var(--accent); background: var(--accent-soft); }
+    #doc-tools {
+      position: fixed;
+      top: 40px;
+      left: 46px;
+      width: 236px;
+      display: flex;
+      gap: 8px;
+      z-index: 12;
+    }
+    #doc-search {
+      min-width: 0;
+      flex: 1;
+      border: 1px solid var(--line);
+      border-radius: 9px;
+      padding: 8px 10px;
+      color: var(--ink);
+      background: var(--bg);
+      font: 12px/1 var(--sans);
+    }
+    #theme-toggle {
+      border: 1px solid var(--line);
+      border-radius: 9px;
+      padding: 0 10px;
+      color: var(--ink);
+      background: var(--bg);
+      cursor: pointer;
+    }
+    section.level1 {
+      margin-top: 30px;
+      margin-bottom: 30px;
+      padding: 34px 42px;
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      background: var(--paper);
+      box-shadow: 0 8px 30px rgba(31, 43, 38, .035);
+    }
+    section.level1 > h1:first-child { margin-top: 0; }
+    h1, h2, h3, h4 { line-height: 1.25; letter-spacing: -.025em; scroll-margin-top: 20px; }
+    h1 { margin: 1.8em 0 .75em; font-size: 32px; }
+    h2 { margin: 1.55em 0 .6em; font-size: 24px; }
+    h3 { margin: 1.35em 0 .48em; font-size: 19px; color: var(--accent); }
+    p { margin: .75em 0; }
+    strong { color: color-mix(in srgb, var(--ink) 88%, var(--accent)); }
+    a { color: var(--accent); text-underline-offset: 3px; }
+    a:hover { text-decoration-thickness: 2px; }
+    blockquote {
+      margin: 1.2em 0;
+      padding: 14px 18px;
+      border-left: 4px solid var(--accent);
+      border-radius: 0 10px 10px 0;
+      background: var(--accent-soft);
+      color: var(--muted);
+    }
+    code { padding: .14em .36em; border: 1px solid var(--line); border-radius: 5px; background: var(--bg); font: .88em/1.4 var(--mono); }
+    pre {
+      overflow: auto;
+      padding: 20px 22px;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: #111814;
+      color: #dce9e1;
+      box-shadow: inset 0 1px rgba(255,255,255,.04);
+    }
+    pre code { padding: 0; border: 0; background: transparent; color: inherit; }
+    table { display: block; width: 100%; overflow-x: auto; margin: 1.25em 0 1.6em; border-collapse: collapse; font-size: 13px; }
+    th { position: sticky; top: 0; background: color-mix(in srgb, var(--accent-soft) 68%, var(--paper)); color: var(--ink); text-align: left; }
+    th, td { min-width: 145px; padding: 11px 13px; border: 1px solid var(--line); vertical-align: top; }
+    tr:nth-child(even) td { background: color-mix(in srgb, var(--bg) 48%, transparent); }
+    li { margin: .3em 0; }
+    hr { border: 0; border-top: 1px solid var(--line); margin: 2.5em 0; }
+    .search-hidden { display: none !important; }
+    .search-note { color: var(--muted); font: 12px/1.4 var(--mono); }
+    @media (max-width: 1080px) {
+      #TOC { display: none; }
+      #doc-tools { top: 14px; left: auto; right: 14px; width: min(78vw, 320px); }
+      #title-block-header, body > section, body > h1, body > h2, body > p, body > table, body > pre, body > ul, body > ol, body > blockquote {
+        margin-left: 18px;
+        margin-right: 18px;
+      }
+      #title-block-header { margin-top: 62px; padding: 34px 28px; }
+      section.level1 { padding: 26px 22px; }
+    }
+    @media (max-width: 720px) {
+      html, body {
+        width: 100%;
+        max-width: 100%;
+        overflow-x: hidden;
+      }
+      body {
+        padding: 0;
+        font-size: 15px;
+      }
+      #doc-tools {
+        top: 10px;
+        left: 18px;
+        right: 12px;
+        width: auto;
+      }
+      #title-block-header,
+      body > section,
+      body > h1,
+      body > h2,
+      body > p,
+      body > table,
+      body > pre,
+      body > ul,
+      body > ol,
+      body > blockquote {
+        width: auto;
+        max-width: calc(100% - 24px);
+        margin-left: 12px;
+        margin-right: 12px;
+      }
+      #title-block-header {
+        margin-top: 58px;
+        padding: 28px 18px 24px;
+        border-radius: 16px;
+      }
+      #title-block-header::after {
+        margin-top: 18px;
+        font-size: 10px;
+        overflow-wrap: anywhere;
+      }
+      .title {
+        max-width: 100%;
+        font-size: clamp(30px, 10vw, 42px);
+        overflow-wrap: anywhere;
+      }
+      section.level1 {
+        padding: 22px 16px;
+        border-radius: 14px;
+      }
+      section.level1 h1 {
+        font-size: 27px;
+        overflow-wrap: anywhere;
+      }
+      h2 { font-size: 22px; }
+      h3 { font-size: 18px; }
+      p, li, blockquote, td, th {
+        overflow-wrap: anywhere;
+        word-break: break-word;
+      }
+      :not(pre) > code {
+        white-space: normal;
+        overflow-wrap: anywhere;
+        word-break: break-all;
+      }
+      blockquote {
+        padding: 12px 14px;
+      }
+      pre {
+        padding: 16px;
+      }
+      th, td {
+        min-width: 128px;
+        padding: 9px 10px;
+      }
+    }
+    @media print {
+      :root { --bg: #fff; --paper: #fff; --ink: #111; --muted: #555; --line: #ccc; }
+      #TOC, #doc-tools, #reading-progress, body::before { display: none !important; }
+      body { background: #fff; font-size: 10.5pt; }
+      #title-block-header, body > section { max-width: none; margin: 0 0 16pt; padding: 0; border: 0; box-shadow: none; }
+      section.level1 { break-before: page; }
+      a { color: #111; text-decoration: none; }
+      pre, table { break-inside: avoid; }
+    }
+  </style>
+  <script>
+    document.addEventListener("DOMContentLoaded", () => {
+      const progress = document.createElement("div");
+      progress.id = "reading-progress";
+      document.body.prepend(progress);
+      const tools = document.createElement("div");
+      tools.id = "doc-tools";
+      tools.innerHTML = '<input id="doc-search" type="search" placeholder="筛选章节 · 按 / 聚焦" aria-label="筛选章节"><button id="theme-toggle" type="button" aria-label="切换主题">◐</button>';
+      document.body.append(tools);
+      const root = document.documentElement;
+      const saved = localStorage.getItem("lumen-report-theme");
+      if (saved) root.dataset.theme = saved;
+      document.getElementById("theme-toggle").addEventListener("click", () => {
+        const next = root.dataset.theme === "dark" ? "light" : "dark";
+        root.dataset.theme = next;
+        localStorage.setItem("lumen-report-theme", next);
+      });
+      const search = document.getElementById("doc-search");
+      search.addEventListener("input", () => {
+        const query = search.value.trim().toLocaleLowerCase();
+        document.querySelectorAll("section.level1").forEach(section => {
+          section.classList.toggle("search-hidden", query && !section.textContent.toLocaleLowerCase().includes(query));
+        });
+      });
+      document.addEventListener("keydown", event => {
+        if (event.key === "/" && document.activeElement !== search) { event.preventDefault(); search.focus(); }
+        if (event.key === "Escape" && document.activeElement === search) { search.value = ""; search.dispatchEvent(new Event("input")); search.blur(); }
+      });
+      const links = [...document.querySelectorAll("#TOC a[href^='#']")];
+      const byId = new Map(links.map(link => [decodeURIComponent(link.hash.slice(1)), link]));
+      const observer = new IntersectionObserver(entries => {
+        const visible = entries.filter(entry => entry.isIntersecting).sort((a, b) => a.boundingClientRect.top - b.boundingClientRect.top)[0];
+        if (!visible) return;
+        links.forEach(link => link.classList.remove("active"));
+        byId.get(visible.target.id)?.classList.add("active");
+      }, { rootMargin: "-10% 0px -76% 0px", threshold: 0 });
+      document.querySelectorAll("section[id], h1[id], h2[id]").forEach(node => observer.observe(node));
+      const updateProgress = () => {
+        const height = document.documentElement.scrollHeight - innerHeight;
+        progress.style.width = (height > 0 ? scrollY / height * 100 : 0) + "%";
+      };
+      addEventListener("scroll", updateProgress, { passive: true });
+      updateProgress();
+    });
+  </script>
+</head>
+<body>
+<header id="title-block-header">
+<h1 class="title">Lumen × Pi × DeepSeek Harness</h1>
+</header>
+<nav id="TOC" role="doc-toc">
+<ul>
+<li><a href="#lumenpi-agent-与-deepseek-harness源码级底层原理与架构对比"
+id="toc-lumenpi-agent-与-deepseek-harness源码级底层原理与架构对比">Lumen、Pi
+Agent 与 DeepSeek Harness：源码级底层原理与架构对比</a>
+<ul>
+<li><a href="#0-版本基线与结论边界" id="toc-0-版本基线与结论边界">0.
+版本基线与结论边界</a></li>
+<li><a href="#1-执行摘要" id="toc-1-执行摘要">1. 执行摘要</a>
+<ul>
+<li><a href="#11-三种架构人格" id="toc-11-三种架构人格">1.1
+三种架构人格</a></li>
+<li><a href="#12-一句话判断" id="toc-12-一句话判断">1.2
+一句话判断</a></li>
+<li><a href="#13-对-lumen-的核心建议"
+id="toc-13-对-lumen-的核心建议">1.3 对 Lumen 的核心建议</a></li>
+</ul></li>
+<li><a href="#2-共同底层原理agent-不是一次模型调用"
+id="toc-2-共同底层原理agent-不是一次模型调用">2. 共同底层原理：Agent
+不是一次模型调用</a></li>
+<li><a href="#3-lumen底层原理与技术架构"
+id="toc-3-lumen底层原理与技术架构">3. Lumen：底层原理与技术架构</a>
+<ul>
+<li><a href="#31-依赖方向与深-module"
+id="toc-31-依赖方向与深-module">3.1 依赖方向与深 Module</a></li>
+<li><a href="#32-从输入到-durable-outcome"
+id="toc-32-从输入到-durable-outcome">3.2 从输入到 durable
+outcome</a></li>
+<li><a href="#33-runtime模型-loop-与推测式文本投影"
+id="toc-33-runtime模型-loop-与推测式文本投影">3.3 Runtime：模型 loop
+与推测式文本投影</a></li>
+<li><a href="#34-contextengineactive-context-不是-canonical-history"
+id="toc-34-contextengineactive-context-不是-canonical-history">3.4
+ContextEngine：active context 不是 canonical history</a></li>
+<li><a href="#35-tool安全与-effect" id="toc-35-tool安全与-effect">3.5
+Tool、安全与 Effect</a></li>
+<li><a href="#36-taskworkspace把改了升级为可验证地改了"
+id="toc-36-taskworkspace把改了升级为可验证地改了">3.6
+TaskWorkspace：把“改了”升级为“可验证地改了”</a></li>
+<li><a href="#37-多-agent线程权威与隔离导入"
+id="toc-37-多-agent线程权威与隔离导入">3.7 多
+Agent：线程权威与隔离导入</a></li>
+</ul></li>
+<li><a href="#4-pi-agent现役架构与-harness-v2-演进方向"
+id="toc-4-pi-agent现役架构与-harness-v2-演进方向">4. Pi
+Agent：现役架构与 Harness v2 演进方向</a>
+<ul>
+<li><a href="#41-必须区分两条实现路径"
+id="toc-41-必须区分两条实现路径">4.1 必须区分两条实现路径</a></li>
+<li><a href="#42-pi-aiprovider-neutral-stream-vocabulary"
+id="toc-42-pi-aiprovider-neutral-stream-vocabulary">4.2
+pi-ai：Provider-neutral stream vocabulary</a></li>
+<li><a href="#43-agent-与-agentloop" id="toc-43-agent-与-agentloop">4.3
+Agent 与 agentLoop</a></li>
+<li><a href="#44-agentsession-与-sessionmanager"
+id="toc-44-agentsession-与-sessionmanager">4.4 AgentSession 与
+SessionManager</a></li>
+<li><a href="#45-compaction-与-branch-summary"
+id="toc-45-compaction-与-branch-summary">4.5 Compaction 与 branch
+summary</a></li>
+<li><a href="#46-extensions-与安全边界"
+id="toc-46-extensions-与安全边界">4.6 Extensions 与安全边界</a></li>
+<li><a href="#47-harness-v2-暗示的下一代方向"
+id="toc-47-harness-v2-暗示的下一代方向">4.7 Harness v2
+暗示的下一代方向</a></li>
+</ul></li>
+<li><a href="#5-deepseek-harness底层原理与技术架构"
+id="toc-5-deepseek-harness底层原理与技术架构">5. DeepSeek
+Harness：底层原理与技术架构</a>
+<ul>
+<li><a href="#51-cordis-组合根与-package-微内核"
+id="toc-51-cordis-组合根与-package-微内核">5.1 Cordis 组合根与 package
+微内核</a></li>
+<li><a href="#52-scope一次注册同时表达可见性与生命周期"
+id="toc-52-scope一次注册同时表达可见性与生命周期">5.2
+Scope：一次注册同时表达可见性与生命周期</a></li>
+<li><a href="#53-reactloopagent每个请求从-session-log-派生"
+id="toc-53-reactloopagent每个请求从-session-log-派生">5.3
+ReactLoopAgent：每个请求从 Session log 派生</a></li>
+<li><a href="#54-session-event-sourcing-与-surface"
+id="toc-54-session-event-sourcing-与-surface">5.4 Session event sourcing
+与 surface</a></li>
+<li><a href="#55-tool-pipeline-与确定性并发"
+id="toc-55-tool-pipeline-与确定性并发">5.5 Tool pipeline
+与确定性并发</a></li>
+<li><a href="#56-compaction-是可选-capability不是-loop-内建分支"
+id="toc-56-compaction-是可选-capability不是-loop-内建分支">5.6
+Compaction 是可选 capability，不是 loop 内建分支</a></li>
+<li><a href="#57-approval-与-sandbox"
+id="toc-57-approval-与-sandbox">5.7 Approval 与 Sandbox</a></li>
+<li><a href="#58-subagentcontinuable-child-与-agent-teams"
+id="toc-58-subagentcontinuable-child-与-agent-teams">5.8
+Subagent、continuable child 与 Agent Teams</a></li>
+</ul></li>
+<li><a href="#6-逐层对比矩阵" id="toc-6-逐层对比矩阵">6.
+逐层对比矩阵</a></li>
+<li><a href="#7-状态权威三者最本质的差异"
+id="toc-7-状态权威三者最本质的差异">7. 状态权威：三者最本质的差异</a>
+<ul>
+<li><a href="#71-pi以-live-agent-为中心"
+id="toc-71-pi以-live-agent-为中心">7.1 Pi：以 live Agent 为中心</a></li>
+<li><a href="#72-deepseek-harness以-session-event-log-为中心"
+id="toc-72-deepseek-harness以-session-event-log-为中心">7.2 DeepSeek
+Harness：以 Session event log 为中心</a></li>
+<li><a href="#73-lumen按状态概念分权session-保存持久事实"
+id="toc-73-lumen按状态概念分权session-保存持久事实">7.3
+Lumen：按状态概念分权，Session 保存持久事实</a></li>
+</ul></li>
+<li><a href="#8-安全与可信完成的对比" id="toc-8-安全与可信完成的对比">8.
+安全与可信完成的对比</a>
+<ul>
+<li><a href="#81-pi明确的本地信任模型"
+id="toc-81-pi明确的本地信任模型">8.1 Pi：明确的本地信任模型</a></li>
+<li><a href="#82-deepseek-harness能力管线强边界事实细"
+id="toc-82-deepseek-harness能力管线强边界事实细">8.2 DeepSeek
+Harness：能力管线强，边界事实细</a></li>
+<li><a href="#83-lumen风险效果验证和完成形成闭环"
+id="toc-83-lumen风险效果验证和完成形成闭环">8.3
+Lumen：风险、效果、验证和完成形成闭环</a></li>
+</ul></li>
+<li><a href="#9-多-agent-的两种不同问题"
+id="toc-9-多-agent-的两种不同问题">9. 多 Agent 的两种不同问题</a></li>
+<li><a href="#10-优势局限与适用场景" id="toc-10-优势局限与适用场景">10.
+优势、局限与适用场景</a>
+<ul>
+<li><a href="#101-lumen" id="toc-101-lumen">10.1 Lumen</a></li>
+<li><a href="#102-pi" id="toc-102-pi">10.2 Pi</a></li>
+<li><a href="#103-deepseek-harness" id="toc-103-deepseek-harness">10.3
+DeepSeek Harness</a></li>
+</ul></li>
+<li><a href="#11-对-lumen-的分阶段建议"
+id="toc-11-对-lumen-的分阶段建议">11. 对 Lumen 的分阶段建议</a>
+<ul>
+<li><a href="#p0保持不动的核心不变量"
+id="toc-p0保持不动的核心不变量">P0：保持不动的核心不变量</a></li>
+<li><a href="#p1低风险高收益"
+id="toc-p1低风险高收益">P1：低风险、高收益</a></li>
+<li><a href="#p2有第二实现时再抽象"
+id="toc-p2有第二实现时再抽象">P2：有第二实现时再抽象</a></li>
+<li><a href="#p3暂不建议" id="toc-p3暂不建议">P3：暂不建议</a></li>
+</ul></li>
+<li><a href="#12-最终判断" id="toc-12-最终判断">12. 最终判断</a></li>
+<li><a href="#13-一手源码索引" id="toc-13-一手源码索引">13.
+一手源码索引</a>
+<ul>
+<li><a href="#lumen-本地" id="toc-lumen-本地">Lumen 本地</a></li>
+<li><a href="#pi-固定-commit" id="toc-pi-固定-commit">Pi 固定
+commit</a></li>
+<li><a href="#deepseek-harness-固定-commit"
+id="toc-deepseek-harness-固定-commit">DeepSeek Harness 固定
+commit</a></li>
+</ul></li>
+</ul></li>
+</ul>
+</nav>
+<h1
+id="lumenpi-agent-与-deepseek-harness源码级底层原理与架构对比">Lumen、Pi
+Agent 与 DeepSeek Harness：源码级底层原理与架构对比</h1>
+<blockquote>
+<p>调研日期：2026-08-24<br />
+证据范围：Lumen 当前本地 worktree；Pi 与 DeepSeek Harness 官方 GitHub
+仓库的固定 commit。<br />
+方法：以源码、契约测试、Accepted
+架构记录和官方仓库文档为一手证据；不以社区文章推断内部实现。</p>
+</blockquote>
+<h2 id="0-版本基线与结论边界">0. 版本基线与结论边界</h2>
+<table>
+<thead>
+<tr>
+<th>项目</th>
+<th>本次基线</th>
+<th>状态说明</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Lumen</td>
+<td>本地 <code>9c924cc221d79a0f876804852f5881bf54af8e3c</code> +
+2026-08-24 当前未提交修改</td>
+<td>本地源码与契约是最高事实来源；未提交实现无法用 GitHub permalink
+精确表示</td>
+</tr>
+<tr>
+<td>Pi</td>
+<td><code>a470b121bf683b4c2b9fc0b3a7c807de7e0cfe9c</code>，<code>@earendil-works/pi-agent-core</code>
+0.84.2</td>
+<td>官方仓库
+<code>earendil-works/pi-mono</code>；经典运行路径已成熟，Harness v2 仍是
+scaffold</td>
+</tr>
+<tr>
+<td>DeepSeek Harness</td>
+<td><code>b150a551b8d465e31e418e1b2eaf5e79bbb7d28e</code>，root
+0.1.1-rc.2</td>
+<td>官方仓库 <code>deepseek-ai/deepseek-harness</code>；仍是 RC /
+developer-preview 语义</td>
+</tr>
+</tbody>
+</table>
+<p>这里的 <strong>Pi Agent</strong> 指 Pi coding agent 及其底层
+<code>pi-agent-core</code>，不是同名 Python SDK 或第三方 fork。 这里的
+<strong>DeepSeek Harness</strong> 指 DeepSeek 官方开源仓库，不是
+DeepSeek 模型 API 本身。</p>
+<p>最重要的总体结论是：三者都运行“模型 → 工具 → 观察 → 再请求模型”的迭代
+loop，但它们真正不同的 不是 ReAct 外形，而是
+<strong>谁拥有状态、何时把事实变成
+durable、扩展如何获得能力、失败后如何判断可以继续， 以及一个 Agent
+是否有资格宣称完成</strong>。</p>
+<h2 id="1-执行摘要">1. 执行摘要</h2>
+<h3 id="11-三种架构人格">1.1 三种架构人格</h3>
+<ol type="1">
+<li><strong>Pi：最小 loop + 应用层自由组合。</strong> <code>Agent</code>
+直接拥有消息数组、流式状态、steering/follow-up 队列和 工具
+loop；<code>AgentSession</code> 再把它接到 coding-agent 的 JSONL
+tree、compaction、extensions 与 TUI。 它的优势是透明、轻、Provider
+面广；代价是 sandbox、审批、Plan、多 Agent 和外部副作用恢复不属于默认
+core 的系统保证。</li>
+<li><strong>Lumen：由深 Module 拥有不同状态概念，并通过 Host
+汇合。</strong> <code>WorkspaceHost</code> 是客户端 seam，
+<code>RunCoordinator</code> 拥有 turn 协调，<code>AgentRuntime</code>
+拥有单 Agent loop，<code>ContextEngine</code> 拥有上下文两阶段
+prepare/commit，<code>TaskWorkspace</code> 拥有 mutation/effect
+验证，<code>AgentOrchestrator</code> 拥有多 Agent 生命周期。
+其设计目标不是最小代码量，而是保持每个概念只有一个运行时权威，并让完成声明受到持久化与验证证据约束。</li>
+<li><strong>DeepSeek Harness：事件溯源 spine + Cordis
+插件微内核。</strong> Session event log 是模型历史与恢复的事实源；
+<code>agent</code> 只定义公共 handle，<code>agent-loop</code> 是可替换
+Implementation；Tool、Prompt、Approval、Sandbox、 Compaction、Subagent
+都通过 scoped registry / waterfall 组合。它的 Leverage
+极高，但有效行为分散在大量 package、scope
+与插件监听器中，调试和认知成本也最高。</li>
+</ol>
+<h3 id="12-一句话判断">1.2 一句话判断</h3>
+<ul>
+<li>想要一个可嵌入、易改造、尽量少做平台判断的 Agent loop：Pi
+最合适。</li>
+<li>想要一个对工作区
+mutation、审批、恢复、客户端一致性和完成证据负责的应用框架：Lumen
+的方向更完整。</li>
+<li>想要一个可热插拔、可多实现替换、事件与 scope 语义高度系统化的 Agent
+产品微内核：DeepSeek Harness 的抽象能力最强，但不能低估其 package graph
+和插件组合复杂度。</li>
+</ul>
+<h3 id="13-对-lumen-的核心建议">1.3 对 Lumen 的核心建议</h3>
+<p>Lumen 不应整体模仿 Pi 的“把策略交给 extension”，也不应整体复制
+DeepSeek Harness 的数百 package 微内核。建议保留现有深 Module
+和唯一权威，同时选择性吸收四点：</p>
+<ul>
+<li>从 Pi 吸收 <strong>低层 loop 的可读性与可替换 stream
+seam</strong>，并把经典 loop 做成更小的契约图，而不是继续 扩大
+<code>AgentRuntime.run()</code> 的认知面积。</li>
+<li>从 DeepSeek Harness 吸收 <strong>scope = visibility + lifetime
+ownership</strong> 的统一思想，继续强化 Lumen 已有的
+<code>RegistrationScope</code>，但不把领域状态迁入通用 scope
+framework。</li>
+<li>引入 <strong>Sandbox enforcement fact</strong>：除了配置
+mode，还对外报告 backend、full/partial/unavailable、网络
+与进程可见性是否实际受控，避免 UI 把配置意图显示成已兑现保证。</li>
+<li>将外部 Agent 接入建模成 <code>AgentRuntimeFactory</code> 的
+backend，而不是第二个 Orchestrator；生命周期、worktree import、证据与
+completion gate 继续由 <code>AgentOrchestrator</code> 独占。</li>
+</ul>
+<h2 id="2-共同底层原理agent-不是一次模型调用">2. 共同底层原理：Agent
+不是一次模型调用</h2>
+<p>三个系统的最小闭环都可以抽象成：</p>
+<pre class="text"><code>input
+  → assemble(system / history / tools / dynamic context)
+  → stream model response
+  → if tool calls:
+        validate / authorize / schedule / execute
+        append tool observations
+        repeat model request
+    else:
+        finish turn
+  → persist / project / expose outcome</code></pre>
+<p>这个 loop 的技术难点不在 <code>while</code>，而在五个一致性问题：</p>
+<ol type="1">
+<li><strong>模型看到的 history 从哪里派生？</strong> 是 mutable message
+array、Session tree，还是 append-only event log？</li>
+<li><strong>工具已经产生副作用，但进程在记录结果前崩溃怎么办？</strong></li>
+<li><strong>并行工具按完成顺序返回，但模型上下文按源顺序要求确定性，谁负责重排？</strong></li>
+<li><strong>压缩后的 active context 与完整 canonical history
+如何同时存在而不形成双权威？</strong></li>
+<li><strong>模型输出了“完成”，但还有未验证文件、未交付 child result
+或待审批动作，谁可以否决？</strong></li>
+</ol>
+<p>Pi 优先优化 loop 的小与灵活；DeepSeek Harness
+优先优化事件与插件组合；Lumen 优先优化应用级状态权威、
+副作用审计和完成正确性。</p>
+<h2 id="3-lumen底层原理与技术架构">3. Lumen：底层原理与技术架构</h2>
+<h3 id="31-依赖方向与深-module">3.1 依赖方向与深 Module</h3>
+<pre class="text"><code>Textual TUI ─┐
+Next/FastAPI ├─ Adapter → WorkspaceHost
+Headless ────┘                 │
+                               ├─ RunCoordinator → AgentRuntime → Provider / Tools
+                               ├─ ContextEngine → ArtifactStore / Memory
+                               ├─ TaskWorkspace → Work Product / Effect journal
+                               ├─ AgentOrchestrator → AgentRuntimeFactory / worktree
+                               └─ SessionRepository → append-only JSONL facts</code></pre>
+<p><code>WorkspaceHost</code> 不是另一个模型 loop。它拥有 Session
+actor、active run、审批 future、幂等请求和 ordered
+<code>EventJournal</code>，让 TUI、Web、headless 共享 command/event
+契约。真正的单 Agent loop 在 <a
+href="../src/lumen/runtime.py"><code>AgentRuntime</code></a>，turn
+与持久化顺序在 <a
+href="../src/lumen/run_coordinator.py"><code>RunCoordinator</code></a>，上下文在
+<a
+href="../src/lumen/context/engine.py"><code>ContextEngine</code></a>。</p>
+<p>这种拆分通过 deletion test 才成立：删除任一深
+Module，其隐藏的复杂度会散落到多个调用者，而不是只少一层 转发。当前
+Accepted 设计与实现审计见 <a
+href="architecture-guide/02-agent-runtime-flow.md"><code>02-agent-runtime-flow.md</code></a>、
+<a
+href="architecture-guide/10-native-multi-agent-runtime.md"><code>10-native-multi-agent-runtime.md</code></a>
+和 <a
+href="architecture-guide/12-current-implementation-audit.md"><code>12-current-implementation-audit.md</code></a>。</p>
+<h3 id="32-从输入到-durable-outcome">3.2 从输入到 durable outcome</h3>
+<p>Lumen 的关键顺序是：</p>
+<ol type="1">
+<li>Host 用 <code>(session_id, client_request_id)</code> 去重，拒绝同
+workspace 第二个主 run。</li>
+<li>Coordinator 先追加 <code>running</code>
+turn，证明输入已被接受，再进入 Provider 或工具执行。</li>
+<li>Runtime 调 <code>ContextEngine.prepare()</code> 获得有 fingerprint
+的 provider-ready envelope。</li>
+<li>Pydantic AI 驱动模型/工具 loop；Lumen 翻译
+streaming、thinking、tool、approval 与 work-product 事件。</li>
+<li>Runtime 调 <code>ContextEngine.commit()</code> 生成候选 active
+history，但 checkpoint 还没有成为运行中事实。</li>
+<li>Coordinator 追加 terminal turn 并 <code>fsync</code>；成功后才
+<code>confirm_persisted()</code> 发布 checkpoint，再替换内存状态。</li>
+<li>如果 rich terminal payload 无法序列化，Coordinator/Host 还会追加最小
+failed terminal record，避免 Web 已显示 的文本在恢复后静默消失。</li>
+</ol>
+<p>这里真正重要的是 <strong>durability-before-publication</strong>：内存
+checkpoint 不得领先于 JSONL。Pi 经典路径的流程较少，
+但不提供这一保证：事件会先发布给 extension/UI listener，随后才在
+<code>message_end</code> 写入 Session，且持久实现未见
+<code>fsync</code>。DeepSeek Harness 则把 Session 内存事实源与
+persistence/checkpoint policy 分开，通过 write-behind、
+<code>session/flush</code> 和 ordinary-turn barrier 建立耐久化
+seam；这仍不同于 Lumen 在 terminal turn 上的显式两阶段发布。</p>
+<h3 id="33-runtime模型-loop-与推测式文本投影">3.3 Runtime：模型 loop
+与推测式文本投影</h3>
+<p><code>AgentRuntime</code> 以 Pydantic AI <code>Agent</code> 作为
+Provider/tool loop Implementation，但 Lumen 自己拥有以下语义：</p>
+<ul>
+<li>request/tool call limits、transient retry 与 partial outcome；</li>
+<li>approval request/result 和 recovery receipt；</li>
+<li>Provider request receipt：route、token 分区、visible tool
+digest、context fingerprint；</li>
+<li>provider thinking 与普通文本分离；</li>
+<li>completion validator 联合 Plan、Work Product 与 Agent unresolved
+issues；</li>
+<li>AttachmentRef 在 Provider boundary 解引用，持久化前恢复为 artifact
+marker。</li>
+</ul>
+<p>流式文本采用推测式渲染：响应中的文本先作为 <code>TextDelta</code>
+显示；如果同一响应随后出现 tool call，就发 <code>TextRetracted</code>
+并将该段重新投影为 commentary。这样 UI
+不必等整个响应结束，同时不会把工具前说明误写成 最终答案。</p>
+<h3 id="34-contextengineactive-context-不是-canonical-history">3.4
+ContextEngine：active context 不是 canonical history</h3>
+<p>Lumen 把上下文看成对完整 Session history
+的预算化投影，而不是历史本身。<code>prepare()</code> 同时处理：</p>
+<ul>
+<li>Prompt、instructions、tool schema 和 safety reserve
+的固定预算；</li>
+<li>History、memory、skills、retrieved context、task/work-product state
+等 Zone；</li>
+<li>大 tool output spill 到内容寻址 ArtifactStore，仅保留 receipt；</li>
+<li>rolling summary、V2 checkpoint
+parent/range/cursor/digest/provenance；</li>
+<li>anti-thrash、cooldown、后台候选与 stale candidate 拒绝；</li>
+<li>summary 失败后的 deterministic
+<code>degrade_to_window</code>，确保不向 Provider 发送超 hard limit
+请求。</li>
+</ul>
+<p>V2 checkpoint 以完整 source transcript 的范围与 digest 为权威，active
+prefix 只是 Provider 投影。
+<code>prepare → commit → fsync → confirm_persisted</code> 是 Lumen
+与另两者最显著的上下文一致性设计。</p>
+<h3 id="35-tool安全与-effect">3.5 Tool、安全与 Effect</h3>
+<p>Lumen 把三个常被混淆的轴拆开：</p>
+<table>
+<thead>
+<tr>
+<th>轴</th>
+<th>回答的问题</th>
+<th>例子</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>Risk</code></td>
+<td>是否需要用户审批</td>
+<td>read / write / execute / external / external_unknown</td>
+</tr>
+<tr>
+<td><code>EffectKind</code></td>
+<td>是否需要状态追踪、恢复和验证</td>
+<td>observe / mutation / execution / external_action / unknown</td>
+</tr>
+<tr>
+<td><code>ToolConcurrency</code></td>
+<td>此次 invocation 能否并发</td>
+<td>exclusive / parallel_safe</td>
+</tr>
+</tbody>
+</table>
+<p><code>ToolOutputSpec</code> 再把 canonical JSON
+result、模型文本和客户端 presentation 分开。Tool renderer 失败只产生
+有界 diagnostic，不能把成功的 authoritative outcome
+改成失败。<code>CapabilityGateway</code> 的 guard 只有
+abstain/deny，任何 deny 都不能被后续 Hook 放宽。</p>
+<p>文件访问通过 <a
+href="../src/lumen/tools/workspace.py"><code>Workspace</code></a>
+拒绝绝对路径、<code>..</code> 和 symlink escape； mutation 使用 expected
+revision、no-replace
+create、替换前重验和原子发布。<code>run_command</code> 通过 <a
+href="../src/lumen/sandbox.py"><code>SandboxRunner</code></a>；默认
+<code>workspace_write</code> 在支持平台 fail closed，并终止超时/取消的
+整个进程组。Approval、路径 confinement 和 OS sandbox
+是三个正交机制。</p>
+<h3 id="36-taskworkspace把改了升级为可验证地改了">3.6
+TaskWorkspace：把“改了”升级为“可验证地改了”</h3>
+<p><a
+href="../src/lumen/work_products/workspace.py"><code>TaskWorkspace</code></a>
+记录 <code>prepared → applied → verified/failed → rolled_back</code>
+effect journal。文本与结构化局部修改除了验证目标已变化，
+还验证非目标区域/路径不变；恢复时把中断 effect 与当前资源 revision
+对账。严格模式下，未验证 mutation、 未知 effect 或
+reconciliation-required work product 会阻止 completion。</p>
+<p>这是 Lumen 相对 Pi 和 DeepSeek Harness 最独特的
+Module：后两者都有工具结果与文件安全机制，但默认产品 spine
+没有等价的“工作对象 + effect verification + completion veto”组合。</p>
+<h3 id="37-多-agent线程权威与隔离导入">3.7 多
+Agent：线程权威与隔离导入</h3>
+<p><a
+href="../src/lumen/agents/orchestrator.py"><code>AgentOrchestrator</code></a>
+是 Agent Thread、调度、消息、恢复、证据与完成门禁的 唯一权威；<a
+href="../src/lumen/agents/runtime_factory.py"><code>NativeAgentRuntimeFactory</code></a>
+只负责创建受限 child runtime 和 管理 worktree 结果。</p>
+<p>V1 的能力约束是：</p>
+<ul>
+<li>child tools = 父轮次有效工具 ∩ role allow-list ∩ workspace
+mode；</li>
+<li>child 不获得多 Agent 控制工具，最大深度由能力层强制为一；</li>
+<li>explorer 共用工作区只读，worker/default 写入独立 Git worktree；</li>
+<li>导入前检查基线、父工作区 dirty path 和三方冲突；</li>
+<li>active、未交付结果、未处理失败、待导入、冲突、缺
+evidence、未验证导入都会阻止根 Agent 完成。</li>
+</ul>
+<p>这是一种“受控并行工作产品”模型，而不是仅仅启动多个 loop。</p>
+<h2 id="4-pi-agent现役架构与-harness-v2-演进方向">4. Pi
+Agent：现役架构与 Harness v2 演进方向</h2>
+<h3 id="41-必须区分两条实现路径">4.1 必须区分两条实现路径</h3>
+<p>当前 Pi 源码有两层不能混写：</p>
+<ol type="1">
+<li><strong>现役经典路径</strong>：<code>pi-ai → Agent / agentLoop → AgentSession → SessionManager → TUI/print/RPC/SDK</code>。
+CLI 主路径仍由 <code>createAgentSession()</code> 创建
+<code>Agent</code>，<code>AgentSession</code> 监听事件并把消息写入
+<code>SessionManager</code>。</li>
+<li><strong>Harness v2
+scaffold</strong>：<code>packages/agent/src/harness/</code> 已包含新的
+Session storage、record reducer、lane、 compaction、skills、tools 和
+telemetry Implementation，其中一部分类型已公开；coding-agent 也有
+<code>createCodingAgentHarness()</code> 装配器。但在固定 commit
+上，<code>prompt()</code>、<code>resume()</code>、<code>compact()</code>、<code>steer()</code>、<code>followUp()</code>、lanes、watch
+与 hooks 等仍明确 抛 <code>HarnessNotImplemented</code>，测试名称就是
+<code>AgentHarness v2 scaffold</code>。</li>
+</ol>
+<p>因此，本节的产品能力判断以经典路径为准；Harness v2
+只作为演进信号。</p>
+<p>证据：<a
+href="https://github.com/earendil-works/pi-mono/blob/a470b121bf683b4c2b9fc0b3a7c807de7e0cfe9c/packages/agent/src/harness/agent-harness.ts"><code>AgentHarness</code></a>、
+<a
+href="https://github.com/earendil-works/pi-mono/blob/a470b121bf683b4c2b9fc0b3a7c807de7e0cfe9c/packages/agent/test/harness/agent-harness-scaffold.test.ts"><code>scaffold test</code></a>、
+<a
+href="https://github.com/earendil-works/pi-mono/blob/a470b121bf683b4c2b9fc0b3a7c807de7e0cfe9c/packages/coding-agent/src/core/sdk.ts"><code>classic SDK construction</code></a>。</p>
+<h3 id="42-pi-aiprovider-neutral-stream-vocabulary">4.2
+pi-ai：Provider-neutral stream vocabulary</h3>
+<p><code>pi-ai</code> 把 Provider/model metadata、统一
+Message/Content、stream event、usage 与 retry 放在 Agent 之下。
+<code>Agent</code> 只依赖一个
+<code>StreamFn(model, context, options)</code>，因此
+Anthropic、OpenAI、Google、Bedrock、DeepSeek 等 差异被限制在 Provider
+adapter。这个 seam 很小：Agent 不需要知道 HTTP/SSE wire format。</p>
+<p>这是 Pi 最大的 Leverage：替换模型通常不改变
+loop；应用也可以注入自己的 stream function。 证据：<a
+href="https://github.com/earendil-works/pi-mono/blob/a470b121bf683b4c2b9fc0b3a7c807de7e0cfe9c/packages/agent/src/types.ts"><code>StreamFn</code></a>、
+<a
+href="https://github.com/earendil-works/pi-mono/blob/a470b121bf683b4c2b9fc0b3a7c807de7e0cfe9c/packages/ai/src/types.ts"><code>pi-ai types</code></a>。</p>
+<h3 id="43-agent-与-agentloop">4.3 Agent 与 agentLoop</h3>
+<p>经典 <code>Agent</code> 直接拥有：</p>
+<ul>
+<li><code>systemPrompt</code>、model、thinking
+level、tools、messages；</li>
+<li><code>isStreaming</code>、partial assistant message、pending tool
+calls、error；</li>
+<li>steering 与 follow-up 两个内存队列；</li>
+<li>subscription listeners 与 active abort controller。</li>
+</ul>
+<p><code>runLoop()</code> 有内外两层循环：内层处理 tool continuation 与
+steering，外层在本应结束时检查 follow-up。 每一步调用可选
+<code>transformContext()</code>，再
+<code>convertToLlm()</code>，然后通过 <code>StreamFn</code>
+请求模型。assistant message 含 tool calls 时，loop 执行并追加 tool
+result；否则结束。</p>
+<p>Pi 的语义非常直接：mutable <code>AgentMessage[]</code> 是运行中
+transcript，事件主要服务 UI 和上层持久化。它没有 Lumen 的
+Host/Coordinator/ContextEngine 三段提交，也没有 DeepSeek Harness 的
+turn/step event log 先行。</p>
+<p>工具并发是“批次级 + 工具 override”：默认 parallel，preflight
+顺序执行，允许的工具并发执行，完成事件按 完成顺序发出，但最终 toolResult
+message 按 assistant 源顺序加入历史；任一工具声明 sequential
+时整批回退。</p>
+<p>证据：<a
+href="https://github.com/earendil-works/pi-mono/blob/a470b121bf683b4c2b9fc0b3a7c807de7e0cfe9c/packages/agent/src/agent.ts"><code>Agent</code></a>、
+<a
+href="https://github.com/earendil-works/pi-mono/blob/a470b121bf683b4c2b9fc0b3a7c807de7e0cfe9c/packages/agent/src/agent-loop.ts"><code>agentLoop</code></a>。</p>
+<h3 id="44-agentsession-与-sessionmanager">4.4 AgentSession 与
+SessionManager</h3>
+<p>coding-agent 的 <code>AgentSession</code> 是经典 core
+与产品功能的胶合层：它处理 compaction、extension hook、session
+event、tool lifecycle、model/tool 切换与 UI-facing
+state。<code>SessionManager</code> 把每个 entry 存成带
+<code>id/parentId</code> 的 JSONL tree，active leaf
+决定当前分支；<code>/tree</code>
+可在同一文件内回到旧节点并形成新分支。</p>
+<p>这个树模型对交互探索非常自然：历史分支不丢失，branch summarization
+可以把离开的路径摘要注入新路径。 但 classic SessionManager 与 live
+<code>Agent.messages</code> 是两个需要 <code>AgentSession</code>
+保持同步的表示；迁移旧 session 时 <code>migrateToCurrentVersion()</code>
+可能重写整个文件。它不是 Lumen 的“旧 schema 永不重写”策略，也不是
+DeepSeek Harness 的 SessionEvent 单一模型历史源。</p>
+<p>证据：<a
+href="https://github.com/earendil-works/pi-mono/blob/a470b121bf683b4c2b9fc0b3a7c807de7e0cfe9c/packages/coding-agent/src/core/session-manager.ts"><code>SessionManager</code></a>、
+<a
+href="https://github.com/earendil-works/pi-mono/blob/a470b121bf683b4c2b9fc0b3a7c807de7e0cfe9c/packages/coding-agent/src/core/agent-session.ts"><code>AgentSession</code></a>、
+<a
+href="https://github.com/earendil-works/pi-mono/blob/a470b121bf683b4c2b9fc0b3a7c807de7e0cfe9c/packages/coding-agent/docs/sessions.md"><code>sessions docs</code></a>。</p>
+<h3 id="45-compaction-与-branch-summary">4.5 Compaction 与 branch
+summary</h3>
+<p>Pi 在 <code>contextTokens &gt; contextWindow - reserveTokens</code>
+时触发 compaction，向后保留约 <code>keepRecentTokens</code>，把旧历史
+交给模型生成结构化 summary，并追加
+<code>CompactionEntry(summary, firstKeptEntryId, tokensBefore, details)</code>。
+完整原始 entries 仍在 JSONL tree 中；Provider 下次看到 summary +
+retained tail。</p>
+<p>Pi 还处理 oversized single turn：cut point 不落在 tool result
+上，必要时分别总结历史和当前 turn prefix。 默认 compaction 累积
+read/modified file 列表；branch navigation 可总结离开的分支。</p>
+<p>它的优点是简单、用户可理解、与 tree 强结合；弱点是 summary
+主要是文本约定，没有 Lumen V2 checkpoint 的
+parent/range/digest/evidence，也没有 DeepSeek Harness
+<code>compaction/start/end</code> durable lock bracket。</p>
+<p>证据：<a
+href="https://github.com/earendil-works/pi-mono/blob/a470b121bf683b4c2b9fc0b3a7c807de7e0cfe9c/packages/coding-agent/src/core/compaction/compaction.ts"><code>compaction</code></a>、
+<a
+href="https://github.com/earendil-works/pi-mono/blob/a470b121bf683b4c2b9fc0b3a7c807de7e0cfe9c/packages/coding-agent/docs/compaction.md"><code>compaction docs</code></a>。</p>
+<h3 id="46-extensions-与安全边界">4.6 Extensions 与安全边界</h3>
+<p>Pi 默认故意不内置 permission popups、Plan mode、subagents 或
+sandbox；它们可以由 TypeScript extension/package 实现。Project trust
+只决定是否加载项目本地
+settings/resources/extensions，不限制模型之后让工具做什么。 内置工具与
+extensions 以启动 Pi 的 OS 用户权限运行；官方建议在
+container、VM、micro-VM 或外部 policy sandbox
+中运行不可信/无人值守任务。</p>
+<p>这不是“没有安全意识”，而是明确选择不把 partial in-process sandbox
+宣称为真实边界。代价是不同 extension 可以各自实现不同
+approval/effect/recovery 语义，平台没有 Lumen 式统一
+Risk/EffectKind/完成门禁，也没有 DeepSeek Harness 式统一 Tool registry
+waterfall。</p>
+<p>证据：<a
+href="https://github.com/earendil-works/pi-mono/blob/a470b121bf683b4c2b9fc0b3a7c807de7e0cfe9c/packages/coding-agent/docs/security.md"><code>security.md</code></a>、
+<a
+href="https://github.com/earendil-works/pi-mono/blob/a470b121bf683b4c2b9fc0b3a7c807de7e0cfe9c/packages/coding-agent/README.md"><code>coding-agent README</code></a>。</p>
+<h3 id="47-harness-v2-暗示的下一代方向">4.7 Harness v2
+暗示的下一代方向</h3>
+<p>虽然尚未可运行，v2 scaffold 已显露明确方向：</p>
+<ul>
+<li><code>Session</code> 与 storage Interface，支持 memory/JSONL
+backend；</li>
+<li>Entry tree + separate operation record log；</li>
+<li>仓库内的 <code>reduceLaneState()</code> 从 durable slice 推导 active
+operation、tool batch、pending write、queue 和 corruption；该 reducer
+有测试，但未从 package 公共入口导出；</li>
+<li>lane 概念、多队列、manual/automatic drive、action stepping；</li>
+<li>record corruption 明确分类，restore
+遇到不可能状态拒绝而非猜测修复。</li>
+</ul>
+<p>这说明 Pi 正在尝试把经典路径中“live mutable Agent + 上层
+SessionManager”的一部分一致性责任下沉到可恢复 harness。但固定 commit
+上这些是 <strong>部分已导出类型，以及仓库内已有测试的
+scaffold，不是已完成的产品 loop</strong>。</p>
+<h2 id="5-deepseek-harness底层原理与技术架构">5. DeepSeek
+Harness：底层原理与技术架构</h2>
+<h3 id="51-cordis-组合根与-package-微内核">5.1 Cordis 组合根与 package
+微内核</h3>
+<p>DeepSeek Harness 不是一个大 <code>AgentRuntime</code>，而是由 Cordis
+<code>Context</code> 装配的 package graph。核心 spine 只有：</p>
+<pre class="text"><code>scope
+  ↓
+session → system-prompt → tools → agent(interface/registry) → agent-loop(implementation)
+                           ↓
+                         llm seam</code></pre>
+<p>Compaction、Approval、Sandbox、FS、Skills、Subagent、Jobs、Web、ACP
+等都是可选 capability/plugin，而不是 硬塞进 loop。消费者依赖
+<code>agent</code> Interface，不依赖 <code>agent-loop</code>
+实现；factory 由 loop 注册到 AgentRegistry。</p>
+<p>证据：<a
+href="https://github.com/deepseek-ai/deepseek-harness/blob/b150a551b8d465e31e418e1b2eaf5e79bbb7d28e/docs/subsystems/core.md"><code>core subsystem</code></a>、
+<a
+href="https://github.com/deepseek-ai/deepseek-harness/tree/b150a551b8d465e31e418e1b2eaf5e79bbb7d28e/packages/core"><code>core packages</code></a>。</p>
+<h3 id="52-scope一次注册同时表达可见性与生命周期">5.2
+Scope：一次注册同时表达可见性与生命周期</h3>
+<p><code>ScopeKey</code> 是不透明对象 identity，生产 loop 直接以 live
+<code>Agent</code> 对象作为 key。通过 <code>agent.ctx</code> 注册的
+Tool、 Prompt、listener 或 restriction 只在该 Agent scope 可见，并在
+scope dispose 时按 effect ownership 清理。 <code>ScopedLayers</code>
+提供 global layer + exact-scope overlay，scope-local 条目 shadow
+global，读操作不创建 layer。</p>
+<p>这同时解决两个常被拆开的事情：</p>
+<ul>
+<li><strong>谁能看到这个能力</strong>；</li>
+<li><strong>谁销毁时必须撤销这个能力</strong>。</li>
+</ul>
+<p>Lumen 的 <code>RegistrationScope</code> 已解决可逆注册与 task
+quiescence，但能力可见性主要由 Registry/Factory 快照和 child tool
+intersection 处理；DeepSeek 的 scope 更统一，也更依赖插件框架。</p>
+<p>证据：<a
+href="https://github.com/deepseek-ai/deepseek-harness/blob/b150a551b8d465e31e418e1b2eaf5e79bbb7d28e/docs/subsystems/scope.md"><code>scope</code></a>、
+<a
+href="https://github.com/deepseek-ai/deepseek-harness/blob/b150a551b8d465e31e418e1b2eaf5e79bbb7d28e/packages/core/scope/src/index.ts"><code>scope source</code></a>。</p>
+<h3 id="53-reactloopagent每个请求从-session-log-派生">5.3
+ReactLoopAgent：每个请求从 Session log 派生</h3>
+<p><code>ReactLoopAgent</code> 的 phase 只有 idle / maintenance /
+running，public status 只暴露 idle/running。Inbox 有
+<code>next-turn</code> 与 <code>next-step</code> 两个可由 Session
+记录重建的 projection；followup/steer/inject 是 <code>send()</code>
+的固定 preset。</p>
+<p>一轮执行：</p>
+<ol type="1">
+<li>append <code>turn/start</code>；</li>
+<li>claim inbox，assemble scoped prompt 与 dynamic runtime
+context；</li>
+<li><code>agent/pre-step</code> waterfall 决定 reject 或 enter；</li>
+<li>append <code>step/start</code> 与 user messages；</li>
+<li>从 <code>session.deriveMessages()</code> 构建模型请求，stream chunk
+全部先 append；</li>
+<li>block assembler 生成 assistant message 并 append；</li>
+<li>有 tool call 则调统一 ToolRuntime，把 result additional context 插回
+next-step inbox；</li>
+<li>append
+<code>step/end</code>、<code>turn/end</code>；失败、abort、max-token
+都有 typed reason。</li>
+</ol>
+<p>与 Pi 最大差别是：Pi 的 loop 先操作 mutable messages
+再发事件；DeepSeek Harness 的 loop 把 turn/step/message/tool
+事实持续写入 Session log，下一请求重新 derive。与 Lumen
+最大差别是：Lumen 的 journal 以 terminal turn 为主， Provider streaming
+通过 EventJournal 与 partial outcome 持久化；DeepSeek 把更细的
+step/chunk 直接作为 Session 事实。</p>
+<p>证据：<a
+href="https://github.com/deepseek-ai/deepseek-harness/blob/b150a551b8d465e31e418e1b2eaf5e79bbb7d28e/packages/core/agent-loop/src/agent.ts"><code>ReactLoopAgent</code></a>。</p>
+<h3 id="54-session-event-sourcing-与-surface">5.4 Session event sourcing
+与 surface</h3>
+<p>Session 是 append-only typed <code>SessionEvent[]</code>，LLM history
+由 <code>deriveMessages()</code> 派生，不维护第二份独立 message
+history。事件除了 log 顺序，还有
+<strong>surface</strong>：message-producing event 可 append 或 replace
+已有 surface range， 因此 compaction、tool-result pruning 和动态上下文
+snapshot 能保留原始 log，同时改变模型下次看到的投影。</p>
+<p>Persistence 是独立 Interface。事件先同步进入 session，backend
+controller write-behind batching； <code>session/flush</code> 取消等待并
+drain 至 quiescence，是下一 ordinary turn 前的 durability
+checkpoint。冷恢复遇到中断 turn 会保留已提交事实并补 synthetic balance
+event，而不是静默截断物理 tail。</p>
+<p>证据：<a
+href="https://github.com/deepseek-ai/deepseek-harness/blob/b150a551b8d465e31e418e1b2eaf5e79bbb7d28e/docs/subsystems/session.md"><code>session</code></a>、
+<a
+href="https://github.com/deepseek-ai/deepseek-harness/blob/b150a551b8d465e31e418e1b2eaf5e79bbb7d28e/docs/subsystems/persistence.md"><code>persistence</code></a>。</p>
+<h3 id="55-tool-pipeline-与确定性并发">5.5 Tool pipeline
+与确定性并发</h3>
+<p>ToolRuntime 把工具定义、scoped visibility、限制、guard、policy
+waterfall、around dispatch、post decision、 presentation 和 final
+notification 收口到一个 pipeline：</p>
+<pre class="text"><code>resolve visible definition
+  → validate / classify execution mode
+  → tools/pre-execute (allow / deny / ask)
+  → monotonic guards
+  → tools/execute around waterfall
+  → body
+  → tools/post-execute
+  → finalize content/meta
+  → frozen result + tools/result</code></pre>
+<p>并行调度比 Pi 更细：exclusive 调用形成 barrier；parallel 调用进入
+bounded rolling pool；每个未启动 call 在启动前 重新分类，因此运行中
+registry 变化可以建立新 barrier。实际 dispatch 可并行，但
+pre-policy、Session result 与 additional context
+按模型源顺序提交；是否已经 durable 取决于 persistence controller 与
+flush barrier。Abort 停止补充新任务、drain 已启动调用，并为未启动 call
+写 synthetic aborted result，使 replay 仍平衡。</p>
+<p>证据：<a
+href="https://github.com/deepseek-ai/deepseek-harness/blob/b150a551b8d465e31e418e1b2eaf5e79bbb7d28e/docs/subsystems/tools.md"><code>tools</code></a>、
+<a
+href="https://github.com/deepseek-ai/deepseek-harness/blob/b150a551b8d465e31e418e1b2eaf5e79bbb7d28e/packages/core/agent-loop/src/tool-calls.ts"><code>tool scheduler</code></a>。</p>
+<h3 id="56-compaction-是可选-capability不是-loop-内建分支">5.6
+Compaction 是可选 capability，不是 loop 内建分支</h3>
+<p>Compaction 通过
+<code>compaction/start</code>、<code>summary</code>、<code>end</code>
+记录完整 durable bracket。summary 本身以一个 <code>user/message</code>
+surface replacement 替换选定范围；旧事件仍在 log。<code>start</code>
+先写、<code>end</code> 最后写，使中途崩溃 表现为 orphaned
+lock，不会误称操作完成。范围选择保持 tool call/result pairing，可先调用
+deterministic tool-result pruner 再决定是否需要模型摘要。</p>
+<p>这比 Pi 的单个 CompactionEntry 更事务化；与 Lumen 相比，它以 surface
+replacement generation 为中心，Lumen 则以 source transcript checkpoint
+chain、digest、Artifact receipt 与两阶段发布为中心。</p>
+<p>证据：<a
+href="https://github.com/deepseek-ai/deepseek-harness/blob/b150a551b8d465e31e418e1b2eaf5e79bbb7d28e/docs/subsystems/compaction.md"><code>compaction</code></a>。</p>
+<h3 id="57-approval-与-sandbox">5.7 Approval 与 Sandbox</h3>
+<p>Approval 的 outcome 是闭合集合，只有 <code>allowed-once</code>
+放行；缺少 answerer 或异常默认 unavailable/deny。 Session policy
+当前主要是 <code>ask/never</code>，每次 asked/decided 都是 log-only
+audit pair。这一设计 fail closed，但策略 表达力低于 Lumen 的
+Risk、manual/auto/plan/accept-edits 和 once/session/always scope。</p>
+<p>Sandbox mode 是
+<code>read-only / workspace-write / danger-full-access</code>，只承诺文件
+effect；network 与 process visibility 明确不在 vocabulary 内。Provider
+返回 <code>full/partial</code> enforcement，旧 Landlock ABI 或 Windows
+ACL 的残缺能力不会被伪装成 full；没有可用 confined backend 必须
+<code>SANDBOX_UNAVAILABLE</code>，不得 silent passthrough。</p>
+<p>这对 Lumen 最直接的启发是：<strong>mode 是 policy intent，enforcement
+是运行事实</strong>，两者都应出现在 capability report 和审计中。</p>
+<p>证据：<a
+href="https://github.com/deepseek-ai/deepseek-harness/blob/b150a551b8d465e31e418e1b2eaf5e79bbb7d28e/docs/subsystems/approval.md"><code>approval</code></a>、
+<a
+href="https://github.com/deepseek-ai/deepseek-harness/blob/b150a551b8d465e31e418e1b2eaf5e79bbb7d28e/docs/subsystems/sandbox.md"><code>sandbox</code></a>。</p>
+<h3 id="58-subagentcontinuable-child-与-agent-teams">5.8
+Subagent、continuable child 与 Agent Teams</h3>
+<p><code>ctx.subagents</code> 是 named Provider registry，可以同时存在
+in-process spawn/fork、ACP、Codex、Claude Code、 DSH SDK 等
+backend。Start 前先检查 output schema、depth limit、tool filter、persona
+等 capability，不能把不支持 的选项接受后忽略。</p>
+<p>one-shot child 返回 <code>SubagentRun</code>；continuable child 则以
+child SessionId 为 durable identity，由 Activation manager 负责
+resident/cold resume，Agent inbox 是唯一 FIFO。Delegation depth 同时写
+Session header 与 runtime option，恢复不能把 child 伪装回 root。Fork
+只复制到父级最后一个已闭合 <code>turn/end</code> 的平衡前缀。</p>
+<p>实验性 Agent Teams 又提供 implicit root、durable
+roster、queued-minus-delivered mailbox 和 shared task DAG； 这是比 Lumen
+V1 depth-one 更宽的拓扑。但其 shared checkout 与通用 child provider
+模型没有 Lumen 当前的 isolated worktree import/reject、父 dirty-path
+guard、Plan evidence 和 TaskWorkspace completion gate。</p>
+<p>证据：<a
+href="https://github.com/deepseek-ai/deepseek-harness/blob/b150a551b8d465e31e418e1b2eaf5e79bbb7d28e/docs/subsystems/subagent.md"><code>subagent</code></a>、
+<a
+href="https://github.com/deepseek-ai/deepseek-harness/blob/b150a551b8d465e31e418e1b2eaf5e79bbb7d28e/docs/subsystems/agent-team.md"><code>agent teams</code></a>。</p>
+<h2 id="6-逐层对比矩阵">6. 逐层对比矩阵</h2>
+<table>
+<thead>
+<tr>
+<th>维度</th>
+<th>Lumen</th>
+<th>Pi 经典路径</th>
+<th>DeepSeek Harness</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>首要定位</td>
+<td>通用、可配置、对安全/恢复/工作对象负责的 Agent framework</td>
+<td>极简、可嵌入、多 Provider coding harness</td>
+<td>可组合、可热插拔的 Agent 产品微内核</td>
+</tr>
+<tr>
+<td>语言/运行时</td>
+<td>Python 3.11–3.13，Pydantic AI loop</td>
+<td>TypeScript/Node，pi-ai stream</td>
+<td>TypeScript/Node，Cordis plugin context</td>
+</tr>
+<tr>
+<td>loop 权威</td>
+<td><code>AgentRuntime</code></td>
+<td><code>Agent</code> / <code>agentLoop</code></td>
+<td>package-private <code>ReactLoopAgent</code></td>
+</tr>
+<tr>
+<td>turn 协调</td>
+<td><code>RunCoordinator</code></td>
+<td><code>AgentSession</code></td>
+<td>Session turn/step events + driver phase</td>
+</tr>
+<tr>
+<td>客户端 seam</td>
+<td><code>WorkspaceHost</code> command/event</td>
+<td>AgentSession events；各 mode 直接组合</td>
+<td>Agent public handle + host/client plugins</td>
+</tr>
+<tr>
+<td>运行中 history</td>
+<td>ContextEngine active projection</td>
+<td>mutable <code>Agent.messages</code></td>
+<td><code>Session.deriveMessages()</code></td>
+</tr>
+<tr>
+<td>durable history</td>
+<td>v9 append-only JSONL records</td>
+<td>JSONL tree entries</td>
+<td>typed append-only SessionEvent 内存 log + 独立 persistence seam</td>
+</tr>
+<tr>
+<td>分支</td>
+<td>Session fork；不以内文件 message tree 为主</td>
+<td>单 JSONL 文件原生 parentId tree</td>
+<td>seed/fork event prefix；surface replacement</td>
+</tr>
+<tr>
+<td>压缩</td>
+<td>Zone budget + Artifact receipt + V2 checkpoint chain</td>
+<td>text summary + retained tail + branch summary</td>
+<td>optional capability + durable bracket + surface replace</td>
+</tr>
+<tr>
+<td>工具权限</td>
+<td>Risk + approval modes/rules</td>
+<td>默认无 approval；extension 自定义</td>
+<td>pre-execute ask/deny + approval service</td>
+</tr>
+<tr>
+<td>工具副作用</td>
+<td>EffectKind + TaskWorkspace journal</td>
+<td>tool result；无统一 effect authority</td>
+<td>Session tool call/result + persistence barrier；无通用 Work Product
+gate</td>
+</tr>
+<tr>
+<td>并发</td>
+<td>per-invocation concurrency，默认 exclusive</td>
+<td>batch parallel/sequential</td>
+<td>live reclassification + barriers + bounded pool</td>
+</tr>
+<tr>
+<td>Sandbox</td>
+<td>workspace_write fail closed；路径层另行限制</td>
+<td>无内建 sandbox，推荐外部隔离</td>
+<td>per-call file sandbox，报告 full/partial</td>
+</tr>
+<tr>
+<td>多 Agent</td>
+<td>depth-one、独立 worktree、显式 import/reject</td>
+<td>默认不内置；extension/package</td>
+<td>named providers、one-shot/continuable、teams</td>
+</tr>
+<tr>
+<td>Completion gate</td>
+<td>Plan + Work Product + Agent unresolved state</td>
+<td>无系统级联合 gate</td>
+<td>turn terminal + capability-specific quiescence</td>
+</tr>
+<tr>
+<td>恢复策略</td>
+<td>schema v1–v9；partial outcome、receipt、reconcile</td>
+<td>classic session reload；v2 在设计 reducer/recovery</td>
+<td>interrupted turn balance + flush/persistence preparation</td>
+</tr>
+<tr>
+<td>扩展生命周期</td>
+<td>Registry + RegistrationScope + ResourceManager</td>
+<td>arbitrary TS extension，以进程权限运行</td>
+<td>scope + Cordis disposer/HMR/rollback</td>
+</tr>
+<tr>
+<td>抽象成本</td>
+<td>中高；深 Module 少但 Interface 已较宽</td>
+<td>低；产品策略由扩展承担</td>
+<td>很高；package graph 与 waterfall 调试复杂</td>
+</tr>
+</tbody>
+</table>
+<h2 id="7-状态权威三者最本质的差异">7. 状态权威：三者最本质的差异</h2>
+<h3 id="71-pi以-live-agent-为中心">7.1 Pi：以 live Agent 为中心</h3>
+<p>经典 Pi 的最短理解路径是 <code>Agent.state.messages</code>。Session
+persistence 是 coding-agent 上层通过 event bridge 维护的
+产品能力。优点是 library 使用者可以直接嵌入
+Agent；风险是更高级产品必须自己确保 Agent state、Session tree、
+UI、extension state 在失败时一致。</p>
+<h3 id="72-deepseek-harness以-session-event-log-为中心">7.2 DeepSeek
+Harness：以 Session event log 为中心</h3>
+<p>模型 history、inbox projection、turn/step、tool result、compaction
+surface、approval audit 都围绕 Session event。 Loop 是 log
+的写入者与派生消费者。好处是 replay 和插件 projection 有共同语义；代价是
+event vocabulary、 surface rule、scope 和 listener ordering
+成为全系统必须掌握的基础设施。</p>
+<h3 id="73-lumen按状态概念分权session-保存持久事实">7.3
+Lumen：按状态概念分权，Session 保存持久事实</h3>
+<p>Lumen 不把所有运行时状态压进 SessionRepository。Session
+只追加事实，不调度；Host、Coordinator、Runtime、
+ContextEngine、TaskWorkspace、Orchestrator
+分别拥有一个状态概念。好处是领域 Locality 更强；风险是跨 Module
+提交顺序必须有明确协议，否则容易产生“某权威已前进、另一个尚未持久化”的裂缝。</p>
+<p>Lumen 当前用 <code>prepare/commit/fsync/confirm</code>、typed record
+和 completion gate 解决这些裂缝。后续重构应优化 Interface
+面积，而不是为了统一外形把所有权威迁入一个通用 event bus。</p>
+<h2 id="8-安全与可信完成的对比">8. 安全与可信完成的对比</h2>
+<h3 id="81-pi明确的本地信任模型">8.1 Pi：明确的本地信任模型</h3>
+<p>Pi 的安全承诺最小但诚实：默认工具和 extension
+就是当前用户权限。适合受信本地仓库、交互式监督和外部容器。
+不适合在没有额外封装时直接承担企业策略、无人值守外部操作和可恢复副作用。</p>
+<h3 id="82-deepseek-harness能力管线强边界事实细">8.2 DeepSeek
+Harness：能力管线强，边界事实细</h3>
+<p>DeepSeek Harness 的 Tool waterfall、monotonic guard、approval
+fail-closed、Sandbox full/partial 和 FS freshness 语义很强。但 Cordis
+plugin 仍是可信同进程代码，scope 不是恶意插件 sandbox；默认 sandbox
+vocabulary 只覆盖 file effect，不能把它描述成完整主机隔离。</p>
+<h3 id="83-lumen风险效果验证和完成形成闭环">8.3
+Lumen：风险、效果、验证和完成形成闭环</h3>
+<p>Lumen 的优势不只在“有 sandbox”，而在：</p>
+<pre class="text"><code>tool intent
+  → Risk/approval
+  → path confinement + OS sandbox
+  → EffectKind journal
+  → post-state verification / reconciliation
+  → completion gate</code></pre>
+<p>这个闭环应继续作为产品差异化，不应为了兼容外部 Agent backend
+而旁路。</p>
+<h2 id="9-多-agent-的两种不同问题">9. 多 Agent 的两种不同问题</h2>
+<p>多 Agent 实际包含两个问题：</p>
+<ol type="1">
+<li><strong>怎么并行运行多个模型 loop？</strong> DeepSeek 的
+Provider/Activation 和 Pi extension 都能解决。</li>
+<li><strong>并行修改怎样安全进入主工作区并成为可声明完成的证据？</strong>
+Lumen 的 worktree + import verification + completion gate
+更直接地解决。</li>
+</ol>
+<p>因此，如果 Lumen 将来支持 DeepSeek/Codex/Claude Code 作为 child
+backend，推荐结构是：</p>
+<pre class="text"><code>AgentOrchestrator (identity / ownership / status / evidence / completion)
+  └─ AgentRuntimeFactory backend
+       ├─ native Lumen runtime
+       ├─ DeepSeek Harness adapter
+       └─ external ACP / Codex / Claude adapter
+
+All writable results
+  → isolated workspace/worktree
+  → import preflight
+  → TaskWorkspace effect journal
+  → verification</code></pre>
+<p>外部 backend 可以拥有 child loop，但不能拥有 Lumen Agent Thread
+的最终状态、导入决策或完成资格。</p>
+<h2 id="10-优势局限与适用场景">10. 优势、局限与适用场景</h2>
+<h3 id="101-lumen">10.1 Lumen</h3>
+<p><strong>优势</strong></p>
+<ul>
+<li>唯一权威和依赖方向清楚，TUI/Web/headless 共享 Host seam。</li>
+<li>Context、Work Product、Agent 生命周期都是有完成门禁的深
+Module。</li>
+<li>Session 长期兼容、ArtifactRef、request receipt
+和恢复语义适合严肃工程任务。</li>
+<li>Risk、Effect、Concurrency 分轴，安全与可验证 mutation
+不是工具名硬编码。</li>
+</ul>
+<p><strong>局限</strong></p>
+<ul>
+<li><code>WorkspaceHost</code>、<code>AgentRuntime.run()</code>、<code>SessionRepository</code>
+Interface 面积持续增长，认知成本已明显高于 Pi。</li>
+<li>多个深 Module
+的提交协议正确但复杂，需要更多状态机/property/conformance tests 防止跨
+Module 漂移。</li>
+<li>以 Pydantic AI 为底层 loop Implementation，某些 streaming/tool
+语义需要 Adapter 翻译，调试链更长。</li>
+<li>原生多 Agent V1 深度和 backend breadth 小于 DeepSeek Harness。</li>
+</ul>
+<p><strong>适用</strong>：需要跨客户端一致行为、强审计、长期
+Session、受控工作区 mutation、可恢复多 Agent 的应用框架。</p>
+<h3 id="102-pi">10.2 Pi</h3>
+<p><strong>优势</strong></p>
+<ul>
+<li>loop 小、源码直观、事件顺序清楚，适合研究和嵌入。</li>
+<li>Provider breadth 和 stream abstraction 成熟。</li>
+<li>JSONL tree、branch navigation、HTML export 与 extension UX
+很适合个人 coding workflow。</li>
+<li>默认不强加 Plan/approval/subagent 产品哲学，定制自由度高。</li>
+</ul>
+<p><strong>局限</strong></p>
+<ul>
+<li>无内建 sandbox/approval/completion gate，extension
+语义可能碎片化。</li>
+<li>经典 live Agent 与 SessionManager 是需要胶合层同步的两种表示。</li>
+<li>session migration 可重写文件，不适合直接承诺 Lumen 式长期
+append-only schema chain。</li>
+<li>Harness v2 虽方向先进，但当前不能当作已实现恢复 runtime。</li>
+</ul>
+<p><strong>适用</strong>：受信本地环境、需要快速二次开发、多
+Provider、偏个人/团队工具而非平台级副作用治理。</p>
+<h3 id="103-deepseek-harness">10.3 DeepSeek Harness</h3>
+<p><strong>优势</strong></p>
+<ul>
+<li>Session event sourcing、scope、registry、waterfall 与 HMR
+生命周期高度一致。</li>
+<li>Loop Interface 与 Implementation
+分离真实，LLM/FS/Sandbox/Persistence/Subagent 都有多个实现。</li>
+<li>Tool scheduler、cancel/drain、确定性 Session 提交顺序和 request
+reconstruction 很严谨。</li>
+<li>Subagent provider breadth、continuable child、teams、Code Mode 等
+orchestration 面广。</li>
+<li>文档生成、invariant companion、composition test 和 per-package
+contract 治理强。</li>
+</ul>
+<p><strong>局限</strong></p>
+<ul>
+<li>仍是 RC，公开 Interface 与持久化格式不宜当成稳定行业标准。</li>
+<li>package graph 极大，有效行为可由 scope、config 和 waterfall listener
+动态改变，定位问题难度高。</li>
+<li>插件仍是同进程可信代码；Sandbox file-effect vocabulary
+不覆盖完整网络/进程边界。</li>
+<li>缺少 Lumen 式统一 Work Product/effect verification/completion
+veto。</li>
+<li>架构 Leverage 高，但小团队复制其微包粒度很容易得到 pass-through
+Module 和维护负担。</li>
+</ul>
+<p><strong>适用</strong>：需要多产品形态、多
+backend、热装卸和精细事件语义，且能承担框架复杂度的 Agent 平台。</p>
+<h2 id="11-对-lumen-的分阶段建议">11. 对 Lumen 的分阶段建议</h2>
+<h3 id="p0保持不动的核心不变量">P0：保持不动的核心不变量</h3>
+<ol type="1">
+<li>保持
+<code>WorkspaceHost → Coordinator/Runtime → Context/Tools/Session</code>
+依赖方向。</li>
+<li>保持 Session append-only 与 v1–v9 不重写历史。</li>
+<li>保持 Risk / EffectKind / ToolConcurrency 三轴独立。</li>
+<li>保持 TaskWorkspace 和 AgentOrchestrator 对 completion 的 veto
+权。</li>
+<li>外部 Provider、Skill、Plugin、child role 只能收窄权限，不能扩大父级
+sandbox。</li>
+</ol>
+<h3 id="p1低风险高收益">P1：低风险、高收益</h3>
+<ol type="1">
+<li>在 capability report 增加 sandbox
+backend、<code>full/partial/unavailable</code>、network/process
+visibility 字段。</li>
+<li>为 <code>AgentRuntime</code> 建一个类似 Pi 的最小 loop sequence
+文档/契约测试，固定 text/tool/steer/follow-up/cancel
+的事件顺序，降低读完整 <code>run()</code> 的必要性。</li>
+<li>借鉴 DeepSeek request reconstruction invariant，把 request receipt
+与 Session history/tool digest 的可重建性做 property
+test，而不只验证字段存在。</li>
+<li>为 Agent/Work Product/Context 的跨 Module 提交增加 fault-injection
+matrix：在 prepare、tool applied、terminal
+append、fsync、confirm、import finalize 每个点模拟崩溃。</li>
+</ol>
+<h3 id="p2有第二实现时再抽象">P2：有第二实现时再抽象</h3>
+<ol type="1">
+<li>只有接入第一个真实外部 child backend 时，才把
+<code>NativeAgentRuntimeFactory</code> 收敛成 provider registry；
+<code>AgentOrchestrator</code> 不变。</li>
+<li>只有出现第二个 Session persistence backend 时，才引入更公开的
+persistence Interface；不要提前复制 DeepSeek 的 package seam。</li>
+<li>只有 TUI/Web/外部 SDK 对 scoped dynamic capabilities
+出现重复逻辑时，才扩展 <code>RegistrationScope</code> 的 visibility
+语义。</li>
+</ol>
+<h3 id="p3暂不建议">P3：暂不建议</h3>
+<ul>
+<li>不把整个系统迁到 LangGraph 或另一个 checkpoint
+graph；会制造第二状态权威。</li>
+<li>不复制 DeepSeek 的微包数量和所有 waterfall；先用 deletion test
+证明每个新 Interface 有两个真实实现或能 消除多处复杂度。</li>
+<li>不把 Pi extension 的任意进程权限模型作为 Lumen plugin 默认。</li>
+<li>不把多 Agent depth 放宽当作目标本身；先证明 depth-one
+在任务图上形成真实瓶颈，并为 nested ownership、 approval
+routing、worktree forest 和 completion evidence 定义协议。</li>
+</ul>
+<h2 id="12-最终判断">12. 最终判断</h2>
+<p>从底层原理看，三者分别优化不同目标：</p>
+<ul>
+<li>Pi 优化 <strong>最短的模型/工具反馈环与最大定制自由</strong>；</li>
+<li>DeepSeek Harness 优化
+<strong>事件事实、插件组合、作用域和实现替换</strong>；</li>
+<li>Lumen 优化
+<strong>应用级唯一权威、可恢复副作用、工作对象验证与可信完成</strong>。</li>
+</ul>
+<p>Lumen 当前不需要证明自己比 Pi 更小，也不需要证明比 DeepSeek Harness
+拥有更多 seam。更合理的路线是： 保留少数真正有 Depth 的 Module，把
+Provider/Tool/child backend 做成可替换 Implementation；把 capability
+visibility、sandbox enforcement、request reconstruction 和
+fault-injection 做得更机械可验；继续让 Session、 TaskWorkspace 与
+AgentOrchestrator 对“发生了什么”和“是否真的完成”拥有最后解释权。</p>
+<h2 id="13-一手源码索引">13. 一手源码索引</h2>
+<p>逐项固定对象、关键符号与冲突复核见 <a
+href="research/upstream-pi-deepseek-harness-sources.md"><code>上游源码证据账本</code></a>。</p>
+<h3 id="lumen-本地">Lumen 本地</h3>
+<ul>
+<li><a
+href="../src/lumen/application/host.py"><code>WorkspaceHost</code></a></li>
+<li><a
+href="../src/lumen/run_coordinator.py"><code>RunCoordinator</code></a></li>
+<li><a
+href="../src/lumen/runtime.py"><code>AgentRuntime</code></a></li>
+<li><a
+href="../src/lumen/context/engine.py"><code>ContextEngine</code></a></li>
+<li><a
+href="../src/lumen/sessions.py"><code>SessionRepository</code></a></li>
+<li><a
+href="../src/lumen/work_products/workspace.py"><code>TaskWorkspace</code></a></li>
+<li><a
+href="../src/lumen/agents/orchestrator.py"><code>AgentOrchestrator</code></a></li>
+<li><a
+href="../src/lumen/agents/runtime_factory.py"><code>NativeAgentRuntimeFactory</code></a></li>
+<li><a
+href="../src/lumen/tools/registry.py"><code>ToolRegistry</code></a>
+与 <a
+href="../src/lumen/tools/gateway.py"><code>CapabilityGateway</code></a></li>
+</ul>
+<h3 id="pi-固定-commit">Pi 固定 commit</h3>
+<ul>
+<li><a
+href="https://github.com/earendil-works/pi-mono/blob/a470b121bf683b4c2b9fc0b3a7c807de7e0cfe9c/packages/agent/src/agent.ts"><code>Agent</code></a></li>
+<li><a
+href="https://github.com/earendil-works/pi-mono/blob/a470b121bf683b4c2b9fc0b3a7c807de7e0cfe9c/packages/agent/src/agent-loop.ts"><code>agentLoop</code></a></li>
+<li><a
+href="https://github.com/earendil-works/pi-mono/blob/a470b121bf683b4c2b9fc0b3a7c807de7e0cfe9c/packages/coding-agent/src/core/agent-session.ts"><code>AgentSession</code></a></li>
+<li><a
+href="https://github.com/earendil-works/pi-mono/blob/a470b121bf683b4c2b9fc0b3a7c807de7e0cfe9c/packages/coding-agent/src/core/session-manager.ts"><code>SessionManager</code></a></li>
+<li><a
+href="https://github.com/earendil-works/pi-mono/blob/a470b121bf683b4c2b9fc0b3a7c807de7e0cfe9c/packages/agent/src/harness/agent-harness.ts"><code>AgentHarness v2 scaffold</code></a></li>
+<li><a
+href="https://github.com/earendil-works/pi-mono/blob/a470b121bf683b4c2b9fc0b3a7c807de7e0cfe9c/packages/agent/src/harness/reducer.ts"><code>reduceLaneState reducer</code></a></li>
+</ul>
+<h3 id="deepseek-harness-固定-commit">DeepSeek Harness 固定 commit</h3>
+<ul>
+<li><a
+href="https://github.com/deepseek-ai/deepseek-harness/blob/b150a551b8d465e31e418e1b2eaf5e79bbb7d28e/packages/core/agent/src/types.ts"><code>Agent Interface</code></a></li>
+<li><a
+href="https://github.com/deepseek-ai/deepseek-harness/blob/b150a551b8d465e31e418e1b2eaf5e79bbb7d28e/packages/core/agent-loop/src/agent.ts"><code>ReactLoopAgent</code></a></li>
+<li><a
+href="https://github.com/deepseek-ai/deepseek-harness/blob/b150a551b8d465e31e418e1b2eaf5e79bbb7d28e/packages/core/agent-loop/src/tool-calls.ts"><code>Tool scheduler</code></a></li>
+<li><a
+href="https://github.com/deepseek-ai/deepseek-harness/tree/b150a551b8d465e31e418e1b2eaf5e79bbb7d28e/packages/core/session"><code>Session</code></a></li>
+<li><a
+href="https://github.com/deepseek-ai/deepseek-harness/blob/b150a551b8d465e31e418e1b2eaf5e79bbb7d28e/packages/core/tools/src/index.ts"><code>ToolRuntime</code></a></li>
+<li><a
+href="https://github.com/deepseek-ai/deepseek-harness/blob/b150a551b8d465e31e418e1b2eaf5e79bbb7d28e/packages/core/scope/src/index.ts"><code>Scope</code></a></li>
+<li><a
+href="https://github.com/deepseek-ai/deepseek-harness/tree/b150a551b8d465e31e418e1b2eaf5e79bbb7d28e/docs/subsystems"><code>Subsystem docs</code></a></li>
+</ul>
+</body>
+</html>

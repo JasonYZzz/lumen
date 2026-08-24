@@ -1,14 +1,15 @@
 from pathlib import Path
 
 from lumen.config import load_config
-from lumen.resources import CONTROL_TOOL_NAMES, ResourceManager
+from lumen.resources import ResourceManager
+from lumen.task_control import CONTROL_TOOL_NAMES
 
 
 async def test_resource_manager_builds_runtime_and_selected_tools(tmp_path: Path) -> None:
     config_path = tmp_path / "agent.yaml"
     config_path.write_text(
         """
-version: 1
+version: 2
 agent:
   name: test-agent
   model:
@@ -33,6 +34,36 @@ sessions:
         for name in CONTROL_TOOL_NAMES:
             assert manager.tool_metadata[name]["control"] == "true"
         assert manager.session_repository is not None
+        assert manager.runtime_invariant_report()["status"] == "ok"
+        assert manager.summary()["invariants"]["status"] == "ok"
+
+
+async def test_capability_inventory_explains_visibility_policy_and_schema(tmp_path: Path) -> None:
+    config_path = tmp_path / "agent.yaml"
+    config_path.write_text(
+        """version: 2
+agent:
+  model: {id: test}
+tools:
+  builtins: [read_file, write_file, run_command]
+permissions:
+  always_deny: [run_command]
+sessions: {directory: sessions}
+""",
+        encoding="utf-8",
+    )
+    manager = ResourceManager(load_config(config_path), workspace=tmp_path)
+
+    async with manager:
+        inventory = {item["name"]: item for item in manager.capability_inventory()}
+
+    assert inventory["read_file"]["status"] == "loaded"
+    assert inventory["read_file"]["approval"] == "allow"
+    assert inventory["read_file"]["concurrency"] == "parallel_safe"
+    assert inventory["read_file"]["schema_digest"].startswith("sha256:")
+    assert inventory["write_file"]["approval"] == "confirm"
+    assert inventory["run_command"]["status"] == "disabled"
+    assert inventory["run_command"]["approval"] == "deny"
 
 
 async def test_resource_manager_appends_custom_instructions(tmp_path: Path) -> None:
@@ -40,7 +71,7 @@ async def test_resource_manager_appends_custom_instructions(tmp_path: Path) -> N
     config_path = tmp_path / "agent.yaml"
     config_path.write_text(
         """
-version: 1
+version: 2
 agent:
   instructions_file: instructions.md
   model:
@@ -64,7 +95,7 @@ def test_base_instructions_define_lumen_without_impersonating_model_provider(tmp
     config_path = tmp_path / "agent.yaml"
     config_path.write_text(
         """
-version: 1
+version: 2
 agent:
   model: {id: test}
 tools: {builtins: []}
@@ -96,7 +127,7 @@ def create_tools() -> list[ToolSpec]:
     config_path = tmp_path / "agent.yaml"
     config_path.write_text(
         """
-version: 1
+version: 2
 agent:
   model:
     id: test
@@ -118,7 +149,7 @@ async def test_capability_tools_have_builtin_origin_and_risk(tmp_path: Path) -> 
     config_path = tmp_path / "agent.yaml"
     config_path.write_text(
         """
-version: 1
+version: 2
 agent:
   model:
     id: test
@@ -140,7 +171,7 @@ async def test_resource_manager_tracks_mcp_health(tmp_path: Path) -> None:
     config_path = tmp_path / "agent.yaml"
     config_path.write_text(
         """
-version: 1
+version: 2
 agent:
   model:
     id: test
@@ -168,7 +199,7 @@ async def test_resource_manager_summary_lists_control_tools(tmp_path: Path) -> N
     config_path = tmp_path / "agent.yaml"
     config_path.write_text(
         """
-version: 1
+version: 2
 agent: {model: {id: test}}
 tools: {builtins: []}
 """,

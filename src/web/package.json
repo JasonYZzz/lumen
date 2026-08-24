@@ -1,0 +1,38 @@
+{
+  "name": "lumen-web",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev --turbopack",
+    "build": "next build",
+    "api:schema": "uv run --project ../.. python ../../scripts/export_web_openapi.py && openapi-typescript openapi.json -o src/lib/api/schema.generated.ts",
+    "api:schema:check": "pnpm api:schema && git diff --exit-code -- openapi.json src/lib/api/schema.generated.ts",
+    "start": "next start",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@phosphor-icons/react": "^2.1.10",
+    "@rive-app/react-canvas": "^4.30.0",
+    "geist": "^1.3.1",
+    "next": "^15.3.4",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0",
+    "react-markdown": "^10.1.0",
+    "remark-gfm": "^4.0.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.30",
+    "@types/react": "^19.1.6",
+    "@types/react-dom": "^19.1.5",
+    "openapi-typescript": "^7.9.1",
+    "typescript": "^5.8.3",
+    "vitest": "^3.2.4"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "esbuild",
+      "sharp"
+    ]
+  }
+}

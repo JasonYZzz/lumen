@@ -109,3 +109,66 @@ def test_tool_risks_read_is_auto_approved_in_auto_mode(tmp_path: Path) -> None:
         policy.decide("remote_search", undeclared_bundle.risk_for("remote_search"))
         is PermissionDecision.CONFIRM
     )
+
+
+def test_mcp_tools_are_deferred_by_default_with_explicit_always_load_exceptions() -> None:
+    config = McpServerConfig(
+        transport="streamable_http",
+        url="https://example.test/mcp",
+        always_load_tools=["status"],
+    )
+    bundle = build_mcp_toolset("remote", config, PermissionPolicy(PermissionsConfig()), timeout=20)
+
+    assert bundle.is_deferred("remote_search") is True
+    assert bundle.is_deferred("remote_status") is False
+
+
+def test_mcp_deferred_loading_can_be_disabled_per_server() -> None:
+    config = McpServerConfig(
+        transport="streamable_http",
+        url="https://example.test/mcp",
+        defer_tools=False,
+    )
+    bundle = build_mcp_toolset("remote", config, PermissionPolicy(PermissionsConfig()), timeout=20)
+
+    assert bundle.is_deferred("remote_search") is False
+
+
+def test_mcp_parallel_safe_only_parallelizes_declared_reads() -> None:
+    config = McpServerConfig(
+        transport="streamable_http",
+        url="https://example.test/mcp",
+        tool_risks={"search": "read", "update": "write"},
+        tool_effects={"search": "observe", "update": "mutation"},
+    )
+    bundle = build_mcp_toolset(
+        "remote",
+        config,
+        PermissionPolicy(PermissionsConfig()),
+        timeout=20,
+        parallel_mode="parallel_safe",
+    )
+
+    assert bundle.is_sequential("remote_search", "parallel_safe") is False
+    assert bundle.is_sequential("remote_update", "parallel_safe") is True
+
+
+def test_mcp_effects_are_independent_from_approval_risk() -> None:
+    config = McpServerConfig(
+        transport="streamable_http",
+        url="https://example.test/mcp",
+        tool_risks={"lookup": "read"},
+        tool_effects={"lookup": "external_action"},
+    )
+    bundle = build_mcp_toolset(
+        "remote",
+        config,
+        PermissionPolicy(PermissionsConfig()),
+        timeout=20,
+    )
+
+    assert bundle.risk_for("remote_lookup").value == "read"
+    assert bundle.effect_for("remote_lookup").value == "external_action"
+    assert bundle.effect_for("remote_undeclared").value == "unknown"
+    assert bundle.is_sequential("remote_unknown", "parallel_safe") is True
+    assert bundle.is_sequential("remote_update", "parallel") is False

@@ -1,0 +1,216 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1920" height="1080" viewBox="0 0 1920 1080" role="img" aria-labelledby="title desc">
+  <title id="title">Pi Agent 技术架构图</title>
+  <desc id="desc">Pi Agent 经典生产路径、状态权威、工具循环、会话持久化和 Harness v2 scaffold 的源码级架构图。</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#07111d"/><stop offset="1" stop-color="#101a2b"/>
+    </linearGradient>
+    <linearGradient id="hero" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#ff9b62"/><stop offset="1" stop-color="#ff6b45"/>
+    </linearGradient>
+    <pattern id="grid" width="32" height="32" patternUnits="userSpaceOnUse">
+      <path d="M32 0H0V32" fill="none" stroke="#9fb2ca" stroke-opacity=".055"/>
+    </pattern>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="12" stdDeviation="18" flood-color="#000" flood-opacity=".28"/>
+    </filter>
+    <marker id="arrow" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto">
+      <path d="M0 0L12 6 0 12Z" fill="#ff8a52"/>
+    </marker>
+    <marker id="arrowMuted" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto">
+      <path d="M0 0L12 6 0 12Z" fill="#6f8299"/>
+    </marker>
+    <style>
+      .sans{font-family:Inter,"SF Pro Display","PingFang SC","Microsoft YaHei",sans-serif}
+      .mono{font-family:"SFMono-Regular",Consolas,"PingFang SC",monospace}
+      .h1{font-size:46px;font-weight:750;fill:#f6f8fb;letter-spacing:-1.2px}
+      .sub{font-size:18px;font-weight:450;fill:#95a8be}
+      .eyebrow{font-size:13px;font-weight:700;letter-spacing:2.2px;fill:#ff9b62}
+      .card{fill:#111f31;stroke:#2b3a50;stroke-width:1.2}
+      .cardHi{fill:#1a2433;stroke:#ff8752;stroke-width:1.6}
+      .cardDash{fill:#101b2b;stroke:#73849a;stroke-width:1.4;stroke-dasharray:8 7}
+      .section{font-size:14px;font-weight:700;letter-spacing:1.3px;fill:#ff9b62}
+      .label{font-size:22px;font-weight:700;fill:#f2f5f9}
+      .labelSm{font-size:18px;font-weight:650;fill:#f2f5f9}
+      .body{font-size:15px;font-weight:430;fill:#aebdce}
+      .bodyBright{font-size:15px;font-weight:520;fill:#e6ebf2}
+      .micro{font-size:12px;font-weight:520;fill:#7f94ab}
+      .pill{fill:#273246;stroke:#44546a}
+      .pillText{font-size:12px;font-weight:650;fill:#dfe6ef;letter-spacing:.3px}
+      .line{stroke:#ff8a52;stroke-width:2.4;fill:none;marker-end:url(#arrow)}
+      .lineMuted{stroke:#6f8299;stroke-width:1.7;fill:none;marker-end:url(#arrowMuted)}
+      .divider{stroke:#2b3a50;stroke-width:1}
+      .num{font-size:12px;font-weight:800;fill:#08111d}
+    </style>
+  </defs>
+
+  <rect width="1920" height="1080" fill="url(#bg)"/>
+  <rect width="1920" height="1080" fill="url(#grid)"/>
+  <circle cx="1650" cy="-80" r="430" fill="#ff7448" opacity=".055"/>
+  <circle cx="1880" cy="920" r="330" fill="#3d6cff" opacity=".05"/>
+
+  <g class="sans">
+    <text x="70" y="62" class="eyebrow">源码级架构 · 经典生产路径</text>
+    <text x="70" y="118" class="h1">Pi Agent 技术架构</text>
+    <text x="70" y="151" class="sub">最短模型—工具反馈环 · 运行时状态集中于 Agent · SessionManager 旁路持久化</text>
+    <g transform="translate(1550 68)">
+      <rect width="300" height="72" rx="18" fill="#172334" stroke="#ff8752"/>
+      <text x="22" y="29" class="section">固定源码基线</text>
+      <text x="22" y="54" class="bodyBright mono">v0.84.2 · a470b121…</text>
+    </g>
+
+    <!-- Column 1 -->
+    <g transform="translate(70 208)" filter="url(#shadow)">
+      <rect width="220" height="520" rx="22" class="card"/>
+      <text x="24" y="39" class="section">01 · 客户端适配层</text>
+      <text x="24" y="77" class="label">产品入口</text>
+      <g transform="translate(24 108)">
+        <rect width="172" height="58" rx="12" class="pill"/><text x="18" y="35" class="labelSm">交互式 TUI</text>
+        <rect y="72" width="172" height="58" rx="12" class="pill"/><text x="18" y="107" class="labelSm">打印 / JSON</text>
+        <rect y="144" width="172" height="58" rx="12" class="pill"/><text x="18" y="179" class="labelSm">RPC 模式</text>
+        <rect y="216" width="172" height="58" rx="12" class="pill"/><text x="18" y="251" class="labelSm">SDK 嵌入</text>
+      </g>
+      <line x1="24" y1="410" x2="196" y2="410" class="divider"/>
+      <text x="24" y="443" class="bodyBright">共同依赖</text>
+      <text x="24" y="472" class="body">createAgentSession()</text>
+      <text x="24" y="497" class="micro">CLI 实际经运行时 /</text>
+      <text x="24" y="516" class="micro">服务包装层进入</text>
+    </g>
+
+    <!-- Column 2 -->
+    <g transform="translate(330 208)" filter="url(#shadow)">
+      <rect width="310" height="520" rx="22" class="cardHi"/>
+      <text x="26" y="39" class="section">02 · 会话协调层</text>
+      <text x="26" y="78" class="label">AgentSession</text>
+      <text x="26" y="108" class="body">产品模式与核心 Agent 的事件桥</text>
+      <g transform="translate(26 143)">
+        <rect width="258" height="58" rx="12" class="pill"/>
+        <text x="16" y="25" class="bodyBright">事件翻译与界面发布</text><text x="16" y="45" class="micro">消息 / 工具 / 流式事件</text>
+        <rect y="72" width="258" height="58" rx="12" class="pill"/>
+        <text x="16" y="97" class="bodyBright">模型、工具与模式配置</text><text x="16" y="117" class="micro">交互 · 打印 · RPC</text>
+        <rect y="144" width="258" height="58" rx="12" class="pill"/>
+        <text x="16" y="169" class="bodyBright">扩展生命周期</text><text x="16" y="189" class="micro">命令 · 钩子 · 自定义工具</text>
+        <rect y="216" width="258" height="58" rx="12" class="pill"/>
+        <text x="16" y="241" class="bodyBright">压缩 / 分支交互</text><text x="16" y="261" class="micro">摘要 · 导航 · 导出</text>
+      </g>
+      <rect x="26" y="448" width="258" height="48" rx="11" fill="#35251f" stroke="#ff8752"/>
+      <text x="42" y="477" class="bodyBright">发布事件先于 message_end 持久化</text>
+    </g>
+
+    <!-- Core loop -->
+    <g transform="translate(680 208)" filter="url(#shadow)">
+      <rect width="420" height="520" rx="22" class="card"/>
+      <text x="26" y="39" class="section">03 · 核心循环与运行时权威</text>
+      <text x="26" y="78" class="label">Agent + agentLoop</text>
+      <rect x="26" y="104" width="368" height="62" rx="13" fill="#17283b" stroke="#506176"/>
+      <text x="44" y="131" class="bodyBright">可变运行时权威：Agent.state</text>
+      <text x="44" y="153" class="micro mono">消息 · 模型 · 工具 · 交互队列</text>
+
+      <g transform="translate(26 193)">
+        <circle cx="18" cy="18" r="16" fill="url(#hero)"/><text x="14" y="22" class="num">1</text>
+        <text x="48" y="23" class="bodyBright">流式接收模型响应</text>
+        <path d="M18 38V66" class="lineMuted"/>
+        <circle cx="18" cy="88" r="16" fill="url(#hero)"/><text x="14" y="92" class="num">2</text>
+        <text x="48" y="93" class="bodyBright">追加助手消息</text>
+        <path d="M18 108V136" class="lineMuted"/>
+        <circle cx="18" cy="158" r="16" fill="url(#hero)"/><text x="14" y="162" class="num">3</text>
+        <text x="48" y="153" class="bodyBright">执行工具调用批次</text>
+        <text x="48" y="176" class="micro">按工具策略并行或顺序执行</text>
+        <path d="M18 178V206" class="lineMuted"/>
+        <circle cx="18" cy="228" r="16" fill="url(#hero)"/><text x="14" y="232" class="num">4</text>
+        <text x="48" y="223" class="bodyBright">追加工具结果</text>
+        <text x="48" y="246" class="micro">随后排空 steering 队列</text>
+      </g>
+      <path d="M356 421C391 421 392 207 355 207" fill="none" stroke="#ff8a52" stroke-width="2" stroke-dasharray="5 5" marker-end="url(#arrow)"/>
+      <text x="305" y="445" class="micro">内层步骤循环</text>
+      <path d="M78 476H338" class="lineMuted"/>
+      <text x="92" y="501" class="micro">外层循环：排空 follow-up 队列</text>
+    </g>
+
+    <!-- Provider and tools -->
+    <g transform="translate(1140 208)" filter="url(#shadow)">
+      <rect width="280" height="246" rx="22" class="card"/>
+      <text x="24" y="39" class="section">04 · 模型提供方 SEAM</text>
+      <text x="24" y="76" class="label">pi-ai</text>
+      <text x="24" y="104" class="body">统一不同 Provider 的流事件语义</text>
+      <g transform="translate(24 132)">
+        <rect width="110" height="36" rx="18" class="pill"/><text x="16" y="23" class="pillText">OpenAI</text>
+        <rect x="122" width="110" height="36" rx="18" class="pill"/><text x="138" y="23" class="pillText">Anthropic</text>
+        <rect y="48" width="110" height="36" rx="18" class="pill"/><text x="16" y="71" class="pillText">Google</text>
+        <rect x="122" y="48" width="110" height="36" rx="18" class="pill"/><text x="138" y="71" class="pillText">其他</text>
+      </g>
+      <rect y="274" width="280" height="246" rx="22" class="card"/>
+      <text x="24" y="313" class="section">05 · 工具与扩展</text>
+      <text x="24" y="350" class="label">进程内能力</text>
+      <text x="24" y="382" class="bodyBright">内置工具</text>
+      <text x="24" y="406" class="body">read · write · edit · bash</text>
+      <text x="24" y="440" class="bodyBright">任意 TypeScript 扩展</text>
+      <text x="24" y="464" class="body">自定义工具 · 钩子 · 命令</text>
+      <rect x="24" y="484" width="232" height="24" rx="12" fill="#35251f"/>
+      <text x="36" y="501" class="micro" fill="#ffc09b">默认无统一审批 / 沙箱机制</text>
+    </g>
+
+    <!-- Insight rail -->
+    <g transform="translate(1460 208)">
+      <text x="0" y="20" class="section">架构解读</text>
+      <g transform="translate(0 43)">
+        <rect width="390" height="116" rx="18" class="card"/>
+        <text x="22" y="34" class="micro">运行时状态权威</text>
+        <text x="22" y="67" class="labelSm">运行中的 Agent.messages</text>
+        <text x="22" y="94" class="body">最短理解路径，也是恢复时需重建的状态</text>
+      </g>
+      <g transform="translate(0 176)">
+        <rect width="390" height="134" rx="18" class="card"/>
+        <text x="22" y="34" class="micro">会话事实与分支</text>
+        <text x="22" y="66" class="labelSm">SessionManager JSONL tree</text>
+        <text x="22" y="94" class="body">parentId 原生分支 · 追加条目</text>
+        <text x="22" y="117" class="body">摘要 + 保留尾部 · 分支摘要</text>
+      </g>
+      <g transform="translate(0 327)">
+        <rect width="390" height="160" rx="18" fill="#28211f" stroke="#ff8752"/>
+        <text x="22" y="34" class="micro" fill="#ffb086">关键安全边界</text>
+        <text x="22" y="66" class="labelSm">宿主负责可信执行</text>
+        <text x="22" y="94" class="body">扩展与工具拥有 Node 进程权限；</text>
+        <text x="22" y="118" class="body">官方建议外部容器 / VM 隔离。</text>
+        <text x="22" y="143" class="micro">不具备 Lumen 式统一完成门禁</text>
+      </g>
+      <g transform="translate(0 504)">
+        <rect width="390" height="104" rx="18" class="card"/>
+        <text x="22" y="31" class="micro">状态同步与恢复边界</text>
+        <text x="22" y="58" class="bodyBright">运行中 Agent 与 JSONL 是两种表示</text>
+        <text x="22" y="81" class="body">加载 Session 后重建 Agent；不保证发布前耐久</text>
+      </g>
+    </g>
+
+    <!-- Connections -->
+    <path d="M290 468H330" class="line"/>
+    <path d="M640 468H680" class="line"/>
+    <path d="M1100 330H1140" class="line"/>
+    <path d="M1100 575H1140" class="line"/>
+    <path d="M485 728V776H1438V451H1460" class="lineMuted"/>
+    <text x="772" y="768" class="micro">message_end → 追加会话条目 · 旁路持久化桥</text>
+
+    <!-- v2 scaffold -->
+    <g transform="translate(70 820)">
+      <rect width="1780" height="190" rx="24" class="cardDash"/>
+      <text x="26" y="38" class="section">HARNESS V2 · 演进信号，不是现役生产循环</text>
+      <rect x="26" y="59" width="245" height="92" rx="14" class="pill"/>
+      <text x="44" y="89" class="labelSm">会话与存储</text><text x="44" y="116" class="body">内存 / JSONL 后端</text><text x="44" y="139" class="micro">条目树 + 操作记录</text>
+      <rect x="295" y="59" width="280" height="92" rx="14" class="pill"/>
+      <text x="313" y="89" class="labelSm">reduceLaneState()</text><text x="313" y="116" class="body">从持久切片推导 lane 状态</text><text x="313" y="139" class="micro">已有测试 · 未从包公共入口导出</text>
+      <rect x="599" y="59" width="245" height="92" rx="14" class="pill"/>
+      <text x="617" y="89" class="labelSm">Lane 与队列</text><text x="617" y="116" class="body">手动 / 自动驱动</text><text x="617" y="139" class="micro">损坏分类与安全拒绝恢复</text>
+      <path d="M857 105H915" class="lineMuted"/>
+      <rect x="928" y="59" width="386" height="92" rx="14" fill="#35251f" stroke="#ff8752"/>
+      <text x="950" y="90" class="labelSm">HarnessNotImplemented</text>
+      <text x="950" y="117" class="body">prompt · resume · compact · steer · watch…</text>
+      <text x="950" y="141" class="micro">createCodingAgentHarness() 无生产路径引用</text>
+      <g transform="translate(1360 52)">
+        <rect width="380" height="106" rx="17" fill="#1e2b3e" stroke="#73849a" stroke-dasharray="5 5"/>
+        <text x="20" y="34" class="micro">正确解读</text>
+        <text x="20" y="63" class="bodyBright">演进方向可信，产品能力尚未完成</text>
+        <text x="20" y="88" class="body">不可与经典路径混写为现役架构</text>
+      </g>
+    </g>
+  </g>
+</svg>

@@ -1,0 +1,4887 @@
+{
+  "app_config": {
+    "$defs": {
+      "AgentSection": {
+        "additionalProperties": false,
+        "description": "Agent configuration with single- or multi-model support.\n\nTwo mutually exclusive forms are accepted:\n\n1. Legacy single-model: ``model: {id: openai:gpt-5, api_key_env: ...}``.\n2. Multi-model: ``models: {name: {id: ..., ...}, ...}`` with an optional\n   ``default_model: <name>`` selecting the active one at startup.\n\nMixing ``model:`` and ``models:`` is rejected so the active source is\nunambiguous. The runtime exposes a model registry derived from whichever\nform is in use, and lets the TUI / CLI switch the active entry at runtime.",
+        "properties": {
+          "builtin_skills_enabled": {
+            "default": false,
+            "title": "Builtin Skills Enabled",
+            "type": "boolean"
+          },
+          "default_model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Default Model"
+          },
+          "instructions_file": {
+            "anyOf": [
+              {
+                "format": "path",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Instructions File"
+          },
+          "limits": {
+            "$ref": "#/$defs/LimitsConfig"
+          },
+          "model": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/ModelSettingsConfig"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "models": {
+            "additionalProperties": {
+              "$ref": "#/$defs/ModelSettingsConfig"
+            },
+            "title": "Models",
+            "type": "object"
+          },
+          "name": {
+            "default": "lumen",
+            "title": "Name",
+            "type": "string"
+          },
+          "skills_enabled": {
+            "default": true,
+            "title": "Skills Enabled",
+            "type": "boolean"
+          }
+        },
+        "title": "AgentSection",
+        "type": "object"
+      },
+      "AgentsConfig": {
+        "additionalProperties": false,
+        "description": "Native, session-scoped multi-agent orchestration policy.",
+        "properties": {
+          "autonomy": {
+            "default": "adaptive",
+            "enum": [
+              "adaptive",
+              "explicit",
+              "disabled"
+            ],
+            "title": "Autonomy",
+            "type": "string"
+          },
+          "default_agent": {
+            "default": "default",
+            "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$",
+            "title": "Default Agent",
+            "type": "string"
+          },
+          "enabled": {
+            "default": true,
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "max_agents_per_run": {
+            "default": 8,
+            "maximum": 32,
+            "minimum": 1,
+            "title": "Max Agents Per Run",
+            "type": "integer"
+          },
+          "max_concurrency": {
+            "default": 3,
+            "maximum": 8,
+            "minimum": 1,
+            "title": "Max Concurrency",
+            "type": "integer"
+          },
+          "max_depth": {
+            "const": 1,
+            "default": 1,
+            "title": "Max Depth",
+            "type": "integer"
+          },
+          "recovery": {
+            "const": "safe",
+            "default": "safe",
+            "title": "Recovery",
+            "type": "string"
+          },
+          "request_count": {
+            "default": 10,
+            "maximum": 50,
+            "minimum": 1,
+            "title": "Request Count",
+            "type": "integer"
+          },
+          "timeout_seconds": {
+            "default": 180.0,
+            "exclusiveMinimum": 0,
+            "maximum": 1800,
+            "title": "Timeout Seconds",
+            "type": "number"
+          },
+          "tool_calls": {
+            "default": 20,
+            "maximum": 100,
+            "minimum": 0,
+            "title": "Tool Calls",
+            "type": "integer"
+          },
+          "worktree_root": {
+            "default": "~/.lumen/worktrees",
+            "format": "path",
+            "title": "Worktree Root",
+            "type": "string"
+          }
+        },
+        "title": "AgentsConfig",
+        "type": "object"
+      },
+      "BailianLiveRouteConfig": {
+        "additionalProperties": false,
+        "properties": {
+          "api_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Api Key"
+          },
+          "api_key_env": {
+            "default": "DASHSCOPE_API_KEY",
+            "title": "Api Key Env",
+            "type": "string"
+          },
+          "base_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Base Url"
+          },
+          "completion_control": {
+            "default": "host_gated_synthesis",
+            "enum": [
+              "host_gated_synthesis",
+              "advisory_only"
+            ],
+            "title": "Completion Control",
+            "type": "string"
+          },
+          "model": {
+            "default": "qwen3.5-omni-plus-realtime",
+            "title": "Model",
+            "type": "string"
+          },
+          "provider": {
+            "const": "bailian",
+            "default": "bailian",
+            "title": "Provider",
+            "type": "string"
+          },
+          "region": {
+            "default": "cn-beijing",
+            "enum": [
+              "cn-beijing",
+              "ap-southeast-1"
+            ],
+            "title": "Region",
+            "type": "string"
+          },
+          "voice": {
+            "default": "Tina",
+            "title": "Voice",
+            "type": "string"
+          },
+          "workspace_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Workspace Id"
+          },
+          "workspace_id_env": {
+            "default": "DASHSCOPE_WORKSPACE_ID",
+            "title": "Workspace Id Env",
+            "type": "string"
+          }
+        },
+        "title": "BailianLiveRouteConfig",
+        "type": "object"
+      },
+      "CollaborationConfig": {
+        "additionalProperties": false,
+        "properties": {
+          "default_mode": {
+            "default": "default",
+            "enum": [
+              "default",
+              "plan"
+            ],
+            "title": "Default Mode",
+            "type": "string"
+          }
+        },
+        "title": "CollaborationConfig",
+        "type": "object"
+      },
+      "ContextConfig": {
+        "additionalProperties": false,
+        "description": "Provider-independent context budgeting and compaction policy.\n\n``ContextEngine`` resolves the active model profile, tokenizer, output\nreserve, and ratio-based soft/hard/target thresholds once, then uses that\nsame policy for assembly, compaction, provider preflight, and reporting.\n``soft_token_limit`` and ``keep_recent_tokens`` remain compatibility\noverrides; new configurations should normally keep the ratio defaults and\nput model-specific capability overrides under ``agent.models.*.context``.",
+        "properties": {
+          "background_compaction": {
+            "default": true,
+            "title": "Background Compaction",
+            "type": "boolean"
+          },
+          "background_trigger_ratio": {
+            "default": 0.9,
+            "exclusiveMinimum": 0.0,
+            "maximum": 1.0,
+            "title": "Background Trigger Ratio",
+            "type": "number"
+          },
+          "enabled": {
+            "default": true,
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "hard_ratio": {
+            "default": 0.92,
+            "exclusiveMinimum": 0.0,
+            "maximum": 1.0,
+            "title": "Hard Ratio",
+            "type": "number"
+          },
+          "keep_recent_tokens": {
+            "default": 20000,
+            "minimum": 1,
+            "title": "Keep Recent Tokens",
+            "type": "integer"
+          },
+          "soft_ratio": {
+            "default": 0.8,
+            "exclusiveMaximum": 1.0,
+            "exclusiveMinimum": 0.0,
+            "title": "Soft Ratio",
+            "type": "number"
+          },
+          "soft_token_limit": {
+            "default": 60000,
+            "minimum": 1,
+            "title": "Soft Token Limit",
+            "type": "integer"
+          },
+          "summary_max_tokens": {
+            "default": 2000,
+            "minimum": 1,
+            "title": "Summary Max Tokens",
+            "type": "integer"
+          },
+          "summary_tool_result_chars": {
+            "default": 2000,
+            "minimum": 100,
+            "title": "Summary Tool Result Chars",
+            "type": "integer"
+          },
+          "target_ratio": {
+            "default": 0.55,
+            "exclusiveMaximum": 1.0,
+            "exclusiveMinimum": 0.0,
+            "title": "Target Ratio",
+            "type": "number"
+          }
+        },
+        "title": "ContextConfig",
+        "type": "object"
+      },
+      "DelegationConfig": {
+        "additionalProperties": false,
+        "description": "Bounded, read-only subagent execution policy.\n\nDelegation is opt-in because every delegated task consumes additional model\nrequests. Child agents receive only tools classified as ``read`` and never\nreceive the delegation tool itself, preventing recursive fan-out.",
+        "properties": {
+          "enabled": {
+            "default": false,
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "max_concurrency": {
+            "default": 3,
+            "maximum": 8,
+            "minimum": 1,
+            "title": "Max Concurrency",
+            "type": "integer"
+          },
+          "request_count": {
+            "default": 10,
+            "maximum": 50,
+            "minimum": 1,
+            "title": "Request Count",
+            "type": "integer"
+          },
+          "research_enabled": {
+            "default": true,
+            "title": "Research Enabled",
+            "type": "boolean"
+          },
+          "timeout_seconds": {
+            "default": 180.0,
+            "exclusiveMinimum": 0,
+            "maximum": 1800,
+            "title": "Timeout Seconds",
+            "type": "number"
+          },
+          "tool_calls": {
+            "default": 20,
+            "maximum": 100,
+            "minimum": 0,
+            "title": "Tool Calls",
+            "type": "integer"
+          },
+          "worktree_enabled": {
+            "default": false,
+            "title": "Worktree Enabled",
+            "type": "boolean"
+          },
+          "worktree_root": {
+            "default": "~/.lumen/worktrees",
+            "format": "path",
+            "title": "Worktree Root",
+            "type": "string"
+          }
+        },
+        "title": "DelegationConfig",
+        "type": "object"
+      },
+      "HookConfig": {
+        "additionalProperties": false,
+        "properties": {
+          "command": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Command"
+          },
+          "event": {
+            "enum": [
+              "pre_tool_use",
+              "post_tool_use",
+              "user_prompt_submit",
+              "stop",
+              "notification"
+            ],
+            "title": "Event",
+            "type": "string"
+          },
+          "factory": {
+            "default": "hook",
+            "title": "Factory",
+            "type": "string"
+          },
+          "matcher": {
+            "default": "*",
+            "title": "Matcher",
+            "type": "string"
+          },
+          "module": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Module"
+          },
+          "timeout": {
+            "default": 10.0,
+            "exclusiveMinimum": 0,
+            "title": "Timeout",
+            "type": "number"
+          }
+        },
+        "required": [
+          "event"
+        ],
+        "title": "HookConfig",
+        "type": "object"
+      },
+      "LimitsConfig": {
+        "additionalProperties": false,
+        "properties": {
+          "parallel_tool_calls": {
+            "default": "sequential",
+            "enum": [
+              "sequential",
+              "parallel_safe",
+              "parallel"
+            ],
+            "title": "Parallel Tool Calls",
+            "type": "string"
+          },
+          "request_count": {
+            "default": 50,
+            "minimum": 1,
+            "title": "Request Count",
+            "type": "integer"
+          },
+          "skill_script_timeout_seconds": {
+            "default": 30.0,
+            "exclusiveMinimum": 0,
+            "title": "Skill Script Timeout Seconds",
+            "type": "number"
+          },
+          "tool_calls": {
+            "default": 100,
+            "minimum": 0,
+            "title": "Tool Calls",
+            "type": "integer"
+          },
+          "tool_timeout_seconds": {
+            "default": 60.0,
+            "exclusiveMinimum": 0,
+            "title": "Tool Timeout Seconds",
+            "type": "number"
+          }
+        },
+        "title": "LimitsConfig",
+        "type": "object"
+      },
+      "LiveConfig": {
+        "additionalProperties": false,
+        "description": "Optional browser Realtime voice transport and policy.",
+        "properties": {
+          "api_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Api Key"
+          },
+          "api_key_env": {
+            "default": "OPENAI_API_KEY",
+            "title": "Api Key Env",
+            "type": "string"
+          },
+          "base_url": {
+            "default": "https://api.openai.com",
+            "title": "Base Url",
+            "type": "string"
+          },
+          "default_route": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Default Route"
+          },
+          "enabled": {
+            "default": false,
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "fallback_routes": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Fallback Routes",
+            "type": "array"
+          },
+          "input_transcription": {
+            "$ref": "#/$defs/LiveTranscriptionConfig"
+          },
+          "max_context_items": {
+            "default": 24,
+            "maximum": 100,
+            "minimum": 1,
+            "title": "Max Context Items",
+            "type": "integer"
+          },
+          "max_sessions": {
+            "default": 1,
+            "maximum": 8,
+            "minimum": 1,
+            "title": "Max Sessions",
+            "type": "integer"
+          },
+          "model": {
+            "default": "gpt-realtime-2.1",
+            "title": "Model",
+            "type": "string"
+          },
+          "persist_audio": {
+            "const": false,
+            "default": false,
+            "title": "Persist Audio",
+            "type": "boolean"
+          },
+          "provider": {
+            "const": "openai",
+            "default": "openai",
+            "title": "Provider",
+            "type": "string"
+          },
+          "reasoning_effort": {
+            "default": "low",
+            "enum": [
+              "low",
+              "medium",
+              "high"
+            ],
+            "title": "Reasoning Effort",
+            "type": "string"
+          },
+          "rollover_seconds": {
+            "default": 3300,
+            "maximum": 3540,
+            "minimum": 60,
+            "title": "Rollover Seconds",
+            "type": "integer"
+          },
+          "routes": {
+            "additionalProperties": {
+              "discriminator": {
+                "mapping": {
+                  "bailian": "#/$defs/BailianLiveRouteConfig",
+                  "openai": "#/$defs/OpenAILiveRouteConfig"
+                },
+                "propertyName": "provider"
+              },
+              "oneOf": [
+                {
+                  "$ref": "#/$defs/OpenAILiveRouteConfig"
+                },
+                {
+                  "$ref": "#/$defs/BailianLiveRouteConfig"
+                }
+              ]
+            },
+            "title": "Routes",
+            "type": "object"
+          },
+          "strict_completion": {
+            "default": true,
+            "title": "Strict Completion",
+            "type": "boolean"
+          },
+          "turn_detection": {
+            "$ref": "#/$defs/LiveTurnDetectionConfig"
+          },
+          "voice": {
+            "default": "marin",
+            "title": "Voice",
+            "type": "string"
+          }
+        },
+        "title": "LiveConfig",
+        "type": "object"
+      },
+      "LiveTranscriptionConfig": {
+        "additionalProperties": false,
+        "properties": {
+          "enabled": {
+            "default": true,
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "language": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": "zh",
+            "title": "Language"
+          },
+          "model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": "gpt-4o-mini-transcribe",
+            "title": "Model"
+          }
+        },
+        "title": "LiveTranscriptionConfig",
+        "type": "object"
+      },
+      "LiveTurnDetectionConfig": {
+        "additionalProperties": false,
+        "properties": {
+          "eagerness": {
+            "default": "auto",
+            "enum": [
+              "low",
+              "medium",
+              "high",
+              "auto"
+            ],
+            "title": "Eagerness",
+            "type": "string"
+          },
+          "interrupt_response": {
+            "default": true,
+            "title": "Interrupt Response",
+            "type": "boolean"
+          },
+          "type": {
+            "default": "semantic_vad",
+            "enum": [
+              "server_vad",
+              "semantic_vad"
+            ],
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "title": "LiveTurnDetectionConfig",
+        "type": "object"
+      },
+      "McpServerConfig": {
+        "additionalProperties": false,
+        "properties": {
+          "always_load_tools": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Always Load Tools",
+            "type": "array"
+          },
+          "approval_status": {
+            "default": "automatic",
+            "title": "Approval Status",
+            "type": "string"
+          },
+          "args": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Args",
+            "type": "array"
+          },
+          "command": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Command"
+          },
+          "defer_tools": {
+            "default": true,
+            "title": "Defer Tools",
+            "type": "boolean"
+          },
+          "definition_fingerprint": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Definition Fingerprint"
+          },
+          "env": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "title": "Env",
+            "type": "object"
+          },
+          "headers": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "title": "Headers",
+            "type": "object"
+          },
+          "load_prompts": {
+            "default": true,
+            "title": "Load Prompts",
+            "type": "boolean"
+          },
+          "load_resources": {
+            "default": true,
+            "title": "Load Resources",
+            "type": "boolean"
+          },
+          "oauth": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/OAuthConfig"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "read_only_tools": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Read Only Tools",
+            "type": "array"
+          },
+          "required": {
+            "default": true,
+            "title": "Required",
+            "type": "boolean"
+          },
+          "source_path": {
+            "anyOf": [
+              {
+                "format": "path",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Source Path"
+          },
+          "source_scope": {
+            "default": "explicit",
+            "title": "Source Scope",
+            "type": "string"
+          },
+          "tool_effects": {
+            "additionalProperties": {
+              "enum": [
+                "observe",
+                "mutation",
+                "execution",
+                "external_action",
+                "unknown"
+              ],
+              "type": "string"
+            },
+            "title": "Tool Effects",
+            "type": "object"
+          },
+          "tool_risks": {
+            "additionalProperties": {
+              "enum": [
+                "read",
+                "write",
+                "execute"
+              ],
+              "type": "string"
+            },
+            "title": "Tool Risks",
+            "type": "object"
+          },
+          "transport": {
+            "enum": [
+              "stdio",
+              "streamable_http"
+            ],
+            "title": "Transport",
+            "type": "string"
+          },
+          "url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Url"
+          }
+        },
+        "required": [
+          "transport"
+        ],
+        "title": "McpServerConfig",
+        "type": "object"
+      },
+      "MemoryConfig": {
+        "additionalProperties": false,
+        "description": "Durable memory and opt-in background learning policy.",
+        "properties": {
+          "external_context": {
+            "const": "exclude",
+            "default": "exclude",
+            "title": "External Context",
+            "type": "string"
+          },
+          "idle_seconds": {
+            "default": 120.0,
+            "minimum": 0.0,
+            "title": "Idle Seconds",
+            "type": "number"
+          },
+          "learn": {
+            "default": false,
+            "title": "Learn",
+            "type": "boolean"
+          },
+          "max_attempts": {
+            "default": 5,
+            "minimum": 1,
+            "title": "Max Attempts",
+            "type": "integer"
+          },
+          "min_session_turns": {
+            "default": 4,
+            "minimum": 1,
+            "title": "Min Session Turns",
+            "type": "integer"
+          },
+          "retry_base_seconds": {
+            "default": 2.0,
+            "minimum": 0.0,
+            "title": "Retry Base Seconds",
+            "type": "number"
+          },
+          "use": {
+            "default": true,
+            "title": "Use",
+            "type": "boolean"
+          }
+        },
+        "title": "MemoryConfig",
+        "type": "object"
+      },
+      "ModelContextOverride": {
+        "additionalProperties": false,
+        "description": "Per-model context capability selection, independent of wire protocol.",
+        "properties": {
+          "keep_recent_tokens": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Keep Recent Tokens"
+          },
+          "max_output_tokens": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Max Output Tokens"
+          },
+          "profile": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Profile"
+          },
+          "soft_limit_tokens": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Soft Limit Tokens"
+          },
+          "tokenizer": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/ModelTokenizerConfig"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "window_tokens": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Window Tokens"
+          }
+        },
+        "title": "ModelContextOverride",
+        "type": "object"
+      },
+      "ModelSettingsConfig": {
+        "additionalProperties": false,
+        "properties": {
+          "api": {
+            "anyOf": [
+              {
+                "enum": [
+                  "chat",
+                  "responses",
+                  "openai-completions",
+                  "openai-responses",
+                  "chat-completions"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": "responses",
+            "title": "Api"
+          },
+          "api_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Api Key"
+          },
+          "api_key_env": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Api Key Env"
+          },
+          "base_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Base Url"
+          },
+          "context": {
+            "$ref": "#/$defs/ModelContextOverride"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "input_modalities": {
+            "default": [
+              "text"
+            ],
+            "items": {
+              "enum": [
+                "text",
+                "image"
+              ],
+              "type": "string"
+            },
+            "title": "Input Modalities",
+            "type": "array"
+          },
+          "settings": {
+            "additionalProperties": true,
+            "title": "Settings",
+            "type": "object"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "title": "ModelSettingsConfig",
+        "type": "object"
+      },
+      "ModelTokenizerConfig": {
+        "additionalProperties": false,
+        "description": "Offline tokenizer selection for one model capability profile.",
+        "properties": {
+          "encoding": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Encoding"
+          },
+          "kind": {
+            "default": "auto",
+            "enum": [
+              "auto",
+              "conservative",
+              "tiktoken"
+            ],
+            "title": "Kind",
+            "type": "string"
+          }
+        },
+        "title": "ModelTokenizerConfig",
+        "type": "object"
+      },
+      "OAuthConfig": {
+        "additionalProperties": false,
+        "properties": {
+          "callback_port": {
+            "anyOf": [
+              {
+                "maximum": 65535,
+                "minimum": 1,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Callback Port"
+          },
+          "callback_timeout": {
+            "default": 300.0,
+            "exclusiveMinimum": 0,
+            "title": "Callback Timeout",
+            "type": "number"
+          },
+          "client_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Client Id"
+          },
+          "client_secret": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Client Secret"
+          },
+          "credential_file": {
+            "default": "mcp_oauth/{server}.json",
+            "title": "Credential File",
+            "type": "string"
+          },
+          "scopes": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Scopes",
+            "type": "array"
+          }
+        },
+        "title": "OAuthConfig",
+        "type": "object"
+      },
+      "OpenAILiveRouteConfig": {
+        "additionalProperties": false,
+        "properties": {
+          "api_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Api Key"
+          },
+          "api_key_env": {
+            "default": "OPENAI_API_KEY",
+            "title": "Api Key Env",
+            "type": "string"
+          },
+          "base_url": {
+            "default": "https://api.openai.com",
+            "title": "Base Url",
+            "type": "string"
+          },
+          "completion_control": {
+            "const": "native_required_tool",
+            "default": "native_required_tool",
+            "title": "Completion Control",
+            "type": "string"
+          },
+          "model": {
+            "default": "gpt-realtime-2.1",
+            "title": "Model",
+            "type": "string"
+          },
+          "provider": {
+            "const": "openai",
+            "default": "openai",
+            "title": "Provider",
+            "type": "string"
+          },
+          "voice": {
+            "default": "marin",
+            "title": "Voice",
+            "type": "string"
+          }
+        },
+        "title": "OpenAILiveRouteConfig",
+        "type": "object"
+      },
+      "PermissionsConfig": {
+        "additionalProperties": false,
+        "properties": {
+          "always_allow": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Always Allow",
+            "type": "array"
+          },
+          "always_deny": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Always Deny",
+            "type": "array"
+          },
+          "default_mode": {
+            "default": "manual",
+            "enum": [
+              "manual",
+              "accept_edits",
+              "auto"
+            ],
+            "title": "Default Mode",
+            "type": "string"
+          }
+        },
+        "title": "PermissionsConfig",
+        "type": "object"
+      },
+      "PluginConfig": {
+        "additionalProperties": false,
+        "properties": {
+          "factory": {
+            "default": "create_tools",
+            "title": "Factory",
+            "type": "string"
+          },
+          "module": {
+            "title": "Module",
+            "type": "string"
+          },
+          "source_dir": {
+            "anyOf": [
+              {
+                "format": "path",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Source Dir"
+          }
+        },
+        "required": [
+          "module"
+        ],
+        "title": "PluginConfig",
+        "type": "object"
+      },
+      "SandboxConfig": {
+        "additionalProperties": false,
+        "properties": {
+          "env_allow": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Env Allow",
+            "type": "array"
+          },
+          "extra_read_paths": {
+            "items": {
+              "format": "path",
+              "type": "string"
+            },
+            "title": "Extra Read Paths",
+            "type": "array"
+          },
+          "extra_write_paths": {
+            "items": {
+              "format": "path",
+              "type": "string"
+            },
+            "title": "Extra Write Paths",
+            "type": "array"
+          },
+          "mode": {
+            "default": "workspace_write",
+            "enum": [
+              "workspace_write",
+              "disabled"
+            ],
+            "title": "Mode",
+            "type": "string"
+          },
+          "network": {
+            "default": false,
+            "title": "Network",
+            "type": "boolean"
+          }
+        },
+        "title": "SandboxConfig",
+        "type": "object"
+      },
+      "SessionsConfig": {
+        "additionalProperties": false,
+        "properties": {
+          "directory": {
+            "default": ".lumen/sessions",
+            "format": "path",
+            "title": "Directory",
+            "type": "string"
+          }
+        },
+        "title": "SessionsConfig",
+        "type": "object"
+      },
+      "ToolsConfig": {
+        "additionalProperties": false,
+        "properties": {
+          "builtins": {
+            "items": {
+              "enum": [
+                "read_file",
+                "list_directory",
+                "search_text",
+                "web_fetch",
+                "write_file",
+                "edit_file",
+                "run_command"
+              ],
+              "type": "string"
+            },
+            "title": "Builtins",
+            "type": "array"
+          },
+          "plugins": {
+            "items": {
+              "$ref": "#/$defs/PluginConfig"
+            },
+            "title": "Plugins",
+            "type": "array"
+          },
+          "web": {
+            "$ref": "#/$defs/WebToolsConfig"
+          }
+        },
+        "title": "ToolsConfig",
+        "type": "object"
+      },
+      "UiConfig": {
+        "additionalProperties": false,
+        "description": "Terminal UI appearance preferences.",
+        "properties": {
+          "animations": {
+            "default": true,
+            "title": "Animations",
+            "type": "boolean"
+          },
+          "notifications": {
+            "default": true,
+            "title": "Notifications",
+            "type": "boolean"
+          },
+          "status_line": {
+            "items": {
+              "enum": [
+                "mode",
+                "state",
+                "model",
+                "usage",
+                "workspace",
+                "keymap"
+              ],
+              "type": "string"
+            },
+            "title": "Status Line",
+            "type": "array"
+          },
+          "terminal_title": {
+            "default": true,
+            "title": "Terminal Title",
+            "type": "boolean"
+          },
+          "theme": {
+            "default": "lumen-dark",
+            "title": "Theme",
+            "type": "string"
+          },
+          "transcript_density": {
+            "default": "normal",
+            "enum": [
+              "normal",
+              "verbose"
+            ],
+            "title": "Transcript Density",
+            "type": "string"
+          },
+          "vim_mode": {
+            "default": false,
+            "title": "Vim Mode",
+            "type": "boolean"
+          }
+        },
+        "title": "UiConfig",
+        "type": "object"
+      },
+      "WebSearchConfig": {
+        "additionalProperties": false,
+        "properties": {
+          "api_key_env": {
+            "title": "Api Key Env",
+            "type": "string"
+          },
+          "max_results": {
+            "default": 8,
+            "maximum": 20,
+            "minimum": 1,
+            "title": "Max Results",
+            "type": "integer"
+          },
+          "provider": {
+            "enum": [
+              "tavily",
+              "brave"
+            ],
+            "title": "Provider",
+            "type": "string"
+          }
+        },
+        "required": [
+          "provider",
+          "api_key_env"
+        ],
+        "title": "WebSearchConfig",
+        "type": "object"
+      },
+      "WebToolsConfig": {
+        "additionalProperties": false,
+        "properties": {
+          "fetch_max_bytes": {
+            "default": 2097152,
+            "minimum": 1024,
+            "title": "Fetch Max Bytes",
+            "type": "integer"
+          },
+          "fetch_timeout_seconds": {
+            "default": 20.0,
+            "exclusiveMinimum": 0,
+            "title": "Fetch Timeout Seconds",
+            "type": "number"
+          },
+          "search": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/WebSearchConfig"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          }
+        },
+        "title": "WebToolsConfig",
+        "type": "object"
+      },
+      "WorkProductsConfig": {
+        "additionalProperties": false,
+        "properties": {
+          "auto_attach": {
+            "default": true,
+            "title": "Auto Attach",
+            "type": "boolean"
+          },
+          "enabled": {
+            "default": true,
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "max_context_items": {
+            "default": 8,
+            "maximum": 100,
+            "minimum": 1,
+            "title": "Max Context Items",
+            "type": "integer"
+          },
+          "strict": {
+            "default": true,
+            "title": "Strict",
+            "type": "boolean"
+          }
+        },
+        "title": "WorkProductsConfig",
+        "type": "object"
+      }
+    },
+    "additionalProperties": false,
+    "properties": {
+      "agent": {
+        "$ref": "#/$defs/AgentSection"
+      },
+      "agents": {
+        "$ref": "#/$defs/AgentsConfig"
+      },
+      "collaboration": {
+        "$ref": "#/$defs/CollaborationConfig"
+      },
+      "config_path": {
+        "format": "path",
+        "title": "Config Path",
+        "type": "string"
+      },
+      "config_sources": {
+        "items": {},
+        "title": "Config Sources",
+        "type": "array"
+      },
+      "config_warnings": {
+        "items": {
+          "type": "string"
+        },
+        "title": "Config Warnings",
+        "type": "array"
+      },
+      "context": {
+        "$ref": "#/$defs/ContextConfig"
+      },
+      "delegation": {
+        "$ref": "#/$defs/DelegationConfig"
+      },
+      "hooks": {
+        "items": {
+          "$ref": "#/$defs/HookConfig"
+        },
+        "title": "Hooks",
+        "type": "array"
+      },
+      "live": {
+        "$ref": "#/$defs/LiveConfig"
+      },
+      "mcp_diagnostics": {
+        "items": {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        "title": "Mcp Diagnostics",
+        "type": "array"
+      },
+      "mcp_servers": {
+        "additionalProperties": {
+          "$ref": "#/$defs/McpServerConfig"
+        },
+        "title": "Mcp Servers",
+        "type": "object"
+      },
+      "memory": {
+        "$ref": "#/$defs/MemoryConfig"
+      },
+      "permissions": {
+        "$ref": "#/$defs/PermissionsConfig"
+      },
+      "project_trusted": {
+        "default": true,
+        "title": "Project Trusted",
+        "type": "boolean"
+      },
+      "sandbox": {
+        "$ref": "#/$defs/SandboxConfig"
+      },
+      "sessions": {
+        "$ref": "#/$defs/SessionsConfig"
+      },
+      "tools": {
+        "$ref": "#/$defs/ToolsConfig"
+      },
+      "ui": {
+        "$ref": "#/$defs/UiConfig"
+      },
+      "version": {
+        "const": 2,
+        "title": "Version",
+        "type": "integer"
+      },
+      "work_products": {
+        "$ref": "#/$defs/WorkProductsConfig"
+      }
+    },
+    "required": [
+      "version",
+      "agent",
+      "config_path"
+    ],
+    "title": "AppConfig",
+    "type": "object"
+  },
+  "catalog_version": 2,
+  "module_graph": [
+    {
+      "consumes": [
+        "RunCoordinator",
+        "SessionRepository",
+        "ResourceManager"
+      ],
+      "implementation": "lumen.application.host.WorkspaceHost",
+      "module": "WorkspaceHost"
+    },
+    {
+      "consumes": [
+        "ContextEngine",
+        "ToolRegistry",
+        "SessionRepository"
+      ],
+      "implementation": "lumen.runtime.AgentRuntime",
+      "module": "AgentRuntime"
+    },
+    {
+      "consumes": [],
+      "implementation": "lumen.lifecycle.RegistrationScope",
+      "module": "RegistrationScope"
+    },
+    {
+      "consumes": [
+        "ArtifactStore",
+        "SessionRepository",
+        "Workspace"
+      ],
+      "implementation": "lumen.work_products.workspace.TaskWorkspace",
+      "module": "TaskWorkspace"
+    },
+    {
+      "consumes": [
+        "AgentRuntimeFactory",
+        "SessionRepository",
+        "ArtifactStore"
+      ],
+      "implementation": "lumen.agents.orchestrator.AgentOrchestrator",
+      "module": "AgentOrchestrator"
+    }
+  ],
+  "run_events": {
+    "$defs": {
+      "AcceptanceCriterion": {
+        "additionalProperties": false,
+        "properties": {
+          "description": {
+            "maxLength": 300,
+            "minLength": 1,
+            "title": "Description",
+            "type": "string"
+          },
+          "id": {
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$",
+            "title": "Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "description"
+        ],
+        "title": "AcceptanceCriterion",
+        "type": "object"
+      },
+      "AgentLifecycleChanged": {
+        "properties": {
+          "agent_id": {
+            "title": "Agent Id",
+            "type": "string"
+          },
+          "path": {
+            "title": "Path",
+            "type": "string"
+          },
+          "phase": {
+            "title": "Phase",
+            "type": "string"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "summary": {
+            "default": "",
+            "title": "Summary",
+            "type": "string"
+          }
+        },
+        "required": [
+          "agent_id",
+          "path",
+          "phase",
+          "status"
+        ],
+        "title": "AgentLifecycleChanged",
+        "type": "object"
+      },
+      "ApprovalRequest": {
+        "description": "Approval request details for backwards compatibility with callbacks.",
+        "properties": {
+          "args": {
+            "additionalProperties": true,
+            "title": "Args",
+            "type": "object"
+          },
+          "call_id": {
+            "title": "Call Id",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "origin": {
+            "title": "Origin",
+            "type": "string"
+          },
+          "risk": {
+            "title": "Risk",
+            "type": "string"
+          }
+        },
+        "required": [
+          "call_id",
+          "name",
+          "args",
+          "origin",
+          "risk"
+        ],
+        "title": "ApprovalRequest",
+        "type": "object"
+      },
+      "ClarificationRequested": {
+        "properties": {
+          "choices": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Choices",
+            "type": "array"
+          },
+          "question": {
+            "title": "Question",
+            "type": "string"
+          },
+          "question_id": {
+            "title": "Question Id",
+            "type": "string"
+          },
+          "related_plan_step": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Related Plan Step"
+          }
+        },
+        "required": [
+          "question_id",
+          "question"
+        ],
+        "title": "ClarificationRequested",
+        "type": "object"
+      },
+      "CommentaryDelta": {
+        "description": "Intermediate text the model produced alongside tool calls.\n\nProviders may emit this directly after a tool call, or the runtime may\nreclassify already-streamed provisional text using :class:`TextRetracted`.\nIt is shown as a subdued analysis summary in the timeline.",
+        "properties": {
+          "text": {
+            "title": "Text",
+            "type": "string"
+          }
+        },
+        "required": [
+          "text"
+        ],
+        "title": "CommentaryDelta",
+        "type": "object"
+      },
+      "ContextCompactionCompleted": {
+        "properties": {
+          "active_message_count": {
+            "title": "Active Message Count",
+            "type": "integer"
+          },
+          "summary_tokens_estimate": {
+            "default": 0,
+            "title": "Summary Tokens Estimate",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "active_message_count"
+        ],
+        "title": "ContextCompactionCompleted",
+        "type": "object"
+      },
+      "ContextCompactionFailed": {
+        "properties": {
+          "message": {
+            "title": "Message",
+            "type": "string"
+          }
+        },
+        "required": [
+          "message"
+        ],
+        "title": "ContextCompactionFailed",
+        "type": "object"
+      },
+      "ContextCompactionStarted": {
+        "properties": {
+          "source_message_count": {
+            "title": "Source Message Count",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "source_message_count"
+        ],
+        "title": "ContextCompactionStarted",
+        "type": "object"
+      },
+      "EvidenceKind": {
+        "enum": [
+          "tool",
+          "command",
+          "diff",
+          "agent",
+          "child",
+          "user_waiver"
+        ],
+        "title": "EvidenceKind",
+        "type": "string"
+      },
+      "EvidenceReceipt": {
+        "additionalProperties": false,
+        "description": "Executor-created evidence; model tools may link but never create it.",
+        "properties": {
+          "created_at": {
+            "title": "Created At",
+            "type": "string"
+          },
+          "criterion_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Criterion Ids",
+            "type": "array"
+          },
+          "id": {
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$",
+            "title": "Id",
+            "type": "string"
+          },
+          "kind": {
+            "$ref": "#/$defs/EvidenceKind"
+          },
+          "passed": {
+            "title": "Passed",
+            "type": "boolean"
+          },
+          "sequence": {
+            "default": 0,
+            "minimum": 0,
+            "title": "Sequence",
+            "type": "integer"
+          },
+          "source_id": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Source Id",
+            "type": "string"
+          },
+          "summary": {
+            "maxLength": 1000,
+            "minLength": 1,
+            "title": "Summary",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "source_id",
+          "summary",
+          "passed"
+        ],
+        "title": "EvidenceReceipt",
+        "type": "object"
+      },
+      "InputDelivered": {
+        "properties": {
+          "message_id": {
+            "title": "Message Id",
+            "type": "string"
+          },
+          "mode": {
+            "title": "Mode",
+            "type": "string"
+          },
+          "text": {
+            "title": "Text",
+            "type": "string"
+          }
+        },
+        "required": [
+          "message_id",
+          "text",
+          "mode"
+        ],
+        "title": "InputDelivered",
+        "type": "object"
+      },
+      "InputDequeued": {
+        "properties": {
+          "message_id": {
+            "title": "Message Id",
+            "type": "string"
+          },
+          "mode": {
+            "title": "Mode",
+            "type": "string"
+          },
+          "text": {
+            "title": "Text",
+            "type": "string"
+          }
+        },
+        "required": [
+          "message_id",
+          "text",
+          "mode"
+        ],
+        "title": "InputDequeued",
+        "type": "object"
+      },
+      "InputQueued": {
+        "properties": {
+          "message_id": {
+            "title": "Message Id",
+            "type": "string"
+          },
+          "mode": {
+            "title": "Mode",
+            "type": "string"
+          },
+          "text": {
+            "title": "Text",
+            "type": "string"
+          }
+        },
+        "required": [
+          "message_id",
+          "text",
+          "mode"
+        ],
+        "title": "InputQueued",
+        "type": "object"
+      },
+      "PlanCreated": {
+        "properties": {
+          "plan": {
+            "$ref": "#/$defs/PlanState"
+          }
+        },
+        "required": [
+          "plan"
+        ],
+        "title": "PlanCreated",
+        "type": "object"
+      },
+      "PlanLifecycle": {
+        "enum": [
+          "draft",
+          "review_pending",
+          "approved",
+          "executing",
+          "completed",
+          "blocked",
+          "rejected",
+          "cancelled"
+        ],
+        "title": "PlanLifecycle",
+        "type": "string"
+      },
+      "PlanReviewPending": {
+        "properties": {
+          "plan": {
+            "$ref": "#/$defs/PlanState"
+          },
+          "revision": {
+            "title": "Revision",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "plan",
+          "revision"
+        ],
+        "title": "PlanReviewPending",
+        "type": "object"
+      },
+      "PlanReviewResolved": {
+        "properties": {
+          "approved": {
+            "title": "Approved",
+            "type": "boolean"
+          },
+          "feedback": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Feedback"
+          },
+          "revision": {
+            "title": "Revision",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "revision",
+          "approved"
+        ],
+        "title": "PlanReviewResolved",
+        "type": "object"
+      },
+      "PlanState": {
+        "additionalProperties": false,
+        "properties": {
+          "approved_revision": {
+            "anyOf": [
+              {
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Approved Revision"
+          },
+          "constraints": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Constraints",
+            "type": "array"
+          },
+          "evidence": {
+            "items": {
+              "$ref": "#/$defs/EvidenceReceipt"
+            },
+            "title": "Evidence",
+            "type": "array"
+          },
+          "goal": {
+            "default": "",
+            "maxLength": 1000,
+            "title": "Goal",
+            "type": "string"
+          },
+          "lifecycle": {
+            "$ref": "#/$defs/PlanLifecycle",
+            "default": "draft"
+          },
+          "revision": {
+            "default": 0,
+            "minimum": 0,
+            "title": "Revision",
+            "type": "integer"
+          },
+          "state_version": {
+            "default": 0,
+            "minimum": 0,
+            "title": "State Version",
+            "type": "integer"
+          },
+          "steps": {
+            "items": {
+              "$ref": "#/$defs/PlanStep"
+            },
+            "title": "Steps",
+            "type": "array"
+          }
+        },
+        "title": "PlanState",
+        "type": "object"
+      },
+      "PlanStep": {
+        "additionalProperties": false,
+        "properties": {
+          "acceptance_criteria": {
+            "items": {
+              "$ref": "#/$defs/AcceptanceCriterion"
+            },
+            "title": "Acceptance Criteria",
+            "type": "array"
+          },
+          "depends_on": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Depends On",
+            "type": "array"
+          },
+          "evidence_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Evidence Ids",
+            "type": "array"
+          },
+          "id": {
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$",
+            "title": "Id",
+            "type": "string"
+          },
+          "note": {
+            "anyOf": [
+              {
+                "maxLength": 500,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Note"
+          },
+          "owner": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Owner"
+          },
+          "status": {
+            "$ref": "#/$defs/StepStatus",
+            "default": "pending"
+          },
+          "title": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Title",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "title"
+        ],
+        "title": "PlanStep",
+        "type": "object"
+      },
+      "PlanUpdated": {
+        "properties": {
+          "plan": {
+            "$ref": "#/$defs/PlanState"
+          }
+        },
+        "required": [
+          "plan"
+        ],
+        "title": "PlanUpdated",
+        "type": "object"
+      },
+      "ProgressReported": {
+        "properties": {
+          "next_action": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Next Action"
+          },
+          "summary": {
+            "title": "Summary",
+            "type": "string"
+          }
+        },
+        "required": [
+          "summary"
+        ],
+        "title": "ProgressReported",
+        "type": "object"
+      },
+      "RunCancelled": {
+        "properties": {
+          "message": {
+            "default": "Run cancelled",
+            "title": "Message",
+            "type": "string"
+          }
+        },
+        "title": "RunCancelled",
+        "type": "object"
+      },
+      "RunCompleted": {
+        "properties": {
+          "output": {
+            "title": "Output",
+            "type": "string"
+          },
+          "usage": {
+            "additionalProperties": true,
+            "title": "Usage",
+            "type": "object"
+          }
+        },
+        "required": [
+          "output"
+        ],
+        "title": "RunCompleted",
+        "type": "object"
+      },
+      "RunFailed": {
+        "properties": {
+          "message": {
+            "title": "Message",
+            "type": "string"
+          }
+        },
+        "required": [
+          "message"
+        ],
+        "title": "RunFailed",
+        "type": "object"
+      },
+      "RunStarted": {
+        "properties": {
+          "prompt": {
+            "title": "Prompt",
+            "type": "string"
+          }
+        },
+        "required": [
+          "prompt"
+        ],
+        "title": "RunStarted",
+        "type": "object"
+      },
+      "RunWaitingForUser": {
+        "properties": {
+          "choices": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Choices",
+            "type": "array"
+          },
+          "question": {
+            "title": "Question",
+            "type": "string"
+          },
+          "question_id": {
+            "title": "Question Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "question_id",
+          "question"
+        ],
+        "title": "RunWaitingForUser",
+        "type": "object"
+      },
+      "StepStatus": {
+        "enum": [
+          "pending",
+          "in_progress",
+          "completed",
+          "blocked",
+          "skipped"
+        ],
+        "title": "StepStatus",
+        "type": "string"
+      },
+      "TextDelta": {
+        "description": "Incremental assistant text, emitted as soon as the provider yields it.",
+        "properties": {
+          "text": {
+            "title": "Text",
+            "type": "string"
+          }
+        },
+        "required": [
+          "text"
+        ],
+        "title": "TextDelta",
+        "type": "object"
+      },
+      "TextRetracted": {
+        "description": "Retract provisional assistant text before reclassifying it.",
+        "properties": {
+          "characters": {
+            "title": "Characters",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "characters"
+        ],
+        "title": "TextRetracted",
+        "type": "object"
+      },
+      "ThinkingDelta": {
+        "description": "Incremental provider reasoning (thinking) content.\n\nEmitted from ``ThinkingPart``/``ThinkingPartDelta`` stream events. It is\npresentation-only: never part of the final answer and never retracted,\nbecause tool calls do not retroactively reclassify reasoning content.",
+        "properties": {
+          "text": {
+            "title": "Text",
+            "type": "string"
+          }
+        },
+        "required": [
+          "text"
+        ],
+        "title": "ThinkingDelta",
+        "type": "object"
+      },
+      "ToolApprovalBatchPending": {
+        "description": "One model turn produced several approval-gated tool calls.",
+        "properties": {
+          "batch_id": {
+            "title": "Batch Id",
+            "type": "string"
+          },
+          "requests": {
+            "items": {
+              "$ref": "#/$defs/ApprovalRequest"
+            },
+            "title": "Requests",
+            "type": "array"
+          },
+          "risk_summary": {
+            "title": "Risk Summary",
+            "type": "string"
+          }
+        },
+        "required": [
+          "batch_id",
+          "requests",
+          "risk_summary"
+        ],
+        "title": "ToolApprovalBatchPending",
+        "type": "object"
+      },
+      "ToolApprovalPending": {
+        "properties": {
+          "args": {
+            "additionalProperties": true,
+            "title": "Args",
+            "type": "object"
+          },
+          "call_id": {
+            "title": "Call Id",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "origin": {
+            "title": "Origin",
+            "type": "string"
+          },
+          "risk": {
+            "title": "Risk",
+            "type": "string"
+          }
+        },
+        "required": [
+          "call_id",
+          "name",
+          "args",
+          "origin",
+          "risk"
+        ],
+        "title": "ToolApprovalPending",
+        "type": "object"
+      },
+      "ToolApprovalResolved": {
+        "properties": {
+          "approved": {
+            "title": "Approved",
+            "type": "boolean"
+          },
+          "call_id": {
+            "title": "Call Id",
+            "type": "string"
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          }
+        },
+        "required": [
+          "call_id",
+          "approved",
+          "message"
+        ],
+        "title": "ToolApprovalResolved",
+        "type": "object"
+      },
+      "ToolCallFinished": {
+        "properties": {
+          "call_id": {
+            "title": "Call Id",
+            "type": "string"
+          },
+          "elapsed_seconds": {
+            "default": 0.0,
+            "title": "Elapsed Seconds",
+            "type": "number"
+          },
+          "exit_code": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Exit Code"
+          },
+          "is_error": {
+            "title": "Is Error",
+            "type": "boolean"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "preview": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Preview"
+          },
+          "result": {
+            "title": "Result",
+            "type": "string"
+          },
+          "result_view": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Result View"
+          }
+        },
+        "required": [
+          "call_id",
+          "name",
+          "result",
+          "is_error"
+        ],
+        "title": "ToolCallFinished",
+        "type": "object"
+      },
+      "ToolCallStarted": {
+        "properties": {
+          "args": {
+            "additionalProperties": true,
+            "title": "Args",
+            "type": "object"
+          },
+          "call_id": {
+            "title": "Call Id",
+            "type": "string"
+          },
+          "call_view": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Call View"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "origin": {
+            "default": "configured tool",
+            "title": "Origin",
+            "type": "string"
+          },
+          "risk": {
+            "default": "external",
+            "title": "Risk",
+            "type": "string"
+          },
+          "started_at": {
+            "default": 0.0,
+            "title": "Started At",
+            "type": "number"
+          }
+        },
+        "required": [
+          "call_id",
+          "name",
+          "args"
+        ],
+        "title": "ToolCallStarted",
+        "type": "object"
+      },
+      "UsageUpdated": {
+        "properties": {
+          "context_tokens_estimate": {
+            "default": 0,
+            "title": "Context Tokens Estimate",
+            "type": "integer"
+          },
+          "elapsed_seconds": {
+            "default": 0.0,
+            "title": "Elapsed Seconds",
+            "type": "number"
+          },
+          "request_count": {
+            "default": 0,
+            "title": "Request Count",
+            "type": "integer"
+          },
+          "tool_call_count": {
+            "default": 0,
+            "title": "Tool Call Count",
+            "type": "integer"
+          },
+          "usage": {
+            "additionalProperties": true,
+            "title": "Usage",
+            "type": "object"
+          }
+        },
+        "required": [
+          "usage"
+        ],
+        "title": "UsageUpdated",
+        "type": "object"
+      },
+      "WorkProductChanged": {
+        "properties": {
+          "effect_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Effect Id"
+          },
+          "phase": {
+            "title": "Phase",
+            "type": "string"
+          },
+          "resource": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Resource"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "summary": {
+            "default": "",
+            "title": "Summary",
+            "type": "string"
+          },
+          "work_product_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Work Product Id"
+          }
+        },
+        "required": [
+          "phase",
+          "work_product_id",
+          "resource",
+          "effect_id",
+          "status"
+        ],
+        "title": "WorkProductChanged",
+        "type": "object"
+      }
+    },
+    "anyOf": [
+      {
+        "$ref": "#/$defs/RunStarted"
+      },
+      {
+        "$ref": "#/$defs/TextDelta"
+      },
+      {
+        "$ref": "#/$defs/TextRetracted"
+      },
+      {
+        "$ref": "#/$defs/CommentaryDelta"
+      },
+      {
+        "$ref": "#/$defs/ThinkingDelta"
+      },
+      {
+        "$ref": "#/$defs/PlanCreated"
+      },
+      {
+        "$ref": "#/$defs/PlanUpdated"
+      },
+      {
+        "$ref": "#/$defs/PlanReviewPending"
+      },
+      {
+        "$ref": "#/$defs/PlanReviewResolved"
+      },
+      {
+        "$ref": "#/$defs/ProgressReported"
+      },
+      {
+        "$ref": "#/$defs/WorkProductChanged"
+      },
+      {
+        "$ref": "#/$defs/AgentLifecycleChanged"
+      },
+      {
+        "$ref": "#/$defs/ToolCallStarted"
+      },
+      {
+        "$ref": "#/$defs/ToolCallFinished"
+      },
+      {
+        "$ref": "#/$defs/ToolApprovalPending"
+      },
+      {
+        "$ref": "#/$defs/ToolApprovalBatchPending"
+      },
+      {
+        "$ref": "#/$defs/ToolApprovalResolved"
+      },
+      {
+        "$ref": "#/$defs/UsageUpdated"
+      },
+      {
+        "$ref": "#/$defs/ContextCompactionStarted"
+      },
+      {
+        "$ref": "#/$defs/ContextCompactionCompleted"
+      },
+      {
+        "$ref": "#/$defs/ContextCompactionFailed"
+      },
+      {
+        "$ref": "#/$defs/RunCompleted"
+      },
+      {
+        "$ref": "#/$defs/ClarificationRequested"
+      },
+      {
+        "$ref": "#/$defs/RunWaitingForUser"
+      },
+      {
+        "$ref": "#/$defs/RunFailed"
+      },
+      {
+        "$ref": "#/$defs/RunCancelled"
+      },
+      {
+        "$ref": "#/$defs/InputQueued"
+      },
+      {
+        "$ref": "#/$defs/InputDelivered"
+      },
+      {
+        "$ref": "#/$defs/InputDequeued"
+      }
+    ]
+  },
+  "runtime_invariants": [
+    {
+      "enforced_by": "ContextEngine.prepare/commit and context validation",
+      "name": "model_visible_history_is_canonical",
+      "owner": "ContextEngine"
+    },
+    {
+      "enforced_by": "TaskWorkspace.completion_issues",
+      "name": "completion_requires_verified_effects",
+      "owner": "TaskWorkspace"
+    },
+    {
+      "enforced_by": "Workspace.atomic_write",
+      "name": "mutation_uses_expected_revision",
+      "owner": "TaskWorkspace"
+    },
+    {
+      "enforced_by": "AgentOrchestrator.completion_issues",
+      "name": "root_completion_has_no_unresolved_agents",
+      "owner": "AgentOrchestrator"
+    },
+    {
+      "enforced_by": "ResourceManager.runtime_invariant_report",
+      "name": "effective_capability_catalog_is_consistent",
+      "owner": "ResourceManager"
+    }
+  ],
+  "session": {
+    "current_schema": 9,
+    "record_types": [
+      "agent_event",
+      "agent_message",
+      "agent_result",
+      "agent_thread",
+      "context_state",
+      "effect",
+      "live_session",
+      "plan_state",
+      "schema_upgrade",
+      "session",
+      "session_catalog",
+      "session_settings",
+      "turn",
+      "work_state"
+    ],
+    "request_receipt": {
+      "additionalProperties": false,
+      "description": "Bounded durable ledger entry for one provider-bound model step.",
+      "properties": {
+        "context_fingerprint": {
+          "title": "Context Fingerprint",
+          "type": "string"
+        },
+        "estimated": {
+          "default": true,
+          "title": "Estimated",
+          "type": "boolean"
+        },
+        "hard_limit_tokens": {
+          "exclusiveMinimum": 0,
+          "title": "Hard Limit Tokens",
+          "type": "integer"
+        },
+        "instructions_tokens": {
+          "minimum": 0,
+          "title": "Instructions Tokens",
+          "type": "integer"
+        },
+        "messages_tokens": {
+          "minimum": 0,
+          "title": "Messages Tokens",
+          "type": "integer"
+        },
+        "model": {
+          "title": "Model",
+          "type": "string"
+        },
+        "output_reserve_tokens": {
+          "minimum": 0,
+          "title": "Output Reserve Tokens",
+          "type": "integer"
+        },
+        "provider": {
+          "title": "Provider",
+          "type": "string"
+        },
+        "route": {
+          "title": "Route",
+          "type": "string"
+        },
+        "step": {
+          "minimum": 1,
+          "title": "Step",
+          "type": "integer"
+        },
+        "tools_tokens": {
+          "minimum": 0,
+          "title": "Tools Tokens",
+          "type": "integer"
+        },
+        "total_tokens": {
+          "minimum": 0,
+          "title": "Total Tokens",
+          "type": "integer"
+        },
+        "visible_tool_digest": {
+          "title": "Visible Tool Digest",
+          "type": "string"
+        },
+        "visible_tools": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Visible Tools",
+          "type": "array"
+        }
+      },
+      "required": [
+        "step",
+        "route",
+        "provider",
+        "model",
+        "instructions_tokens",
+        "messages_tokens",
+        "tools_tokens",
+        "output_reserve_tokens",
+        "total_tokens",
+        "hard_limit_tokens",
+        "visible_tool_digest",
+        "context_fingerprint"
+      ],
+      "title": "ProviderRequestReceipt",
+      "type": "object"
+    },
+    "supported_schemas": [
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9
+    ],
+    "upgrade_policy": "append-only schema_upgrade; never rewrite prior records"
+  },
+  "tool_spec": {
+    "compatibility_constructor_fields": [
+      "function",
+      "risk",
+      "name",
+      "description",
+      "timeout",
+      "effect_kind",
+      "output",
+      "concurrency",
+      "presentation"
+    ],
+    "concurrency": [
+      "exclusive",
+      "parallel_safe"
+    ],
+    "effect_kind": [
+      "observe",
+      "mutation",
+      "execution",
+      "external_action",
+      "unknown"
+    ],
+    "output_contract": {
+      "canonical_value": "Pydantic TypeAdapter validated JSON value",
+      "client_projection": "object|null",
+      "model_projection": "str"
+    },
+    "presentation": {
+      "call": {
+        "$defs": {
+          "ToolFamily": {
+            "enum": [
+              "read",
+              "list",
+              "search",
+              "web",
+              "mcp",
+              "command",
+              "edit",
+              "plan",
+              "skill",
+              "other"
+            ],
+            "title": "ToolFamily",
+            "type": "string"
+          }
+        },
+        "additionalProperties": false,
+        "properties": {
+          "active_verb": {
+            "title": "Active Verb",
+            "type": "string"
+          },
+          "completed_verb": {
+            "title": "Completed Verb",
+            "type": "string"
+          },
+          "detail": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Detail"
+          },
+          "family": {
+            "$ref": "#/$defs/ToolFamily"
+          },
+          "group_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Group Key"
+          },
+          "groupable": {
+            "default": false,
+            "title": "Groupable",
+            "type": "boolean"
+          },
+          "plural": {
+            "default": "calls",
+            "title": "Plural",
+            "type": "string"
+          },
+          "schema_version": {
+            "const": 1,
+            "default": 1,
+            "title": "Schema Version",
+            "type": "integer"
+          },
+          "singular": {
+            "default": "call",
+            "title": "Singular",
+            "type": "string"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          },
+          "tone": {
+            "default": "tool",
+            "title": "Tone",
+            "type": "string"
+          },
+          "tool_name": {
+            "title": "Tool Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "tool_name",
+          "family",
+          "title",
+          "active_verb",
+          "completed_verb"
+        ],
+        "title": "ToolCallView",
+        "type": "object"
+      },
+      "failure_policy": "fallback projection; never changes authoritative outcome",
+      "result": {
+        "additionalProperties": false,
+        "properties": {
+          "full_text": {
+            "title": "Full Text",
+            "type": "string"
+          },
+          "preview": {
+            "title": "Preview",
+            "type": "string"
+          },
+          "schema_version": {
+            "const": 1,
+            "default": 1,
+            "title": "Schema Version",
+            "type": "integer"
+          },
+          "status": {
+            "enum": [
+              "success",
+              "error"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "summary": {
+            "title": "Summary",
+            "type": "string"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          },
+          "tone": {
+            "default": "tool",
+            "title": "Tone",
+            "type": "string"
+          },
+          "tool_name": {
+            "title": "Tool Name",
+            "type": "string"
+          },
+          "truncated": {
+            "default": false,
+            "title": "Truncated",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "tool_name",
+          "status",
+          "title",
+          "summary",
+          "preview",
+          "full_text"
+        ],
+        "title": "ToolResultView",
+        "type": "object"
+      }
+    },
+    "risk": [
+      "read",
+      "write",
+      "execute",
+      "external",
+      "external_unknown"
+    ]
+  },
+  "workspace_commands": {
+    "$defs": {
+      "ApproveAgentImport": {
+        "properties": {
+          "agent_id": {
+            "title": "Agent Id",
+            "type": "string"
+          },
+          "type": {
+            "const": "approve_agent_import",
+            "default": "approve_agent_import",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "agent_id"
+        ],
+        "title": "ApproveAgentImport",
+        "type": "object"
+      },
+      "ApproveChildImport": {
+        "properties": {
+          "child_id": {
+            "title": "Child Id",
+            "type": "string"
+          },
+          "type": {
+            "const": "approve_child_import",
+            "default": "approve_child_import",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "child_id"
+        ],
+        "title": "ApproveChildImport",
+        "type": "object"
+      },
+      "ApprovePlan": {
+        "properties": {
+          "client_request_id": {
+            "title": "Client Request Id",
+            "type": "string"
+          },
+          "revision": {
+            "title": "Revision",
+            "type": "integer"
+          },
+          "session_id": {
+            "title": "Session Id",
+            "type": "string"
+          },
+          "type": {
+            "const": "approve_plan",
+            "default": "approve_plan",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "session_id",
+          "revision",
+          "client_request_id"
+        ],
+        "title": "ApprovePlan",
+        "type": "object"
+      },
+      "AttachmentRef": {
+        "additionalProperties": false,
+        "description": "Provider-neutral reference to one immutable user attachment.",
+        "properties": {
+          "artifact_ref": {
+            "pattern": "^sha256:[0-9a-f]{64}$",
+            "title": "Artifact Ref",
+            "type": "string"
+          },
+          "byte_size": {
+            "maximum": 20971520,
+            "minimum": 1,
+            "title": "Byte Size",
+            "type": "integer"
+          },
+          "filename": {
+            "maxLength": 255,
+            "minLength": 1,
+            "title": "Filename",
+            "type": "string"
+          },
+          "kind": {
+            "const": "image",
+            "default": "image",
+            "title": "Kind",
+            "type": "string"
+          },
+          "media_type": {
+            "title": "Media Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "artifact_ref",
+          "media_type",
+          "filename",
+          "byte_size"
+        ],
+        "title": "AttachmentRef",
+        "type": "object"
+      },
+      "CancelChildRun": {
+        "properties": {
+          "child_id": {
+            "title": "Child Id",
+            "type": "string"
+          },
+          "type": {
+            "const": "cancel_child_run",
+            "default": "cancel_child_run",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "child_id"
+        ],
+        "title": "CancelChildRun",
+        "type": "object"
+      },
+      "CancelClarification": {
+        "properties": {
+          "session_id": {
+            "title": "Session Id",
+            "type": "string"
+          },
+          "type": {
+            "const": "cancel_clarification",
+            "default": "cancel_clarification",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "session_id"
+        ],
+        "title": "CancelClarification",
+        "type": "object"
+      },
+      "CancelRun": {
+        "properties": {
+          "run_id": {
+            "title": "Run Id",
+            "type": "string"
+          },
+          "type": {
+            "const": "cancel_run",
+            "default": "cancel_run",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "run_id"
+        ],
+        "title": "CancelRun",
+        "type": "object"
+      },
+      "CloseAgent": {
+        "properties": {
+          "agent_id": {
+            "title": "Agent Id",
+            "type": "string"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Reason"
+          },
+          "resolution": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Resolution"
+          },
+          "type": {
+            "const": "close_agent",
+            "default": "close_agent",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "agent_id"
+        ],
+        "title": "CloseAgent",
+        "type": "object"
+      },
+      "CloseChildRun": {
+        "properties": {
+          "child_id": {
+            "title": "Child Id",
+            "type": "string"
+          },
+          "type": {
+            "const": "close_child_run",
+            "default": "close_child_run",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "child_id"
+        ],
+        "title": "CloseChildRun",
+        "type": "object"
+      },
+      "ContextControl": {
+        "properties": {
+          "action": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Action"
+          },
+          "control": {
+            "enum": [
+              "report",
+              "compact",
+              "memory"
+            ],
+            "title": "Control",
+            "type": "string"
+          },
+          "focus": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Focus"
+          },
+          "payload": {
+            "additionalProperties": true,
+            "title": "Payload",
+            "type": "object"
+          },
+          "session_id": {
+            "title": "Session Id",
+            "type": "string"
+          },
+          "type": {
+            "const": "context_control",
+            "default": "context_control",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "session_id",
+          "control"
+        ],
+        "title": "ContextControl",
+        "type": "object"
+      },
+      "ContinueAgent": {
+        "properties": {
+          "agent_id": {
+            "title": "Agent Id",
+            "type": "string"
+          },
+          "task": {
+            "title": "Task",
+            "type": "string"
+          },
+          "type": {
+            "const": "continue_agent",
+            "default": "continue_agent",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "agent_id",
+          "task"
+        ],
+        "title": "ContinueAgent",
+        "type": "object"
+      },
+      "CreateSession": {
+        "properties": {
+          "type": {
+            "const": "create_session",
+            "default": "create_session",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "title": "CreateSession",
+        "type": "object"
+      },
+      "DecideApproval": {
+        "properties": {
+          "approved": {
+            "title": "Approved",
+            "type": "boolean"
+          },
+          "call_id": {
+            "title": "Call Id",
+            "type": "string"
+          },
+          "run_id": {
+            "title": "Run Id",
+            "type": "string"
+          },
+          "scope": {
+            "default": "once",
+            "enum": [
+              "once",
+              "session",
+              "always"
+            ],
+            "title": "Scope",
+            "type": "string"
+          },
+          "type": {
+            "const": "decide_approval",
+            "default": "decide_approval",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "run_id",
+          "call_id",
+          "approved"
+        ],
+        "title": "DecideApproval",
+        "type": "object"
+      },
+      "DeleteModelConfiguration": {
+        "properties": {
+          "expected_revision": {
+            "title": "Expected Revision",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "type": {
+            "const": "delete_model_configuration",
+            "default": "delete_model_configuration",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "expected_revision",
+          "name"
+        ],
+        "title": "DeleteModelConfiguration",
+        "type": "object"
+      },
+      "DeleteSession": {
+        "properties": {
+          "session_id": {
+            "title": "Session Id",
+            "type": "string"
+          },
+          "type": {
+            "const": "delete_session",
+            "default": "delete_session",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "session_id"
+        ],
+        "title": "DeleteSession",
+        "type": "object"
+      },
+      "DequeueRunInputs": {
+        "properties": {
+          "run_id": {
+            "title": "Run Id",
+            "type": "string"
+          },
+          "type": {
+            "const": "dequeue_run_inputs",
+            "default": "dequeue_run_inputs",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "run_id"
+        ],
+        "title": "DequeueRunInputs",
+        "type": "object"
+      },
+      "EndLiveSession": {
+        "properties": {
+          "live_session_id": {
+            "title": "Live Session Id",
+            "type": "string"
+          },
+          "type": {
+            "const": "end_live_session",
+            "default": "end_live_session",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "live_session_id"
+        ],
+        "title": "EndLiveSession",
+        "type": "object"
+      },
+      "ForkSessionAtTurn": {
+        "properties": {
+          "session_id": {
+            "title": "Session Id",
+            "type": "string"
+          },
+          "through_turn": {
+            "title": "Through Turn",
+            "type": "integer"
+          },
+          "type": {
+            "const": "fork_session_at_turn",
+            "default": "fork_session_at_turn",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "session_id",
+          "through_turn"
+        ],
+        "title": "ForkSessionAtTurn",
+        "type": "object"
+      },
+      "GetBootstrap": {
+        "properties": {
+          "type": {
+            "const": "get_bootstrap",
+            "default": "get_bootstrap",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "title": "GetBootstrap",
+        "type": "object"
+      },
+      "GetConfiguration": {
+        "properties": {
+          "type": {
+            "const": "get_configuration",
+            "default": "get_configuration",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "title": "GetConfiguration",
+        "type": "object"
+      },
+      "ImportAttachmentPath": {
+        "properties": {
+          "path": {
+            "title": "Path",
+            "type": "string"
+          },
+          "type": {
+            "const": "import_attachment_path",
+            "default": "import_attachment_path",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "path"
+        ],
+        "title": "ImportAttachmentPath",
+        "type": "object"
+      },
+      "InterruptAgent": {
+        "properties": {
+          "agent_id": {
+            "title": "Agent Id",
+            "type": "string"
+          },
+          "type": {
+            "const": "interrupt_agent",
+            "default": "interrupt_agent",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "agent_id"
+        ],
+        "title": "InterruptAgent",
+        "type": "object"
+      },
+      "InterruptLiveSession": {
+        "properties": {
+          "live_session_id": {
+            "title": "Live Session Id",
+            "type": "string"
+          },
+          "type": {
+            "const": "interrupt_live_session",
+            "default": "interrupt_live_session",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "live_session_id"
+        ],
+        "title": "InterruptLiveSession",
+        "type": "object"
+      },
+      "InvokePrompt": {
+        "properties": {
+          "arguments": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "title": "Arguments",
+            "type": "object"
+          },
+          "client_request_id": {
+            "title": "Client Request Id",
+            "type": "string"
+          },
+          "display_input": {
+            "title": "Display Input",
+            "type": "string"
+          },
+          "reference": {
+            "title": "Reference",
+            "type": "string"
+          },
+          "session_id": {
+            "title": "Session Id",
+            "type": "string"
+          },
+          "type": {
+            "const": "invoke_prompt",
+            "default": "invoke_prompt",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "session_id",
+          "reference",
+          "arguments",
+          "display_input",
+          "client_request_id"
+        ],
+        "title": "InvokePrompt",
+        "type": "object"
+      },
+      "InvokeSkill": {
+        "properties": {
+          "arguments": {
+            "title": "Arguments",
+            "type": "string"
+          },
+          "client_request_id": {
+            "title": "Client Request Id",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "session_id": {
+            "title": "Session Id",
+            "type": "string"
+          },
+          "type": {
+            "const": "invoke_skill",
+            "default": "invoke_skill",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "session_id",
+          "name",
+          "arguments",
+          "client_request_id"
+        ],
+        "title": "InvokeSkill",
+        "type": "object"
+      },
+      "ListAgents": {
+        "properties": {
+          "session_id": {
+            "title": "Session Id",
+            "type": "string"
+          },
+          "type": {
+            "const": "list_agents",
+            "default": "list_agents",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "session_id"
+        ],
+        "title": "ListAgents",
+        "type": "object"
+      },
+      "ListCheckpoints": {
+        "properties": {
+          "session_id": {
+            "title": "Session Id",
+            "type": "string"
+          },
+          "type": {
+            "const": "list_checkpoints",
+            "default": "list_checkpoints",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "session_id"
+        ],
+        "title": "ListCheckpoints",
+        "type": "object"
+      },
+      "ListChildRuns": {
+        "properties": {
+          "session_id": {
+            "title": "Session Id",
+            "type": "string"
+          },
+          "type": {
+            "const": "list_child_runs",
+            "default": "list_child_runs",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "session_id"
+        ],
+        "title": "ListChildRuns",
+        "type": "object"
+      },
+      "ListContextSources": {
+        "properties": {
+          "session_id": {
+            "title": "Session Id",
+            "type": "string"
+          },
+          "type": {
+            "const": "list_context_sources",
+            "default": "list_context_sources",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "session_id"
+        ],
+        "title": "ListContextSources",
+        "type": "object"
+      },
+      "ListHooks": {
+        "properties": {
+          "type": {
+            "const": "list_hooks",
+            "default": "list_hooks",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "title": "ListHooks",
+        "type": "object"
+      },
+      "ListMcpPrompts": {
+        "properties": {
+          "type": {
+            "const": "list_mcp_prompts",
+            "default": "list_mcp_prompts",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "title": "ListMcpPrompts",
+        "type": "object"
+      },
+      "ListMcpResources": {
+        "properties": {
+          "session_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Session Id"
+          },
+          "type": {
+            "const": "list_mcp_resources",
+            "default": "list_mcp_resources",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "title": "ListMcpResources",
+        "type": "object"
+      },
+      "ListSessions": {
+        "properties": {
+          "include_archived": {
+            "default": false,
+            "title": "Include Archived",
+            "type": "boolean"
+          },
+          "type": {
+            "const": "list_sessions",
+            "default": "list_sessions",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "title": "ListSessions",
+        "type": "object"
+      },
+      "QueueRunInput": {
+        "properties": {
+          "attachments": {
+            "default": [],
+            "items": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/AttachmentRef"
+                },
+                {
+                  "additionalProperties": true,
+                  "type": "object"
+                }
+              ]
+            },
+            "title": "Attachments",
+            "type": "array"
+          },
+          "mode": {
+            "enum": [
+              "steer",
+              "follow_up"
+            ],
+            "title": "Mode",
+            "type": "string"
+          },
+          "model_prompt": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Model Prompt"
+          },
+          "run_id": {
+            "title": "Run Id",
+            "type": "string"
+          },
+          "text": {
+            "title": "Text",
+            "type": "string"
+          },
+          "type": {
+            "const": "queue_input",
+            "default": "queue_input",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "run_id",
+          "text",
+          "mode"
+        ],
+        "title": "QueueRunInput",
+        "type": "object"
+      },
+      "RejectAgentImport": {
+        "properties": {
+          "agent_id": {
+            "title": "Agent Id",
+            "type": "string"
+          },
+          "type": {
+            "const": "reject_agent_import",
+            "default": "reject_agent_import",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "agent_id"
+        ],
+        "title": "RejectAgentImport",
+        "type": "object"
+      },
+      "RejectChildImport": {
+        "properties": {
+          "child_id": {
+            "title": "Child Id",
+            "type": "string"
+          },
+          "type": {
+            "const": "reject_child_import",
+            "default": "reject_child_import",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "child_id"
+        ],
+        "title": "RejectChildImport",
+        "type": "object"
+      },
+      "RejectPlan": {
+        "properties": {
+          "client_request_id": {
+            "title": "Client Request Id",
+            "type": "string"
+          },
+          "feedback": {
+            "title": "Feedback",
+            "type": "string"
+          },
+          "revision": {
+            "title": "Revision",
+            "type": "integer"
+          },
+          "session_id": {
+            "title": "Session Id",
+            "type": "string"
+          },
+          "type": {
+            "const": "reject_plan",
+            "default": "reject_plan",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "session_id",
+          "revision",
+          "feedback",
+          "client_request_id"
+        ],
+        "title": "RejectPlan",
+        "type": "object"
+      },
+      "RenameSession": {
+        "properties": {
+          "session_id": {
+            "title": "Session Id",
+            "type": "string"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          },
+          "type": {
+            "const": "rename_session",
+            "default": "rename_session",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "session_id",
+          "title"
+        ],
+        "title": "RenameSession",
+        "type": "object"
+      },
+      "RetryRun": {
+        "properties": {
+          "client_request_id": {
+            "title": "Client Request Id",
+            "type": "string"
+          },
+          "session_id": {
+            "title": "Session Id",
+            "type": "string"
+          },
+          "type": {
+            "const": "retry_run",
+            "default": "retry_run",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "session_id",
+          "client_request_id"
+        ],
+        "title": "RetryRun",
+        "type": "object"
+      },
+      "SelectModel": {
+        "properties": {
+          "model": {
+            "title": "Model",
+            "type": "string"
+          },
+          "type": {
+            "const": "select_model",
+            "default": "select_model",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "model"
+        ],
+        "title": "SelectModel",
+        "type": "object"
+      },
+      "SendAgentMessage": {
+        "properties": {
+          "agent_id": {
+            "title": "Agent Id",
+            "type": "string"
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          },
+          "type": {
+            "const": "send_agent_message",
+            "default": "send_agent_message",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "agent_id",
+          "message"
+        ],
+        "title": "SendAgentMessage",
+        "type": "object"
+      },
+      "SetApprovalMode": {
+        "properties": {
+          "mode": {
+            "enum": [
+              "manual",
+              "accept_edits",
+              "auto"
+            ],
+            "title": "Mode",
+            "type": "string"
+          },
+          "session_id": {
+            "title": "Session Id",
+            "type": "string"
+          },
+          "type": {
+            "const": "set_approval_mode",
+            "default": "set_approval_mode",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "session_id",
+          "mode"
+        ],
+        "title": "SetApprovalMode",
+        "type": "object"
+      },
+      "SetCollaborationMode": {
+        "properties": {
+          "mode": {
+            "enum": [
+              "default",
+              "plan"
+            ],
+            "title": "Mode",
+            "type": "string"
+          },
+          "session_id": {
+            "title": "Session Id",
+            "type": "string"
+          },
+          "type": {
+            "const": "set_collaboration_mode",
+            "default": "set_collaboration_mode",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "session_id",
+          "mode"
+        ],
+        "title": "SetCollaborationMode",
+        "type": "object"
+      },
+      "SetContextSource": {
+        "properties": {
+          "active": {
+            "title": "Active",
+            "type": "boolean"
+          },
+          "kind": {
+            "enum": [
+              "skill",
+              "resource"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "reference": {
+            "title": "Reference",
+            "type": "string"
+          },
+          "session_id": {
+            "title": "Session Id",
+            "type": "string"
+          },
+          "type": {
+            "const": "set_context_source",
+            "default": "set_context_source",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "session_id",
+          "kind",
+          "reference",
+          "active"
+        ],
+        "title": "SetContextSource",
+        "type": "object"
+      },
+      "SetSessionArchived": {
+        "properties": {
+          "archived": {
+            "title": "Archived",
+            "type": "boolean"
+          },
+          "session_id": {
+            "title": "Session Id",
+            "type": "string"
+          },
+          "type": {
+            "const": "set_session_archived",
+            "default": "set_session_archived",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "session_id",
+          "archived"
+        ],
+        "title": "SetSessionArchived",
+        "type": "object"
+      },
+      "SetTranscriptDensity": {
+        "properties": {
+          "density": {
+            "enum": [
+              "normal",
+              "verbose"
+            ],
+            "title": "Density",
+            "type": "string"
+          },
+          "session_id": {
+            "title": "Session Id",
+            "type": "string"
+          },
+          "type": {
+            "const": "set_transcript_density",
+            "default": "set_transcript_density",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "session_id",
+          "density"
+        ],
+        "title": "SetTranscriptDensity",
+        "type": "object"
+      },
+      "StartLiveSession": {
+        "properties": {
+          "client_request_id": {
+            "title": "Client Request Id",
+            "type": "string"
+          },
+          "route": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Route"
+          },
+          "sdp": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Sdp"
+          },
+          "session_id": {
+            "title": "Session Id",
+            "type": "string"
+          },
+          "type": {
+            "const": "start_live_session",
+            "default": "start_live_session",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "session_id",
+          "client_request_id"
+        ],
+        "title": "StartLiveSession",
+        "type": "object"
+      },
+      "StartRun": {
+        "properties": {
+          "attachments": {
+            "default": [],
+            "items": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/AttachmentRef"
+                },
+                {
+                  "additionalProperties": true,
+                  "type": "object"
+                }
+              ]
+            },
+            "title": "Attachments",
+            "type": "array"
+          },
+          "client_request_id": {
+            "title": "Client Request Id",
+            "type": "string"
+          },
+          "input": {
+            "title": "Input",
+            "type": "string"
+          },
+          "model_prompt": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Model Prompt"
+          },
+          "session_id": {
+            "title": "Session Id",
+            "type": "string"
+          },
+          "type": {
+            "const": "start_run",
+            "default": "start_run",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "session_id",
+          "input",
+          "client_request_id"
+        ],
+        "title": "StartRun",
+        "type": "object"
+      },
+      "StoreAttachment": {
+        "properties": {
+          "content": {
+            "format": "binary",
+            "title": "Content",
+            "type": "string"
+          },
+          "filename": {
+            "title": "Filename",
+            "type": "string"
+          },
+          "media_type": {
+            "title": "Media Type",
+            "type": "string"
+          },
+          "type": {
+            "const": "store_attachment",
+            "default": "store_attachment",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "filename",
+          "media_type",
+          "content"
+        ],
+        "title": "StoreAttachment",
+        "type": "object"
+      },
+      "UpsertModelConfiguration": {
+        "properties": {
+          "definition": {
+            "additionalProperties": true,
+            "title": "Definition",
+            "type": "object"
+          },
+          "expected_revision": {
+            "title": "Expected Revision",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "set_default": {
+            "default": false,
+            "title": "Set Default",
+            "type": "boolean"
+          },
+          "type": {
+            "const": "upsert_model_configuration",
+            "default": "upsert_model_configuration",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "expected_revision",
+          "name",
+          "definition"
+        ],
+        "title": "UpsertModelConfiguration",
+        "type": "object"
+      },
+      "WaivePlanVerification": {
+        "properties": {
+          "reason": {
+            "title": "Reason",
+            "type": "string"
+          },
+          "scope": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Scope",
+            "type": "array"
+          },
+          "session_id": {
+            "title": "Session Id",
+            "type": "string"
+          },
+          "type": {
+            "const": "waive_plan_verification",
+            "default": "waive_plan_verification",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "session_id",
+          "scope",
+          "reason"
+        ],
+        "title": "WaivePlanVerification",
+        "type": "object"
+      }
+    },
+    "anyOf": [
+      {
+        "$ref": "#/$defs/CreateSession"
+      },
+      {
+        "$ref": "#/$defs/GetBootstrap"
+      },
+      {
+        "$ref": "#/$defs/GetConfiguration"
+      },
+      {
+        "$ref": "#/$defs/UpsertModelConfiguration"
+      },
+      {
+        "$ref": "#/$defs/DeleteModelConfiguration"
+      },
+      {
+        "$ref": "#/$defs/ListSessions"
+      },
+      {
+        "$ref": "#/$defs/RenameSession"
+      },
+      {
+        "$ref": "#/$defs/SetSessionArchived"
+      },
+      {
+        "$ref": "#/$defs/DeleteSession"
+      },
+      {
+        "$ref": "#/$defs/StartRun"
+      },
+      {
+        "$ref": "#/$defs/CancelRun"
+      },
+      {
+        "$ref": "#/$defs/StartLiveSession"
+      },
+      {
+        "$ref": "#/$defs/InterruptLiveSession"
+      },
+      {
+        "$ref": "#/$defs/EndLiveSession"
+      },
+      {
+        "$ref": "#/$defs/DecideApproval"
+      },
+      {
+        "$ref": "#/$defs/QueueRunInput"
+      },
+      {
+        "$ref": "#/$defs/DequeueRunInputs"
+      },
+      {
+        "$ref": "#/$defs/SetApprovalMode"
+      },
+      {
+        "$ref": "#/$defs/SetCollaborationMode"
+      },
+      {
+        "$ref": "#/$defs/SetTranscriptDensity"
+      },
+      {
+        "$ref": "#/$defs/ApprovePlan"
+      },
+      {
+        "$ref": "#/$defs/RejectPlan"
+      },
+      {
+        "$ref": "#/$defs/WaivePlanVerification"
+      },
+      {
+        "$ref": "#/$defs/ListChildRuns"
+      },
+      {
+        "$ref": "#/$defs/ListAgents"
+      },
+      {
+        "$ref": "#/$defs/SendAgentMessage"
+      },
+      {
+        "$ref": "#/$defs/ContinueAgent"
+      },
+      {
+        "$ref": "#/$defs/InterruptAgent"
+      },
+      {
+        "$ref": "#/$defs/CloseAgent"
+      },
+      {
+        "$ref": "#/$defs/ApproveAgentImport"
+      },
+      {
+        "$ref": "#/$defs/RejectAgentImport"
+      },
+      {
+        "$ref": "#/$defs/ListCheckpoints"
+      },
+      {
+        "$ref": "#/$defs/ForkSessionAtTurn"
+      },
+      {
+        "$ref": "#/$defs/CancelChildRun"
+      },
+      {
+        "$ref": "#/$defs/ApproveChildImport"
+      },
+      {
+        "$ref": "#/$defs/RejectChildImport"
+      },
+      {
+        "$ref": "#/$defs/CloseChildRun"
+      },
+      {
+        "$ref": "#/$defs/SelectModel"
+      },
+      {
+        "$ref": "#/$defs/RetryRun"
+      },
+      {
+        "$ref": "#/$defs/InvokeSkill"
+      },
+      {
+        "$ref": "#/$defs/InvokePrompt"
+      },
+      {
+        "$ref": "#/$defs/ListContextSources"
+      },
+      {
+        "$ref": "#/$defs/ListMcpPrompts"
+      },
+      {
+        "$ref": "#/$defs/ListMcpResources"
+      },
+      {
+        "$ref": "#/$defs/ListHooks"
+      },
+      {
+        "$ref": "#/$defs/SetContextSource"
+      },
+      {
+        "$ref": "#/$defs/CancelClarification"
+      },
+      {
+        "$ref": "#/$defs/ContextControl"
+      },
+      {
+        "$ref": "#/$defs/StoreAttachment"
+      },
+      {
+        "$ref": "#/$defs/ImportAttachmentPath"
+      }
+    ]
+  },
+  "workspace_results": {
+    "$defs": {
+      "CommandAcknowledged": {
+        "properties": {
+          "data": {
+            "additionalProperties": true,
+            "title": "Data",
+            "type": "object"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status"
+        ],
+        "title": "CommandAcknowledged",
+        "type": "object"
+      },
+      "LiveStartedResult": {
+        "properties": {
+          "answer_sdp": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Answer Sdp"
+          },
+          "live_session_id": {
+            "title": "Live Session Id",
+            "type": "string"
+          },
+          "media": {
+            "additionalProperties": true,
+            "title": "Media",
+            "type": "object"
+          },
+          "session_id": {
+            "title": "Session Id",
+            "type": "string"
+          },
+          "state": {
+            "additionalProperties": true,
+            "title": "State",
+            "type": "object"
+          }
+        },
+        "required": [
+          "live_session_id",
+          "session_id",
+          "media",
+          "answer_sdp",
+          "state"
+        ],
+        "title": "LiveStartedResult",
+        "type": "object"
+      },
+      "RunStartedResult": {
+        "properties": {
+          "run_id": {
+            "title": "Run Id",
+            "type": "string"
+          },
+          "session_id": {
+            "title": "Session Id",
+            "type": "string"
+          },
+          "status": {
+            "default": "running",
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "run_id",
+          "session_id"
+        ],
+        "title": "RunStartedResult",
+        "type": "object"
+      },
+      "SessionCreated": {
+        "properties": {
+          "session_id": {
+            "title": "Session Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "session_id"
+        ],
+        "title": "SessionCreated",
+        "type": "object"
+      },
+      "SessionList": {
+        "properties": {
+          "sessions": {
+            "items": {
+              "$ref": "#/$defs/SessionSummary"
+            },
+            "title": "Sessions",
+            "type": "array"
+          }
+        },
+        "required": [
+          "sessions"
+        ],
+        "title": "SessionList",
+        "type": "object"
+      },
+      "SessionSummary": {
+        "properties": {
+          "archived": {
+            "default": false,
+            "title": "Archived",
+            "type": "boolean"
+          },
+          "created_at": {
+            "title": "Created At",
+            "type": "string"
+          },
+          "model_id": {
+            "title": "Model Id",
+            "type": "string"
+          },
+          "session_id": {
+            "title": "Session Id",
+            "type": "string"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          }
+        },
+        "required": [
+          "session_id",
+          "created_at",
+          "model_id",
+          "title"
+        ],
+        "title": "SessionSummary",
+        "type": "object"
+      },
+      "WorkspaceBootstrap": {
+        "properties": {
+          "active_model": {
+            "title": "Active Model",
+            "type": "string"
+          },
+          "active_run_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Active Run Id"
+          },
+          "agent": {
+            "title": "Agent",
+            "type": "string"
+          },
+          "approval_mode": {
+            "title": "Approval Mode",
+            "type": "string"
+          },
+          "available_models": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Available Models",
+            "type": "array"
+          },
+          "collaboration_mode": {
+            "title": "Collaboration Mode",
+            "type": "string"
+          },
+          "input_modalities": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Input Modalities",
+            "type": "array"
+          },
+          "live_enabled": {
+            "default": false,
+            "title": "Live Enabled",
+            "type": "boolean"
+          },
+          "mcp": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Mcp",
+            "type": "array"
+          },
+          "model_id": {
+            "title": "Model Id",
+            "type": "string"
+          },
+          "skills": {
+            "items": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "type": "object"
+            },
+            "title": "Skills",
+            "type": "array"
+          },
+          "tools": {
+            "items": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "type": "object"
+            },
+            "title": "Tools",
+            "type": "array"
+          },
+          "warnings": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Warnings",
+            "type": "array"
+          },
+          "workspace": {
+            "title": "Workspace",
+            "type": "string"
+          }
+        },
+        "required": [
+          "agent",
+          "workspace",
+          "active_model",
+          "model_id",
+          "input_modalities",
+          "available_models",
+          "approval_mode",
+          "collaboration_mode",
+          "tools",
+          "mcp",
+          "skills",
+          "warnings",
+          "active_run_id"
+        ],
+        "title": "WorkspaceBootstrap",
+        "type": "object"
+      }
+    },
+    "anyOf": [
+      {
+        "$ref": "#/$defs/SessionCreated"
+      },
+      {
+        "$ref": "#/$defs/RunStartedResult"
+      },
+      {
+        "$ref": "#/$defs/LiveStartedResult"
+      },
+      {
+        "$ref": "#/$defs/CommandAcknowledged"
+      },
+      {
+        "$ref": "#/$defs/WorkspaceBootstrap"
+      },
+      {
+        "$ref": "#/$defs/SessionList"
+      }
+    ]
+  }
+}

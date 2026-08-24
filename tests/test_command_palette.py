@@ -19,7 +19,7 @@ def _multi_model_app(tmp_path: Path) -> LumenApp:
     config_path = tmp_path / "agent.yaml"
     config_path.write_text(
         """
-version: 1
+version: 2
 agent:
   default_model: alpha
   models:
@@ -103,7 +103,7 @@ async def test_quit_command_routes_through_project_safe_action(tmp_path: Path) -
     async with app.run_test(size=(100, 30)) as pilot:
         await pilot.pause()
         provider = LumenCommandProvider(screen=app.screen)
-        quit_command = next(runnable for name, runnable, _ in provider.commands if name == "app: Quit")
+        quit_command = next(runnable for name, runnable, _ in provider.commands if name == "app: Exit")
 
         assert quit_command == app.action_safe_quit
 
@@ -126,7 +126,7 @@ async def test_palette_quit_cancels_and_waits_for_active_worker(tmp_path: Path) 
         await pilot.pause()
         app.current_worker = ActiveWorker()  # type: ignore[assignment]
         provider = LumenCommandProvider(screen=app.screen)
-        quit_command = next(runnable for name, runnable, _ in provider.commands if name == "app: Quit")
+        quit_command = next(runnable for name, runnable, _ in provider.commands if name == "app: Exit")
 
         await quit_command()
 

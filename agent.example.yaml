@@ -1,4 +1,4 @@
-version: 1
+version: 2
 
 agent:
   name: lumen
@@ -7,29 +7,69 @@ agent:
   # CLI flag `--model <name>` / TUI command `/model <name>`). Each entry is a
   # ModelSettingsConfig: id uses the `<provider>:<model>` convention, and the
   # api_key is loaded from the named env var.
-  default_model: deepseek-v4-pro
+  default_model: deepseek-v4-flash
   models:
-    deepseek-v4-pro:
-      id: openai:deepseek-v4-pro
+    deepseek-v4-flash:
+      id: openai:deepseek-v4-flash
       api_key_env: DEEPSEEK_API_KEY
-      base_url: https://api.deepseek.com/v1
-      api: chat                 # OpenAI-compatible /chat/completions path
+      base_url: https://api.deepseek.com
+      api: responses            # 默认路径；DeepSeek Responses 是无状态的部分兼容实现
+      context:
+        # Exact ID from src/lumen/context/profiles.py. The profile supplies
+        # window_tokens=1000000 and max_output_tokens=384000.
+        profile: deepseek-v4-flash
+        # Deployment-specific capability overrides are also read here:
+        # window_tokens: 1000000
+        # max_output_tokens: 384000
       settings:
-        max_tokens: 4096
+        # Requested output for each provider call. Lumen reserves it in full;
+        # it must not exceed context.max_output_tokens or the total window.
+        max_tokens: 65536
     glm-5.2:
       id: openai:glm-5.2
       api_key_env: DASHSCOPE_API_KEY
       base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
-      api: chat                 # 阿里云百炼 Chat Completions(最稳)
+      api: responses
+      context:
+        profile: glm-5.2        # 部署端输出上限可用 max_output_tokens 显式覆盖
+    kimi-k3:
+      id: openai:k3
+      api_key_env: KIMI_API_KEY
+      base_url: https://api.kimi.com/coding/v1
+      api: responses
+      input_modalities: [text, image]
+      context:
+        profile: kimi-k3
+        max_output_tokens: 65536 # 按实际部署能力显式配置
+    gpt-5.6:
+      id: openai:gpt-5.6
+      api_key_env: OPENAI_API_KEY
+      api: responses
+      context:
+        profile: openai-gpt-5.6
     qwen3-max:
       id: openai:qwen3-max
       api_key_env: DASHSCOPE_API_KEY
       base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
-      api: responses            # 阿里云百炼 Responses API(可选;不开 previous_response_id/内置工具)
+      api: responses            # 状态和工具仍由 Lumen 管理
+    omlx-qwen3.8-27b-4bit:
+      # oMLX uses the model ID returned by GET /v1/models, not the Hugging Face repo path.
+      id: openai:Qwen3.8-27B-4bit
+      api_key_env: OMLX_API_KEY
+      base_url: http://127.0.0.1:8091/v1
+      api: responses
+      input_modalities: [text, image]
+      context:
+        window_tokens: 262144
+        max_output_tokens: 32768
+        tokenizer:
+          kind: conservative
+      settings:
+        max_tokens: 32768
   # Legacy single-model form is still accepted. Use either `model:` or
   # `models:`, never both.
   # model:
-  #   id: openai:gpt-5.2
+  #   id: openai:gpt-5.6
   #   api_key_env: OPENAI_API_KEY
   #   base_url: null
   #   settings:
@@ -37,18 +77,114 @@ agent:
   limits:
     request_count: 50          # raise if multi-step tasks halt at the limit
     tool_calls: 100
-    # No total_tokens cap — context growth is handled by auto-compaction
-    # (context.soft_token_limit). See README "运行限制" section.
+    # No total_tokens cap — ContextEngine uses the active model profile and
+    # ratio policy for automatic compaction. See README "运行限制" section.
     tool_timeout_seconds: 60
+    skill_script_timeout_seconds: 30
+    # sequential (default) | parallel_safe (read tools only) | parallel
+    parallel_tool_calls: parallel_safe
+  # Builtins are packaged but opt-in so existing catalogs stay unchanged.
+  builtin_skills_enabled: true
 
 tools:
   builtins:
     - read_file
     - list_directory
     - search_text
+    - web_fetch
     - write_file
     - edit_file
     - run_command
+  web:
+    fetch_timeout_seconds: 20
+    fetch_max_bytes: 2097152
+    # web_search is only registered when a provider + API key env are set.
+    # search:
+    #   provider: tavily          # tavily | brave
+    #   api_key_env: TAVILY_API_KEY
+    #   max_results: 8
+
+# Native session-scoped depth-one Agent Threads. Explicit user/project/Skill
+# instructions require delegation; otherwise the root Agent delegates only
+# when parallel work materially improves speed, isolation, or verification.
+agents:
+  enabled: true
+  autonomy: adaptive
+  max_depth: 1
+  worktree_root: ~/.lumen/worktrees
+  max_concurrency: 3
+  max_agents_per_run: 8
+  default_agent: default
+  recovery: safe
+  request_count: 10
+  tool_calls: 20
+  timeout_seconds: 180
+
+collaboration:
+  default_mode: default
+
+ui:
+  theme: lumen-dark
+  transcript_density: normal   # normal | verbose; Ctrl+O toggles live
+  animations: true             # false freezes the activity glyph (reduced motion)
+  terminal_title: true
+  notifications: true
+  vim_mode: false
+  status_line: [mode, state, model, usage, keymap]
+
+sandbox:
+  mode: workspace_write
+  network: false
+  extra_read_paths: []
+  extra_write_paths: []
+  env_allow: [PATH, LANG, LC_ALL, TERM, TMPDIR]
+
+# Durable, session-scoped work products. Existing write_file/edit_file calls
+# keep their interface and are automatically journaled through this module.
+work_products:
+  enabled: true
+  auto_attach: true
+  strict: true
+  max_context_items: 8
+
+# Browser realtime voice. The Router selects a Provider Profile once per call.
+# Bailian uses a Host-controlled PCM WebSocket so Provider events, tools and
+# credentials never pass through the browser. Requires `lumen-agent[live]`.
+live:
+  enabled: false
+  default_route: cn-primary
+  fallback_routes: [cn-fast]
+  routes:
+    cn-primary:
+      provider: bailian
+      model: qwen3.5-omni-plus-realtime
+      region: cn-beijing
+      api_key_env: DASHSCOPE_API_KEY
+      workspace_id_env: DASHSCOPE_WORKSPACE_ID
+      voice: Tina
+      completion_control: host_gated_synthesis
+    cn-fast:
+      provider: bailian
+      model: qwen3.5-omni-flash-realtime
+      region: cn-beijing
+      api_key_env: DASHSCOPE_API_KEY
+      workspace_id_env: DASHSCOPE_WORKSPACE_ID
+      voice: Tina
+      completion_control: host_gated_synthesis
+  reasoning_effort: low
+  turn_detection:
+    type: semantic_vad
+    eagerness: auto
+    interrupt_response: true
+  input_transcription:
+    enabled: true
+    model: qwen3-asr-flash-realtime
+    language: zh
+  strict_completion: true
+  max_sessions: 1
+  rollover_seconds: 3300
+  persist_audio: false
+  max_context_items: 24
 
 mcp_servers:
   # Two optional Streamable HTTP examples. Set `required: false` so a
@@ -58,6 +194,8 @@ mcp_servers:
     url: https://mcp.tianyancha.com/v1
     headers:
       Authorization: ${TYC_TOKEN}
+    defer_tools: true             # default: schema is resolved by tool search
+    always_load_tools: []         # raw tool names that must always stay visible
     # Generic dispatch can invoke capabilities beyond a simple lookup, so it
     # stays approval-gated even in auto mode. The remaining tools are reads.
     tool_risks:
@@ -78,19 +216,57 @@ mcp_servers:
       search_listed_companies: read
       search_patents: read
       search_trademarks: read
+    tool_effects:
+      call_tool: unknown
+      call_tools_batch: unknown
+      get_company_basic_profile: observe
+      search_companies: observe
     required: false
   exa:
     transport: streamable_http
     url: https://mcp.exa.ai/mcp
     headers:
       x-api-key: ${EXA_API_KEY}
+    defer_tools: true
     tool_risks:
       web_fetch_exa: read
       web_search_exa: read
+    tool_effects:
+      web_fetch_exa: observe
+      web_search_exa: observe
     required: false
+    load_resources: true
+    load_prompts: true
+
+  # OAuth uses MCP protected-resource discovery + PKCE, persists refreshable
+  # credentials as a 0600 JSON file under sessions.directory.
+  # github:
+  #   transport: streamable_http
+  #   url: https://example.com/mcp
+  #   oauth:
+  #     client_id: ${GITHUB_MCP_CLIENT_ID}
+  #     scopes: [repo, read:user]
+  #     credential_file: mcp_oauth/github.json
+  #   tool_risks:
+  #     search_code: read
+  #   tool_effects:
+  #     search_code: observe
+  #   required: false
+
+# Hooks run without a shell. Context is JSON on stdin; exit 0 allows, exit 2
+# denies, and JSON stdout can modify args/result/prompt. See docs/hooks/README.md.
+# hooks:
+#   - event: pre_tool_use
+#     matcher: run_command
+#     command: [bash, .lumen/hooks/block-dangerous.sh]
+#   - event: post_tool_use
+#     matcher: write_file
+#     module: my_hooks.autoformat
+#     factory: hook
 
 permissions:
-  # manual | accept_edits | auto (legacy "ask" is accepted as manual)
+  # Side-effect approval is orthogonal to collaboration mode.
+  # manual | accept_edits | auto
   default_mode: manual
   always_allow: []
   always_deny: []
@@ -100,6 +276,22 @@ sessions:
 
 context:
   enabled: true
-  soft_token_limit: 60000
-  keep_recent_tokens: 20000   # 压缩后保留的最近窗口 token 预算(向后走到用户请求边界)
+  soft_ratio: 0.80
+  hard_ratio: 0.92
+  target_ratio: 0.55
+  # soft_token_limit / keep_recent_tokens 仍兼容，但会产生弃用提示；
+  # recent 上限可在 agent.models.<name>.context.keep_recent_tokens 覆盖。
   summary_max_tokens: 2000
+  background_compaction: true
+  background_trigger_ratio: 0.90
+
+# Explicit recall is enabled; automatic extraction is opt-in and makes no
+# background model calls while learn=false.
+memory:
+  use: true
+  learn: false
+  external_context: exclude
+  min_session_turns: 4
+  idle_seconds: 120
+  max_attempts: 5
+  retry_base_seconds: 2

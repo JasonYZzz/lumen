@@ -417,6 +417,22 @@ wheels = [
 ]
 
 [[package]]
+name = "fastapi"
+version = "0.140.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "annotated-doc" },
+    { name = "pydantic" },
+    { name = "starlette" },
+    { name = "typing-extensions" },
+    { name = "typing-inspection" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/0d/fb/fd7671137d9fa3df1d93a2f5111eb982709201724b29f211e4beb2d58688/fastapi-0.140.0.tar.gz", hash = "sha256:f338951b82fd74ca8f843163aec43ea1a1ce84d515415a50fa98fa25572a5544", size = 420968, upload-time = "2026-07-24T21:16:41.187Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/eb/76/6d9e25ad88da9d3ff744bcdbec4736e38c2288611d43f673a5d9bfa27c07/fastapi-0.140.0-py3-none-any.whl", hash = "sha256:e951c0a0d9540bf5d9a2a9e078fd415da2ab7e312d435139e7d9e2e7fe9f0b23", size = 130863, upload-time = "2026-07-24T21:16:42.89Z" },
+]
+
+[[package]]
 name = "fastmcp-slim"
 version = "3.4.4"
 source = { registry = "https://pypi.org/simple" }
@@ -808,11 +824,22 @@ name = "lumen-agent"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
+    { name = "fastapi" },
     { name = "pydantic" },
     { name = "pydantic-ai-slim", extra = ["anthropic", "google", "mcp", "openai"] },
     { name = "pyyaml" },
     { name = "textual" },
     { name = "typer" },
+    { name = "uvicorn" },
+]
+
+[package.optional-dependencies]
+live = [
+    { name = "httpx" },
+    { name = "websockets" },
+]
+tokenizers = [
+    { name = "tiktoken" },
 ]
 
 [package.dev-dependencies]
@@ -825,16 +852,23 @@ dev = [
     { name = "pytest-textual-snapshot" },
     { name = "pytest-timeout" },
     { name = "ruff" },
+    { name = "tiktoken" },
 ]
 
 [package.metadata]
 requires-dist = [
+    { name = "fastapi", specifier = ">=0.115,<1" },
+    { name = "httpx", marker = "extra == 'live'", specifier = ">=0.27,<1" },
     { name = "pydantic", specifier = ">=2.11" },
     { name = "pydantic-ai-slim", extras = ["anthropic", "google", "mcp", "openai"], specifier = ">=2.1.0" },
     { name = "pyyaml", specifier = ">=6.0.2" },
     { name = "textual", specifier = ">=6.1" },
+    { name = "tiktoken", marker = "extra == 'tokenizers'", specifier = ">=0.7,<1" },
     { name = "typer", specifier = ">=0.16" },
+    { name = "uvicorn", specifier = ">=0.30" },
+    { name = "websockets", marker = "extra == 'live'", specifier = ">=14,<17" },
 ]
+provides-extras = ["tokenizers", "live"]
 
 [package.metadata.requires-dev]
 dev = [
@@ -846,6 +880,7 @@ dev = [
     { name = "pytest-textual-snapshot", specifier = ">=1.1" },
     { name = "pytest-timeout", specifier = ">=2.4" },
     { name = "ruff", specifier = ">=0.12" },
+    { name = "tiktoken", specifier = ">=0.7,<1" },
 ]
 
 [[package]]

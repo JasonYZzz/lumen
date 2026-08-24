@@ -8,7 +8,15 @@ from lumen.events import (
     ProgressReported,
     RunEvent,
 )
-from lumen.plan import PlanState, PlanStep, PlanStepInput, StepStatus
+from lumen.plan import (
+    AcceptanceCriterion,
+    EvidenceKind,
+    EvidenceReceipt,
+    PlanState,
+    PlanStep,
+    PlanStepInput,
+    StepStatus,
+)
 from lumen.task_control import TaskController
 
 
@@ -34,7 +42,7 @@ async def test_controller_rejects_completed_to_pending() -> None:
     await controller.set_plan([PlanStepInput(id="one", title="One")])
     await controller.update_step("one", StepStatus.IN_PROGRESS)
     await controller.update_step("one", StepStatus.COMPLETED)
-    with pytest.raises(ValueError, match="completed step"):
+    with pytest.raises(ValueError, match="finished step"):
         await controller.update_step("one", StepStatus.PENDING)
 
 
@@ -70,13 +78,16 @@ async def test_set_plan_rejects_duplicate_ids() -> None:
         )
 
 
-async def test_update_step_rejects_second_active_step() -> None:
+async def test_update_step_allows_independent_parallel_steps() -> None:
     controller = TaskController()
     controller.start(PlanState(), lambda _event: None)
     await controller.set_plan([PlanStepInput(id="a", title="A"), PlanStepInput(id="b", title="B")])
     await controller.update_step("a", StepStatus.IN_PROGRESS)
-    with pytest.raises(ValueError, match="in_progress"):
-        await controller.update_step("b", StepStatus.IN_PROGRESS)
+    await controller.update_step("b", StepStatus.IN_PROGRESS)
+    assert [step.status for step in controller.snapshot().steps] == [
+        StepStatus.IN_PROGRESS,
+        StepStatus.IN_PROGRESS,
+    ]
 
 
 async def test_set_plan_increments_revision() -> None:
@@ -111,14 +122,66 @@ def test_plan_state_is_strict() -> None:
         PlanStep(id="ok", title="t", status=StepStatus.PENDING, extra="nope")  # type: ignore[call-arg]
 
 
-def test_plan_state_rejects_multiple_active_steps_at_model_seam() -> None:
-    with pytest.raises(ValueError, match="at most one in_progress"):
+def test_plan_state_allows_parallel_steps_and_rejects_cycles() -> None:
+    state = PlanState(
+        steps=[
+            PlanStep(id="one", title="One", status=StepStatus.IN_PROGRESS),
+            PlanStep(id="two", title="Two", status=StepStatus.IN_PROGRESS),
+        ]
+    )
+    assert len(state.steps) == 2
+    with pytest.raises(ValueError, match="cycle"):
         PlanState(
             steps=[
-                PlanStep(id="one", title="One", status=StepStatus.IN_PROGRESS),
-                PlanStep(id="two", title="Two", status=StepStatus.IN_PROGRESS),
+                PlanStep(id="one", title="One", depends_on=["two"]),
+                PlanStep(id="two", title="Two", depends_on=["one"]),
             ]
         )
+
+
+async def test_dependencies_and_passing_evidence_gate_completion() -> None:
+    controller = TaskController()
+    controller.start(PlanState(), lambda _event: None)
+    await controller.set_plan(
+        [
+            PlanStepInput(
+                id="build",
+                title="Build",
+                acceptance_criteria=[AcceptanceCriterion(id="tests", description="Tests pass")],
+            ),
+            PlanStepInput(id="ship", title="Ship", depends_on=["build"]),
+        ],
+        goal="Ship safely",
+    )
+    with pytest.raises(ValueError, match="incomplete dependencies"):
+        await controller.update_step("ship", StepStatus.IN_PROGRESS)
+    await controller.update_step("build", StepStatus.IN_PROGRESS)
+    with pytest.raises(ValueError, match="no passing evidence"):
+        await controller.update_step("build", StepStatus.COMPLETED)
+    controller.record_evidence(
+        EvidenceReceipt(
+            id="receipt-tests",
+            kind=EvidenceKind.COMMAND,
+            source_id="call-tests",
+            summary="tests passed",
+            passed=True,
+        )
+    )
+    await controller.link_evidence("build", "receipt-tests", ["tests"])
+    await controller.update_step("build", StepStatus.COMPLETED)
+    await controller.update_step("ship", StepStatus.IN_PROGRESS)
+
+
+async def test_state_updates_do_not_invalidate_structural_revision() -> None:
+    controller = TaskController()
+    controller.start(PlanState(), lambda _event: None)
+    await controller.set_plan([PlanStepInput(id="one", title="One")], goal="Goal")
+    revision = controller.snapshot().revision
+    state_version = controller.snapshot().state_version
+    await controller.update_step("one", StepStatus.IN_PROGRESS)
+    snapshot = controller.snapshot()
+    assert snapshot.revision == revision
+    assert snapshot.state_version > state_version
 
 
 def test_progress_reported_event_round_trips() -> None:

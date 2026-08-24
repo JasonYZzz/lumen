@@ -52,7 +52,7 @@ def _workspace_config(tmp_path: Path) -> Path:
     config_path = tmp_path / "agent.yaml"
     config_path.write_text(
         """
-version: 1
+version: 2
 agent:
   name: integration
   model:
@@ -175,7 +175,10 @@ async def test_end_to_end_scenario_with_approvals(tmp_path: Path) -> None:
     semantic_order = [
         type(event) for event in events if isinstance(event, (PlanCreated, ProgressReported, PlanUpdated))
     ]
-    assert semantic_order == [PlanCreated, ProgressReported, PlanUpdated]
+    assert semantic_order[:2] == [PlanCreated, ProgressReported]
+    assert semantic_order[-1] is PlanUpdated
+    # Executor-created receipts also update plan state; the model cannot forge them.
+    assert len(outcome.plan.evidence) == 3
     # Final output never contains commentary text.
     final = projected_assistant_text(events)
     assert "All set; config patched." in final

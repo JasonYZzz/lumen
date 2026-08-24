@@ -1,0 +1,171 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1920" height="1080" viewBox="0 0 1920 1080" role="img" aria-labelledby="title desc">
+  <title id="title">DeepSeek Harness 技术架构图</title>
+  <desc id="desc">DeepSeek Harness 的 Cordis 插件微内核、Scope、ReactLoopAgent、Session event log、ToolRuntime、持久化和子 Agent 架构。</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#06131b"/><stop offset="1" stop-color="#11172a"/></linearGradient>
+    <linearGradient id="cyan" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#43e0c0"/><stop offset="1" stop-color="#3ba7ff"/></linearGradient>
+    <pattern id="grid" width="32" height="32" patternUnits="userSpaceOnUse"><path d="M32 0H0V32" fill="none" stroke="#9ddbd3" stroke-opacity=".055"/></pattern>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%"><feDropShadow dx="0" dy="12" stdDeviation="18" flood-color="#000" flood-opacity=".28"/></filter>
+    <marker id="arrow" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto"><path d="M0 0L12 6 0 12Z" fill="#47d8c5"/></marker>
+    <marker id="arrowV" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto"><path d="M0 0L12 6 0 12Z" fill="#899ab3"/></marker>
+    <style>
+      .sans{font-family:Inter,"SF Pro Display","PingFang SC","Microsoft YaHei",sans-serif}
+      .mono{font-family:"SFMono-Regular",Consolas,"PingFang SC",monospace}
+      .h1{font-size:46px;font-weight:760;fill:#f4f8fb;letter-spacing:-1.2px}.sub{font-size:18px;fill:#98abba}.eyebrow{font-size:13px;font-weight:750;letter-spacing:2.2px;fill:#47d8c5}
+      .card{fill:#0f202c;stroke:#29424e;stroke-width:1.2}.cardHi{fill:#102734;stroke:#47d8c5;stroke-width:1.6}.cardPurple{fill:#1b2038;stroke:#7886ff;stroke-width:1.3}.cardDash{fill:#101e29;stroke:#657f8b;stroke-width:1.3;stroke-dasharray:8 7}
+      .section{font-size:13px;font-weight:750;letter-spacing:1.4px;fill:#47d8c5}.label{font-size:22px;font-weight:720;fill:#f1f6f8}.labelSm{font-size:17px;font-weight:680;fill:#edf4f7}.body{font-size:14px;fill:#adc0c8}.bodyBright{font-size:14px;font-weight:550;fill:#e6eff2}.micro{font-size:12px;fill:#8098a2}.pill{fill:#18303d;stroke:#34505c}.pillText{font-size:12px;font-weight:650;fill:#e0ecef}
+      .line{stroke:#47d8c5;stroke-width:2.4;fill:none;marker-end:url(#arrow)}.lineMuted{stroke:#718894;stroke-width:1.6;fill:none;marker-end:url(#arrowV)}.lineDash{stroke:#7886ff;stroke-width:1.7;fill:none;stroke-dasharray:7 6;marker-end:url(#arrowV)}.divider{stroke:#29424e}.num{font-size:12px;font-weight:850;fill:#06131b}
+    </style>
+  </defs>
+  <rect width="1920" height="1080" fill="url(#bg)"/><rect width="1920" height="1080" fill="url(#grid)"/>
+  <circle cx="1550" cy="-110" r="430" fill="#43e0c0" opacity=".05"/><circle cx="1860" cy="900" r="390" fill="#777dff" opacity=".055"/>
+
+  <g class="sans">
+    <text x="70" y="62" class="eyebrow">插件微内核 · 事件派生请求 · 作用域生命周期</text>
+    <text x="70" y="118" class="h1">DeepSeek Harness 技术架构</text>
+    <text x="70" y="151" class="sub">Scope 同时表达能力可见性与销毁责任 · Session 记录交互事实 · 工具管线确定性提交</text>
+    <g transform="translate(1530 68)"><rect width="320" height="72" rx="18" fill="#102533" stroke="#47d8c5"/><text x="22" y="29" class="section">固定源码基线</text><text x="22" y="54" class="bodyBright mono">0.1.1-rc.2 · b150a551…</text></g>
+
+    <!-- Host and composition root -->
+    <g transform="translate(70 200)" filter="url(#shadow)">
+      <rect width="220" height="686" rx="22" class="card"/>
+      <text x="24" y="38" class="section">01 · 宿主与产品层</text><text x="24" y="76" class="label">产品组合</text>
+      <g transform="translate(24 105)">
+        <rect width="172" height="54" rx="12" class="pill"/><text x="18" y="33" class="labelSm">CLI / 客户端</text>
+        <rect y="68" width="172" height="54" rx="12" class="pill"/><text x="18" y="101" class="labelSm">编码 Agent</text>
+        <rect y="136" width="172" height="54" rx="12" class="pill"/><text x="18" y="169" class="labelSm">自定义产品</text>
+      </g>
+      <line x1="24" y1="327" x2="196" y2="327" class="divider"/>
+      <text x="24" y="360" class="section">CORDIS 组合根</text>
+      <text x="24" y="393" class="bodyBright">插件上下文</text><text x="24" y="418" class="body">安装 · 销毁 · 热更新</text><text x="24" y="443" class="body">回滚 · 副作用归属</text>
+      <rect x="24" y="472" width="172" height="166" rx="14" class="cardPurple"/>
+      <text x="42" y="501" class="labelSm">微包实现</text>
+      <text x="42" y="529" class="micro mono">core/agent</text><text x="42" y="551" class="micro mono">core/agent-loop</text><text x="42" y="573" class="micro mono">core/session</text><text x="42" y="595" class="micro mono">core/tools</text><text x="42" y="617" class="micro mono">core/scope</text>
+      <text x="24" y="670" class="micro">公开接口与包内私有实现</text><text x="24" y="691" class="micro">在源码层真实分离</text>
+    </g>
+
+    <!-- Scope bus -->
+    <g transform="translate(330 200)" filter="url(#shadow)">
+      <rect width="1080" height="104" rx="20" class="cardHi"/>
+      <text x="24" y="34" class="section">02 · 作用域与分层注册</text>
+      <text x="24" y="67" class="labelSm">Agent 对象标识 → 精确作用域覆盖 → 销毁器归属</text>
+      <g transform="translate(678 25)">
+        <rect width="84" height="34" rx="17" class="pill"/><text x="17" y="22" class="pillText">工具</text>
+        <rect x="96" width="92" height="34" rx="17" class="pill"/><text x="113" y="22" class="pillText">提示词</text>
+        <rect x="200" width="108" height="34" rx="17" class="pill"/><text x="216" y="22" class="pillText">监听器</text>
+        <rect x="320" width="110" height="34" rx="17" class="pill"/><text x="334" y="22" class="pillText">策略</text>
+      </g>
+      <text x="702" y="82" class="micro">一种机制同时管理能力可见性与生命周期</text>
+    </g>
+
+    <!-- Core agent -->
+    <g transform="translate(330 342)" filter="url(#shadow)">
+      <rect width="430" height="544" rx="22" class="card"/>
+      <text x="24" y="38" class="section">03 · AGENT 循环实现</text>
+      <text x="24" y="76" class="label">ReactLoopAgent</text>
+      <text x="24" y="105" class="body">公开句柄隐藏循环实现细节</text>
+      <g transform="translate(24 136)">
+        <circle cx="17" cy="17" r="16" fill="url(#cyan)"/><text x="13" y="21" class="num">1</text><text x="48" y="22" class="bodyBright">追加 turn/start · 认领收件箱</text>
+        <path d="M17 38V58" class="lineMuted"/>
+        <circle cx="17" cy="79" r="16" fill="url(#cyan)"/><text x="13" y="83" class="num">2</text><text x="48" y="84" class="bodyBright">组装提示词与运行时上下文</text>
+        <path d="M17 100V120" class="lineMuted"/>
+        <circle cx="17" cy="141" r="16" fill="url(#cyan)"/><text x="13" y="145" class="num">3</text><text x="48" y="146" class="bodyBright">deriveMessages() → 模型流</text>
+        <path d="M17 162V182" class="lineMuted"/>
+        <circle cx="17" cy="203" r="16" fill="url(#cyan)"/><text x="13" y="207" class="num">4</text><text x="48" y="208" class="bodyBright">追加流片段 / 助手消息</text>
+        <path d="M17 224V244" class="lineMuted"/>
+        <circle cx="17" cy="265" r="16" fill="url(#cyan)"/><text x="13" y="269" class="num">5</text><text x="48" y="270" class="bodyBright">ToolRuntime 批次与结果</text>
+        <path d="M17 286V306" class="lineMuted"/>
+        <circle cx="17" cy="327" r="16" fill="url(#cyan)"/><text x="13" y="331" class="num">6</text><text x="48" y="332" class="bodyBright">追加 step/end · turn/end</text>
+      </g>
+      <rect x="24" y="478" width="382" height="46" rx="14" fill="#173744"/>
+      <text x="39" y="497" class="micro">收件箱投影：next-turn / next-step</text>
+      <text x="39" y="516" class="micro">阶段：空闲 / 维护 / 运行 · 类型化终止原因</text>
+    </g>
+
+    <!-- Session center -->
+    <g transform="translate(800 342)" filter="url(#shadow)">
+      <rect width="610" height="270" rx="22" class="cardHi"/>
+      <text x="24" y="38" class="section">04 · 交互事实权威</text>
+      <text x="24" y="76" class="label">SessionEvent[] · 内存规范日志</text>
+      <text x="24" y="105" class="body">只追加类型化事件；下一请求不读取第二份可变消息历史</text>
+      <g transform="translate(24 133)">
+        <rect width="92" height="36" rx="18" class="pill"/><text x="17" y="23" class="pillText">turn/*</text>
+        <rect x="102" width="92" height="36" rx="18" class="pill"/><text x="120" y="23" class="pillText">step/*</text>
+        <rect x="204" width="116" height="36" rx="18" class="pill"/><text x="221" y="23" class="pillText">message</text>
+        <rect x="330" width="116" height="36" rx="18" class="pill"/><text x="346" y="23" class="pillText">tool/*</text>
+        <rect x="456" width="106" height="36" rx="18" class="pill"/><text x="470" y="23" class="pillText">request</text>
+      </g>
+      <rect x="24" y="188" width="562" height="58" rx="13" fill="#16303d" stroke="#34505c"/>
+      <text x="42" y="214" class="bodyBright">表面投影 → deriveMessages()</text>
+      <text x="42" y="235" class="micro">追加 / 替换范围；原始日志保留，改变模型可见投影</text>
+    </g>
+
+    <!-- Persistence -->
+    <g transform="translate(800 644)" filter="url(#shadow)">
+      <rect width="290" height="242" rx="22" class="card"/>
+      <text x="24" y="38" class="section">05 · 持久化 SEAM</text>
+      <text x="24" y="76" class="labelSm">异步回写控制器</text>
+      <text x="24" y="107" class="body">session/event 同步入队</text><text x="24" y="132" class="body">批处理 + 后端刷写</text>
+      <rect x="24" y="154" width="242" height="54" rx="12" class="pill"/>
+      <text x="41" y="178" class="bodyBright mono">session/flush</text><text x="41" y="198" class="micro">排空至静止状态</text>
+      <text x="24" y="229" class="micro">普通轮次屏障由检查点策略拥有</text>
+    </g>
+    <g transform="translate(1120 644)" filter="url(#shadow)">
+      <rect width="290" height="242" rx="22" class="card"/>
+      <text x="24" y="38" class="section">06 · 崩溃恢复</text>
+      <text x="24" y="76" class="labelSm">补全事实，而不是截断尾部</text>
+      <text x="24" y="108" class="body">未配对工具调用 → 合成结果</text>
+      <text x="24" y="134" class="body mono">TOOL_NOT_STARTED</text>
+      <text x="24" y="158" class="body mono">TOOL_OUTCOME_UNKNOWN</text>
+      <text x="24" y="187" class="body">补 step/end · turn/end</text>
+      <text x="24" y="215" class="body">保持 Provider 调用转录平衡</text>
+    </g>
+
+    <!-- Capability rail -->
+    <g transform="translate(1450 200)">
+      <text x="0" y="20" class="section">能力管线</text>
+      <g transform="translate(0 43)">
+        <rect width="400" height="194" rx="20" class="card"/>
+        <text x="22" y="34" class="labelSm">ToolRuntime + 调度器</text>
+        <text x="22" y="64" class="body">解析 → 校验 → 前置策略 → 单调守卫</text>
+        <text x="22" y="88" class="body">→ 环绕执行 → 后置决策 → 冻结结果</text>
+        <text x="22" y="121" class="bodyBright">有界滚动并发池 + 独占屏障</text>
+        <text x="22" y="146" class="body">工具执行可并行，Session 提交按源顺序</text>
+        <text x="22" y="172" class="micro">中止时排空已启动调用，并补合成结果</text>
+      </g>
+      <g transform="translate(0 254)">
+        <rect width="400" height="168" rx="20" class="cardPurple"/>
+        <text x="22" y="34" class="labelSm">上下文压缩能力</text>
+        <text x="22" y="64" class="body">compaction/start → 摘要 → end</text>
+        <text x="22" y="89" class="body">表面替换；旧事件仍完整保留</text>
+        <text x="22" y="115" class="bodyBright">孤立锁显式表示操作未完成</text>
+        <text x="22" y="143" class="micro">范围选择保持工具调用 / 结果配对</text>
+      </g>
+      <g transform="translate(0 439)">
+        <rect width="400" height="204" rx="20" class="card"/>
+        <text x="22" y="34" class="labelSm">审批与沙箱</text>
+        <text x="22" y="64" class="body">执行前：允许 / 拒绝 / 询问</text>
+        <text x="22" y="89" class="body">审批不可用 → 安全失败</text>
+        <text x="22" y="121" class="bodyBright">沙箱模式 ≠ 实际强制事实</text>
+        <text x="22" y="146" class="body">每次调用报告完整 / 部分强制</text>
+        <text x="22" y="178" class="micro">同进程插件仍是可信代码</text>
+      </g>
+    </g>
+
+    <!-- Flow connections -->
+    <path d="M290 542H330" class="line"/><path d="M760 570H800" class="line"/><path d="M1105 612V644" class="lineMuted"/>
+    <path d="M800 475H760" class="line"/><text x="764" y="455" class="micro">派生请求</text>
+    <path d="M1410 482H1450" class="line"/>
+    <path d="M870 304V342" class="lineMuted"/><path d="M1160 304V342" class="lineMuted"/><path d="M1650 304V342" class="lineMuted"/>
+
+    <!-- Bottom orchestration -->
+    <g transform="translate(70 930)">
+      <rect width="1780" height="96" rx="22" class="cardDash"/>
+      <text x="24" y="34" class="section">07 · 多 AGENT 编排扩展</text>
+      <text x="24" y="66" class="labelSm">命名子 Agent 提供器</text><text x="246" y="66" class="body">一次性 SubagentRun · 可续接子 SessionId · 激活管理器</text>
+      <line x1="895" y1="20" x2="895" y2="76" class="divider"/>
+      <text x="925" y="34" class="labelSm">实验性 Agent Teams</text><text x="925" y="66" class="body">隐式根 · 持久成员表 · 邮箱 · 共享任务 DAG · revision/CAS</text>
+      <text x="925" y="87" class="micro">委派深度写入 Session metadata；团队能力仍属实验性</text>
+    </g>
+  </g>
+</svg>

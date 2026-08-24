@@ -33,8 +33,9 @@ def build_model(config: ModelSettingsConfig) -> Model | str:
     * ``responses`` → ``OpenAIResponsesModel`` (the ``/responses`` endpoint,
       used by 阿里云百炼's Responses-compatible API and OpenAI's Responses API).
 
-    When ``api`` is unset we preserve the historical behaviour: a custom
-    ``base_url`` implies Chat, the default OpenAI endpoint implies Responses.
+    When ``api`` is unset, Responses is the default for both OpenAI and custom
+    OpenAI-compatible endpoints. Providers that only implement Chat Completions
+    remain supported through the explicit ``api: chat`` compatibility Adapter.
     """
     if config.id == "test":
         return TestModel()
@@ -45,15 +46,14 @@ def build_model(config: ModelSettingsConfig) -> Model | str:
 
     if provider_name == "openai":
         provider = OpenAIProvider(api_key=config.api_key, base_url=config.base_url)
-        api_choice = _API_ALIAS.get(config.api) if config.api is not None else None
+        api_choice = _API_ALIAS.get(config.api) if config.api is not None else "responses"
         if api_choice == "responses":
             return OpenAIResponsesModel(model_name, provider=provider)
         if api_choice == "chat":
             return OpenAIChatModel(model_name, provider=provider)
-        # No explicit selector: keep the legacy base_url-driven default.
-        if config.base_url:
-            return OpenAIChatModel(model_name, provider=provider)
-        return OpenAIResponsesModel(model_name, provider=provider)
+        # ModelSettingsConfig validates known values, so this is only defensive
+        # for callers that bypass normal validation.
+        raise ValueError(f"unsupported OpenAI-compatible api selector: {config.api!r}")
     if provider_name == "ollama":
         provider = OllamaProvider(base_url=config.base_url, api_key=config.api_key)
         return OpenAIChatModel(model_name, provider=provider)

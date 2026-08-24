@@ -17,12 +17,22 @@ from typing import TYPE_CHECKING, Any
 
 from textual.command import DiscoveryHit, Hit, Hits, Provider
 
+from lumen.ui.slash_commands import find_command
+
 if TYPE_CHECKING:
     from lumen.ui.app import LumenApp
 
 
 # A command tuple: (display name, runnable callback, help text).
 Command = tuple[str, Any, str]
+
+
+def _registry_help(command_name: str) -> str:
+    """Pull the one-line help text for a palette entry from the slash-command
+    registry, so palette and ``/help``/completions never drift apart."""
+
+    entry = find_command(command_name)
+    return entry.description if entry is not None else ""
 
 
 class LumenCommandProvider(Provider):
@@ -53,8 +63,8 @@ class LumenCommandProvider(Provider):
         out: list[Command] = []
 
         # --- session management -------------------------------------------
-        out.append(("session: New", app.action_new_session, "Start a fresh session"))
-        out.append(("session: List recent", app.action_list_sessions, "Show recent session UUIDs"))
+        out.append(("session: New", app.action_new_session, _registry_help("new")))
+        out.append(("session: List recent", app.action_list_sessions, _registry_help("sessions")))
         out.append(
             (
                 "session: Resume…",
@@ -75,18 +85,26 @@ class LumenCommandProvider(Provider):
             )
 
         # --- tools / state inspection -------------------------------------
-        out.append(("tools: List visible", app.action_list_tools, "Show model-visible tools"))
+        out.append(("tools: List visible", app.action_list_tools, _registry_help("tools")))
+        out.append(("hooks: List configured", app.action_list_hooks, _registry_help("hooks")))
         out.append(("view: Show prompt history", app.action_show_history, "Browse recent prompts"))
+        out.append(
+            (
+                "view: Copy latest response",
+                app.action_copy_last_response,
+                _registry_help("copy"),
+            )
+        )
         out.append(
             (
                 "view: Clear timeline",
                 app.action_clear_timeline,
-                "Clear visible activity without resetting session context",
+                _registry_help("clear"),
             )
         )
 
         # --- conversation control -----------------------------------------
-        out.append(("run: Retry last prompt", app.action_retry_last, "Re-send the previous prompt"))
+        out.append(("run: Retry last prompt", app.action_retry_last, _registry_help("retry")))
 
         # --- approval mode ------------------------------------------------
         # One command per mode so the user can see the current state and switch
@@ -108,6 +126,13 @@ class LumenCommandProvider(Provider):
         )
         out.append(
             (
+                "approval: Switch to plan mode",
+                partial(app.request_approval_mode, "plan"),
+                "Explore read-only and block changes",
+            )
+        )
+        out.append(
+            (
                 "approval: Switch to auto mode",
                 partial(app.request_approval_mode, "auto"),
                 "Auto-approve classified tools; still confirm unknown remote tools",
@@ -115,7 +140,7 @@ class LumenCommandProvider(Provider):
         )
 
         # --- app ----------------------------------------------------------
-        out.append(("app: Quit", app.action_safe_quit, "Cancel the active run cleanly, then exit"))
+        out.append(("app: Exit", app.action_safe_quit, _registry_help("exit")))
 
         return tuple(out)
 
@@ -128,7 +153,7 @@ class LumenCommandProvider(Provider):
             "session: New",
             "session: Resume…",
             "tools: List visible",
-            "app: Quit",
+            "app: Exit",
         }
         for name, runnable, help_text in self.commands:
             if name in priority:

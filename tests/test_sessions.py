@@ -1,9 +1,13 @@
+import hashlib
 import json
+from datetime import UTC, datetime
+from decimal import Decimal
 from pathlib import Path
 
 import pytest
 from pydantic_ai.messages import (
     ModelMessage,
+    ModelMessagesTypeAdapter,
     ModelRequest,
     ModelResponse,
     SystemPromptPart,
@@ -11,10 +15,37 @@ from pydantic_ai.messages import (
     UserPromptPart,
 )
 
-from lumen.context import CompactionRecord, ContextSummary
+from lumen.agents.types import (
+    AgentConfigSnapshot,
+    AgentEvent,
+    AgentEventKind,
+    AgentMessage,
+    AgentResult,
+    AgentStatus,
+    AgentThreadRef,
+    AgentThreadState,
+)
+from lumen.collaboration import CollaborationMode, PlanReviewStatus, SessionSettingsState
+from lumen.context import (
+    CompactionCheckpointV1,
+    CompactionCheckpointV2,
+    CompactionRecord,
+    ContextSummary,
+    ProviderRequestReceipt,
+    RollingContextState,
+    TranscriptCursor,
+)
 from lumen.events import RunStarted, TextDelta, TimelineEventRecord
+from lumen.live import LiveConnectionState, LiveSessionRef, LiveSessionState
 from lumen.plan import PlanState, PlanStep, StepStatus
-from lumen.sessions import SCHEMA_VERSION, SessionCorruptError, SessionRepository
+from lumen.sessions import (
+    SCHEMA_VERSION,
+    SessionCatalogState,
+    SessionCorruptError,
+    SessionRepository,
+)
+from lumen.tools.spec import EffectKind
+from lumen.work_products import EffectReceipt, EffectStatus, SessionWorkState
 
 
 def test_session_round_trip_preserves_model_messages(tmp_path: Path) -> None:
@@ -38,10 +69,293 @@ def test_session_round_trip_preserves_model_messages(tmp_path: Path) -> None:
     assert loaded.full_history == loaded.history
     assert loaded.turns[0].user_input == "hello"
     assert loaded.plan == PlanState()
-    assert SCHEMA_VERSION == 4
+    assert SCHEMA_VERSION == 9
 
 
-def test_session_v4_round_trip_preserves_timeline_events(tmp_path: Path) -> None:
+def test_session_turn_normalizes_decimal_values_before_jsonl_append(tmp_path: Path) -> None:
+    repository = SessionRepository(tmp_path)
+    session = repository.create(agent_name="test-agent", model_id="test")
+
+    repository.append_turn(
+        session.id,
+        user_input="decimal usage",
+        messages=[],
+        approvals=[],
+        usage={"cost": Decimal("0.0125")},
+        status="completed",
+    )
+
+    loaded = repository.load(session.id)
+    assert loaded.turns[0].usage == {"cost": "0.0125"}
+
+
+def test_running_turn_is_durable_and_terminal_record_supersedes_its_projection(
+    tmp_path: Path,
+) -> None:
+    repository = SessionRepository(tmp_path)
+    session = repository.create(agent_name="test-agent", model_id="test")
+    interaction_id = "run-1"
+
+    repository.append_turn_started(
+        session.id,
+        user_input="persist before running",
+        interaction_id=interaction_id,
+    )
+
+    running = repository.load(session.id)
+    running_page = repository.load_turn_page(session.id, limit=20)
+    assert [(turn.user_input, turn.status) for turn in running.turns] == [
+        ("persist before running", "running")
+    ]
+    assert [(turn.user_input, turn.status) for turn in running_page.turns] == [
+        ("persist before running", "running")
+    ]
+
+    messages: list[ModelMessage] = [
+        ModelRequest(parts=[UserPromptPart(content="persist before running")]),
+        ModelResponse(parts=[TextPart(content="done")]),
+    ]
+    repository.append_turn(
+        session.id,
+        user_input="persist before running",
+        messages=messages,
+        approvals=[],
+        usage={},
+        status="completed",
+        interaction_id=interaction_id,
+    )
+
+    completed = repository.load(session.id)
+    completed_page = repository.load_turn_page(session.id, limit=20)
+    assert [(turn.user_input, turn.status) for turn in completed.turns] == [
+        ("persist before running", "completed")
+    ]
+    assert [(turn.user_input, turn.status) for turn in completed_page.turns] == [
+        ("persist before running", "completed")
+    ]
+    assert completed.history == messages
+    records = [json.loads(line) for line in session.path.read_text().splitlines()]
+    assert [record["status"] for record in records if record["type"] == "turn"] == [
+        "running",
+        "completed",
+    ]
+
+
+def test_session_catalog_is_append_only_and_uses_latest_projection(tmp_path: Path) -> None:
+    repository = SessionRepository(tmp_path)
+    session = repository.create(agent_name="test-agent", model_id="test")
+
+    repository.append_session_catalog(
+        session.id,
+        SessionCatalogState(title="First title"),
+    )
+    repository.append_session_catalog(
+        session.id,
+        SessionCatalogState(title="Renamed", archived_at="2026-08-19T00:00:00+00:00"),
+    )
+
+    loaded = repository.load(session.id)
+    records = [json.loads(line) for line in session.path.read_text().splitlines()]
+
+    assert loaded.catalog.title == "Renamed"
+    assert loaded.catalog.archived_at == "2026-08-19T00:00:00+00:00"
+    assert [item["type"] for item in records] == [
+        "session",
+        "session_catalog",
+        "session_catalog",
+    ]
+
+
+def test_request_receipt_round_trip_and_projection_cache_are_rebuildable(tmp_path: Path) -> None:
+    repository = SessionRepository(tmp_path)
+    session = repository.create(agent_name="test-agent", model_id="acme:test")
+    receipt = ProviderRequestReceipt(
+        step=1,
+        route="acme:test",
+        provider="acme",
+        model="test",
+        instructions_tokens=11,
+        messages_tokens=13,
+        tools_tokens=17,
+        output_reserve_tokens=19,
+        total_tokens=60,
+        hard_limit_tokens=100,
+        visible_tools=("read_file", "search_text"),
+        visible_tool_digest="sha256:tools",
+        context_fingerprint="sha256:context",
+        estimated=True,
+    )
+    repository.append_turn(
+        session.id,
+        user_input="inspect",
+        messages=[],
+        approvals=[],
+        usage={},
+        status="completed",
+        request_receipts=[receipt],
+    )
+    original = session.path.read_bytes()
+
+    cold = repository.load(session.id)
+    warm = repository.load(session.id)
+    repository.clear_projection_cache()
+    rebuilt = repository.load(session.id)
+
+    assert cold == warm == rebuilt
+    assert rebuilt.turns[0].request_receipts == [receipt]
+    assert session.path.read_bytes() == original
+
+
+def test_session_v7_round_trip_preserves_work_state_and_effects(tmp_path: Path) -> None:
+    repository = SessionRepository(tmp_path)
+    session = repository.create(agent_name="test-agent", model_id="test")
+    effect = EffectReceipt(
+        id="effect:one",
+        effect_kind=EffectKind.EXECUTION,
+        operation="run_command",
+        status=EffectStatus.VERIFIED,
+        summary="command completed",
+    )
+
+    repository.append_work_state(session.id, SessionWorkState())
+    repository.append_effect(session.id, effect)
+
+    assert repository.load(session.id).work_state.effects == (effect,)
+
+
+def test_session_v8_round_trip_preserves_agent_records(tmp_path: Path) -> None:
+    repository = SessionRepository(tmp_path)
+    session = repository.create(agent_name="test-agent", model_id="test")
+    thread = AgentThreadState(
+        ref=AgentThreadRef(
+            id="agent-one",
+            path="/root/one",
+            parent_session_id=session.id,
+            root_run_id="run-one",
+            agent_type="explorer",
+        ),
+        task="inspect",
+        task_name="one",
+        config=AgentConfigSnapshot(
+            model_name="test",
+            model_id="test",
+            cwd=str(tmp_path),
+        ),
+        idempotency_key="sha256:" + "0" * 64,
+    )
+    repository.append_agent_thread(session.id, thread)
+    repository.append_agent_message(
+        session.id,
+        AgentMessage(id="msg-one", agent_id="agent-one", sender="/root", content="context"),
+    )
+    repository.append_agent_event(
+        session.id,
+        AgentEvent(
+            id="event-one",
+            sequence=1,
+            agent_id="agent-one",
+            session_id=session.id,
+            root_run_id="run-one",
+            kind=AgentEventKind.COMPLETED,
+            status=AgentStatus.COMPLETED,
+        ),
+    )
+    repository.append_agent_result(
+        session.id,
+        AgentResult(
+            agent_id="agent-one",
+            status=AgentStatus.COMPLETED,
+            summary="done",
+        ),
+    )
+
+    loaded = repository.load(session.id).agent_state
+
+    assert loaded.get("agent-one") is not None
+    assert loaded.get("agent-one").result.summary == "done"  # type: ignore[union-attr]
+    assert loaded.messages[0].content == "context"
+    assert loaded.events[0].kind is AgentEventKind.COMPLETED
+
+
+def test_session_fork_marks_active_agents_not_carried(tmp_path: Path) -> None:
+    repository = SessionRepository(tmp_path)
+    session = repository.create(agent_name="test-agent", model_id="test")
+    repository.append_turn(
+        session.id,
+        user_input="work",
+        messages=[],
+        approvals=[],
+        usage={},
+        status="completed",
+    )
+    repository.append_agent_thread(
+        session.id,
+        AgentThreadState(
+            ref=AgentThreadRef(
+                id="agent-active",
+                path="/root/active",
+                parent_session_id=session.id,
+                root_run_id="run-one",
+                agent_type="explorer",
+            ),
+            task="inspect",
+            task_name="active",
+            status=AgentStatus.RUNNING,
+            config=AgentConfigSnapshot(model_name="test", model_id="test", cwd=str(tmp_path)),
+            idempotency_key="sha256:" + "1" * 64,
+        ),
+    )
+
+    forked = repository.fork(session.id, through_turn=0)
+    copied = repository.load(forked.id).agent_state.get("agent-active")
+
+    assert copied is not None
+    assert copied.status is AgentStatus.NOT_CARRIED
+    assert copied.ref.parent_session_id == forked.id
+
+
+def test_session_fork_preserves_v7_work_state(tmp_path: Path) -> None:
+    repository = SessionRepository(tmp_path)
+    session = repository.create(agent_name="test-agent", model_id="test")
+    repository.append_turn(
+        session.id,
+        user_input="work",
+        messages=[],
+        approvals=[],
+        usage={},
+        status="completed",
+    )
+    effect = EffectReceipt(
+        id="effect:forked",
+        effect_kind=EffectKind.EXECUTION,
+        operation="run_command",
+        status=EffectStatus.VERIFIED,
+        summary="command completed",
+    )
+    repository.append_effect(session.id, effect)
+
+    forked = repository.fork(session.id, through_turn=0)
+
+    assert repository.load(forked.id).work_state.effects == (effect,)
+
+
+def test_historical_v6_session_upgrades_append_only_for_work_state(tmp_path: Path) -> None:
+    repository = SessionRepository(tmp_path)
+    session = repository.create(agent_name="test-agent", model_id="test")
+    original = session.path.read_text(encoding="utf-8").replace('"schema_version":9', '"schema_version":6')
+    session.path.write_text(original, encoding="utf-8")
+
+    assert repository.load(session.id).work_state == SessionWorkState()
+    repository.append_work_state(session.id, SessionWorkState())
+
+    lines = [json.loads(line) for line in session.path.read_text(encoding="utf-8").splitlines()]
+    assert lines[0]["schema_version"] == 6
+    assert lines[1]["type"] == "schema_upgrade"
+    assert lines[2]["type"] == "work_state"
+    assert repository.load(session.id).work_state == SessionWorkState()
+
+
+def test_session_v6_round_trip_preserves_timeline_events(tmp_path: Path) -> None:
     repository = SessionRepository(tmp_path)
     session = repository.create(agent_name="test-agent", model_id="test")
     records = [
@@ -64,6 +378,21 @@ def test_session_v4_round_trip_preserves_timeline_events(tmp_path: Path) -> None
         RunStarted("literal @README.md"),
         TextDelta("answer"),
     ]
+
+
+def test_session_round_trip_preserves_independent_modes_and_plan_review(tmp_path: Path) -> None:
+    repository = SessionRepository(tmp_path)
+    session = repository.create(agent_name="test-agent", model_id="test")
+    state = SessionSettingsState(
+        collaboration_mode=CollaborationMode.PLAN,
+        approval_mode="auto",
+        plan_review_status=PlanReviewStatus.REVIEW_PENDING,
+        reviewed_revision=3,
+    )
+
+    repository.append_session_settings(session.id, state)
+
+    assert repository.load(session.id).settings == state
 
 
 def test_failed_turn_round_trip_preserves_partial_audit_without_model_history(tmp_path: Path) -> None:
@@ -141,7 +470,15 @@ def test_session_persists_plan_diagnostics_and_compaction(tmp_path: Path) -> Non
         failures_and_approvals=[],
         outstanding=[],
     )
-    record = CompactionRecord(summary, [], 5, {"input_tokens": 7})
+    checkpoint = CompactionCheckpointV1(
+        checkpoint_id="cp-one",
+        source_start=0,
+        source_end=5,
+        source_digest="sha256:abc",
+        created_at=datetime.now(UTC),
+    )
+    compacted: list[ModelMessage] = [ModelRequest(parts=[SystemPromptPart(content="Prior summary")])]
+    record = CompactionRecord(summary, compacted, 5, {"input_tokens": 7}, checkpoint)
     new_messages = [ModelResponse(parts=[TextPart(content="ok")])]
 
     repository.append_turn(
@@ -161,13 +498,20 @@ def test_session_persists_plan_diagnostics_and_compaction(tmp_path: Path) -> Non
     assert loaded.turns[0].diagnostics == diagnostics
     assert loaded.turns[0].compaction is not None
     assert loaded.turns[0].compaction["source_message_count"] == 5
+    # V1's active-prefix count is mapped to the absolute raw transcript
+    # boundary available when the record is loaded.
+    assert loaded.latest_compaction_checkpoint == checkpoint.model_copy(
+        update={"source_start": 0, "source_end": 0}
+    )
+    assert loaded.compacted_prefix_length == 1
+    assert loaded.compacted_source_end == 0
 
 
 def test_session_restores_latest_compacted_active_history(tmp_path: Path) -> None:
     repository = SessionRepository(tmp_path)
     session = repository.create(agent_name="test", model_id="test")
     old_messages = [ModelRequest(parts=[UserPromptPart(content="old question")])]
-    compacted = [ModelRequest(parts=[SystemPromptPart(content="Prior summary")])]
+    compacted: list[ModelMessage] = [ModelRequest(parts=[SystemPromptPart(content="Prior summary")])]
     new_messages = [
         ModelRequest(parts=[UserPromptPart(content="new question")]),
         ModelResponse(parts=[TextPart(content="new answer")]),
@@ -210,6 +554,79 @@ def test_session_restores_latest_compacted_active_history(tmp_path: Path) -> Non
     assert loaded.plan == plan
     assert loaded.history == record.active_history + new_messages
     assert loaded.full_history == old_messages + new_messages
+
+
+def test_corrupt_v2_checkpoint_falls_back_to_raw_transcript(tmp_path: Path) -> None:
+    repository = SessionRepository(tmp_path)
+    session = repository.create(agent_name="test", model_id="test")
+    source: list[ModelMessage] = [
+        ModelRequest(parts=[UserPromptPart(content="old question")]),
+        ModelResponse(parts=[TextPart(content="old answer")]),
+    ]
+    summary = ContextSummary(goals=["continue safely"])
+    source_payload = json.dumps(
+        ModelMessagesTypeAdapter.dump_python(source, mode="json"),
+        ensure_ascii=False,
+        sort_keys=True,
+        default=str,
+    )
+    last_payload = json.dumps(
+        ModelMessagesTypeAdapter.dump_python([source[-1]], mode="json"),
+        ensure_ascii=False,
+        sort_keys=True,
+        default=str,
+    )
+    last_digest = hashlib.sha256(b"1:" + last_payload.encode()).hexdigest()[:16]
+    rolling_state = RollingContextState(goals=("continue safely",))
+    checkpoint = CompactionCheckpointV2(
+        checkpoint_id="cp-v2",
+        source_start=0,
+        source_end=2,
+        source_digest=f"sha256:{hashlib.sha256(source_payload.encode()).hexdigest()}",
+        created_at=datetime.now(UTC),
+        source_start_cursor=TranscriptCursor(sequence=0, message_id="session-origin"),
+        source_end_cursor=TranscriptCursor(sequence=2, message_id=f"msg-{last_digest}"),
+        full_history_length=2,
+        rolling_state=rolling_state,
+        state_digest=(f"sha256:{hashlib.sha256(rolling_state.model_dump_json().encode()).hexdigest()}"),
+    )
+    compacted: list[ModelMessage] = [ModelRequest(parts=[SystemPromptPart(content="Prior summary")])]
+    repository.append_turn(
+        session.id,
+        user_input="old",
+        messages=source,
+        approvals=[],
+        usage={},
+        status="completed",
+    )
+    repository.append_turn(
+        session.id,
+        user_input="next",
+        messages=[ModelResponse(parts=[TextPart(content="new answer")])],
+        approvals=[],
+        usage={},
+        status="completed",
+        compaction=CompactionRecord(summary, compacted, 2, {}, checkpoint),
+    )
+    assert repository.load(session.id).latest_compaction_checkpoint == checkpoint
+
+    lines = session.path.read_text(encoding="utf-8").splitlines()
+    changed_projection = json.loads(lines[2])
+    changed_projection["compaction"]["summary"]["goals"] = ["untrusted stale projection"]
+    lines[2] = json.dumps(changed_projection, ensure_ascii=False, separators=(",", ":"))
+    session.path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    restored = repository.load(session.id)
+    assert restored.latest_compaction_summary.goals == ["continue safely"]
+
+    damaged = json.loads(lines[2])
+    damaged["compaction"]["checkpoint"]["source_digest"] = "sha256:damaged"
+    lines[2] = json.dumps(damaged, ensure_ascii=False, separators=(",", ":"))
+    session.path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    recovered = repository.load(session.id)
+    assert recovered.latest_compaction_checkpoint is None
+    assert recovered.history == recovered.full_history
 
 
 def test_session_restores_latest_compaction_summary(tmp_path: Path) -> None:
@@ -264,7 +681,7 @@ def test_session_without_compaction_has_none_summary(tmp_path: Path) -> None:
     assert loaded.latest_compaction_summary is None
 
 
-@pytest.mark.parametrize("schema_version", [1, 2, 3])
+@pytest.mark.parametrize("schema_version", list(range(1, 10)))
 def test_legacy_session_loads_without_rewriting(tmp_path: Path, schema_version: int) -> None:
     session_id = "00000000-0000-0000-0000-000000000001"
     path = tmp_path / f"{session_id}.jsonl"
@@ -307,7 +724,7 @@ def test_session_rejects_unknown_schema_version(tmp_path: Path) -> None:
         json.dumps(
             {
                 "type": "session",
-                "schema_version": 7,
+                "schema_version": 10,
                 "id": session_id,
                 "agent_name": "x",
                 "model_id": "test",
@@ -319,3 +736,30 @@ def test_session_rejects_unknown_schema_version(tmp_path: Path) -> None:
     )
     with pytest.raises(SessionCorruptError, match="unsupported session schema"):
         SessionRepository(tmp_path).load(session_id)
+
+
+def test_v9_live_state_is_append_only_and_owned_by_session(tmp_path: Path) -> None:
+    repository = SessionRepository(tmp_path)
+    session = repository.create(agent_name="test-agent", model_id="test")
+    state = LiveSessionState(
+        ref=LiveSessionRef(id="live-one", session_id=session.id),
+        model="gpt-realtime-2.1",
+        voice="marin",
+    )
+
+    repository.append_live_session(session.id, state)
+    repository.append_live_session(
+        session.id,
+        state.model_copy(update={"connection": LiveConnectionState.CLOSED}),
+    )
+
+    loaded = repository.load(session.id)
+    restored = loaded.live_state.get("live-one")
+    assert restored is not None
+    assert restored.connection is LiveConnectionState.CLOSED
+    records = [json.loads(line) for line in session.path.read_text().splitlines()]
+    assert [record["type"] for record in records] == [
+        "session",
+        "live_session",
+        "live_session",
+    ]

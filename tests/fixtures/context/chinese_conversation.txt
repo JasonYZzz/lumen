@@ -1,0 +1,12 @@
+user: 请帮我把 src/lumen/context.py 重构成一个 context 包，保留原来的 import 路径。
+assistant: 好的。我会先读取现有的 context.py，然后按计划拆分为 context/__init__.py、engine.py、types.py 等模块。第一步是冻结当前行为，所以我会先补全 characterization 测试。
+tool: read_file src/lumen/context.py (返回 603 行，包含 ContextManager、estimate_message_tokens、retain_recent_tokens 等)
+user: 注意中文文本的 token 估算，当前用 byte/4 会高估，M2 要换成 provider 感知的 tokenizer。
+assistant: 明白。当前的 estimate_message_tokens 对中文按 UTF-8 字节除以 4 估算，三个中文字符 "你好世" 是 9 字节，约 3 token；实际 tiktoken 大约 2 token。M2 会引入 ConservativeTokenCounter 对中文用不同系数。
+user: 压缩失败时不要返回原始超限 history，这是安全不变量。
+assistant: 收到。这是迁移时第一个必须补上的安全不变量：compaction 失败时走降级路径，而不是恢复未经验证的超限 history。命令是 uv run pytest tests/test_context.py -q。
+tool: run_command uv run pytest tests/test_context.py -q (exit_code=0, 63 passed in 4.2s)
+user: 记得路径 src/lumen/context_contract.py 和错误码 ECONNRESET 要进 exact_literals，不能被摘要改写丢失。
+assistant: 已记录。exact_literals 会包含 kind=path value="src/lumen/context_contract.py" 和 kind=error_code value="ECONNRESET"，source_event_ids 指向来源事件。
+user: 下一步是 M1，把 ContextManager.prepare 包装成 ContextEngine.prepare/commit/control 的兼容版本。
+assistant: 好的，开始 M1。验收标准是 runtime.py 不再直接引用 ContextSummary、summary prompt 或 token estimator。

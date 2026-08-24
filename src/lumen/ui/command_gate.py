@@ -10,7 +10,9 @@ slot.
 
 This module is the single place that classifies commands by run-safety so the
 dispatcher doesn't scatter ``current_worker is running`` checks across a dozen
-branches.
+branches. The classification data lives in the slash-command registry
+(``slash_commands.SlashCommand.while_running``); this module only maps it to
+policies.
 
 Classification follows the plan's matrix:
 
@@ -22,12 +24,15 @@ Classification follows the plan's matrix:
   plan allows queuing, but a queue adds re-entrancy complexity — refusing with
   a clear message is the safe minimal behaviour and matches how a new prompt
   is already refused while a run is active).
-* ``cancel_then_run`` — ``/quit``: request cancellation, then exit.
+* ``cancel_then_run`` — ``/exit`` (and its ``/quit`` alias): request
+  cancellation, then exit.
 """
 
 from __future__ import annotations
 
 from enum import StrEnum
+
+from lumen.ui.slash_commands import find_command
 
 
 class CommandPolicy(StrEnum):
@@ -39,26 +44,13 @@ class CommandPolicy(StrEnum):
     CANCEL_THEN_RUN = "cancel_then_run"
 
 
-# Read-only info commands: safe at any time, never touch session/runtime.
-_ALWAYS_ALLOWED: frozenset[str] = frozenset(
-    {
-        "/help",
-        "/mode",
-        "/tools",
-        "/skills",
-        "/sessions",
-    }
-)
-
-# Commands that destroy or swap the session/runtime while a worker may be
-# mid-run writing turns / using the old runtime. Refused during a run.
-_STATE_DESTROYERS: frozenset[str] = frozenset(
-    {
-        "/new",
-        "/resume",
-        "/clear",
-    }
-)
+# Registry ``while_running`` values map 1:1 onto policies.
+_POLICIES: dict[str, CommandPolicy] = {
+    "allow": CommandPolicy.ALLOW,
+    "block": CommandPolicy.BLOCK,
+    "queue": CommandPolicy.QUEUE,
+    "cancel_then_run": CommandPolicy.CANCEL_THEN_RUN,
+}
 
 
 def _base_command(line: str) -> str:
@@ -82,26 +74,16 @@ def classify_command(line: str) -> CommandPolicy:
     command = _base_command(line)
     if not command:
         return CommandPolicy.ALLOW
-    if command in _ALWAYS_ALLOWED:
-        return CommandPolicy.ALLOW
-    if command in _STATE_DESTROYERS:
-        return CommandPolicy.BLOCK
-    if command == "/model":
-        # ``/model`` with no arg is a read (list); ``/model <name>`` switches
-        # the runtime. We can't tell from the command token alone how many
-        # parts there are, so the dispatcher must refine — but the safe
-        # default for the gate is ALLOW for the listing form and BLOCK for the
-        # switching form. The dispatcher checks parts and overrides.
-        return CommandPolicy.ALLOW
-    if command == "/retry":
-        return CommandPolicy.QUEUE
-    if command == "/quit":
-        return CommandPolicy.CANCEL_THEN_RUN
     if command.startswith("/skill:"):
+        # Dynamic prefix form: starting a skill starts a run.
         return CommandPolicy.QUEUE
-    # Unknown command — let it through so the "unknown command" message still
-    # fires (no point blocking something that wouldn't do anything anyway).
-    return CommandPolicy.ALLOW
+    entry = find_command(command)
+    if entry is None:
+        # Unknown command — let it through so the "unknown command" message
+        # still fires (no point blocking something that wouldn't do anything
+        # anyway).
+        return CommandPolicy.ALLOW
+    return _POLICIES[entry.while_running]
 
 
 def classify_model_command(parts: list[str]) -> CommandPolicy:

@@ -54,6 +54,18 @@ class CommentaryDelta:
 
 
 @dataclass(frozen=True, slots=True)
+class ThinkingDelta:
+    """Incremental provider reasoning (thinking) content.
+
+    Emitted from ``ThinkingPart``/``ThinkingPartDelta`` stream events. It is
+    presentation-only: never part of the final answer and never retracted,
+    because tool calls do not retroactively reclassify reasoning content.
+    """
+
+    text: str
+
+
+@dataclass(frozen=True, slots=True)
 class PlanCreated:
     plan: PlanState
 
@@ -64,9 +76,41 @@ class PlanUpdated:
 
 
 @dataclass(frozen=True, slots=True)
+class PlanReviewPending:
+    plan: PlanState
+    revision: int
+
+
+@dataclass(frozen=True, slots=True)
+class PlanReviewResolved:
+    revision: int
+    approved: bool
+    feedback: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class ProgressReported:
     summary: str
     next_action: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class WorkProductChanged:
+    phase: str
+    work_product_id: str | None
+    resource: str | None
+    effect_id: str | None
+    status: str
+    summary: str = ""
+
+
+@dataclass(frozen=True, slots=True)
+class AgentLifecycleChanged:
+    agent_id: str
+    path: str
+    phase: str
+    status: str
+    summary: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -77,6 +121,7 @@ class ToolCallStarted:
     origin: str = "configured tool"
     risk: str = "external"
     started_at: float = 0.0
+    call_view: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -88,6 +133,7 @@ class ToolCallFinished:
     elapsed_seconds: float = 0.0
     preview: str | None = None
     exit_code: int | None = None
+    result_view: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -97,6 +143,15 @@ class ToolApprovalPending:
     args: dict[str, Any]
     origin: str
     risk: str
+
+
+@dataclass(frozen=True, slots=True)
+class ToolApprovalBatchPending:
+    """One model turn produced several approval-gated tool calls."""
+
+    batch_id: str
+    requests: tuple[ApprovalRequest, ...]
+    risk_summary: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -115,13 +170,6 @@ class ApprovalRequest:
     args: dict[str, Any]
     origin: str
     risk: str
-
-
-@dataclass(frozen=True, slots=True)
-class ApprovalRequested:
-    """Legacy alias for ToolApprovalPending for compatibility."""
-
-    request: ApprovalRequest
 
 
 @dataclass(frozen=True, slots=True)
@@ -153,6 +201,21 @@ class ContextCompactionFailed:
 class RunCompleted:
     output: str
     usage: dict[str, Any] = field(default_factory=dict[str, Any])
+
+
+@dataclass(frozen=True, slots=True)
+class ClarificationRequested:
+    question_id: str
+    question: str
+    choices: tuple[str, ...] = ()
+    related_plan_step: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class RunWaitingForUser:
+    question_id: str
+    question: str
+    choices: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -191,19 +254,26 @@ RunEvent: TypeAlias = (
     | TextDelta
     | TextRetracted
     | CommentaryDelta
+    | ThinkingDelta
     | PlanCreated
     | PlanUpdated
+    | PlanReviewPending
+    | PlanReviewResolved
     | ProgressReported
+    | WorkProductChanged
+    | AgentLifecycleChanged
     | ToolCallStarted
     | ToolCallFinished
     | ToolApprovalPending
+    | ToolApprovalBatchPending
     | ToolApprovalResolved
-    | ApprovalRequested
     | UsageUpdated
     | ContextCompactionStarted
     | ContextCompactionCompleted
     | ContextCompactionFailed
     | RunCompleted
+    | ClarificationRequested
+    | RunWaitingForUser
     | RunFailed
     | RunCancelled
     | InputQueued
@@ -241,10 +311,10 @@ class TimelineEventRecord:
         if event_type is None:
             raise ValueError(f"unknown timeline event type: {self.type}")
         data = dict(self.data)
-        if event_type in {PlanCreated, PlanUpdated}:
+        if event_type in {PlanCreated, PlanUpdated, PlanReviewPending}:
             data["plan"] = PlanState.model_validate(data["plan"])
-        elif event_type is ApprovalRequested:
-            data["request"] = ApprovalRequest(**data["request"])
+        elif event_type is ToolApprovalBatchPending:
+            data["requests"] = tuple(ApprovalRequest(**item) for item in data["requests"])
         return event_type(**data)
 
 
@@ -268,19 +338,26 @@ _EVENT_TYPES: dict[str, type[Any]] = {
         TextDelta,
         TextRetracted,
         CommentaryDelta,
+        ThinkingDelta,
         PlanCreated,
         PlanUpdated,
+        PlanReviewPending,
+        PlanReviewResolved,
         ProgressReported,
+        WorkProductChanged,
+        AgentLifecycleChanged,
         ToolCallStarted,
         ToolCallFinished,
         ToolApprovalPending,
+        ToolApprovalBatchPending,
         ToolApprovalResolved,
-        ApprovalRequested,
         UsageUpdated,
         ContextCompactionStarted,
         ContextCompactionCompleted,
         ContextCompactionFailed,
         RunCompleted,
+        ClarificationRequested,
+        RunWaitingForUser,
         RunFailed,
         RunCancelled,
         InputQueued,

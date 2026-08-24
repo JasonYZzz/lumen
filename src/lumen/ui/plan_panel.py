@@ -1,4 +1,4 @@
-"""Todo panel: renders the agent's structured execution plan as user-facing tasks.
+"""Task panel: renders the agent's structured execution plan as user-facing tasks.
 
 The panel is fed by ``PlanCreated`` and ``PlanUpdated`` events. Each step is
 rendered with a single status glyph (✓ ● ○ !) and a state-specific CSS class so
@@ -7,15 +7,17 @@ the TUI can theme active, completed, pending, and blocked steps distinctly.
 
 from __future__ import annotations
 
-from textual.containers import VerticalScroll
+from typing import Any
+
+from textual.containers import Vertical
 from textual.widgets import Static
 
 from lumen.plan import PlanState, StepStatus
 
 _STATUS_GLYPHS: dict[StepStatus, str] = {
-    StepStatus.COMPLETED: "✓",
-    StepStatus.IN_PROGRESS: "●",
-    StepStatus.PENDING: "○",
+    StepStatus.COMPLETED: "✔",
+    StepStatus.IN_PROGRESS: "▣",
+    StepStatus.PENDING: "☐",
     StepStatus.BLOCKED: "!",
 }
 
@@ -27,48 +29,44 @@ _STATUS_CLASSES: dict[StepStatus, str] = {
 }
 
 
-class PlanPanel(VerticalScroll):
-    """Renders the current plan as a vertical list of step rows."""
+class PlanPanel(Vertical):
+    """Renders one turn's plan inline with the conversation timeline."""
 
+    can_focus = True
     DEFAULT_CSS = """
     PlanPanel {
-        /* Fixed-height plan panel pinned at the top of the screen (between
-           the topbar and the scrolling message timeline). ``max-height: 8``
-           keeps an 8-step plan fully visible; longer plans scroll inside the
-           panel rather than pushing the message area down. */
         height: auto;
-        max-height: 8;
-        border: round $accent 40%;
-        background: $surface 50%;
-        padding: 0 1;
-        margin: 0 2;
+        background: $background;
+        padding: 0 1 1 1;
+        margin: 1 1;
         display: none;
     }
     PlanPanel.has-plan { display: block; }
-    PlanPanel.plan-collapsed { height: 3; }
-    .plan-header { text-style: bold; color: $accent; padding: 0 0 0 1; }
-    .plan-step { padding: 0 1; }
-    /* Active step: amber + bold — the eye is drawn to what's happening now. */
-    .plan-step-active { color: $warning; text-style: bold; }
-    /* Completed: green + dimmed to indicate "done, move on". */
-    .plan-step-completed { color: $success; text-style: dim; }
-    /* Pending: muted — not yet actionable. */
+    PlanPanel.plan-collapsed { height: 1; padding-bottom: 0; }
+    .plan-header { text-style: bold; color: $text; padding: 0 1; }
+    .plan-step { padding: 0 3; }
+    .plan-step-active { color: $accent; text-style: bold; }
+    .plan-step-completed { color: $text-muted; }
     .plan-step-pending { color: $text-muted; }
-    /* Blocked: red + bold — needs attention. */
     .plan-step-blocked { color: $error; text-style: bold; }
+    .plan-detail { color: $text-muted; padding: 0 5; }
     """
 
-    def __init__(self) -> None:
+    def __init__(self, plan: PlanState | None = None) -> None:
         super().__init__()
-        self._plan: PlanState | None = None
+        self._plan = plan
         self._collapsed = False
-        self._header = Static("Todo", classes="plan-header")
+        self._show_details = False
+        self._header = Static("Tasks", classes="plan-header", markup=False)
 
     def compose(self):  # type: ignore[no-untyped-def]
         yield self._header
 
+    def on_mount(self) -> None:
+        self._render_plan()
+
     def update_plan(self, plan: PlanState) -> None:
-        """Replace the rendered plan; auto-collapse if there are no steps."""
+        """Replace the plan rendered for this conversation turn."""
 
         self._plan = plan
         self._render_plan()
@@ -81,16 +79,17 @@ class PlanPanel(VerticalScroll):
                 child.remove()
         if plan.steps:
             self.add_class("has-plan")
+            completed = sum(step.status is StepStatus.COMPLETED for step in plan.steps)
             if self._collapsed:
-                completed = sum(step.status is StepStatus.COMPLETED for step in plan.steps)
                 active = next(
                     (step for step in plan.steps if step.status is StepStatus.IN_PROGRESS),
                     next((step for step in plan.steps if step.status is not StepStatus.COMPLETED), None),
                 )
-                active_text = active.title if active is not None else "Done"
-                self._header.update(f"Todo {completed}/{len(plan.steps)} · active: {active_text}")
+                active_text = active.title if active is not None else "Complete"
+                self._header.update(f"Tasks {completed}/{len(plan.steps)} · {active_text}")
                 return
-            self._header.update("Todo")
+            revision = f" · revision {plan.revision}" if plan.revision else ""
+            self._header.update(f"Tasks  {completed}/{len(plan.steps)}{revision} · E details")
             # Collapse state is managed exclusively by collapse(); update_plan
             # only controls has-plan visibility.
             for step in plan.steps:
@@ -98,8 +97,33 @@ class PlanPanel(VerticalScroll):
                 css = _STATUS_CLASSES[step.status]
                 note = f" — {step.note}" if step.note else ""
                 self.mount(Static(f"{glyph} {step.title}{note}", classes=f"plan-step {css}"))
+                if self._show_details:
+                    dependency = ", ".join(step.depends_on) or "none"
+                    owner = step.owner or "agent"
+                    self.mount(
+                        Static(
+                            f"owner {owner} · depends on {dependency}",
+                            classes="plan-detail",
+                            markup=False,
+                        )
+                    )
+                    for criterion in step.acceptance_criteria:
+                        linked = [
+                            receipt
+                            for receipt in plan.evidence
+                            if receipt.id in step.evidence_ids
+                            and criterion.id in receipt.criterion_ids
+                        ]
+                        state = "passed" if any(receipt.passed for receipt in linked) else "required"
+                        self.mount(
+                            Static(
+                                f"[{state}] {criterion.id}: {criterion.description}",
+                                classes="plan-detail",
+                                markup=False,
+                            )
+                        )
         else:
-            self._header.update("Todo")
+            self._header.update("Tasks")
             self.remove_class("has-plan")
 
     def collapse(self, collapsed: bool) -> None:
@@ -111,6 +135,14 @@ class PlanPanel(VerticalScroll):
         else:
             self.remove_class("plan-collapsed")
         self._render_plan()
+
+    def on_key(self, event: Any) -> None:  # type: ignore[no-untyped-def]
+        if getattr(event, "key", "") not in {"e", "enter"}:
+            return
+        self._show_details = not self._show_details
+        self._render_plan()
+        event.prevent_default()
+        event.stop()
 
     def render(self):  # type: ignore[no-untyped-def]
         # The container itself doesn't paint text; children do. We expose a

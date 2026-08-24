@@ -1,0 +1,17 @@
+{
+  "user_prompt": "运行测试",
+  "tool_call": {
+    "tool_name": "run_command",
+    "tool_call_id": "call_err_1",
+    "args": {"command": "uv run pytest tests/test_context.py -q"}
+  },
+  "tool_return": {
+    "tool_name": "run_command",
+    "tool_call_id": "call_err_1",
+    "content": "FAILED tests/test_context.py::test_compaction_safety - AssertionError: expected compaction to fit within window\n  File \"tests/test_context.py\", line 142\n    assert prepared.history fits within soft_token_limit\nAssertionError\n========================= 1 failed, 62 passed in 4.0s =========================\nexit_code=1",
+    "is_error": true,
+    "exit_code": 1
+  },
+  "expected_status": "tool_error",
+  "expected_error_category": "nonzero_exit"
+}
