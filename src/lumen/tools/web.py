@@ -1,14 +1,17 @@
 """Bounded web access tools: ``web_fetch`` and config-gated ``web_search``.
 
 Both tools are declared ``Risk.EXTERNAL`` (the operator approves an outbound
-network action) with ``EffectKind.OBSERVE`` (they are read-only and idempotent,
-so they may run in the parallel-safe class). SSRF hardening: only public http(s)
+network action) with ``EffectKind.OBSERVE`` for effect tracking. They currently
+use the default exclusive concurrency policy; read risk/effect does not itself
+grant parallel execution. SSRF hardening: only public http(s)
 hosts are reachable, redirects are re-validated per hop, and responses are
 size-capped before parsing.
 """
 
 from __future__ import annotations
 
+import asyncio
+import hashlib
 import ipaddress
 import json
 import os
@@ -16,13 +19,18 @@ import socket
 from collections.abc import Callable
 from dataclasses import dataclass
 from html.parser import HTMLParser
-from typing import Any, cast
+from pathlib import Path
+from typing import TYPE_CHECKING, Any, cast
 from urllib.parse import urlparse
 
 import httpx
 
 from lumen.config import WebSearchConfig
 from lumen.tools.spec import EffectKind, Risk, ToolSpec
+from lumen.tools.workspace import Workspace
+
+if TYPE_CHECKING:
+    from lumen.work_products import TaskWorkspace
 
 MAX_CONTENT_CHARS = 64_000
 MAX_RESPONSE_BYTES = 2 * 1024 * 1024
@@ -64,7 +72,7 @@ class _TextExtractor(HTMLParser):
         return "\n".join(line for line in lines if line)
 
 
-def _is_public_host(host: str) -> bool:
+def is_public_host(host: str) -> bool:
     """Reject loopback, link-local, private and reserved targets.
 
     Resolution-based checking is required because a DNS name is just an
@@ -87,7 +95,7 @@ def _is_public_host(host: str) -> bool:
     return True
 
 
-def _validate_url(raw: str, host_guard: Callable[[str], bool]) -> httpx.URL:
+def validate_public_url(raw: str, host_guard: Callable[[str], bool]) -> httpx.URL:
     parsed = urlparse(raw)
     if parsed.scheme not in {"http", "https"}:
         raise ValueError(f"web_fetch only supports http/https URLs: {raw}")
@@ -113,7 +121,7 @@ def _fetch(
     transport: httpx.BaseTransport | None,
     host_guard: Callable[[str], bool],
 ) -> _FetchResult:
-    current = _validate_url(url, host_guard)
+    current = validate_public_url(url, host_guard)
     with httpx.Client(timeout=timeout, follow_redirects=False, transport=transport) as client:
         for _ in range(MAX_REDIRECTS + 1):
             response = client.get(current)
@@ -123,7 +131,7 @@ def _fetch(
                     raise ValueError(f"redirect without location header from {current}")
                 # Resolve relative redirects, then re-run the full public-host
                 # check: a redirect is a fresh attack surface for SSRF.
-                current = _validate_url(str(current.join(location)), host_guard)
+                current = validate_public_url(str(current.join(location)), host_guard)
                 continue
             response.raise_for_status()
             bounded = response.content[:max_bytes] if len(response.content) > max_bytes else response.content
@@ -154,7 +162,7 @@ def build_web_fetch_spec(
     timeout: float = DEFAULT_TIMEOUT_SECONDS,
     max_bytes: int = MAX_RESPONSE_BYTES,
     transport: httpx.BaseTransport | None = None,
-    host_guard: Callable[[str], bool] = _is_public_host,
+    host_guard: Callable[[str], bool] = is_public_host,
 ) -> ToolSpec:
     """Build the ``web_fetch`` tool spec.
 
@@ -200,6 +208,107 @@ def build_web_fetch_spec(
         effect_kind=EffectKind.OBSERVE,
         timeout=timeout,
     )
+
+
+def build_download_file_spec(
+    root: str | Path,
+    *,
+    task_workspace: TaskWorkspace | None = None,
+    timeout: float = DEFAULT_TIMEOUT_SECONDS,
+    max_bytes: int = MAX_RESPONSE_BYTES,
+    transport: httpx.AsyncBaseTransport | None = None,
+    host_guard: Callable[[str], bool] = is_public_host,
+) -> ToolSpec:
+    """Transfer source text without sending its body through model output.
+
+    Network reads use the web permission path, independent of subprocess
+    networking. Local publication uses TaskWorkspace's existing journal.
+    """
+    workspace = Workspace(root)
+
+    async def download_file(
+        url: str, path: str, overwrite: bool = False, sha256: str | None = None,
+    ) -> dict[str, Any]:
+        """Download a public URL's exact UTF-8 source bytes to a workspace file.
+
+        Prefer this over web_fetch plus write_file for exact text resources.
+        For complete skill installation use install_skill instead.
+        Use raw.githubusercontent.com URLs, not GitHub
+        HTML views. Never transcribe large files or base64 through the model.
+        Parent directories are created; existing files require overwrite=True.
+        Returns only path, byte size and SHA-256, not the downloaded body.
+        Optionally require an expected sha256. Binary files are rejected.
+        This tool cannot write global home paths. Use list_skills to refresh
+        the catalog after manually downloading a skill's complete resources.
+        """
+        resolved = workspace.resolve_for_mutation(path)
+        expected_revision = await asyncio.to_thread(workspace.revision, resolved)
+        if expected_revision != "missing" and not overwrite:
+            raise FileExistsError(f"file already exists; pass overwrite=True to replace: {path}")
+        if sha256 is not None:
+            if len(sha256) != 64 or any(char not in "0123456789abcdefABCDEF" for char in sha256):
+                raise ValueError("sha256 must contain exactly 64 hexadecimal characters")
+        body = bytearray()
+        async with asyncio.timeout(timeout):
+            current = await asyncio.to_thread(validate_public_url, url, host_guard)
+            async with httpx.AsyncClient(
+                timeout=timeout, follow_redirects=False, transport=transport,
+            ) as client:
+                for _ in range(MAX_REDIRECTS + 1):
+                    async with client.stream("GET", current) as response:
+                        if response.is_redirect:
+                            location = response.headers.get("location")
+                            if not location:
+                                raise ValueError(f"redirect without location header from {current}")
+                            current = await asyncio.to_thread(
+                                validate_public_url, str(current.join(location)), host_guard,
+                            )
+                            continue
+                        response.raise_for_status()
+                        content_type = response.headers.get("content-type", "").split(";", 1)[0].lower()
+                        if content_type in {"text/html", "application/xhtml+xml"}:
+                            raise ValueError("download_file requires a raw source URL, not an HTML page")
+                        async for chunk in response.aiter_bytes(chunk_size=64 * 1024):
+                            if len(body) + len(chunk) > max_bytes:
+                                raise ValueError(f"download exceeds {max_bytes} bytes; no file was written")
+                            body.extend(chunk)
+                        break
+                else:
+                    raise ValueError(f"too many redirects (>{MAX_REDIRECTS}) starting from {url}")
+        encoded = bytes(body)
+        digest = hashlib.sha256(encoded).hexdigest()
+        if sha256 is not None and digest != sha256.lower():
+            raise ValueError("download SHA-256 mismatch; no file was written")
+        try:
+            content = encoded.decode("utf-8")
+        except UnicodeDecodeError as error:
+            raise ValueError("download_file supports UTF-8 text only; no file was written") from error
+        if "\x00" in content:
+            raise ValueError("download_file does not support binary files; no file was written")
+
+        def publish() -> dict[str, Any]:
+            result = {"path": path, "bytes": len(encoded), "sha256": digest}
+
+            def write() -> dict[str, Any]:
+                workspace.atomic_write(resolved, encoded, expected_revision=expected_revision)
+                return result
+
+            if task_workspace is None:
+                return write()
+            return task_workspace.perform_text_mutation(
+                path, operation="download_file", selector="whole", change=content, action=write,
+            )
+
+        # Finish the atomic publication/journal before propagating cancellation;
+        # no worker may mutate the workspace after the invocation has returned.
+        publication = asyncio.create_task(asyncio.to_thread(publish))
+        try:
+            return await asyncio.shield(publication)
+        except asyncio.CancelledError:
+            await publication
+            raise
+
+    return ToolSpec(download_file, risk=Risk.EXTERNAL, effect_kind=EffectKind.MUTATION, timeout=timeout)
 
 
 def _format_result(item: dict[str, Any], keys: tuple[str, str, str]) -> str:
@@ -269,4 +378,4 @@ def build_web_search_spec(
     )
 
 
-__all__ = ["build_web_fetch_spec", "build_web_search_spec"]
+__all__ = ["build_download_file_spec", "build_web_fetch_spec", "build_web_search_spec"]

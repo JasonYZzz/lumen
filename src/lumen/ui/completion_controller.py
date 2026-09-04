@@ -65,6 +65,10 @@ class CompletionControllerMixin(MessagePump):
         editor.focus()
         dropdown = self.query_one(CompletionDropdown)
         dropdown.hide()
+        command = event.suggestion.insert.strip()
+        if event.activate and command in {"/model", "/mode", "/tasks"} and editor.text.strip() == command:
+            editor.text = ""
+            self.run_worker(self.handle_input(command))
 
     @on(CompletionDropdown.Dismissed)
     def _on_completion_dismissed(self: LumenApp, event: CompletionDropdown.Dismissed) -> None:
@@ -204,10 +208,10 @@ class CompletionControllerMixin(MessagePump):
             commands.append((f"/{entry.name}", description))
             for suffix, suffix_description in entry.completion_rows:
                 commands.append((f"/{entry.name} {suffix}", suffix_description))
-        # Dynamic /skill:<name> entries — one per discovered skill, with the
-        # skill description truncated for dropdown readability.
+        # Keep names and insertion text canonical. The dropdown owns visual
+        # truncation; metadata descriptions never become command labels.
         for skill in self.resources.skills:
-            commands.append((f"/skill:{skill.name}", skill.description[:60]))
+            commands.append((f"/skill:{skill.name}", skill.description))
         frag = prefix  # prefix already starts with "/"
         return [
             CompletionSuggestion(label=cmd, insert=cmd + " ", description=desc)

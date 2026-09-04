@@ -10,7 +10,7 @@ from pydantic_ai.messages import ModelMessage, ModelRequest, UserPromptPart
 from rich.text import Text
 from textual.app import App, ComposeResult
 from textual.containers import Vertical, VerticalScroll
-from textual.widgets import Static
+from textual.widgets import Input, OptionList, Static
 
 from lumen.events import (
     ClarificationRequested,
@@ -26,6 +26,7 @@ from lumen.events import (
     RunWaitingForUser,
     TextDelta,
     TextRetracted,
+    ThinkingDelta,
     ToolApprovalPending,
     ToolApprovalResolved,
     ToolCallFinished,
@@ -36,6 +37,8 @@ from lumen.plan import PlanState, PlanStep, StepStatus
 from lumen.ui.activity_indicator import RunActivityIndicator
 from lumen.ui.approval_panel import ApprovalPanel
 from lumen.ui.autocomplete import CompletionDropdown
+from lumen.ui.choice_picker import ChoicePickerScreen
+from lumen.ui.composer import PromptEditor
 from lumen.ui.file_search import FileHit
 from lumen.ui.plan_panel import PlanPanel, render_plan_summary
 from lumen.ui.streaming_markdown import AssistantMarkdown
@@ -349,19 +352,96 @@ async def test_clear_resets_only_visible_timeline(tmp_path: Path) -> None:
         assert app.session is not None and app.session.id == session_before
 
 
-async def test_model_command_lists_configured_models(tmp_path: Path) -> None:
+async def test_model_command_opens_searchable_picker_and_switches(tmp_path: Path) -> None:
     app = _make_multi_model_app(tmp_path)
 
     async with app.run_test() as pilot:
         await pilot.pause()
         await app.handle_input("/model")
         await pilot.pause()
-        text = "\n".join(str(widget.content) for widget in app.query("#messages Static").results(Static))
+        assert isinstance(app.screen, ChoicePickerScreen)
+        options = app.screen.query_one(OptionList)
+        assert [options.get_option_at_index(i).id for i in range(options.option_count)] == ["alpha", "beta"]
+        app.screen.query_one(Input).value = "beta"
+        await pilot.pause()
+        await pilot.press("enter")
+        await pilot.pause()
+        assert not isinstance(app.screen, ChoicePickerScreen)
+        assert app.resources.active_model_name() == "beta"
 
-    # Both models are listed with the active one marked.
-    assert "alpha" in text
-    assert "beta" in text
-    assert "* alpha" in text  # active marker
+
+async def test_model_shortcut_keeps_draft_when_cancelled(tmp_path: Path) -> None:
+    app = _make_multi_model_app(tmp_path)
+    async with app.run_test() as pilot:
+        editor = app.query_one(PromptEditor)
+        editor.text = "An unfinished draft"
+        await pilot.press("alt+p")
+        await pilot.pause()
+        assert isinstance(app.screen, ChoicePickerScreen)
+        await pilot.press("escape")
+        await pilot.pause()
+        assert editor.text == "An unfinished draft"
+        assert editor.has_focus
+        assert app.resources.active_model_name() == "alpha"
+
+
+@pytest.mark.parametrize("key", ["enter", "tab"])
+async def test_model_completion_enter_opens_picker_but_tab_only_completes(tmp_path: Path, key: str) -> None:
+    app = _make_multi_model_app(tmp_path)
+    async with app.run_test() as pilot:
+        editor = app.query_one(PromptEditor)
+        editor.focus()
+        await pilot.press("/", "m", "o", "d", "e", "l")
+        await pilot.pause()
+        await pilot.press(key)
+        await pilot.pause()
+        assert isinstance(app.screen, ChoicePickerScreen) is (key == "enter")
+        if key == "tab":
+            assert editor.text.strip() == "/model"
+        else:
+            app.screen.query_one(Input).value = "no-such-model"
+            await pilot.pause()
+            assert app.screen.query_one(OptionList).option_count == 0
+            await pilot.press("enter")
+            assert app.resources.active_model_name() == "alpha"
+
+
+async def test_model_picker_is_read_only_during_run(tmp_path: Path) -> None:
+    app = _make_multi_model_app(tmp_path)
+    release = asyncio.Event()
+    async def wait_for_release() -> None:
+        await release.wait()
+    async with app.run_test() as pilot:
+        app.current_worker = app.run_worker(wait_for_release())
+        await pilot.pause()
+        await app.handle_input("/model")
+        await pilot.pause()
+        assert isinstance(app.screen, ChoicePickerScreen)
+        options = app.screen.query_one(OptionList)
+        assert all(options.get_option_at_index(i).disabled for i in range(options.option_count))
+        await pilot.press("enter")
+        assert app.resources.active_model_name() == "alpha"
+        await pilot.press("escape")
+        release.set()
+
+
+async def test_plan_skipped_notes_and_literal_markup() -> None:
+    app = PlanHost(PlanState(steps=[PlanStep(
+        id="one", title="[bold]literal title[/bold]", status=StepStatus.SKIPPED, note="Detailed evidence"
+    )]))
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        panel = app.query_one(PlanPanel)
+        assert "skipped" in _panel_summary(panel)
+        assert "Detailed evidence" not in _panel_summary(panel)
+        panel.focus()
+        await pilot.press("e")
+        await pilot.pause()
+        assert "Detailed evidence" in _panel_summary(panel)
+        assert "[bold]literal title[/bold]" in str(panel.query_one(".plan-step", Static).render())
+        await pilot.press("enter")
+        await pilot.pause()
+        assert panel.is_collapsed
 
 
 async def test_model_command_switches_active_model(tmp_path: Path) -> None:
@@ -450,22 +530,6 @@ async def test_progress_uses_markdown_and_control_tools_stay_hidden(tmp_path: Pa
         assert progress[0].source == "↳ **Step 1:** inspect"
 
 
-async def test_inline_approval_replaces_modal(tmp_path: Path) -> None:
-    """There is no longer an ApprovalModal; the modal class is gone entirely.
-
-    This guards against accidentally restoring the old modal path during a
-    future refactor.
-    """
-    # The approval module should no longer be importable.
-    with pytest.raises(ModuleNotFoundError):
-        import lumen.ui.approval  # type: ignore[import-not-found] # noqa: F401
-
-    # And the app module should not reference it either.
-    from lumen.ui import app as app_module
-
-    assert not hasattr(app_module, "ApprovalModal")
-
-
 # ---------------------------------------------------------------------------
 # Streaming Markdown throttling
 # ---------------------------------------------------------------------------
@@ -503,6 +567,18 @@ async def test_text_delta_buffers_until_flush(tmp_path: Path) -> None:
         await app._render_event(RunCompleted(output="done"))  # type: ignore[reportPrivateUsage]
         await pilot.pause()
         assert stream.pending is False
+
+
+async def test_retraction_spans_interleaved_thinking(tmp_path: Path) -> None:
+    app = _make_app(tmp_path)
+    async with app.run_test() as pilot:
+        await app.render_event(RunStarted("inspect"))
+        await app.render_event(TextDelta("保留🙂草"))
+        await app.render_event(ThinkingDelta("thinking"))
+        await app.render_event(TextDelta("稿🙂"))
+        await app.render_event(TextRetracted(3))
+        await pilot.pause()
+        assert [document.source for document in app.query(AssistantMarkdown)] == ["保留🙂"]
 
 
 async def test_provisional_stream_is_reclassified_without_duplicate_answer(tmp_path: Path) -> None:
@@ -724,23 +800,13 @@ async def test_new_turn_gets_a_distinct_plan_panel(tmp_path: Path) -> None:
 
 
 def test_limits_defaults_support_multi_step_plans(tmp_path: Path) -> None:
-    """The default request_count must be high enough for an 8-step plan.
-
-    An 8-step plan averages 2-3 LLM calls per step (planning + tool decision
-    + summary), so 16-24 requests minimum. The old default of 12 was too low
-    and caused real tasks to halt mid-way; 50 gives comfortable headroom.
-
-    There is no ``total_tokens`` field at all (removed — context growth is
-    managed by auto-compaction, mirroring coding-agent's design).
-    """
+    """Interactive plans have no default count cap; context compacts separately."""
 
     from lumen.config import LimitsConfig
 
     limits = LimitsConfig()
-    assert limits.request_count >= 40, (
-        f"request_count default {limits.request_count} is too low for multi-step plans"
-    )
-    assert limits.tool_calls >= 80
+    assert limits.request_count is None
+    assert limits.tool_calls is None
     # total_tokens field no longer exists on LimitsConfig.
     assert not hasattr(limits, "total_tokens")
 

@@ -1,6 +1,6 @@
 # 3. 上下文引擎、Prompt、压缩与记忆
 
-本章描述当前源码中的真实组装路径。最重要的结论是：**Lumen 的 Prompt 不是一个拼接后的字符串，Context zone 也不等于 provider role。** `ContextAssembler` 负责预算、来源、信任、保留策略和裁剪；Pydantic AI 在每个模型步骤负责把 instructions、原生工具定义、message history 与当前输入转换成 provider 请求。
+本章描述当前源码中的真实组装路径。最重要的结论是：**Lumen 的 Prompt 不是一个拼接后的字符串，Context zone 也不等于 provider role。** `ContextAssembler` 负责预算、来源、信任、保留策略和裁剪；`AgentRuntime` 在 `LumenAgentLoop` 每个请求边界冻结输入，再交给低层 `PydanticAIModelDriver`。
 
 ## 3.1 四种历史
 
@@ -9,7 +9,7 @@
 | raw history | 所有已持久化终态 turn 的原始消息事实 | `SessionRepository` 的 JSONL | 否；只保存模型实际产生的新消息 |
 | canonical history | 下一次可继续提交的规范历史 | `ContextEnvelope.canonical_history` | 永远排除 Plan、Skill、Memory、MCP resource 的瞬时重注入 |
 | active history | canonical history 经 checkpoint 摘要和近期窗口裁剪后的有界投影 | `RunCoordinator` | 否 |
-| provider history | 本次交给 Pydantic AI 的 history 参数 | `ContextEnvelope.provider_history` | 是；包含瞬时 policy/context-data 消息，但不含尚未由 Pydantic AI 追加的当前输入 |
+| provider history | 本次进入 `LumenAgentLoop` 的 provider-ready history | `ContextEnvelope.provider_history` | 是；包含瞬时 policy/context-data 消息，但不含尚未在请求边界追加的当前输入 |
 
 `ContextEnvelope.messages` 是 `provider_history` 的兼容别名，只保留一个兼容周期。压缩永远不删除 raw history；它只改变 active/canonical 投影。
 
@@ -18,25 +18,27 @@
 一次模型步骤的逻辑层次是：
 
 ```text
-1. Pydantic AI instructions
-2. Pydantic AI native function-tool definitions
+1. Agent instructions
+2. 当前 Loop 最终可见的 function-tool definitions
 3. SystemPromptPart: <session-policy-context>
 4. canonical active history
 5. UserPromptPart: <context-data>
 6. current user prompt
 ```
 
-前两项不是普通历史消息：instructions 由 Agent 管理，工具定义由 Pydantic AI 的 ToolManager 在该步骤动态解析。后三至五项由 `ContextEngine.prepare` 形成 `provider_history`；第六项由 `agent.run_stream_events(prompt, message_history=...)` 追加。Provider 可以在传输层合并相邻 user request，但不会改变 Lumen 的 canonical history 边界。
+前两项不是普通历史消息：instructions 由 `AgentRuntime` 管理，工具定义来自 `CapabilityGateway` 的有序有效能力目录。后三至五项由 `ContextEngine.prepare` 形成 `provider_history`；第六项在真正的请求边界追加，steer/follow-up 也必须先追加再生成 manifest。Provider 可以在传输层合并相邻 user request，但不会改变 Lumen 的 canonical history 边界。
 
 ```mermaid
 flowchart LR
-  I["Agent instructions"] --> P["Pydantic AI request builder"]
-  T["Final native tool definitions"] --> P
+  I["Agent instructions"] --> P["Loop request builder"]
+  T["Final ordered tool definitions"] --> P
   SP["System: session-policy-context"] --> P
   H["Canonical active history"] --> P
   UD["User: context-data"] --> P
   U["Current user input"] --> P
-  P --> W["Provider-specific wire payload"]
+  P --> D["Frozen ModelDriverRequest"]
+  D --> W
+  W["PydanticAI Model/Provider wire payload"]
 ```
 
 因此，“11/12 个 zone 都逐一作为消息发送给模型”是不准确的。Zone 是预算与保留模型；provider role/message 是另一层结构。
@@ -69,7 +71,7 @@ receipt 不是信息终点：正文仍在 artifact store 中，receipt 文本带
 3. 前一个 checkpoint 的 `rolling_state` 投影成 `previous_state`，摘要器只负责 `summarize(delta, previous_state, task_state)`；recent window 的 token 预算由 Engine 单独计算；
 4. 摘要 merge/validator 保留既有 constraint、approval、path、error code 和 exact literal；摘要失败不推进 cursor，并计入连续失败/cooldown；
 5. 新 `CompactionCheckpointV2` 保存 parent id、绝对 start/end cursor、full-history length、完整 source SHA-256、rolling state、state digest、证据范围和结构化条目；
-6. recent history 从 delta 尾部反向选取，并吸附到完整用户 request 边界，tool call/result 不得拆开；
+6. run 起点的 recent history 吸附到完整用户 request 边界；同轮 prepare_step 保留用户目标与最近完整模型/工具批次，tool call/result 不得拆开；
 7. 新 rolling state 用 `<history-summary trust="recalled">` 包装；旧 V1 checkpoint 只读兼容，加载时映射到 raw transcript 的绝对边界；
 8. V2 加载时校验 parent、连续范围、cursor message id、source digest、state digest 和 full-history length。损坏记录不发布，恢复从最后一个合法 checkpoint 加原始 JSONL 继续；
 9. `ContextEngine.commit` 只构造候选 transition。`RunCoordinator` 完成 JSONL append + `fsync` 后才调用 `confirm_persisted`，发布 checkpoint/cursor 并允许后台压缩；写盘失败时内存状态不前进。
@@ -84,7 +86,16 @@ model context:   只注入 S2 + token-budgeted recent history
 episode archive: cp1 可按需检索，但不会与 S2 永久叠加
 ```
 
-P1 的真实请求自适应缩减也只裁剪旧 canonical history；session policy、context data、当前输入以及当前 run 的工具调用/结果均受保护。若删除全部旧历史仍超过 hard limit，则在 provider I/O 前明确失败。
+同一 run 不再等下一条用户输入才总结。`prepare_step` 在后续请求前检查实际快照，按 soft threshold、
+cooldown 与有效 delta 决定是否压缩；Provider context overflow 可以触发一次强制压缩恢复。
+多次同轮摘要合并为最新候选 checkpoint，其 parent 始终是最后已持久化 checkpoint。
+`covered_new_messages` 只属于运行内 envelope，Session 加载从绝对 `source_end` 推导已覆盖的当前
+turn 前缀，active history 只拼接未覆盖尾部，full history 仍保留全部消息。
+详细时序与恢复条件见[长任务持续执行](14-long-running-recovery.md)。
+
+真实请求的最终自适应缩减先把旧历史和当前 run 中的大型工具结果投影为 content-addressed receipt，再只
+裁剪旧 canonical history；session policy、context data、当前输入以及当前 run 的工具调用/结果配对均受
+保护。若 receipt 化并删除全部旧历史后仍超过 hard limit，则在 provider I/O 前明确失败。
 
 失败轮还会保存已成功的非只读工具 recovery receipt。receipt 使用工具名和规范化 validated arguments 计算摘要，并保存 JSON-safe 结果；只有用户显式 retry 且下一次模型调用的工具名、参数摘要完全一致时，runtime 才跳过副作用并回放原结果。只读/控制工具不参与该机制，参数发生任何变化都会正常重新执行。这个机制避免重复写入，但不把 receipt 当成“操作仍然有效”的事实证明。
 
@@ -120,7 +131,10 @@ Memory index、recalled memory 与 retrieved context 分别计费和限额，报
 3. 模型 slug 的精确 alias；
 4. 未知模型的 80k conservative fallback。
 
-内置首批 profile：GPT-5.6 Sol/Terra/Luna 使用 1,050,000 window、128,000 max output 和 `o200k_base`；DeepSeek V4 Pro 使用 1,000,000 / 384,000 和 conservative-CJK；Kimi K3、GLM-5.2 使用 1,000,000 window，输出上限由模型配置覆盖，缺失时预留 4,096 并标记 estimated。自定义 `base_url` 不参与 profile 选择。
+内置 profile：GPT-5.6 Sol/Terra/Luna 使用 1,050,000 window、128,000 max output 和 `o200k_base`；
+Qwen3.8 Max/Flash 使用 1,000,000 / 131,072 和 conservative-CJK；DeepSeek V4 Pro 使用
+1,000,000 / 384,000 和 conservative-CJK；Kimi K3、GLM-5.2 使用 1,000,000 window，输出上限由模型
+配置覆盖。自定义 `base_url` 不参与 profile 选择。
 
 `ResolvedContextPolicy` 是预算的唯一来源，提供 window、完整 requested output reserve、soft/hard/target、recent max、counter 及来源元数据。默认值是 window 的 80% / 92% / 55%，recent 上限 20,000。压缩后的 recent budget 为：
 
@@ -128,11 +142,17 @@ Memory index、recalled memory 与 retrieved context 分别计费和限额，报
 min(recent_max, target - fixed_context - rolling_summary - output_reserve)
 ```
 
-`settings.max_tokens` 优先作为 requested output reserve；未配置时使用 profile 已知上限，未知时使用 4,096。配置超过已知架构上限会在启动阶段失败。旧 `context.soft_token_limit` 和 `context.keep_recent_tokens` 仍可读取，但只作为弃用兼容覆盖。
+`settings.max_tokens` 优先作为 requested output reserve；未配置时使用 profile 已知上限。未知模型不再使用
+固定 4,096：初始 reserve 取窗口的 1/8，以 16,384 为现代模型基线、32,768 为未验证能力上限，且不超过
+窗口的 1/4；小窗口部署因此会自动下调。该值标记为 estimated，并可在 `LENGTH` 后逐次有界增长。
+Runtime 会把 resolved reserve 写入真实 Provider 请求，避免预算与传输设置分叉。配置超过已知架构上限会
+在启动阶段失败。Provider 报告 `LENGTH` 时，只有隐式 reserve 可在 `agent.limits.output_limit_retries`
+范围内有界增长；显式上限不会被静默突破。旧 `context.soft_token_limit` 和 `context.keep_recent_tokens` 仍可
+读取，但只作为弃用兼容覆盖。
 
 一个 agent run 可能包含多次模型调用。Deferred MCP tool 被 tool search 发现后，下一步的 function-tool schema 会增长；工具结果也会让 messages 增长。所以仅在 run 开始前估算一次不够。
 
-`ProviderRequestPreflight.before_model_request` 在 Pydantic AI 已完成该步骤 ToolManager 解析后读取：
+`AgentRuntime._freeze_lumen_request` 在每次 Driver I/O 之前读取：
 
 - `ModelRequestContext.messages`；
 - 每个 request 的 instructions；
@@ -141,7 +161,19 @@ min(recent_max, target - fixed_context - rolling_summary - output_reserve)
 
 它使用 ContextEngine 同一 provider-aware token counter 生成 `ProviderRequestSnapshot`，包括步骤号、instructions/messages/tools/reserve token、可见工具名与 digest、窗口、hard limit 和 `estimated` 标记。快照按 session 更新 `/context`，不会建立第二套工具 schema 权威。计数不包含 provider 私有协议开销，因此始终表述为估算。
 
-每个真正准备发往 provider 的 snapshot 会连同已冻结的 route、provider/model 与 Context fingerprint 转成有界 `ProviderRequestReceipt`。Runtime 把 receipt 附在完整或 partial outcome 上，`RunCoordinator` 与 terminal turn 一起追加到 Session v9；因此正常完成、取消和失败都保留实际请求证据。receipt 只保存 token 分区、可见工具名称/digest 和路由元数据，不保存 secret、工具 schema 正文或完整消息。
+`AgentRuntime._freeze_lumen_request()` 在每个 Driver 调用前执行同一
+`ContextEngine.adapt_request_history()`、`ensure_request_fits()` 和
+`build_input_manifest()` 流程；工具结果和请求边界的 steer/follow-up 先进入 messages，再冻结下一步
+`ModelDriverRequest`。因此预算和请求证据只在真正掌握 provider I/O 边界的单一位置采集。
+
+每个真正准备发往 provider 的 snapshot 会连同已冻结的 route、provider/model 与 Context fingerprint 转成有界 `ProviderRequestReceipt`。Runtime 把 receipt 附在完整或 partial outcome 上，`RunCoordinator` 与 terminal turn 一起追加到 Session v9；因此正常完成、取消和失败都保留实际请求证据。
+
+receipt 内嵌同一步 `ModelInputManifest`：它对 instructions、实际 messages、完整有序 tool schema、模型
+settings、Context source、stable prefix 和 dynamic tail 分别计算 SHA-256，并保存 source
+zone/origin/revision、token estimate、ArtifactRef/Session reference、replay eligibility 与不可回放原因。
+`visible_tool_digest` 因此覆盖完整 schema，不再只覆盖工具名称。Manifest 不保存 secret、instructions、工具
+schema 正文、Skill/MCP 正文或完整消息；canonical history 仍只属于 Session journal，大正文仍只属于
+ArtifactStore。它是请求证据，不是第二套 history。
 
 ### Token 计量器（tokenizer adapter）
 
@@ -161,24 +193,26 @@ sequenceDiagram
   participant R as RunCoordinator
   participant A as AgentRuntime
   participant E as ContextEngine
-  participant P as Pydantic AI
-  participant M as Model / Tool
+  participant L as LumenAgentLoop
+  participant P as ModelDriver / Provider
+  participant M as CapabilityGateway
 
   C->>H: StartRun(session_id, input)
   H->>R: RunInput
   R->>A: active history + plan + checkpoint
   A->>E: prepare(ContextRequest)
   E-->>A: ContextEnvelope(provider_history, canonical_history)
-  A->>P: run(prompt, message_history=provider_history)
+  A->>L: 执行唯一模型—工具 Loop
   loop 每个模型步骤
-    P->>A: before_model_request(final messages/tools)
-    A->>E: snapshot + adaptive old-history trim + hard preflight
+    L->>E: final messages/tools + adaptive old-history trim
+    E-->>L: snapshot + manifest + hard preflight
     A->>A: snapshot → ProviderRequestReceipt
-    P->>M: provider request
-    M-->>P: text / tool call
-    P->>M: approved tool execution
+    L->>P: provider request
+    P-->>L: text / thinking / tool call
+    L->>M: approved capability execution
+    M-->>L: canonical result / typed failure
   end
-  P-->>A: result.new_messages()
+  L-->>A: new canonical messages
   A->>E: commit(fingerprint, new_messages)
   E-->>R: candidate canonical transition
   R->>R: construct next state
@@ -189,7 +223,11 @@ sequenceDiagram
   R-->>H: completed / waiting_for_user / failed
 ```
 
-`result.new_messages()` 不包含由调用者传入的 transient policy/context-data history，所以这些内容不会污染 canonical history，也不会在下一轮重复膨胀。后台候选只在一轮成功持久化后、压力达到 soft limit 的 90% 时生成；下一轮采用前重新校验 parent、source cursor 和 digest，过期候选直接丢弃。
+提交给 `ContextEngine.commit()` 的 new messages 不包含调用者传入的 transient policy/context-data
+history，所以这些内容不会污染 canonical history，也不会在下一轮重复膨胀。`LumenAgentLoop` 显式积累
+request/response/tool-result 轨迹，并保留 Driver 返回的完整 `ModelResponse`。后台候选只在一轮成功
+持久化后、压力达到 soft limit 的 90% 时生成；下一轮采用前重新校验 parent、source cursor 和 digest，过期
+候选直接丢弃。
 
 ## 3.8 SessionContextState：Skill/MCP 激活、恢复与卸载
 

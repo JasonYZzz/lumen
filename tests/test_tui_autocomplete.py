@@ -10,6 +10,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+import pytest
 from rich.text import Text
 
 from lumen.config import load_config
@@ -45,6 +46,42 @@ async def _focus_editor(pilot: Any) -> PromptEditor:  # type: ignore[no-untyped-
     editor.focus()
     await pilot.pause()
     return editor
+
+
+@pytest.mark.parametrize("key", ["enter", "tab"])
+async def test_skill_completion_keeps_name_and_insertion_separate_from_long_description(
+    tmp_path: Path, key: str,
+) -> None:
+    skill_dir = tmp_path / ".lumen" / "skills" / "diagram-design"
+    skill_dir.mkdir(parents=True)
+    description = "Create architecture diagrams " * 30
+    (skill_dir / "SKILL.md").write_text(
+        "---\nname: diagram-design\ndescription: |\n  " + description
+        + "\n  [bold]Literal metadata[/bold]\n---\nInstructions.\n",
+        encoding="utf-8",
+    )
+    app = _make_app(tmp_path)
+    async with app.run_test(size=(80, 24)) as pilot:
+        editor = await _focus_editor(pilot)
+        await pilot.press(*"/skill:diagram")
+        await pilot.pause()
+        dropdown = app.query_one(CompletionDropdown)
+        suggestion = dropdown.suggestions[0]
+        assert suggestion.label == "/skill:diagram-design"
+        assert suggestion.insert == "/skill:diagram-design "
+        prompt = dropdown.get_option_at_index(0).prompt
+        assert isinstance(prompt, Text)
+        assert prompt.plain.startswith(suggestion.label)
+        assert "[bold]Literal metadata[/bold]" in prompt.plain
+        assert "\n" not in prompt.plain
+        assert dropdown.virtual_size.height == len(dropdown.suggestions)
+        assert "…" in dropdown.render_line(0).text
+        assert dropdown.region.bottom <= editor.region.y
+        await pilot.press(key)
+        await pilot.pause()
+        assert editor.text == "/skill:diagram-design "
+        assert not dropdown.is_open
+        assert not app.history
 
 
 async def test_at_trigger_opens_file_dropdown(tmp_path: Path) -> None:

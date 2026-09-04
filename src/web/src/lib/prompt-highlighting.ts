@@ -5,7 +5,36 @@ export interface PromptToken {
   value: string
 }
 
-const TOKEN_PATTERN = /\/skill:[\w.-]+|\/[\w-]+|@[\w./~-]+/g
+const TOKEN_PATTERN = /\/skill:[\w.-]+|\/[\w-]+|@"[^"\n]*"|@[\w./~-]+/g
+
+export interface FileMention {
+  start: number
+  end: number
+  query: string
+}
+
+/** Locate the mention at the caret, never an unrelated token at the text end. */
+export function fileMentionAt(value: string, start: number, end = start): FileMention | null {
+  if (start !== end) return null
+  const prefix = value.slice(0, start)
+  const match = prefix.match(/(?:^|[\s([{])(@(?:"[^"\n]*|[\w./~-]*))$/)
+  if (!match) return null
+  const token = match[1]
+  const tail = value.slice(start).match(token.startsWith('@"') ? /^[^"\n]*(?:")?/ : /^[\w./~-]*/)?.[0] ?? ''
+  return { start: start - token.length, end: start + tail.length, query: token.slice(1).replace(/^"/, '') }
+}
+
+export function insertFileMention(value: string, mention: FileMention, path: string, directory: boolean) {
+  const target = `${path.replace(/\/$/, '')}${directory ? '/' : ''}`
+  // The backend accepts quoted paths; use them for spaces, CJK and extensionless names too.
+  const quote = !/^[\w./~-]+$/.test(target) || !/[./~-]/.test(target)
+  const token = quote ? `@"${target}"` : `@${target}`
+  const tail = value.slice(mention.end)
+  const suffix = directory || /^\s/.test(tail) ? '' : ' '
+  const text = `${value.slice(0, mention.start)}${token}${suffix}${tail}`
+  const caret = mention.start + token.length + (directory ? (quote ? -1 : 0) : 1)
+  return { text, caret }
+}
 
 export function tokenizePrompt(value: string): PromptToken[] {
   const tokens: PromptToken[] = []

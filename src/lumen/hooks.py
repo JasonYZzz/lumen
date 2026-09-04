@@ -16,10 +16,6 @@ from fnmatch import fnmatchcase
 from pathlib import Path
 from typing import Any, Protocol, cast
 
-from pydantic_ai import Tool
-from pydantic_ai.tools import RunContext
-from pydantic_ai.toolsets import FunctionToolset, ToolsetTool, WrapperToolset
-
 from lumen.config import HookConfig
 
 
@@ -275,69 +271,6 @@ class HookBus:
         return True
 
 
-@dataclass
-class HookedToolset(WrapperToolset[None]):
-    hooks: HookBus
-
-    async def call_tool(
-        self,
-        name: str,
-        tool_args: dict[str, Any],
-        ctx: RunContext[None],
-        tool: ToolsetTool[None],
-    ) -> Any:
-        before = await self.hooks.dispatch(
-            self.hooks.context(HookEvent.PRE_TOOL_USE, tool_name=name, tool_args=tool_args)
-        )
-        if not before.allow:
-            return f"ToolDenied: {before.reason or 'denied by pre_tool_use hook'}"
-        effective_args = before.modified_args or tool_args
-        result = await self.wrapped.call_tool(name, effective_args, ctx, tool)
-        rendered = result if isinstance(result, str) else json.dumps(result, ensure_ascii=False, default=str)
-        after = await self.hooks.dispatch(
-            self.hooks.context(
-                HookEvent.POST_TOOL_USE,
-                tool_name=name,
-                tool_args=effective_args,
-                tool_result=rendered,
-            )
-        )
-        return after.modified_result if after.modified_result is not None else result
-
-
-class HookedFunctionToolset(FunctionToolset[None]):
-    """Local-tool adapter that preserves native schemas and approval flags."""
-
-    def __init__(self, tools: list[Tool[None]], hooks: HookBus) -> None:
-        super().__init__(tools, id="lumen:local")
-        self.hooks = hooks
-
-    async def call_tool(
-        self,
-        name: str,
-        tool_args: dict[str, Any],
-        ctx: RunContext[None],
-        tool: ToolsetTool[None],
-    ) -> Any:
-        before = await self.hooks.dispatch(
-            self.hooks.context(HookEvent.PRE_TOOL_USE, tool_name=name, tool_args=tool_args)
-        )
-        if not before.allow:
-            return f"ToolDenied: {before.reason or 'denied by pre_tool_use hook'}"
-        effective_args = before.modified_args or tool_args
-        result = await super().call_tool(name, effective_args, ctx, tool)
-        rendered = result if isinstance(result, str) else json.dumps(result, ensure_ascii=False, default=str)
-        after = await self.hooks.dispatch(
-            self.hooks.context(
-                HookEvent.POST_TOOL_USE,
-                tool_name=name,
-                tool_args=effective_args,
-                tool_result=rendered,
-            )
-        )
-        return after.modified_result if after.modified_result is not None else result
-
-
 def _load_python_hook(
     module_name: str,
     factory: str,
@@ -365,7 +298,5 @@ __all__ = [
     "HookDecision",
     "HookDiagnostic",
     "HookEvent",
-    "HookedFunctionToolset",
-    "HookedToolset",
     "PythonHookRunner",
 ]

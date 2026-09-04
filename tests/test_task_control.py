@@ -100,6 +100,54 @@ async def test_set_plan_increments_revision() -> None:
     assert [step.id for step in snapshot.steps] == ["two"]
 
 
+async def test_revising_plan_preserves_completed_steps_and_evidence() -> None:
+    controller = TaskController()
+    controller.start(PlanState(), lambda _event: None)
+    first = PlanStepInput(id="read", title="Read source")
+    await controller.set_plan([first], goal="Review")
+    controller.record_evidence(EvidenceReceipt(
+        id="receipt", kind=EvidenceKind.TOOL, source_id="read-call", summary="Read source", passed=True,
+    ))
+    await controller.attach_executor_evidence("read", "receipt")
+    await controller.update_step("read", StepStatus.COMPLETED, note="Checked", owner="root")
+    before = controller.snapshot()
+    await controller.set_plan([first, PlanStepInput(id="review", title="Write review")])
+    after = controller.snapshot()
+    assert after.steps[0] == before.steps[0]
+    assert after.evidence == before.evidence
+    assert after.goal == "Review"
+    assert after.steps[1].status is StepStatus.PENDING
+    assert after.approved_revision is None
+    await controller.set_plan([first, PlanStepInput(id="review", title="Write review")])
+    assert controller.snapshot() == after
+
+
+async def test_changed_definition_invalidates_dependent_progress_but_new_goal_resets_all() -> None:
+    controller = TaskController()
+    controller.start(PlanState(), lambda _event: None)
+    steps = [PlanStepInput(id="a", title="A"), PlanStepInput(id="b", title="B", depends_on=["a"])]
+    await controller.set_plan(steps, goal="First")
+    await controller.update_step("a", StepStatus.COMPLETED)
+    await controller.update_step("b", StepStatus.COMPLETED)
+    await controller.set_plan([PlanStepInput(id="a", title="Changed"), steps[1]])
+    assert all(step.status is StepStatus.PENDING for step in controller.snapshot().steps)
+    await controller.update_step("a", StepStatus.COMPLETED)
+    await controller.set_plan([PlanStepInput(id="a", title="Changed")], goal="New task")
+    assert controller.snapshot().steps[0].status is StepStatus.PENDING
+
+
+async def test_plan_ownership_is_run_local_and_not_claimed_by_public_progress() -> None:
+    controller = TaskController()
+    plan = PlanState(steps=[PlanStep(id="a", title="A")])
+    controller.start(plan, lambda _event: None)
+    await controller.report_progress("Answering an unrelated question")
+    assert not controller.plan_updated
+    await controller.update_step("a", StepStatus.IN_PROGRESS)
+    assert controller.plan_updated
+    controller.start(controller.snapshot(), lambda _event: None)
+    assert not controller.plan_updated
+
+
 async def test_update_step_rejects_unknown_id() -> None:
     controller = TaskController()
     controller.start(PlanState(), lambda _event: None)

@@ -72,27 +72,33 @@ class ModelSettingsConfig(StrictModel):
 
 
 class LimitsConfig(StrictModel):
-    #: Per-run caps passed to pydantic_ai's ``UsageLimits``. The defaults are
-    #: sized for multi-step planned tasks: an 8-step plan averages 2-3 LLM
-    #: calls per step (planning + tool decision + summary) = 16-24 requests,
-    #: and reflection/retry easily pushes that to 40+. 50 gives headroom
-    #: without inviting runaway spend. Raise via agent.yaml when needed.
-    request_count: int = Field(default=50, ge=1)
-    tool_calls: int = Field(default=100, ge=0)
-    #: There is intentionally NO ``total_tokens`` cap. coding-agent doesn't set
-    #: one either — context growth is managed by :class:`ContextManager`'s
-    #: soft-limit auto-compaction, which summarizes old history before the
+    #: Optional, explicit per-run budgets. Long interactive tasks have no
+    #: artificial step ceiling; finite user/child budgets remain authoritative.
+    request_count: int | None = Field(default=None, ge=1)
+    tool_calls: int | None = Field(default=None, ge=0)
+    model_stream_idle_timeout_seconds: float = Field(default=300.0, gt=0)
+    model_retries: int = Field(default=5, ge=0, le=20)
+    model_retry_delay_seconds: float = Field(default=2.0, ge=0, le=60)
+    model_retry_max_delay_seconds: float = Field(default=60.0, gt=0, le=300)
+    #: Safe retries after a provider exhausts its per-request output budget.
+    #: No partial tool call is ever executed; an implicit/default max_tokens
+    #: may grow at a request boundary, while an explicit user cap stays fixed.
+    output_limit_retries: int = Field(default=3, ge=0, le=10)
+    #: There is intentionally NO ``total_tokens`` cap. ContextEngine owns
+    #: per-request auto-compaction, which summarizes old history before the
     #: provider's context window fills. A cumulative-token hard wall would
     #: halt long agentic loops mid-task; the compaction system is the primary
     #: defense against context overflow. (Field removed entirely; old configs
     #: that set ``total_tokens`` will fail StrictModel's extra=forbid — remove
     #: the line from agent.yaml.)
     tool_timeout_seconds: float = Field(default=60.0, gt=0)
+    #: Wall-clock deadline for one model request, including active streaming
+    #: and provider retries. Tool execution and user approval wait are excluded.
+    model_request_timeout_seconds: float | None = Field(default=None, gt=0)
     skill_script_timeout_seconds: float = Field(default=30.0, gt=0)
-    #: Tool-call scheduling policy. ``parallel_safe`` only overlaps tools with
-    #: an explicit ``ToolConcurrency.PARALLEL_SAFE`` declaration, while
-    #: ``parallel`` also allows exclusive tools to overlap.
-    #: The default preserves the pre-M6 execution order.
+    #: ``sequential`` disables overlap. The native Loop treats both parallel
+    #: modes as permission to batch explicitly PARALLEL_SAFE invocations;
+    #: neither mode overrides an exclusive Gateway concurrency contract.
     parallel_tool_calls: Literal["sequential", "parallel_safe", "parallel"] = "sequential"
 
 
@@ -125,9 +131,9 @@ class AgentsConfig(StrictModel):
     default_agent: str = Field(default="default", pattern=r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
     recovery: Literal["safe"] = "safe"
     worktree_root: Path = Path("~/.lumen/worktrees")
-    request_count: int = Field(default=10, ge=1, le=50)
-    tool_calls: int = Field(default=20, ge=0, le=100)
-    timeout_seconds: float = Field(default=180.0, gt=0, le=1800)
+    request_count: int | None = Field(default=None, ge=1)
+    tool_calls: int | None = Field(default=None, ge=0)
+    timeout_seconds: float | None = Field(default=None, gt=0)
 
 
 class AgentSection(StrictModel):
@@ -158,6 +164,8 @@ class AgentSection(StrictModel):
     #: Ship builtin skills with the wheel but keep activation opt-in so
     #: existing installations retain their exact discovered catalog.
     builtin_skills_enabled: bool = False
+    #: Managed global Skill writes do not grant command sandbox access to HOME.
+    user_skill_install_enabled: bool = False
 
     @model_validator(mode="after")
     def validate_model_fields(self) -> AgentSection:
@@ -248,6 +256,8 @@ class ToolsConfig(StrictModel):
             "list_directory",
             "search_text",
             "web_fetch",
+            "download_file",
+            "install_skill",
             "write_file",
             "edit_file",
             "run_command",
@@ -277,8 +287,8 @@ class McpServerConfig(StrictModel):
     load_prompts: bool = True
     oauth: OAuthConfig | None = None
     #: Legacy allow-list of tool names (without the server prefix) treated as
-    #: side-effect-free reads. Deprecated in favour of ``tool_risks``, which
-    #: classifies a tool as read/write/execute. Kept for backwards
+    #: read approval risk. This does not declare their EffectKind. Deprecated
+    #: in favour of ``tool_risks``, which classifies read/write/execute. Kept for backwards
     #: compatibility; emits a deprecation warning at build time.
     read_only_tools: list[str] = Field(default_factory=list)
     #: Per-tool risk declarations, keyed by the tool's raw name (without the

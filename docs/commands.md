@@ -61,6 +61,12 @@ Web 右上角设置入口始终可见。模型配置写入 `<workspace>/.lumen/a
 从旧的单模型形式首次添加模型时，受管层会保留原模型和原默认选择；若原模型使用内联密钥，
 必须先把它改为环境变量引用，避免凭据进入 Web 管理的复制路径。
 
+设置窗口按通用设置、模型、扩展能力和 Agent 预设分类。模型通过表单顶部的“当前配置”选择，
+右侧逐行编辑；保存操作固定在内容区底部。手机使用顶部分类和单列表单。切换分类保留未保存内容，
+关闭时会将“继续编辑 / 放弃更改”提示带入视野，重复按 Esc 不会直接丢弃草稿。
+有未保存内容时需先保存或还原，才能添加或选择其他模型；工作区任一任务运行时模型编辑为只读。
+配置路径复制、版本冲突检查和保存后重启生效的规则保持一致。
+
 ### 1.4 Capability inventory
 
 ```bash
@@ -69,7 +75,12 @@ lumen capabilities --cwd . --json
 
 该命令通过与 TUI/Web 相同的 `ResourceManager.capabilities_report()` 只读 Interface，列出 Tool、Skill、MCP server 和 Agent Profile。Tool 行包含 origin、loaded/deferred/disabled 状态、Risk、EffectKind、审批决定、Sandbox mode 与输入 schema digest；报告不参与权限决策。
 
-### 1.4 配置、信任与 MCP 审批
+deferred 表示工具需要通过模型的 `search_tools` 发现后加载，不等于不可用。搜索支持关键词和
+`queries: [""]` 分页浏览；Server 启动状态单独报告。Sandbox mode 描述命令子进程策略，不能据此
+推断 MCP/Web 联网是否可用。Risk 与 EffectKind 分别控制审批与副作用追踪，read 风险不自动获得
+observe 的断线重试语义。
+
+### 1.5 配置、信任与 MCP 审批
 
 ```bash
 lumen init [--cwd PATH | --global | --local]
@@ -92,14 +103,15 @@ lumen mcp reset [--name <name>] --cwd . [--config PATH]
 |---|---|---|---|
 | Session | `/new` | 新建 session | 禁用 |
 | Session | `/sessions` | 列出历史 session | 可用 |
-| Session | `/agents [interrupt\|message\|continue\|import\|reject\|close] <id> [text]` | 查看、协调、中断、导入/拒绝或关闭 Agent；`/children` 为可见兼容入口 | 可用 |
+| Session | `/children [cancel\|interrupt\|message\|continue\|import\|reject\|close] <id> [text]` | 查看、协调、中断、导入/拒绝或关闭 Agent；`/agents` 是可调用但暂不出现在 TUI 补全中的 canonical alias | 可用 |
 | Session | `/checkpoints` | 浏览 receipts，并从历史 turn 创建非破坏式 session 分支 | 禁用 |
 | Session | `/resume <id>` | 恢复指定 session | 禁用 |
 | Session | `/clear` | 清空可见时间线，保留 session 上下文 | 禁用 |
-| Session | `/retry` | 重发上一条 prompt | 需先结束当前 run |
+| Session | `/retry` | 重发上一条 prompt，恢复附件/receipts 及已持久化完整工具批次；未解决 Effect 阻止执行 | 需先结束当前 run |
 | Session | `/edit` | 用 $VISUAL/$EDITOR 编辑上一条 prompt，在保留之前 turn 的新分支上重发；工作区文件不变 | 禁用 |
-| Model | `/model [name]` | 无参数列模型；有参数切换模型 | 查看可用；切换会被后端保护 |
-| Model | `/mode [manual\|accept_edits\|plan\|auto]` | 查看或切换审批模式 | 可用 |
+| Model | `/model [name]` | 无参数打开可搜索选择器；有参数切换模型 | 运行中选择器只读；切换受 Host 保护 |
+| Model | `/mode [manual\|accept_edits\|plan\|auto]` | 无参数打开模式选择器；有参数沿用模式切换契约 | 可用 |
+| Session | `/tasks` | 展开或收起最近的计划步骤 | 可用 |
 | Model | `/status` | 查看 workspace、session、模式、沙箱和 UI 状态 | 可用 |
 | Context | `/context [--json\|sources\|capabilities]` | 查看预算、活动来源或统一能力清单 | 可用 |
 | Context | `/compact [focus]` | 请求强制压缩，可附 focus | 可用 |
@@ -148,8 +160,10 @@ Web 通过 FastAPI application host 执行命令；本地显示类命令不会�
 
 | 能力 | Web 命令 | 备注 |
 |---|---|---|
-| 会话 | `/new`、`/retry`、`/clear` | 历史列表、恢复、重命名、归档与删除由侧边栏提供；空 Session 不进入历史列表 |
-| 模型/审批 | `/model [name]`、`/mode [mode]` | `auto` 仍需显式确认 |
+| 会话 | `/new`、`/retry`、`/clear`、`/checkpoints`、`/dequeue` | 历史列表、恢复、重命名、归档与删除由侧边栏提供；checkpoint 可创建分支，dequeue 撤回尚未执行的排队输入 |
+| Agent/审计 | `/agents`、`/transcript` | 打开 Agent 协调面板或结构化 transcript；具体 Agent 动作由面板/API 执行 |
+| 模型/审批 | `/model [name]`、`/mode [mode]`、`/plan <task>` | `auto` 仍需显式确认；`/plan` 以 Plan collaboration mode 启动任务 |
+| 计划 | `/tasks` | 打开最新计划侧栏；完成与跳过分开计数；此入口不批准执行 |
 | Context | `/context`、`/context sources`、`/context capabilities`、`/compact [focus]`、`/clarification cancel` | sources/capabilities 不依赖 context engine 报告可用性 |
 | Memory | `/memory [action]` | 支持常用 list/remember/forget/use/learn/incognito 操作 |
 | MCP | `/mcp`、`/resource [refresh\|unload] <ref>`、`/prompts`、`/prompt <ref> [key=value ...]` | `/prompt` 支持单/双引号参数值 |
@@ -158,10 +172,56 @@ Web 通过 FastAPI application host 执行命令；本地显示类命令不会�
 
 Web 当前不提供 `/sessions`、`/resume`、`/resources`、`/theme`、`/exit` 的 slash 形式；其中 session 浏览/恢复由侧边栏承担。TUI 与 Web 同一工作区同时只允许一个 Agent run，运行期间的状态变更命令可能返回 workspace busy。
 
+Web 的 `/model`、`/mode` 无参数形式直接打开选择器，点击菜单项与完整 slash 命令共用处理路径。模型名来自配置注册表，未知名称不会被替换为列表第一项。输入区 `+` 提供常用操作，完整命令通过 `/` 检索；模型和审批的参数选项在检索时出现，避免占满主菜单。`@文件`、图片粘贴、拖放和附件能力检查保持有效。
+
+Skill 补全以发现的 `name` 为标识，`description` 仅作辅助说明。Web 用名称和单行省略的说明组成紧凑菜单项，悬停可查看完整说明；TUI 保持 `/skill:<name>` 为主标签，说明中的换行只在显示时合并，并按终端宽度省略。两端选择 Skill 后均插入 `/skill:<name> `，不会把描述插入输入框，也不会在选中时立即发起 Skill 执行。
+
+Web 的审批模式和工作方式显示当前 Session 的设置；刷新工作区、切换模型不会用工作区默认值覆盖它们。
+新任务中的 `/mode auto` 和菜单选择使用同一确认流程：确认成功后更新显示；失败保留原模式并允许重试。
+切换或离开任务时取消未提交的确认；运行期间禁止切换审批模式。返回新任务显示工作区默认设置，恢复任务显示该任务已保存的设置。
+
+Web 运行时默认展开处理过程：公开思考与进展按正文排版，工具活动以图标和动作行穿插显示，点击可查看输入与结果。过程随主对话滚动，不使用独立纵向滚动框。用户可在运行中手动收起；新的待审批动作会重新展开。成功结束后自动收起，最终回答独立保留；失败、中断和等待补充信息时默认展开。完成后的入口显示 Runtime 记录的本轮实际处理耗时（包括模型、工具和相关等待），刷新后可从历史恢复；没有计时数据的旧记录不显示时长。
+
+普通模式仅在当前运行有计划时，在输入框上方居中显示进度胶囊；停止、失败或运行结束后消失。步骤序号、当前步骤和完成计数来自实际计划；点击向上打开非模态清单，Esc、关闭按钮、点击外部或移出焦点关闭，输入区保持可用。新问题未产生计划时不会沿用上一轮的进度。步骤结束不代表整个运行完成。对话过程不展示历史计划卡片，页头和右侧不再保留独立计划面板；`/tasks` 是打开运行记录的兼容入口，原始计划仍持久化以供恢复、审核与审计。
+
+Plan Mode 探索时显示“正在探索并规划”。方案提交审核后，完整步骤进入对话正文，输入框上方提供“确认并开始执行”和“先调整方案”。修改入口聚焦意见输入框；提交失败保留反馈。确认和修改都携带当前方案 revision 调用同一 Host 审核 Interface，确认成功切换到直接执行，修改成功保留先规划模式；等待请求期间防止重复提交，切换任务后丢弃旧响应的界面更新。方案确认与工具审批设置独立。
+
+桌面侧栏收起后保留窄图标栏，可展开、新建任务或搜索已有任务；展开状态和收起偏好在刷新后保持。点击搜索打开独立弹框并聚焦无边框输入区，不展开侧栏或清空草稿。空输入展示最近的未归档对话，输入关键词按标题筛选全部对话（包括带标记的归档对话）；目录中的异步标题更新会同步到结果。方向键选择、Enter 打开对话，中文输入法确认候选不会误打开；`Esc`、关闭按钮和点击遮罩关闭弹框。列表独立滚动，Tab 焦点限制在弹框内，关闭后返回搜索入口。手机侧栏使用遮罩和焦点约束，点击搜索时关闭侧栏，搜索关闭后焦点返回展开按钮；手机开关不改变桌面偏好。侧栏只提供当前已经实现的任务功能。
+
+模型菜单与输入框等宽，并按可用空间显示在其上方或下方；搜索直接融入菜单，仅列出实际配置的模型。方向键选择、Enter 确认、Esc 关闭；中文输入法确认候选不会误切换。打开或关闭菜单不带动页面滚动，输入框聚焦时保留轻边线。
+
+Web 对话滚动条位于页面右缘，正文保持居中阅读宽度。长对话在宽屏右侧显示消息位置标记；悬停或聚焦预览消息，点击跳转，方向键及 Home / End 可逐条定位。回看历史时暂停跟随输出，点击“回到底部”恢复跟随；窄屏保留原生滚动。
+
+未命名对话接受输入后先显示“新对话”，Host 在后台用当前模型生成短标题，正文立即开始输出。标题完成后侧栏、页面标题和浏览器标题自动更新，不重载消息或清空草稿。生成失败或超时会回退到脱敏后的输入摘要；手动命名（包括命名为“新对话”）始终优先。编辑消息创建的分支也使用此流程。标题请求不调用工具，不作为对话 turn；待生成状态记录在 Session，重启后可恢复。TUI / headless 通过相同 Host 使用同一目录标题。
+
+模型将 `<think>` / `<thinking>` 混在普通文本中时，Web 会把其中正文归入处理过程，移除控制标签；单独的关闭标签也会被识别。流式未完成标签不会闪现在正文，历史回放使用同一投影。原生 thinking 段不会因为闭合标签变成最终回答，其 Markdown 状态不会污染下一文本通道或用户轮次。代码块、行内代码和转义示例保留原文，Session 与 provider 消息不改写；回复复制及 `/copy` 使用已投影的回答。运行记录的标准视图也使用这份投影进行显示、搜索和复制，详细视图保留原始协议记录；工具输出不会被当作模型思考处理。
+
+运行时，输入框右侧以圆形方块按钮停止生成；停止请求处理中显示等待状态，失败后保留运行和重试入口。空草稿不显示无效的发送按钮；输入补充内容或添加附件后，显示发送队列按钮及“立即补充 / 完成后继续”。
+
+用户消息下方提供复制与编辑，鼠标悬停、键盘聚焦或触屏时可见。编辑区支持取消、`Esc` 返回、`Ctrl/Cmd+Enter` 发送，以及失败后保留草稿重试。发送后，从被编辑消息**之前**创建新 Session 分支，再使用新消息生成后续回答；原对话及 journal 保留，新分支以编辑后的问题命名，并提供“查看原对话”。普通消息保留原附件，Skill/Prompt 调用沿用对应 Host Interface；旧方案的审核授权不会沿用到替换消息。已发生的工作区与外部副作用不会回滚。活动运行期间先停止或等待结束后再编辑。
+
+存在待核实的外部操作时，Host 在启动或创建编辑分支前拒绝受理，保留原对话和编辑草稿。
+Web 显示“查看并处理”：逐条检查结果，填写核实依据后记录人工确认；请求失败会保留输入。
+该确认只作用于选中的历史操作，不重试调用，也不修改后续权限。完成门禁不会要求模型把
+effect ID 写进产物。MCP 工具缺少 effect 声明则在执行前返回 `effect_contract_required`，
+应由操作者按真实语义配置 `tool_effects`，不能从 `tool_risks: read` 自动推导。
+
+失败任务可以直接归档或删除，无需为了清理列表而确认未知结果。删除只追加不可撤销的目录墓碑，
+保留原始对话、产物和待核实记录；它不撤销文件修改或外部动作，也不代表任务成功。
+重复删除同一任务返回成功。工作区仍在执行、任务存在活动 Agent 或未结束的语音连接时，
+需要先结束执行；归档任务恢复可见性后，继续执行仍受原有恢复检查约束。
+
+输入区的“先规划”与“每次确认”等审批选项是两个独立设置。兼容命令 `/mode plan` 设置 collaboration mode，`/mode manual`、`/mode accept_edits` 同时回到 Default；直接点击审批选择器只修改审批策略。计划清单是只读投影，真正执行仍通过带 revision 的方案确认与原有工具审批 Interface。
+
+Web 回复中的工作区文档链接与内联文件路径可点击预览；本轮成功的 `write_file` / `edit_file` 还会生成去重文件卡片。预览通过 Host 读取当前文件，支持 Markdown 阅读/源码切换、HTML 隔离静态预览、纯文本、常见图片和浏览器 PDF 预览，并提供下载。HTML 禁止脚本、外部资源和跳转；SVG 按源码显示。Office 文件及超过 1 MiB 的文本只提供下载，单文件读取上限 20 MiB；不支持路径逃逸、隐藏路径、符号链接或特殊文件。删除、移动和超限等读取失败可重试。此入口展示工作区当前内容，不声称是历史快照；原有产物写入路径规则不变。
+
 ## 4. 快捷键与发现入口
 
 - TUI：`Ctrl+P` 打开命令面板，`Alt+C` 等同 `/copy`，`Shift+Tab` 循环审批模式。
+- TUI：`Alt+P` 打开模型选择器；`Alt+M` 打开模式选择器；`Alt+T` 等同 `/tasks`。计划聚焦时 `Enter` / `Space` 折叠步骤，`E` 切换说明。
 - TUI/Web：输入 `/` 打开 slash 菜单；输入 `@` 打开文件 mention 补全。
+- TUI：整段输入的 `/model`、`/mode`、`/tasks` 补全用 `Enter` 直接打开，`Tab` 只补全；其他命令保留原有补全行为。
+- Web：完整命令用 `Enter` 或点击立即执行，带待填参数的命令先补全；`Tab` 只补全，`Esc` 关闭菜单。中文输入法确认候选不会触发发送。
 - TUI：`Esc` 依次处理关闭补全、取消 run、清空输入；空闲退出使用 `/exit` 或 `Ctrl+C`。
 - Web：会话切换、恢复和新建也可直接使用左侧栏。
 

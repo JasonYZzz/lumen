@@ -231,7 +231,26 @@
         "type": "object"
       },
       "ForkSessionBody": {
+        "additionalProperties": false,
         "properties": {
+          "clientRequestId": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Clientrequestid"
+          },
+          "includeTurn": {
+            "default": true,
+            "title": "Includeturn",
+            "type": "boolean"
+          },
           "throughTurn": {
             "minimum": 0.0,
             "title": "Throughturn",
@@ -953,6 +972,38 @@
           }
         },
         "summary": "Upsert Model Configuration"
+      }
+    },
+    "/api/v1/files/content": {
+      "get": {
+        "operationId": "document_content_api_v1_files_content_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "path",
+            "required": true,
+            "schema": {
+              "title": "Path",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Document Content"
       }
     },
     "/api/v1/files/search": {

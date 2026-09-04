@@ -43,7 +43,7 @@ Web 模型设置不重写用户维护的 YAML，而由 `WorkspaceConfiguration` 
 |---|---|
 | `agent` | 模型、指令、请求限制、并行工具、Skill 开关 |
 | `tools` | builtin、Python plugin、Web fetch/search provider |
-| `mcp_servers` | transport、schema 延迟、risk、OAuth、resource/prompt |
+| `mcp_servers` | transport、schema 延迟、risk、effect、安全重试、OAuth、resource/prompt |
 | `permissions` | 默认模式、always allow/deny；交互产生的项目永久规则另存状态文件 |
 | `sessions` | JSONL 会话目录 |
 | `agent.models.*.context` | 模型 profile、window/output/tokenizer 与模型级覆盖 |
@@ -53,6 +53,16 @@ Web 模型设置不重写用户维护的 YAML，而由 `WorkspaceConfiguration` 
 | `sandbox` | `workspace_write` / `disabled` 与平台 Adapter 配置 |
 | `live` | Realtime Route、provider、媒体与严格 completion |
 | `hooks` | 生命周期 hook adapter |
+
+长任务配置的当前默认值：`agent.limits.request_count`、`tool_calls`、
+`model_request_timeout_seconds` 均为 `null`；`model_stream_idle_timeout_seconds=300`，
+`model_retries=5`，退避基础值 `model_retry_delay_seconds=2`、单次上限
+`model_retry_max_delay_seconds=60`。空闲计时随数据到达延续，显式总时限不延续。
+原生 `agents.request_count/tool_calls/timeout_seconds` 同样默认 `null`，请求/工具预算与父配置取
+更严格值。旧有限配置和 delegation 兼容映射保持有效，不自动改写或续租。
+完整字段含义、计数和排障见[第 14 章](14-long-running-recovery.md)。
+
+这些设置不会热替换正在运行的 Python 类；源码升级后需重启 Lumen 进程。
 
 ## 7.3 ResourceManager 生命周期
 
@@ -67,11 +77,15 @@ stateDiagram-v2
     Closing --> [*]
 ```
 
-构造阶段发现 Skill、注册本地工具、构造 MCP bundles 和 metadata。`open` 才建立远端连接并创建 runtime。模型切换使用事务式 rebuild：每个模型按“显式字段 → 显式 profile → 精确 slug alias → 80k conservative fallback”重新解析 `ResolvedContextPolicy` 和 token counter，再创建新的 ContextEngine；新 runtime 构建成功后才关闭旧 runtime，失败则恢复旧实例。session 的 rolling checkpoint 不丢失；从大窗口切到小窗口时，新 Engine 会立即按新 hard limit 安全降级或在 provider I/O 前明确失败。
+构造阶段发现 Skill、注册本地工具、构造 MCP bundles 和 metadata。`open` 才建立远端连接并创建 runtime。模型切换使用事务式 rebuild：每个模型按“显式字段 → 显式 profile → 精确 slug alias → 80k conservative fallback”重新解析 `ResolvedContextPolicy` 和 token counter，再在局部 candidate Scope 中创建并完整打开新的 ContextEngine、`PydanticAIModelDriver` 和唯一的 `LumenAgentLoop` Runtime。成功后以一次无等待赋值同时发布 Runtime、Scope、Memory extractor 与活动模型名，再关闭旧 Scope；构建失败不修改共享引用。Host 状态锁串行化 start/switch。session 的 rolling checkpoint 不丢失；从大窗口切到小窗口时，新 Engine 会立即按新 hard limit 安全降级或在 provider I/O 前明确失败。
 
 可逆注册由内部 `RegistrationScope` 持有。它只管理 Tool/Hook/MCP/Capability disposer 和后台 task 生命周期，不保存 Session、Plan、Agent 或 Work Product 状态。模型切换先在候选 runtime Scope 内完成构建与验证，再原子发布并关闭旧 Scope；关闭会取消并等待 task、以 LIFO 执行所有 disposer，单个清理异常不会阻断其余清理，并只保留有界 diagnostic。同一 `ResourceManager` 重开或重复切换不会累积 MCP schema、toolset、listener 或 capability。
 
-`openai:`、`api: chat/responses` 和 `base_url` 只描述传输，不参与模型能力推断。`settings.max_tokens` 会被完整预留；若超过已知 profile 的架构输出上限，配置加载失败。旧 `context.soft_token_limit` / `keep_recent_tokens` 是兼容覆盖，并在 `/context` 中标记。
+`openai:` / `anthropic:`、`api: chat/responses` 和 `base_url` 只描述传输，不参与模型能力推断。
+`settings.max_tokens` 会被完整预留并原样用于 Provider 请求；未显式配置时，resolved profile reserve 会被
+写入请求。未知模型按 window 自适应选择初始 reserve（80K fallback window 对应 16K，大窗口最多 32K，
+且始终不超过 window 的 1/4），并可在 length stop 后有界增长。若配置超过已知 profile 的架构输出
+上限，配置加载失败。旧 `context.soft_token_limit` / `keep_recent_tokens` 是兼容覆盖，并在 `/context` 中标记。
 
 ## 7.4 主要持久化位置
 

@@ -7,6 +7,11 @@ DeepSeek Harness 证据快照：官方仓库 `deepseek-ai/deepseek-harness`，co
 
 Lumen 证据范围：当前工作区源码、契约测试和 Accepted 架构记录；工作区包含尚未提交的在途修改，因此本文以文件内容而不是仅以 Git HEAD 为准。
 
+> **实现跟踪（2026-08-27）：** 本文外部事实与评分保留为 2026-08-18 研究快照。Lumen 后续已完成
+> `LumenAgentLoop` 单轨切换；PydanticAI 仅保留低层 Model/Provider Adapter。当前实现以
+> [实现审计](../architecture-guide/12-current-implementation-audit.md) 与
+> [迁移决策记录](../architecture-guide/13-native-agent-loop-migration.md) 为准。
+
 资料原则：外部事实只采用 DeepSeek 官方仓库、官方文档站和仓库内源码/测试说明；本文明确区分“官方事实”“基于源码的分析”和“对 Lumen 的建议”。
 
 ## 1. 执行摘要
@@ -332,7 +337,7 @@ Lumen 当前的关键事实源和 deep Module 已在架构审计中明确：[当
 |---|---|---|
 | 客户端命令、run、审批 | `WorkspaceHost` | TUI/Web/headless 共享 command/event contract |
 | 单 Session turn/恢复 | `RunCoordinator` | 候选状态先持久化，成功后再发布 |
-| 模型/工具 loop | `AgentRuntime` | Pydantic AI provider translation、recovery receipt、completion gate |
+| 模型/工具 loop | `AgentRuntime` + `LumenAgentLoop` | 单一 Loop 权威；低层 Driver 保留 PydanticAI Provider 适配，统一 recovery receipt 与 completion gate |
 | Context | `ContextEngine` | zone/trust/provenance、token preflight、V2 rolling checkpoint、ArtifactStore |
 | Work Product/effect | `TaskWorkspace` | prepared→applied→verified/failed、局部验证、恢复/协调 |
 | 多 Agent | `AgentOrchestrator` | 深度一、能力只收窄、worktree import、安全完成门禁 |

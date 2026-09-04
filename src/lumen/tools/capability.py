@@ -12,6 +12,7 @@ import asyncio
 import hashlib
 import os
 import signal
+import sys
 import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -147,7 +148,9 @@ def build_capability_specs(
         resolved = workspace.resolve_for_mutation(path)
         if not resolved.is_file():
             raise FileNotFoundError(f"file not found: {path}")
-        original = resolved.read_text(encoding="utf-8")
+        if not find:
+            raise ValueError("find must not be empty")
+        original = resolved.read_bytes().decode("utf-8")
         count = original.count(find)
         if count == 0:
             raise ValueError(f"0 matches for find in {path}")
@@ -265,12 +268,31 @@ def build_capability_specs(
             "timed_out": timed_out,
             "stdout_truncated": stdout_collector.truncated,
             "stderr_truncated": stderr_collector.truncated,
+            "sandbox": {
+                "mode": sandbox.config.mode,
+                "network_allowed": sandbox.config.mode == "disabled" or sandbox.config.network,
+                "scope": "this command only; MCP and web tools have separate permissions",
+            },
         }
 
     return [
         ToolSpec(write_file, risk=Risk.WRITE, effect_kind=EffectKind.MUTATION),
         ToolSpec(edit_file, risk=Risk.WRITE, effect_kind=EffectKind.MUTATION),
-        ToolSpec(run_command, risk=Risk.EXECUTE, effect_kind=EffectKind.EXECUTION, timeout=max_timeout),
+        ToolSpec(
+            run_command,
+            description=(
+                (run_command.__doc__ or "")
+                + f"\nExecution policy: sandbox.mode={sandbox.config.mode}; "
+                + f"command network_allowed={sandbox.config.mode == 'disabled' or sandbox.config.network}. "
+                + "This policy applies to this subprocess, not separately configured MCP/web tools. "
+                + "After failure, inspect stderr and exit_code; do not infer global network availability. "
+                + f"Known Python interpreter: {sys.executable}. "
+                + "Use load_skill/read_skill_resource for discovered skills outside the workspace."
+            ),
+            risk=Risk.EXECUTE,
+            effect_kind=EffectKind.EXECUTION,
+            timeout=max_timeout,
+        ),
     ]
 
 

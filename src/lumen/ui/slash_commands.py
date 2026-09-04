@@ -160,20 +160,27 @@ _COMMANDS: tuple[SlashCommand, ...] = (
     SlashCommand(
         name="model",
         usage="/model [name]",
-        description="List configured models or switch the active model",
+        description="Choose a model or switch by name",
         category=CATEGORY_MODEL,
         handler="_cmd_model",
-        # The listing form is read-only; the switching form rebuilds the
+        # The picker is read-only during a run; switching rebuilds the
         # runtime. The gate refines this via classify_model_command.
         in_palette=True,
     ),
     SlashCommand(
         name="mode",
         usage="/mode [manual|accept_edits|plan|auto]",
-        description="Show or switch the approval mode",
+        description="Choose a permission mode or switch by name",
         category=CATEGORY_MODEL,
         handler="_cmd_mode",
         in_palette=True,
+    ),
+    SlashCommand(
+        name="tasks",
+        usage="/tasks",
+        description="Show or collapse the latest task plan",
+        category=CATEGORY_SESSION,
+        handler="_cmd_tasks",
     ),
     SlashCommand(
         name="status",

@@ -233,6 +233,8 @@ class ListCheckpoints:
 class ForkSessionAtTurn:
     session_id: str
     through_turn: int
+    include_turn: bool = True
+    client_request_id: str | None = None
     type: Literal["fork_session_at_turn"] = "fork_session_at_turn"
 
 
@@ -459,6 +461,7 @@ class SessionSummary:
     model_id: str
     title: str
     archived: bool = False
+    title_pending: bool = False
 
 
 @dataclass(frozen=True, slots=True)

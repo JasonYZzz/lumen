@@ -1,4 +1,680 @@
 {
+  "agent_loop": {
+    "authority": "LumenAgentLoop",
+    "events": {
+      "$defs": {
+        "LoopCommentaryEmitted": {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "commentary_emitted",
+              "default": "commentary_emitted",
+              "title": "Kind",
+              "type": "string"
+            },
+            "request_index": {
+              "minimum": 1,
+              "title": "Request Index",
+              "type": "integer"
+            },
+            "sequence": {
+              "minimum": 0,
+              "title": "Sequence",
+              "type": "integer"
+            },
+            "text": {
+              "title": "Text",
+              "type": "string"
+            }
+          },
+          "required": [
+            "sequence",
+            "text",
+            "request_index"
+          ],
+          "title": "LoopCommentaryEmitted",
+          "type": "object"
+        },
+        "LoopCompletionDecided": {
+          "additionalProperties": false,
+          "properties": {
+            "accepted": {
+              "title": "Accepted",
+              "type": "boolean"
+            },
+            "issues": {
+              "items": {
+                "type": "string"
+              },
+              "maxItems": 128,
+              "title": "Issues",
+              "type": "array"
+            },
+            "kind": {
+              "const": "completion_decided",
+              "default": "completion_decided",
+              "title": "Kind",
+              "type": "string"
+            },
+            "request_index": {
+              "minimum": 1,
+              "title": "Request Index",
+              "type": "integer"
+            },
+            "sequence": {
+              "minimum": 0,
+              "title": "Sequence",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "sequence",
+            "request_index",
+            "accepted"
+          ],
+          "title": "LoopCompletionDecided",
+          "type": "object"
+        },
+        "LoopRequestAttempted": {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "request_attempted",
+              "default": "request_attempted",
+              "title": "Kind",
+              "type": "string"
+            },
+            "model_attempts": {
+              "minimum": 1,
+              "title": "Model Attempts",
+              "type": "integer"
+            },
+            "request_index": {
+              "minimum": 1,
+              "title": "Request Index",
+              "type": "integer"
+            },
+            "sequence": {
+              "minimum": 0,
+              "title": "Sequence",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "sequence",
+            "request_index",
+            "model_attempts"
+          ],
+          "title": "LoopRequestAttempted",
+          "type": "object"
+        },
+        "LoopRetryScheduled": {
+          "additionalProperties": false,
+          "properties": {
+            "attempt": {
+              "minimum": 1,
+              "title": "Attempt",
+              "type": "integer"
+            },
+            "category": {
+              "maxLength": 128,
+              "title": "Category",
+              "type": "string"
+            },
+            "delay_seconds": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Delay Seconds",
+              "type": "number"
+            },
+            "discarded_text_characters": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Discarded Text Characters",
+              "type": "integer"
+            },
+            "discarded_thinking_characters": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Discarded Thinking Characters",
+              "type": "integer"
+            },
+            "kind": {
+              "const": "retry_scheduled",
+              "default": "retry_scheduled",
+              "title": "Kind",
+              "type": "string"
+            },
+            "request_index": {
+              "minimum": 1,
+              "title": "Request Index",
+              "type": "integer"
+            },
+            "sequence": {
+              "minimum": 0,
+              "title": "Sequence",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "sequence",
+            "request_index",
+            "attempt",
+            "category"
+          ],
+          "title": "LoopRetryScheduled",
+          "type": "object"
+        },
+        "LoopStallObserved": {
+          "additionalProperties": false,
+          "properties": {
+            "call_id": {
+              "title": "Call Id",
+              "type": "string"
+            },
+            "kind": {
+              "const": "stall_observed",
+              "default": "stall_observed",
+              "title": "Kind",
+              "type": "string"
+            },
+            "request_index": {
+              "minimum": 1,
+              "title": "Request Index",
+              "type": "integer"
+            },
+            "sequence": {
+              "minimum": 0,
+              "title": "Sequence",
+              "type": "integer"
+            },
+            "signature": {
+              "pattern": "^sha256:[0-9a-f]{64}$",
+              "title": "Signature",
+              "type": "string"
+            },
+            "window_count": {
+              "minimum": 2,
+              "title": "Window Count",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "sequence",
+            "request_index",
+            "call_id",
+            "signature",
+            "window_count"
+          ],
+          "title": "LoopStallObserved",
+          "type": "object"
+        },
+        "LoopState": {
+          "enum": [
+            "preparing",
+            "requesting_model",
+            "streaming_model",
+            "collecting_tool_calls",
+            "awaiting_approval",
+            "executing_tools",
+            "appending_tool_results",
+            "validating_completion",
+            "waiting_for_user",
+            "reconciliation_required",
+            "completed",
+            "cancelled",
+            "failed"
+          ],
+          "title": "LoopState",
+          "type": "string"
+        },
+        "LoopTextEmitted": {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "text_emitted",
+              "default": "text_emitted",
+              "title": "Kind",
+              "type": "string"
+            },
+            "request_index": {
+              "minimum": 1,
+              "title": "Request Index",
+              "type": "integer"
+            },
+            "sequence": {
+              "minimum": 0,
+              "title": "Sequence",
+              "type": "integer"
+            },
+            "text": {
+              "title": "Text",
+              "type": "string"
+            }
+          },
+          "required": [
+            "sequence",
+            "text",
+            "request_index"
+          ],
+          "title": "LoopTextEmitted",
+          "type": "object"
+        },
+        "LoopTextRetracted": {
+          "additionalProperties": false,
+          "properties": {
+            "characters": {
+              "minimum": 1,
+              "title": "Characters",
+              "type": "integer"
+            },
+            "kind": {
+              "const": "text_retracted",
+              "default": "text_retracted",
+              "title": "Kind",
+              "type": "string"
+            },
+            "request_index": {
+              "minimum": 1,
+              "title": "Request Index",
+              "type": "integer"
+            },
+            "sequence": {
+              "minimum": 0,
+              "title": "Sequence",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "sequence",
+            "characters",
+            "request_index"
+          ],
+          "title": "LoopTextRetracted",
+          "type": "object"
+        },
+        "LoopThinkingEmitted": {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "thinking_emitted",
+              "default": "thinking_emitted",
+              "title": "Kind",
+              "type": "string"
+            },
+            "request_index": {
+              "minimum": 1,
+              "title": "Request Index",
+              "type": "integer"
+            },
+            "sequence": {
+              "minimum": 0,
+              "title": "Sequence",
+              "type": "integer"
+            },
+            "text": {
+              "title": "Text",
+              "type": "string"
+            }
+          },
+          "required": [
+            "sequence",
+            "text",
+            "request_index"
+          ],
+          "title": "LoopThinkingEmitted",
+          "type": "object"
+        },
+        "LoopToolCallPrepared": {
+          "additionalProperties": false,
+          "properties": {
+            "arguments": {
+              "additionalProperties": true,
+              "title": "Arguments",
+              "type": "object"
+            },
+            "call_id": {
+              "title": "Call Id",
+              "type": "string"
+            },
+            "kind": {
+              "const": "tool_call_prepared",
+              "default": "tool_call_prepared",
+              "title": "Kind",
+              "type": "string"
+            },
+            "name": {
+              "title": "Name",
+              "type": "string"
+            },
+            "order": {
+              "minimum": 0,
+              "title": "Order",
+              "type": "integer"
+            },
+            "origin": {
+              "default": "unregistered capability",
+              "title": "Origin",
+              "type": "string"
+            },
+            "request_index": {
+              "minimum": 1,
+              "title": "Request Index",
+              "type": "integer"
+            },
+            "risk": {
+              "default": "external_unknown",
+              "title": "Risk",
+              "type": "string"
+            },
+            "sequence": {
+              "minimum": 0,
+              "title": "Sequence",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "sequence",
+            "request_index",
+            "order",
+            "call_id",
+            "name"
+          ],
+          "title": "LoopToolCallPrepared",
+          "type": "object"
+        },
+        "LoopToolResultRecorded": {
+          "additionalProperties": false,
+          "properties": {
+            "call_id": {
+              "title": "Call Id",
+              "type": "string"
+            },
+            "call_view": {
+              "anyOf": [
+                {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Call View"
+            },
+            "canonical_output": {
+              "default": null,
+              "title": "Canonical Output"
+            },
+            "effect_receipt_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Effect Receipt Id"
+            },
+            "error": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Error"
+            },
+            "idempotency_key": {
+              "title": "Idempotency Key",
+              "type": "string"
+            },
+            "kind": {
+              "const": "tool_result_recorded",
+              "default": "tool_result_recorded",
+              "title": "Kind",
+              "type": "string"
+            },
+            "model_output": {
+              "title": "Model Output",
+              "type": "string"
+            },
+            "name": {
+              "title": "Name",
+              "type": "string"
+            },
+            "order": {
+              "minimum": 0,
+              "title": "Order",
+              "type": "integer"
+            },
+            "request_index": {
+              "minimum": 1,
+              "title": "Request Index",
+              "type": "integer"
+            },
+            "result_view": {
+              "anyOf": [
+                {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Result View"
+            },
+            "sequence": {
+              "minimum": 0,
+              "title": "Sequence",
+              "type": "integer"
+            },
+            "status": {
+              "title": "Status",
+              "type": "string"
+            }
+          },
+          "required": [
+            "sequence",
+            "request_index",
+            "order",
+            "call_id",
+            "name",
+            "status",
+            "model_output",
+            "idempotency_key"
+          ],
+          "title": "LoopToolResultRecorded",
+          "type": "object"
+        },
+        "LoopTransition": {
+          "additionalProperties": false,
+          "properties": {
+            "current": {
+              "$ref": "#/$defs/LoopState"
+            },
+            "kind": {
+              "const": "state_changed",
+              "default": "state_changed",
+              "title": "Kind",
+              "type": "string"
+            },
+            "previous": {
+              "$ref": "#/$defs/LoopState"
+            },
+            "reason": {
+              "maxLength": 512,
+              "title": "Reason",
+              "type": "string"
+            },
+            "request_index": {
+              "minimum": 0,
+              "title": "Request Index",
+              "type": "integer"
+            },
+            "sequence": {
+              "minimum": 0,
+              "title": "Sequence",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "sequence",
+            "previous",
+            "current",
+            "reason",
+            "request_index"
+          ],
+          "title": "LoopTransition",
+          "type": "object"
+        },
+        "LoopUsageObserved": {
+          "additionalProperties": false,
+          "properties": {
+            "cache_read_tokens": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Cache Read Tokens"
+            },
+            "cache_write_tokens": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Cache Write Tokens"
+            },
+            "input_tokens": {
+              "minimum": 0,
+              "title": "Input Tokens",
+              "type": "integer"
+            },
+            "kind": {
+              "const": "usage_observed",
+              "default": "usage_observed",
+              "title": "Kind",
+              "type": "string"
+            },
+            "output_tokens": {
+              "minimum": 0,
+              "title": "Output Tokens",
+              "type": "integer"
+            },
+            "request_index": {
+              "minimum": 1,
+              "title": "Request Index",
+              "type": "integer"
+            },
+            "sequence": {
+              "minimum": 0,
+              "title": "Sequence",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "sequence",
+            "request_index",
+            "input_tokens",
+            "output_tokens"
+          ],
+          "title": "LoopUsageObserved",
+          "type": "object"
+        }
+      },
+      "discriminator": {
+        "mapping": {
+          "commentary_emitted": "#/$defs/LoopCommentaryEmitted",
+          "completion_decided": "#/$defs/LoopCompletionDecided",
+          "request_attempted": "#/$defs/LoopRequestAttempted",
+          "retry_scheduled": "#/$defs/LoopRetryScheduled",
+          "stall_observed": "#/$defs/LoopStallObserved",
+          "state_changed": "#/$defs/LoopTransition",
+          "text_emitted": "#/$defs/LoopTextEmitted",
+          "text_retracted": "#/$defs/LoopTextRetracted",
+          "thinking_emitted": "#/$defs/LoopThinkingEmitted",
+          "tool_call_prepared": "#/$defs/LoopToolCallPrepared",
+          "tool_result_recorded": "#/$defs/LoopToolResultRecorded",
+          "usage_observed": "#/$defs/LoopUsageObserved"
+        },
+        "propertyName": "kind"
+      },
+      "oneOf": [
+        {
+          "$ref": "#/$defs/LoopTransition"
+        },
+        {
+          "$ref": "#/$defs/LoopTextEmitted"
+        },
+        {
+          "$ref": "#/$defs/LoopTextRetracted"
+        },
+        {
+          "$ref": "#/$defs/LoopThinkingEmitted"
+        },
+        {
+          "$ref": "#/$defs/LoopCommentaryEmitted"
+        },
+        {
+          "$ref": "#/$defs/LoopToolCallPrepared"
+        },
+        {
+          "$ref": "#/$defs/LoopToolResultRecorded"
+        },
+        {
+          "$ref": "#/$defs/LoopStallObserved"
+        },
+        {
+          "$ref": "#/$defs/LoopUsageObserved"
+        },
+        {
+          "$ref": "#/$defs/LoopRetryScheduled"
+        },
+        {
+          "$ref": "#/$defs/LoopRequestAttempted"
+        },
+        {
+          "$ref": "#/$defs/LoopCompletionDecided"
+        }
+      ]
+    },
+    "provider_adapter": "PydanticAIModelDriver",
+    "states": [
+      "preparing",
+      "requesting_model",
+      "streaming_model",
+      "collecting_tool_calls",
+      "awaiting_approval",
+      "executing_tools",
+      "appending_tool_results",
+      "validating_completion",
+      "waiting_for_user",
+      "reconciliation_required",
+      "completed",
+      "cancelled",
+      "failed"
+    ]
+  },
   "app_config": {
     "$defs": {
       "AgentSection": {
@@ -65,6 +741,11 @@
             "default": true,
             "title": "Skills Enabled",
             "type": "boolean"
+          },
+          "user_skill_install_enabled": {
+            "default": false,
+            "title": "User Skill Install Enabled",
+            "type": "boolean"
           }
         },
         "title": "AgentSection",
@@ -122,25 +803,43 @@
             "type": "string"
           },
           "request_count": {
-            "default": 10,
-            "maximum": 50,
-            "minimum": 1,
-            "title": "Request Count",
-            "type": "integer"
+            "anyOf": [
+              {
+                "minimum": 1,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Request Count"
           },
           "timeout_seconds": {
-            "default": 180.0,
-            "exclusiveMinimum": 0,
-            "maximum": 1800,
-            "title": "Timeout Seconds",
-            "type": "number"
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Timeout Seconds"
           },
           "tool_calls": {
-            "default": 20,
-            "maximum": 100,
-            "minimum": 0,
-            "title": "Tool Calls",
-            "type": "integer"
+            "anyOf": [
+              {
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Tool Calls"
           },
           "worktree_root": {
             "default": "~/.lumen/worktrees",
@@ -449,6 +1148,53 @@
       "LimitsConfig": {
         "additionalProperties": false,
         "properties": {
+          "model_request_timeout_seconds": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Model Request Timeout Seconds"
+          },
+          "model_retries": {
+            "default": 5,
+            "maximum": 20,
+            "minimum": 0,
+            "title": "Model Retries",
+            "type": "integer"
+          },
+          "model_retry_delay_seconds": {
+            "default": 2.0,
+            "maximum": 60,
+            "minimum": 0,
+            "title": "Model Retry Delay Seconds",
+            "type": "number"
+          },
+          "model_retry_max_delay_seconds": {
+            "default": 60.0,
+            "exclusiveMinimum": 0,
+            "maximum": 300,
+            "title": "Model Retry Max Delay Seconds",
+            "type": "number"
+          },
+          "model_stream_idle_timeout_seconds": {
+            "default": 300.0,
+            "exclusiveMinimum": 0,
+            "title": "Model Stream Idle Timeout Seconds",
+            "type": "number"
+          },
+          "output_limit_retries": {
+            "default": 3,
+            "maximum": 10,
+            "minimum": 0,
+            "title": "Output Limit Retries",
+            "type": "integer"
+          },
           "parallel_tool_calls": {
             "default": "sequential",
             "enum": [
@@ -460,10 +1206,17 @@
             "type": "string"
           },
           "request_count": {
-            "default": 50,
-            "minimum": 1,
-            "title": "Request Count",
-            "type": "integer"
+            "anyOf": [
+              {
+                "minimum": 1,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Request Count"
           },
           "skill_script_timeout_seconds": {
             "default": 30.0,
@@ -472,10 +1225,17 @@
             "type": "number"
           },
           "tool_calls": {
-            "default": 100,
-            "minimum": 0,
-            "title": "Tool Calls",
-            "type": "integer"
+            "anyOf": [
+              {
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Tool Calls"
           },
           "tool_timeout_seconds": {
             "default": 60.0,
@@ -1359,6 +2119,8 @@
                 "list_directory",
                 "search_text",
                 "web_fetch",
+                "download_file",
+                "install_skill",
                 "write_file",
                 "edit_file",
                 "run_command"
@@ -1628,7 +2390,7 @@
     "title": "AppConfig",
     "type": "object"
   },
-  "catalog_version": 2,
+  "catalog_version": 7,
   "module_graph": [
     {
       "consumes": [
@@ -1641,12 +2403,30 @@
     },
     {
       "consumes": [
+        "LumenAgentLoop",
         "ContextEngine",
         "ToolRegistry",
-        "SessionRepository"
+        "SessionRepository",
+        "InteractiveMessageQueue"
       ],
       "implementation": "lumen.runtime.AgentRuntime",
       "module": "AgentRuntime"
+    },
+    {
+      "consumes": [
+        "ModelDriver",
+        "CapabilityGateway",
+        "CompletionGate"
+      ],
+      "implementation": "lumen.agent_loop.loop.LumenAgentLoop",
+      "module": "LumenAgentLoop"
+    },
+    {
+      "consumes": [
+        "PydanticAI Model.request_stream"
+      ],
+      "implementation": "lumen.agent_loop.pydantic_driver.PydanticAIModelDriver",
+      "module": "PydanticAIModelDriver"
     },
     {
       "consumes": [],
@@ -2774,6 +3554,41 @@
       "owner": "ContextEngine"
     },
     {
+      "enforced_by": "LumenAgentLoop.validate_transition and provider sequence validation",
+      "name": "provider_events_follow_validated_explicit_state_transitions",
+      "owner": "LumenAgentLoop"
+    },
+    {
+      "enforced_by": "LumenAgentLoop tool scheduler and LoopToolCallsUnsupported fail-closed gate",
+      "name": "tool_calls_only_execute_through_capability_gateway",
+      "owner": "LumenAgentLoop"
+    },
+    {
+      "enforced_by": "ordered invocation batches and LoopToolResultRecorded order",
+      "name": "tool_results_preserve_provider_call_order",
+      "owner": "LumenAgentLoop"
+    },
+    {
+      "enforced_by": "CapabilityGateway.prepare and _finish_success",
+      "name": "pre_hook_precedes_approval_and_post_hook_cannot_change_canonical_output",
+      "owner": "CapabilityGateway"
+    },
+    {
+      "enforced_by": "_dequeue_native_input and _freeze_lumen_request",
+      "name": "interactive_input_is_frozen_before_provider_request_receipt",
+      "owner": "AgentRuntime"
+    },
+    {
+      "enforced_by": "replay and record_success adapters",
+      "name": "successful_side_effect_replay_is_exact",
+      "owner": "RecoveryReceiptLedger"
+    },
+    {
+      "enforced_by": "AgentRuntime._freeze_lumen_request and ModelInputManifest",
+      "name": "every_provider_request_has_bounded_input_evidence",
+      "owner": "ContextEngine"
+    },
+    {
       "enforced_by": "TaskWorkspace.completion_issues",
       "name": "completion_requires_verified_effects",
       "owner": "TaskWorkspace"
@@ -2796,6 +3611,271 @@
   ],
   "session": {
     "current_schema": 9,
+    "model_input_manifest": {
+      "$defs": {
+        "ContextZone": {
+          "description": "Every byte of model-visible context lives in exactly one labelled zone.\n\nThe ordering mirrors the assembly order in plan §8.2: stable/pinned content\nfirst, then session state, then the compressible recent tail, then the\nper-turn ephemera. ``OUTPUT_RESERVE`` is measured but never rendered.",
+          "enum": [
+            "system",
+            "policy",
+            "memory_index",
+            "capability_catalog",
+            "task_state",
+            "active_skills",
+            "history_summary",
+            "recent_history",
+            "recalled_memory",
+            "retrieved_context",
+            "current_input",
+            "output_reserve"
+          ],
+          "title": "ContextZone",
+          "type": "string"
+        },
+        "ModelInputSource": {
+          "additionalProperties": false,
+          "description": "One bounded, body-free source entry in a model-input manifest.\n\n``reference`` points to a durable Session fact or content-addressed\nartifact when one exists. ``content_digest`` proves which rendered value\nwas used without copying Skill, MCP, memory, prompt, or policy bodies into\nthe Session journal.",
+          "properties": {
+            "content_digest": {
+              "pattern": "^sha256:[0-9a-f]{64}$",
+              "title": "Content Digest",
+              "type": "string"
+            },
+            "kind": {
+              "$ref": "#/$defs/SourceKind"
+            },
+            "non_replayable_reason": {
+              "anyOf": [
+                {
+                  "maxLength": 512,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Non Replayable Reason"
+            },
+            "order": {
+              "minimum": 0,
+              "title": "Order",
+              "type": "integer"
+            },
+            "origin": {
+              "maxLength": 512,
+              "title": "Origin",
+              "type": "string"
+            },
+            "reference": {
+              "anyOf": [
+                {
+                  "maxLength": 512,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Reference"
+            },
+            "replayable": {
+              "title": "Replayable",
+              "type": "boolean"
+            },
+            "revision": {
+              "anyOf": [
+                {
+                  "maxLength": 256,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Revision"
+            },
+            "token_estimate": {
+              "minimum": 0,
+              "title": "Token Estimate",
+              "type": "integer"
+            },
+            "zone": {
+              "$ref": "#/$defs/ContextZone"
+            }
+          },
+          "required": [
+            "order",
+            "zone",
+            "kind",
+            "origin",
+            "content_digest",
+            "token_estimate",
+            "replayable"
+          ],
+          "title": "ModelInputSource",
+          "type": "object"
+        },
+        "ReplayEligibility": {
+          "description": "How precisely a recorded model request can be reconstructed offline.",
+          "enum": [
+            "replayable",
+            "verify_only",
+            "non_replayable"
+          ],
+          "title": "ReplayEligibility",
+          "type": "string"
+        },
+        "SourceKind": {
+          "description": "The category of origin a block or checkpoint item was derived from.",
+          "enum": [
+            "system",
+            "policy",
+            "memory",
+            "capability",
+            "task",
+            "history",
+            "retrieved",
+            "current",
+            "reserve"
+          ],
+          "title": "SourceKind",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "description": "Bounded proof of the Lumen-visible inputs for one provider request.\n\nThe manifest deliberately stores only counts, ordered source references,\nand SHA-256 digests. Full messages remain in the append-only Session\njournal and large/transient source bodies remain in ArtifactStore. This is\naudit evidence, not a second canonical history.",
+      "properties": {
+        "context_fingerprint": {
+          "maxLength": 256,
+          "title": "Context Fingerprint",
+          "type": "string"
+        },
+        "context_sources_digest": {
+          "pattern": "^sha256:[0-9a-f]{64}$",
+          "title": "Context Sources Digest",
+          "type": "string"
+        },
+        "dynamic_tail_digest": {
+          "pattern": "^sha256:[0-9a-f]{64}$",
+          "title": "Dynamic Tail Digest",
+          "type": "string"
+        },
+        "instructions_digest": {
+          "pattern": "^sha256:[0-9a-f]{64}$",
+          "title": "Instructions Digest",
+          "type": "string"
+        },
+        "message_count": {
+          "minimum": 0,
+          "title": "Message Count",
+          "type": "integer"
+        },
+        "message_history_digest": {
+          "pattern": "^sha256:[0-9a-f]{64}$",
+          "title": "Message History Digest",
+          "type": "string"
+        },
+        "model": {
+          "maxLength": 384,
+          "title": "Model",
+          "type": "string"
+        },
+        "non_replayable_reasons": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 128,
+          "title": "Non Replayable Reasons",
+          "type": "array"
+        },
+        "provider": {
+          "maxLength": 128,
+          "title": "Provider",
+          "type": "string"
+        },
+        "replay_eligibility": {
+          "$ref": "#/$defs/ReplayEligibility",
+          "default": "verify_only"
+        },
+        "request_fingerprint": {
+          "pattern": "^sha256:[0-9a-f]{64}$",
+          "title": "Request Fingerprint",
+          "type": "string"
+        },
+        "route": {
+          "maxLength": 512,
+          "title": "Route",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": 1,
+          "default": 1,
+          "title": "Schema Version",
+          "type": "integer"
+        },
+        "session_id": {
+          "maxLength": 256,
+          "title": "Session Id",
+          "type": "string"
+        },
+        "settings_digest": {
+          "default": "sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+          "pattern": "^sha256:[0-9a-f]{64}$",
+          "title": "Settings Digest",
+          "type": "string"
+        },
+        "sources": {
+          "items": {
+            "$ref": "#/$defs/ModelInputSource"
+          },
+          "maxItems": 128,
+          "title": "Sources",
+          "type": "array"
+        },
+        "stable_prefix_digest": {
+          "pattern": "^sha256:[0-9a-f]{64}$",
+          "title": "Stable Prefix Digest",
+          "type": "string"
+        },
+        "step": {
+          "minimum": 1,
+          "title": "Step",
+          "type": "integer"
+        },
+        "tool_count": {
+          "minimum": 0,
+          "title": "Tool Count",
+          "type": "integer"
+        },
+        "tool_schema_digest": {
+          "pattern": "^sha256:[0-9a-f]{64}$",
+          "title": "Tool Schema Digest",
+          "type": "string"
+        }
+      },
+      "required": [
+        "session_id",
+        "step",
+        "route",
+        "provider",
+        "model",
+        "context_fingerprint",
+        "message_count",
+        "tool_count",
+        "instructions_digest",
+        "message_history_digest",
+        "tool_schema_digest",
+        "context_sources_digest",
+        "stable_prefix_digest",
+        "dynamic_tail_digest",
+        "request_fingerprint"
+      ],
+      "title": "ModelInputManifest",
+      "type": "object"
+    },
     "record_types": [
       "agent_event",
       "agent_message",
@@ -2813,6 +3893,271 @@
       "work_state"
     ],
     "request_receipt": {
+      "$defs": {
+        "ContextZone": {
+          "description": "Every byte of model-visible context lives in exactly one labelled zone.\n\nThe ordering mirrors the assembly order in plan §8.2: stable/pinned content\nfirst, then session state, then the compressible recent tail, then the\nper-turn ephemera. ``OUTPUT_RESERVE`` is measured but never rendered.",
+          "enum": [
+            "system",
+            "policy",
+            "memory_index",
+            "capability_catalog",
+            "task_state",
+            "active_skills",
+            "history_summary",
+            "recent_history",
+            "recalled_memory",
+            "retrieved_context",
+            "current_input",
+            "output_reserve"
+          ],
+          "title": "ContextZone",
+          "type": "string"
+        },
+        "ModelInputManifest": {
+          "additionalProperties": false,
+          "description": "Bounded proof of the Lumen-visible inputs for one provider request.\n\nThe manifest deliberately stores only counts, ordered source references,\nand SHA-256 digests. Full messages remain in the append-only Session\njournal and large/transient source bodies remain in ArtifactStore. This is\naudit evidence, not a second canonical history.",
+          "properties": {
+            "context_fingerprint": {
+              "maxLength": 256,
+              "title": "Context Fingerprint",
+              "type": "string"
+            },
+            "context_sources_digest": {
+              "pattern": "^sha256:[0-9a-f]{64}$",
+              "title": "Context Sources Digest",
+              "type": "string"
+            },
+            "dynamic_tail_digest": {
+              "pattern": "^sha256:[0-9a-f]{64}$",
+              "title": "Dynamic Tail Digest",
+              "type": "string"
+            },
+            "instructions_digest": {
+              "pattern": "^sha256:[0-9a-f]{64}$",
+              "title": "Instructions Digest",
+              "type": "string"
+            },
+            "message_count": {
+              "minimum": 0,
+              "title": "Message Count",
+              "type": "integer"
+            },
+            "message_history_digest": {
+              "pattern": "^sha256:[0-9a-f]{64}$",
+              "title": "Message History Digest",
+              "type": "string"
+            },
+            "model": {
+              "maxLength": 384,
+              "title": "Model",
+              "type": "string"
+            },
+            "non_replayable_reasons": {
+              "items": {
+                "type": "string"
+              },
+              "maxItems": 128,
+              "title": "Non Replayable Reasons",
+              "type": "array"
+            },
+            "provider": {
+              "maxLength": 128,
+              "title": "Provider",
+              "type": "string"
+            },
+            "replay_eligibility": {
+              "$ref": "#/$defs/ReplayEligibility",
+              "default": "verify_only"
+            },
+            "request_fingerprint": {
+              "pattern": "^sha256:[0-9a-f]{64}$",
+              "title": "Request Fingerprint",
+              "type": "string"
+            },
+            "route": {
+              "maxLength": 512,
+              "title": "Route",
+              "type": "string"
+            },
+            "schema_version": {
+              "const": 1,
+              "default": 1,
+              "title": "Schema Version",
+              "type": "integer"
+            },
+            "session_id": {
+              "maxLength": 256,
+              "title": "Session Id",
+              "type": "string"
+            },
+            "settings_digest": {
+              "default": "sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+              "pattern": "^sha256:[0-9a-f]{64}$",
+              "title": "Settings Digest",
+              "type": "string"
+            },
+            "sources": {
+              "items": {
+                "$ref": "#/$defs/ModelInputSource"
+              },
+              "maxItems": 128,
+              "title": "Sources",
+              "type": "array"
+            },
+            "stable_prefix_digest": {
+              "pattern": "^sha256:[0-9a-f]{64}$",
+              "title": "Stable Prefix Digest",
+              "type": "string"
+            },
+            "step": {
+              "minimum": 1,
+              "title": "Step",
+              "type": "integer"
+            },
+            "tool_count": {
+              "minimum": 0,
+              "title": "Tool Count",
+              "type": "integer"
+            },
+            "tool_schema_digest": {
+              "pattern": "^sha256:[0-9a-f]{64}$",
+              "title": "Tool Schema Digest",
+              "type": "string"
+            }
+          },
+          "required": [
+            "session_id",
+            "step",
+            "route",
+            "provider",
+            "model",
+            "context_fingerprint",
+            "message_count",
+            "tool_count",
+            "instructions_digest",
+            "message_history_digest",
+            "tool_schema_digest",
+            "context_sources_digest",
+            "stable_prefix_digest",
+            "dynamic_tail_digest",
+            "request_fingerprint"
+          ],
+          "title": "ModelInputManifest",
+          "type": "object"
+        },
+        "ModelInputSource": {
+          "additionalProperties": false,
+          "description": "One bounded, body-free source entry in a model-input manifest.\n\n``reference`` points to a durable Session fact or content-addressed\nartifact when one exists. ``content_digest`` proves which rendered value\nwas used without copying Skill, MCP, memory, prompt, or policy bodies into\nthe Session journal.",
+          "properties": {
+            "content_digest": {
+              "pattern": "^sha256:[0-9a-f]{64}$",
+              "title": "Content Digest",
+              "type": "string"
+            },
+            "kind": {
+              "$ref": "#/$defs/SourceKind"
+            },
+            "non_replayable_reason": {
+              "anyOf": [
+                {
+                  "maxLength": 512,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Non Replayable Reason"
+            },
+            "order": {
+              "minimum": 0,
+              "title": "Order",
+              "type": "integer"
+            },
+            "origin": {
+              "maxLength": 512,
+              "title": "Origin",
+              "type": "string"
+            },
+            "reference": {
+              "anyOf": [
+                {
+                  "maxLength": 512,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Reference"
+            },
+            "replayable": {
+              "title": "Replayable",
+              "type": "boolean"
+            },
+            "revision": {
+              "anyOf": [
+                {
+                  "maxLength": 256,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Revision"
+            },
+            "token_estimate": {
+              "minimum": 0,
+              "title": "Token Estimate",
+              "type": "integer"
+            },
+            "zone": {
+              "$ref": "#/$defs/ContextZone"
+            }
+          },
+          "required": [
+            "order",
+            "zone",
+            "kind",
+            "origin",
+            "content_digest",
+            "token_estimate",
+            "replayable"
+          ],
+          "title": "ModelInputSource",
+          "type": "object"
+        },
+        "ReplayEligibility": {
+          "description": "How precisely a recorded model request can be reconstructed offline.",
+          "enum": [
+            "replayable",
+            "verify_only",
+            "non_replayable"
+          ],
+          "title": "ReplayEligibility",
+          "type": "string"
+        },
+        "SourceKind": {
+          "description": "The category of origin a block or checkpoint item was derived from.",
+          "enum": [
+            "system",
+            "policy",
+            "memory",
+            "capability",
+            "task",
+            "history",
+            "retrieved",
+            "current",
+            "reserve"
+          ],
+          "title": "SourceKind",
+          "type": "string"
+        }
+      },
       "additionalProperties": false,
       "description": "Bounded durable ledger entry for one provider-bound model step.",
       "properties": {
@@ -2829,6 +4174,17 @@
           "exclusiveMinimum": 0,
           "title": "Hard Limit Tokens",
           "type": "integer"
+        },
+        "input_manifest": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ModelInputManifest"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         },
         "instructions_tokens": {
           "minimum": 0,
@@ -3558,6 +4914,23 @@
       },
       "ForkSessionAtTurn": {
         "properties": {
+          "client_request_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Client Request Id"
+          },
+          "include_turn": {
+            "default": true,
+            "title": "Include Turn",
+            "type": "boolean"
+          },
           "session_id": {
             "title": "Session Id",
             "type": "string"
@@ -4741,6 +6114,11 @@
           "title": {
             "title": "Title",
             "type": "string"
+          },
+          "title_pending": {
+            "default": false,
+            "title": "Title Pending",
+            "type": "boolean"
           }
         },
         "required": [

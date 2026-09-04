@@ -23,6 +23,7 @@ class WorkProductKind(StrEnum):
     TEXT = "text"
     JSON = "json"
     YAML = "yaml"
+    DIRECTORY = "directory"
 
 
 class WorkProductStatus(StrEnum):

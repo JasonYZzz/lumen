@@ -31,8 +31,11 @@ from lumen.context import (
     CompactionCheckpointV2,
     CompactionRecord,
     ContextSummary,
+    ModelInputManifest,
     ProviderRequestReceipt,
+    ReplayEligibility,
     RollingContextState,
+    SessionContextState,
     TranscriptCursor,
 )
 from lumen.events import RunStarted, TextDelta, TimelineEventRecord
@@ -70,6 +73,31 @@ def test_session_round_trip_preserves_model_messages(tmp_path: Path) -> None:
     assert loaded.turns[0].user_input == "hello"
     assert loaded.plan == PlanState()
     assert SCHEMA_VERSION == 9
+
+
+@pytest.mark.parametrize("turn_index", [0, 1, 2])
+def test_message_edit_fork_keeps_only_prefix_without_rewriting_source(
+    tmp_path: Path, turn_index: int,
+) -> None:
+    repository = SessionRepository(tmp_path)
+    source = repository.create(agent_name="test", model_id="test")
+    for index in range(3):
+        repository.append_turn(
+            source.id, user_input=f"question-{index}", approvals=[], usage={}, status="completed",
+            messages=[ModelRequest(parts=[UserPromptPart(content=f"question-{index}")]),
+                      ModelResponse(parts=[TextPart(content=f"answer-{index}")])],
+        )
+    repository.append_session_settings(source.id, SessionSettingsState(
+        collaboration_mode=CollaborationMode.PLAN,
+        plan_review_status=PlanReviewStatus.REVIEW_PENDING,
+    ))
+    before = source.path.read_bytes()
+    branch = repository.load(repository.fork(source.id, through_turn=turn_index, include_turn=False).id)
+    assert [turn.user_input for turn in branch.turns] == [f"question-{index}" for index in range(turn_index)]
+    assert len(branch.full_history) == turn_index * 2
+    assert branch.settings.collaboration_mode is CollaborationMode.PLAN
+    assert branch.settings.plan_review_status is PlanReviewStatus.NONE
+    assert source.path.read_bytes() == before
 
 
 def test_session_turn_normalizes_decimal_values_before_jsonl_append(tmp_path: Path) -> None:
@@ -166,9 +194,47 @@ def test_session_catalog_is_append_only_and_uses_latest_projection(tmp_path: Pat
     ]
 
 
+def test_deleted_session_cannot_be_resurrected_by_a_stale_catalog_writer(tmp_path: Path) -> None:
+    repository = SessionRepository(tmp_path)
+    session = repository.create(agent_name="test-agent", model_id="test")
+    deleted = SessionCatalogState(title="Failed research", deleted_at="2026-09-04T00:00:00+00:00")
+    repository.append_session_catalog(session.id, deleted)
+    before = session.path.read_bytes()
+    assert repository.load(session.id).catalog == deleted
+
+    repository.append_session_catalog(session.id, SessionCatalogState(title="Late generated title"))
+    after = session.path.read_bytes()
+    assert after.startswith(before)
+    assert len(after) > len(before)
+    assert repository.load(session.id).catalog == deleted
+    repository.clear_projection_cache()
+    assert repository.load(session.id).catalog == deleted
+    assert session.path.read_bytes() == after
+
+
 def test_request_receipt_round_trip_and_projection_cache_are_rebuildable(tmp_path: Path) -> None:
     repository = SessionRepository(tmp_path)
     session = repository.create(agent_name="test-agent", model_id="acme:test")
+    digest = "sha256:" + "0" * 64
+    manifest = ModelInputManifest(
+        session_id=session.id,
+        step=1,
+        route="acme:test",
+        provider="acme",
+        model="test",
+        context_fingerprint="sha256:context",
+        message_count=2,
+        tool_count=2,
+        instructions_digest=digest,
+        message_history_digest=digest,
+        tool_schema_digest=digest,
+        context_sources_digest=digest,
+        stable_prefix_digest=digest,
+        dynamic_tail_digest=digest,
+        request_fingerprint="sha256:" + "1" * 64,
+        replay_eligibility=ReplayEligibility.VERIFY_ONLY,
+        non_replayable_reasons=("provider_private_framing_not_captured",),
+    )
     receipt = ProviderRequestReceipt(
         step=1,
         route="acme:test",
@@ -184,6 +250,7 @@ def test_request_receipt_round_trip_and_projection_cache_are_rebuildable(tmp_pat
         visible_tool_digest="sha256:tools",
         context_fingerprint="sha256:context",
         estimated=True,
+        input_manifest=manifest,
     )
     repository.append_turn(
         session.id,
@@ -203,6 +270,7 @@ def test_request_receipt_round_trip_and_projection_cache_are_rebuildable(tmp_pat
 
     assert cold == warm == rebuilt
     assert rebuilt.turns[0].request_receipts == [receipt]
+    assert rebuilt.turns[0].request_receipts[0].input_manifest == manifest
     assert session.path.read_bytes() == original
 
 
@@ -353,6 +421,77 @@ def test_historical_v6_session_upgrades_append_only_for_work_state(tmp_path: Pat
     assert lines[1]["type"] == "schema_upgrade"
     assert lines[2]["type"] == "work_state"
     assert repository.load(session.id).work_state == SessionWorkState()
+
+
+def test_historical_session_appends_v5_v6_upgrade_chain_without_rewriting_header(
+    tmp_path: Path,
+) -> None:
+    repository = SessionRepository(tmp_path)
+    session = repository.create(agent_name="test-agent", model_id="test")
+    original = session.path.read_text(encoding="utf-8").replace('"schema_version":9', '"schema_version":1')
+    session.path.write_text(original, encoding="utf-8")
+
+    context_state = SessionContextState()
+    settings = SessionSettingsState(collaboration_mode=CollaborationMode.PLAN)
+    plan = PlanState(steps=[PlanStep(id="one", title="One")])
+    repository.append_context_state(session.id, context_state)
+    repository.append_session_settings(session.id, settings)
+    repository.append_plan_state(session.id, plan)
+    repository.append_turn(
+        session.id,
+        user_input="continue",
+        messages=[],
+        approvals=[],
+        usage={},
+        status="completed",
+        plan=plan,
+    )
+
+    records = [json.loads(line) for line in session.path.read_text(encoding="utf-8").splitlines()]
+    assert records[0]["schema_version"] == 1
+    assert [
+        (record["from_version"], record["to_version"])
+        for record in records
+        if record["type"] == "schema_upgrade"
+    ] == [(1, 5), (5, 6)]
+    assert [record["type"] for record in records[1:]] == [
+        "schema_upgrade",
+        "context_state",
+        "schema_upgrade",
+        "session_settings",
+        "plan_state",
+        "turn",
+    ]
+
+    loaded = repository.load(session.id)
+    assert loaded.context_state == context_state
+    assert loaded.settings == settings
+    assert loaded.plan == plan
+    assert repository.load_turn_page(session.id, limit=20).turns[0].user_input == "continue"
+
+
+def test_session_rejects_schema_upgrade_with_stale_from_version(tmp_path: Path) -> None:
+    repository = SessionRepository(tmp_path)
+    session = repository.create(agent_name="test-agent", model_id="test")
+    records = [json.loads(line) for line in session.path.read_text(encoding="utf-8").splitlines()]
+    records[0]["schema_version"] = 4
+    records.append(
+        {
+            "type": "schema_upgrade",
+            "from_version": 3,
+            "to_version": 5,
+            "created_at": "2026-01-01T00:00:00Z",
+        }
+    )
+    session.path.write_text(
+        "".join(json.dumps(record, separators=(",", ":")) + "\n" for record in records),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(SessionCorruptError, match="invalid schema_upgrade at line 2"):
+        repository.load(session.id)
+    with pytest.raises(SessionCorruptError, match="invalid schema_upgrade at line 2"):
+        repository.load_turn_page(session.id, limit=20)
 
 
 def test_session_v6_round_trip_preserves_timeline_events(tmp_path: Path) -> None:

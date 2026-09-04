@@ -178,7 +178,14 @@ def build_mcp_toolset(
 
     wrapped = wrapped.prepared(prepare_definitions)
     resilient: AbstractToolset[None] = ResilientMcpToolset(
-        wrapped, client=client, server_name=name, status_sink=status_sink
+        wrapped,
+        client=client,
+        server_name=name,
+        status_sink=status_sink,
+        retryable_tools=frozenset(
+            f"{name}_{raw_name}" for raw_name, effect in config.tool_effects.items()
+            if effect == EffectKind.OBSERVE.value
+        ),
     )
     return McpToolsetBundle(name, config, client, resilient, policy)
 
@@ -228,16 +235,17 @@ def _is_transport_error(error: BaseException) -> bool:
 
 
 class ResilientMcpToolset(WrapperToolset[None]):
-    """Outermost MCP wrapper: reconnect once on transport failure, never crash.
+    """Reconnect observe calls; surface uncertain effects without replay.
 
     pydantic-ai feeds server-side tool errors back to the model as
     ``ModelRetry``, but a *broken connection* (dead stdio server, dropped HTTP
     stream) propagates and terminates the whole run. This wrapper catches those
     transport errors, forces the underlying ``MCPToolset`` to re-establish its
     session (exit → enter, which also clears its cached tool list), and retries
-    the call once. If the server stays unreachable the model receives a
-    ``ModelRetry`` explaining the outage instead of the run dying — and every
-    later call re-attempts the reconnect, so a restarted server self-heals.
+    an explicitly declared observe call once. Unknown/mutating effects are
+    never automatically replayed after an ambiguous disconnect. If an observe
+    call stays unreachable the model receives a ``ModelRetry`` explaining the
+    outage; later observe calls may re-attempt the connection.
     """
 
     def __init__(
@@ -247,11 +255,13 @@ class ResilientMcpToolset(WrapperToolset[None]):
         client: MCPToolset[None],
         server_name: str,
         status_sink: Callable[[str, str], None] | None = None,
+        retryable_tools: frozenset[str] = frozenset(),
     ) -> None:
         super().__init__(wrapped)
         self._client = client
         self._server_name = server_name
         self._status_sink = status_sink
+        self._retryable_tools = retryable_tools
         self._reconnect_lock = asyncio.Lock()
 
     async def call_tool(
@@ -266,6 +276,14 @@ class ResilientMcpToolset(WrapperToolset[None]):
         except BaseException as error:
             if not _is_transport_error(error):
                 raise
+            if name not in self._retryable_tools:
+                self._report("error")
+                raise ModelRetry(
+                    f"[mcp_outcome_unknown] MCP tool {name!r} lost its connection; "
+                    "the remote action may already have executed. It was not automatically retried "
+                    "because its effect is not declared observe. Verify the remote outcome before "
+                    "repeating the action; use another authorized read tool if available."
+                ) from error
             return await self._reconnect_and_retry(name, tool_args, ctx, tool, error)
 
     async def _reconnect_and_retry(

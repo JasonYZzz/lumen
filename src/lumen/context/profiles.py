@@ -16,6 +16,19 @@ from lumen.config import ContextConfig, ModelSettingsConfig, ModelTokenizerConfi
 
 TokenizerKind = Literal["conservative", "tiktoken", "deterministic"]
 
+# Unknown model deployments need a useful starting point without pretending
+# Lumen knows their architectural output limit. 16K is the modern conservative
+# floor; a large explicitly declared window may start as high as 32K. The
+# proportional/window cap keeps small local deployments usable.
+DEFAULT_UNKNOWN_OUTPUT_TOKENS = 16_384
+_MAX_UNKNOWN_INITIAL_OUTPUT_TOKENS = 32_768
+
+
+def _unknown_output_reserve(window_tokens: int, hard_limit_tokens: int) -> int:
+    proportional = max(DEFAULT_UNKNOWN_OUTPUT_TOKENS, window_tokens // 8)
+    capacity_cap = max(1, min(window_tokens // 4, hard_limit_tokens // 2))
+    return min(proportional, _MAX_UNKNOWN_INITIAL_OUTPUT_TOKENS, capacity_cap)
+
 
 @dataclass(frozen=True, slots=True)
 class TokenizerSpec:
@@ -56,6 +69,15 @@ class ResolvedContextPolicy:
 
 
 _PROFILES: tuple[ModelCapabilityProfile, ...] = (
+    ModelCapabilityProfile(
+        id="alibaba-qwen3.8",
+        aliases=("qwen3.8-max", "qwen3.8-flash"),
+        context_window_tokens=1_000_000,
+        max_output_tokens=131_072,
+        tokenizer=TokenizerSpec("conservative"),
+        source="https://help.aliyun.com/zh/model-studio/qwen3-8-max",
+        verified_at=date(2026, 9, 2),
+    ),
     ModelCapabilityProfile(
         id="openai-gpt-5.6",
         aliases=("gpt-5.6", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"),
@@ -184,6 +206,7 @@ def resolve_context_policy(
     if override.tokenizer is not None and override.tokenizer.kind != "auto":
         estimated.discard("tokenizer")
 
+    hard = int(window * context.hard_ratio)
     configured_output_raw = model.settings.get("max_tokens")
     configured_output = (
         int(configured_output_raw)
@@ -206,7 +229,7 @@ def resolve_context_policy(
     elif architecture_output is not None:
         output_reserve = architecture_output
     else:
-        output_reserve = 4_096
+        output_reserve = _unknown_output_reserve(window, hard)
         estimated.add("output_reserve_tokens")
 
     legacy_soft = "soft_token_limit" in context.model_fields_set
@@ -218,7 +241,6 @@ def resolve_context_policy(
         if legacy_soft
         else int(window * context.soft_ratio)
     )
-    hard = int(window * context.hard_ratio)
     ratio_target = int(window * context.target_ratio)
     # An absolute soft limit is a compatibility/operations override, not a
     # replacement model window. It may intentionally sit above the resolved
@@ -241,9 +263,9 @@ def resolve_context_policy(
             "invalid resolved context thresholds "
             f"(target={target}, soft={soft}, hard={hard}, window={window})"
         )
-    if output_reserve >= window:
+    if output_reserve >= hard:
         raise ValueError(
-            f"resolved output reserve {output_reserve} must be smaller than context window {window}"
+            f"resolved output reserve {output_reserve} must be smaller than hard limit {hard}"
         )
 
     return ResolvedContextPolicy(
@@ -264,6 +286,7 @@ def resolve_context_policy(
 
 
 __all__ = [
+    "DEFAULT_UNKNOWN_OUTPUT_TOKENS",
     "ModelCapabilityProfile",
     "ResolvedContextPolicy",
     "TokenizerSpec",

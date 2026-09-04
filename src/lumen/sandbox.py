@@ -58,11 +58,11 @@ class SandboxRunner:
         environment["HOME"] = str(home)
         environment["TMPDIR"] = str(tmp)
         environment["LUMEN_WORKSPACE"] = str(self.workspace)
-        executable = self._resolve_executable(argv[0], environment)
-        command = [str(executable), *argv[1:]]
-        if self.config.mode == "disabled":
-            return PreparedSandboxCommand(command, environment, temp_root)
         try:
+            executable = self._resolve_executable(argv[0], environment)
+            command = [str(executable), *argv[1:]]
+            if self.config.mode == "disabled":
+                return PreparedSandboxCommand(command, environment, temp_root)
             system = platform.system()
             if system == "Darwin":
                 wrapped = self._seatbelt(command, Path(cwd).resolve(), temp_root, read_paths)
@@ -103,6 +103,16 @@ class SandboxRunner:
             path = Path(value)
             if path.exists():
                 candidates.append(path.resolve())
+        # Public runtime configuration, not all of /etc (which can hold secrets).
+        # TLS clients read openssl.cnf even for offline commands such as curl -V.
+        for value in (
+            "/etc/ssl/openssl.cnf", "/etc/ssl/cert.pem", "/etc/ssl/certs",
+            "/etc/pki/tls/openssl.cnf", "/etc/pki/tls/certs",
+            "/etc/hosts", "/etc/resolv.conf", "/etc/nsswitch.conf",
+        ):
+            # Keep the public spelling too: bubblewrap must mount e.g.
+            # /etc/resolv.conf even when it points into /run on the host.
+            candidates.extend((Path(value), Path(value).resolve()))
         return _dedupe_existing(candidates)
 
     def _write_roots(self, temp_root: Path) -> list[Path]:
@@ -134,10 +144,25 @@ class SandboxRunner:
             # ``subpath`` rules below do not include their ancestor entry.
             '(allow file-read* (literal "/"))',
         ]
+        read_roots = _dedupe_existing([*self._read_roots(command, read_paths), *self._write_roots(temp_root)])
         clauses.extend(
             f'(allow file-read* (subpath "{_escape(path)}"))'
-            for path in self._read_roots(command, read_paths)
+            for path in read_roots
         )
+        # getcwd/dyld and xcode-select traverse ancestors and the developer-dir
+        # symlink. Metadata permits traversal, not listing or reading their data.
+        ancestors = {parent for path in [*read_roots, cwd] for parent in path.parents}
+        ancestors.update({Path("/var"), Path("/var/select"), Path("/private/var/select")})
+        ancestors.update({Path("/var/select/developer_dir"), Path("/private/var/select/developer_dir")})
+        clauses.extend(
+            f'(allow file-read-metadata (literal "{_escape(path)}"))'
+            for path in sorted(ancestors)
+        )
+        clauses.extend(
+            f'(allow file-read* (literal "{path}"))'
+            for path in ("/dev/null", "/dev/zero", "/dev/random", "/dev/urandom")
+        )
+        clauses.append('(allow file-write* (literal "/dev/null"))')
         clauses.extend(
             f'(allow file-write* (subpath "{_escape(path)}"))'
             for path in self._write_roots(temp_root)

@@ -141,6 +141,7 @@ class SessionContextManager:
                     "name": item.name,
                     "revision": item.revision,
                     "source": item.source,
+                    "body_artifact_ref": item.body_artifact_ref,
                     "body": body.decode("utf-8", errors="replace"),
                 }
             )
@@ -158,6 +159,7 @@ class SessionContextManager:
                     "server": item.server,
                     "uri": item.uri,
                     "revision": item.revision,
+                    "body_artifact_ref": item.body_artifact_ref,
                     "body": body.decode("utf-8", errors="replace"),
                 }
             )

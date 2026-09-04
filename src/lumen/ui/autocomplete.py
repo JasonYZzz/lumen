@@ -51,6 +51,8 @@ class CompletionDropdown(OptionList):
         min-width: 24;
         width: 92%;
         height: auto;
+        text-wrap: nowrap;
+        text-overflow: ellipsis;
         display: none;
         background: $surface 100%;
         border: round $primary 55%;
@@ -83,10 +85,11 @@ class CompletionDropdown(OptionList):
     class SuggestionSelected(Message):
         """Posted when the user accepts a suggestion (Tab or Enter)."""
 
-        def __init__(self, suggestion: CompletionSuggestion, prefix: str) -> None:
+        def __init__(self, suggestion: CompletionSuggestion, prefix: str, *, activate: bool = False) -> None:
             super().__init__()
             self.suggestion = suggestion
             self.prefix = prefix
+            self.activate = activate
 
     class Dismissed(Message):
         """Posted when the user cancels the dropdown (Esc)."""
@@ -189,11 +192,13 @@ class CompletionDropdown(OptionList):
             label_token = "tool"
         label_color = self._theme_variable(label_token, FALLBACK_COLORS["activity"])
         meta_color = self._theme_variable("activity-meta", FALLBACK_COLORS["activity-meta"])
+        # Metadata may contain paragraphs. Each completion stays one terminal
+        # row so the name and keyboard selection remain visible above input.
         rendered = Text()
         rendered.append(f"{suggestion.label:<{label_width}}", style=f"bold {label_color}")
         if suggestion.description:
             rendered.append("  ")
-            rendered.append(suggestion.description, style=meta_color)
+            rendered.append(" ".join(suggestion.description.split()), style=meta_color)
         return rendered
 
     def _theme_variable(self, token: str, fallback: str) -> str:
@@ -231,7 +236,7 @@ class CompletionDropdown(OptionList):
         current = self.highlighted if self.highlighted is not None else 0
         self.highlighted = (current + delta) % count
 
-    def action_select(self) -> None:
+    def action_select(self, *, activate: bool = False) -> None:
         """Accept the highlighted suggestion (bound to Tab and Enter).
 
         We hide the dropdown *synchronously* before posting the message so
@@ -248,7 +253,7 @@ class CompletionDropdown(OptionList):
         # returns False immediately, before the message loop runs again.
         self.display = False
         self._suggestions = []
-        self.post_message(self.SuggestionSelected(sug, self.trigger_prefix))
+        self.post_message(self.SuggestionSelected(sug, self.trigger_prefix, activate=activate))
 
     def action_dismiss(self) -> None:
         """Cancel the dropdown (bound to Esc)."""

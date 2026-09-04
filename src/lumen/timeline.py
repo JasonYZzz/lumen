@@ -4,10 +4,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 from enum import StrEnum
+from math import isfinite
 from typing import Any, Protocol
 
 from pydantic_ai.messages import ModelResponse, TextPart, ToolCallPart, ToolReturnPart
 
+from lumen.attachments import AttachmentRef
 from lumen.events import (
     AgentLifecycleChanged,
     ClarificationRequested,
@@ -32,6 +34,7 @@ from lumen.events import (
     ToolApprovalResolved,
     ToolCallFinished,
     ToolCallStarted,
+    UsageUpdated,
     WorkProductChanged,
 )
 from lumen.sessions import SessionRepository, TurnRecord, recoverable_orphaned_input
@@ -70,6 +73,10 @@ class TimelineItem:
     plan: dict[str, Any] | None = None
     call_view: dict[str, Any] | None = None
     result_view: dict[str, Any] | None = None
+    elapsed_seconds: float | None = None
+    turn_index: int | None = None
+    interaction_id: str | None = None
+    attachments: tuple[AttachmentRef, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -109,12 +116,20 @@ class RepositoryTimelineAdapter:
         page = self._repository.load_turn_page(self._session_id, before=cursor, limit=limit)
         items: list[TimelineItem] = []
         for turn_index, turn in enumerate(page.turns):
+            ordinal = (page.next_before or 0) + turn_index
+            turn_items = _turn_items(
+                turn,
+                ordinal=ordinal,
+                active_interaction_id=self._active_interaction_id,
+            )
             items.extend(
-                _turn_items(
-                    turn,
-                    ordinal=(page.next_before or 0) + turn_index,
-                    active_interaction_id=self._active_interaction_id,
+                replace(
+                    item, turn_index=ordinal, interaction_id=turn.interaction_id,
+                    attachments=tuple(turn.attachments),
                 )
+                if item.kind is TimelineKind.USER
+                else item
+                for item in turn_items
             )
         if cursor is None and not page.turns:
             recovered_input = recoverable_orphaned_input(self._repository.load(self._session_id))
@@ -162,6 +177,17 @@ class TimelineStore:
 
     def apply(self, event: RunEvent) -> TimelineItem | None:
         item: TimelineItem | None = None
+        if isinstance(event, UsageUpdated):
+            # Project the Runtime's durable measurement onto its user turn.
+            # No new visible row, browser clock, or Session timing authority.
+            if isfinite(event.elapsed_seconds) and event.elapsed_seconds >= 0:
+                for index in range(len(self._items) - 1, -1, -1):
+                    if self._items[index].kind is TimelineKind.USER:
+                        self._items[index] = replace(
+                            self._items[index], elapsed_seconds=event.elapsed_seconds
+                        )
+                        break
+            return None
         if isinstance(event, RunStarted):
             item = self._new(TimelineKind.USER, text=event.prompt)
         elif isinstance(event, TextDelta):
@@ -171,16 +197,23 @@ class TimelineStore:
                 return item
             item = self._new(TimelineKind.ASSISTANT, text=event.text)
         elif isinstance(event, TextRetracted):
-            if not self._items or self._items[-1].kind is not TimelineKind.ASSISTANT:
-                return None
-            previous = self._items[-1].text
-            remaining = previous[: -event.characters] if event.characters else previous
-            if remaining:
-                item = replace(self._items[-1], text=remaining)
-                self._items[-1] = item
-                return item
-            self._items.pop()
-            return None
+            remaining = event.characters
+            updated: TimelineItem | None = None
+            for index in range(len(self._items) - 1, -1, -1):
+                previous = self._items[index]
+                if previous.kind is TimelineKind.USER or remaining <= 0:
+                    break
+                if previous.kind is not TimelineKind.ASSISTANT:
+                    continue
+                removed = min(remaining, len(previous.text))
+                remaining -= removed
+                retained = previous.text[:len(previous.text) - removed]
+                if retained:
+                    updated = replace(previous, text=retained)
+                    self._items[index] = updated
+                else:
+                    self._items.pop(index)
+            return updated
         elif isinstance(event, CommentaryDelta):
             if self._items and self._items[-1].kind is TimelineKind.COMMENTARY:
                 item = replace(self._items[-1], text=self._items[-1].text + event.text)
@@ -290,9 +323,9 @@ class TimelineStore:
         elif isinstance(event, ContextCompactionFailed):
             item = self._new(TimelineKind.ERROR, text=event.message, is_error=True)
         elif isinstance(event, RunFailed):
-            item = self._new(TimelineKind.ERROR, text=event.message, is_error=True)
+            item = self._new(TimelineKind.ERROR, text=event.message, is_error=True, status="failed")
         elif isinstance(event, RunCancelled):
-            item = self._new(TimelineKind.SYSTEM, text=event.message)
+            item = self._new(TimelineKind.SYSTEM, text=event.message, status="cancelled")
         elif isinstance(event, ClarificationRequested):
             choices = "\n".join(f"- {choice}" for choice in event.choices)
             text = event.question + (f"\n{choices}" if choices else "")
@@ -455,6 +488,7 @@ def _turn_items(
                 kind,
                 text=message,
                 is_error=turn.status == "failed",
+                status=turn.status,
             )
         )
     elif _is_interrupted_turn(turn, active_interaction_id):

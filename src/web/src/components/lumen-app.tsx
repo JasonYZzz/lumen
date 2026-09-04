@@ -8,7 +8,6 @@ import {
   CaretDown,
   Check,
   CheckCircle,
-  Circle,
   CircleNotch,
   ClockCounterClockwise,
   Copy,
@@ -17,9 +16,11 @@ import {
   FolderSimple,
   FolderOpen,
   GearSix,
+  Globe,
   HardDrives,
   Info,
   List,
+  ListChecks,
   ListMagnifyingGlass,
   MagnifyingGlass,
   NotePencil,
@@ -28,6 +29,7 @@ import {
   Plus,
   Robot,
   ShieldCheck,
+  SidebarSimple,
   Sparkle,
   TerminalWindow,
   TreeStructure,
@@ -35,7 +37,7 @@ import {
   WarningCircle,
   X,
 } from '@phosphor-icons/react'
-import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react'
+import { useCallback, useEffect, useId, useMemo, useReducer, useRef, useState, type MouseEvent } from 'react'
 import { exchangeLaunchToken, lumenApi, subscribeRun } from '@/lib/api/client'
 import type {
   AgentRecord,
@@ -49,27 +51,38 @@ import type {
   EventEnvelope,
   QueueMode,
   SessionSummary,
+  SessionSnapshot,
   TimelineEntry,
 } from '@/lib/api/types'
 import { initialRunState, runReducer } from '@/lib/state/run-reducer'
 import {
-  baseSlashCommands,
+  buildSlashCommands,
   parsePromptInvocation,
-  type SlashCommand,
 } from '@/lib/slash-commands'
 import { Composer } from './composer'
+import { ClarificationPrompt } from './clarification-prompt'
+import { CopyButton } from './copy-button'
+import { UserMessage } from './user-message'
+import { ConversationScrollNav } from './conversation-scroll-nav'
 import { ChoiceMenu, type ChoiceOption } from './choice-menu'
 import { LandingEntry } from './landing-entry'
 import { LiveVoiceControls } from './live-voice-controls'
+import { LumenLogo, LumenMark } from './lumen-logo'
 import { MarkdownMessage } from './markdown-message'
+import { PlanProgress, PlanProposal, PlanReview } from './plan-panel'
+import { DocumentProvider, DocumentResults } from './document-preview'
 import { SessionActionsMenu } from './session-actions-menu'
+import { SessionSearchDialog } from './session-search-dialog'
 import { EMPTY_WORKSPACE_PROMPT } from '@/lib/copy'
+import { projectThinkingMarkup } from '@/lib/thinking-markup'
 import {
   activityMeta,
+  activityDuration,
   activityTitle,
   transcriptEventLabel,
   timelineNoteLabel,
   toolSourceLabel,
+  toolActivityLabel,
   turnPresentation,
   type TurnPresentation,
 } from '@/lib/turn-activity'
@@ -105,28 +118,109 @@ export function LumenApp() {
   const [queueMode, setQueueMode] = useState<QueueMode>('steer')
   const [loading, setLoading] = useState(true)
   const [sidebarOpen, setSidebarOpen] = useState(false)
-  const [confirmAuto, setConfirmAuto] = useState(false)
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
+  const [sessionSearchOpen, setSessionSearchOpen] = useState(false)
+  const sessionSearchReturnFocusRef = useRef<HTMLButtonElement>(null)
+  const sidebarToggleRef = useRef<HTMLButtonElement>(null)
+  const sidebarRailRef = useRef<HTMLElement>(null)
+  const sidebarFocusRef = useModalFocus(() => setSidebarOpen(false), sidebarOpen)
+
+  const setDesktopSidebarCollapsed = useCallback((collapsed: boolean) => {
+    setSidebarCollapsed(collapsed)
+    try { localStorage.setItem('lumen.sidebarCollapsed', String(collapsed)) } catch { /* Storage may be disabled. */ }
+  }, [])
+  const expandSidebar = () => {
+    setSessionMenu(null)
+    const mobile = window.matchMedia?.('(max-width: 800px)').matches ?? false
+    if (mobile) setSidebarOpen(true)
+    else setDesktopSidebarCollapsed(false)
+    window.requestAnimationFrame(() => {
+      if (!mobile) sidebarFocusRef.current?.querySelector<HTMLButtonElement>('.sidebar-close')?.focus()
+    })
+  }
+  const openSessionSearch = (event: MouseEvent<HTMLButtonElement>) => {
+    sessionSearchReturnFocusRef.current = window.matchMedia?.('(max-width: 800px)').matches
+      ? sidebarToggleRef.current : event.currentTarget
+    setSessionMenu(null)
+    setSidebarOpen(false)
+    setSessionSearchOpen(true)
+  }
+  const collapseSidebar = () => {
+    setSessionMenu(null)
+    if (window.matchMedia?.('(max-width: 800px)').matches) setSidebarOpen(false)
+    else {
+      setDesktopSidebarCollapsed(true)
+      window.requestAnimationFrame(() => sidebarRailRef.current?.querySelector('button')?.focus())
+    }
+  }
+  useEffect(() => {
+    try { setSidebarCollapsed(localStorage.getItem('lumen.sidebarCollapsed') === 'true') } catch { /* Optional preference. */ }
+    const media = window.matchMedia?.('(max-width: 800px)')
+    const changed = () => { setSidebarOpen(false); setSessionMenu(null) }
+    media?.addEventListener('change', changed)
+    return () => media?.removeEventListener('change', changed)
+  }, [])
+  const [confirmAuto, setConfirmAuto] = useState<string | null>(null)
+  const [autoError, setAutoError] = useState('')
+  const [approvalChanging, setApprovalChanging] = useState(false)
+  const approvalChangeRef = useRef(false)
   const [planFeedback, setPlanFeedback] = useState('')
   const [planReviewBusy, setPlanReviewBusy] = useState(false)
+  const planReviewRequest = useRef<symbol | null>(null)
+  useEffect(() => { setPlanFeedback('') }, [sessionId, run.planReviewRevision])
   const [showJumpToLatest, setShowJumpToLatest] = useState(false)
   const [inspectorOpen, setInspectorOpen] = useState(false)
   const [checkpointsOpen, setCheckpointsOpen] = useState(false)
   const [transcriptOpen, setTranscriptOpen] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const [modelMenuOpen, setModelMenuOpen] = useState(false)
+  const [modeMenuOpen, setModeMenuOpen] = useState(false)
+  const [modelChanging, setModelChanging] = useState(false)
+  const modelChangeRef = useRef(false)
+  const [settingsNotice, setSettingsNotice] = useState('')
   const [checkpoints, setCheckpoints] = useState<CheckpointRecord[]>([])
   const [controlBusy, setControlBusy] = useState(false)
+  const [stopping, setStopping] = useState(false)
+  const [stopError, setStopError] = useState('')
+  const stoppingRef = useRef<string | null>(null)
+  const editingRef = useRef(false)
+  const [messageEditing, setMessageEditing] = useState(false)
+  const [editedFrom, setEditedFrom] = useState<{ sourceId: string; branchId: string } | null>(null)
+  const selectedSessionRef = useRef<string | null>(null)
+  const editRequestRef = useRef<{
+    key: string; forkRequestId: string; runRequestId: string; branchId?: string
+  } | null>(null)
   const closeStreamRef = useRef<(() => void) | null>(null)
   const timelineRef = useRef<HTMLElement>(null)
   const stickToLatestRef = useRef(true)
+  const sessionListRevision = useRef(0)
+
+  const refreshSessions = useCallback(async () => {
+    const revision = ++sessionListRevision.current
+    const items = await lumenApi.listSessions(true)
+    if (revision === sessionListRevision.current) setSessions(items)
+  }, [])
 
   const refreshChrome = useCallback(async () => {
-    const [nextBootstrap, nextSessions] = await Promise.all([
+    const [nextBootstrap] = await Promise.all([
       lumenApi.bootstrap(),
-      lumenApi.listSessions(true),
+      refreshSessions(),
     ])
     setBootstrap(nextBootstrap)
-    setSessions(nextSessions)
-  }, [])
+  }, [refreshSessions])
+
+  const pendingTitles = sessions.filter((item) => item.titlePending).map((item) => item.sessionId).join(',')
+  useEffect(() => {
+    if (!pendingTitles) return
+    let disposed = false
+    let timer: ReturnType<typeof setTimeout>
+    const poll = async () => {
+      try { if (!document.hidden) await refreshSessions() } catch { /* Retry metadata independently of the run. */ }
+      if (!disposed) timer = setTimeout(poll, 1500)
+    }
+    timer = setTimeout(poll, 1500)
+    return () => { disposed = true; clearTimeout(timer) }
+  }, [pendingTitles, refreshSessions])
 
   const attachRun = useCallback(
     (runId: string) => {
@@ -143,6 +237,12 @@ export function LumenApp() {
           ) {
             closeStreamRef.current = null
             void refreshChrome()
+            const selected = selectedSessionRef.current
+            if (selected) void lumenApi.session(selected).then((snapshot) => {
+              if (selectedSessionRef.current !== selected) return
+              dispatch({ type: 'work-state-refreshed', workProducts: snapshot.workProducts,
+                pendingEffects: snapshot.pendingEffects, recoverableEffects: snapshot.recoverableEffects })
+            }).catch(() => { /* The runtime inspector can retry the read. */ })
           }
         },
         (message) => dispatch({ type: 'local-error', message }),
@@ -151,8 +251,24 @@ export function LumenApp() {
     [refreshChrome],
   )
 
+  const applySessionSnapshot = useCallback((snapshot: SessionSnapshot) => {
+    selectedSessionRef.current = snapshot.sessionId
+    setSessionId(snapshot.sessionId)
+    dispatch({ type: 'snapshot', snapshot })
+    const url = new URL(window.location.href)
+    url.searchParams.set('session', snapshot.sessionId)
+    window.history.replaceState({}, '', `${url.pathname}${url.search}`)
+  }, [])
+
   const openSession = useCallback(
     async (id: string) => {
+      selectedSessionRef.current = id
+      setConfirmAuto(null)
+      setAutoError('')
+      planReviewRequest.current = null
+      setPlanReviewBusy(false)
+      setPlanFeedback('')
+      setSettingsNotice('')
       setSessionMenu(null)
       closeStreamRef.current?.()
       closeStreamRef.current = null
@@ -161,16 +277,8 @@ export function LumenApp() {
       setLoading(true)
       try {
         const snapshot = await lumenApi.session(id)
-        setSessionId(id)
-        setBootstrap((current) => current ? {
-          ...current,
-          approvalMode: snapshot.approvalMode,
-          collaborationMode: snapshot.collaborationMode,
-        } : current)
-        dispatch({ type: 'snapshot', snapshot })
-        const url = new URL(window.location.href)
-        url.searchParams.set('session', id)
-        window.history.replaceState({}, '', `${url.pathname}${url.search}`)
+        if (selectedSessionRef.current !== id) return
+        applySessionSnapshot(snapshot)
         if (snapshot.activeRunId) attachRun(snapshot.activeRunId)
       } catch (error) {
         dispatch({
@@ -182,7 +290,7 @@ export function LumenApp() {
         setSidebarOpen(false)
       }
     },
-    [attachRun],
+    [applySessionSnapshot, attachRun],
   )
 
   useEffect(() => {
@@ -224,12 +332,45 @@ export function LumenApp() {
     return created.sessionId
   }, [openSession, refreshChrome])
 
+  const updateSessionSettings = useCallback(async (
+    targetSession: string,
+    settings: Parameters<typeof lumenApi.updateSessionSettings>[1],
+  ) => {
+    await lumenApi.updateSessionSettings(targetSession, settings)
+    // Workspace bootstrap contains defaults, never the selected Session's modes.
+    dispatch({ type: 'session-settings', sessionId: targetSession, settings })
+  }, [])
+
+  const setApprovalMode = useCallback(async (mode: ApprovalMode, resetCollaboration = false) => {
+    if (bootstrap?.activeRunId || run.runId || approvalChangeRef.current) {
+      throw new Error('请等待当前操作结束，再切换审批模式。')
+    }
+    const targetSession = sessionId ?? (await createSession())
+    setAutoError('')
+    if (mode === 'auto') {
+      setConfirmAuto(targetSession)
+      return
+    }
+    setConfirmAuto(null)
+    await updateSessionSettings(targetSession, {
+      approvalMode: mode,
+      ...(resetCollaboration ? { collaborationMode: 'default' as const } : {}),
+    })
+  }, [bootstrap?.activeRunId, createSession, run.runId, sessionId, updateSessionSettings])
+
+  const setCollaborationMode = useCallback(async (mode: 'default' | 'plan') => {
+    if (bootstrap?.activeRunId || run.runId) throw new Error('请先停止运行，再切换工作方式。')
+    const targetSession = sessionId ?? (await createSession())
+    await updateSessionSettings(targetSession, { collaborationMode: mode })
+  }, [bootstrap?.activeRunId, createSession, run.runId, sessionId, updateSessionSettings])
+
   const refreshSessionCapabilities = useCallback(async () => {
     if (!sessionId) return
     const [snapshot, agents] = await Promise.all([
       lumenApi.session(sessionId),
       lumenApi.listAgents(sessionId),
     ])
+    if (selectedSessionRef.current !== sessionId) return
     dispatch({ type: 'agents-refreshed', agents })
     dispatch({
       type: 'work-state-refreshed',
@@ -310,15 +451,32 @@ export function LumenApp() {
     }
   }, [run.runId])
 
-  const waiveEffect = useCallback(async (effect: Record<string, unknown>) => {
-    // TODO(设计审计 W6)：window.prompt 同上，后续替换为自绘弹层
-    if (!sessionId) return
+  const waiveEffect = useCallback(async (effect: Record<string, unknown>, reason: string) => {
+    if (!sessionId || run.runId || bootstrap?.activeRunId) throw new Error('请先停止运行再核实结果。')
     const id = String(effect.id ?? '')
-    const reason = window.prompt('说明为什么可以跳过该验证')
-    if (!id || !reason?.trim()) return
+    if (!id || !reason.trim()) throw new Error('请填写此操作的核实依据。')
     await lumenApi.waiveVerification(sessionId, [id], reason.trim())
     await refreshSessionCapabilities()
-  }, [refreshSessionCapabilities, sessionId])
+  }, [refreshSessionCapabilities, sessionId, run.runId, bootstrap?.activeRunId])
+
+  const selectModel = useCallback(async (model: string) => {
+    if (modelChangeRef.current || bootstrap?.activeRunId || run.runId) {
+      throw new Error('请等待当前操作结束，或停止运行后再切换模型。')
+    }
+    if (model === bootstrap?.activeModel) return
+    if (!bootstrap?.availableModels.includes(model)) throw new Error(`未配置的模型：${model}`)
+    modelChangeRef.current = true
+    setModelChanging(true)
+    setSettingsNotice('')
+    try {
+      await lumenApi.updateWorkspaceSettings({ model })
+      await refreshChrome()
+      setSettingsNotice(`已切换到 ${model}，用于下一轮对话。`)
+    } finally {
+      modelChangeRef.current = false
+      setModelChanging(false)
+    }
+  }, [bootstrap, refreshChrome, run.runId])
 
   const handleSlashCommand = useCallback(
     async (command: string): Promise<boolean> => {
@@ -358,8 +516,7 @@ export function LumenApp() {
           return true
         }
         const targetSession = sessionId ?? (await createSession())
-        await lumenApi.updateSessionSettings(targetSession, { collaborationMode: 'plan' })
-        setBootstrap((current) => current ? { ...current, collaborationMode: 'plan' } : current)
+        await updateSessionSettings(targetSession, { collaborationMode: 'plan' })
         const started = await lumenApi.startRun(targetSession, argument, requestId())
         dispatch({ type: 'run-registered', runId: started.runId })
         attachRun(started.runId)
@@ -369,30 +526,14 @@ export function LumenApp() {
       }
       if (name === '/mode') {
         if (!argument) {
-          dispatch({
-            type: 'local-message',
-            message: `审批：${bootstrap?.approvalMode ?? 'manual'}\n\n可用：\`manual\` · \`accept_edits\` · \`auto\`；需要先规划时使用 \`/plan 任务\`。`,
-          })
+          setModeMenuOpen(true)
           setInput('')
           return true
         }
-        if (!sessionId) {
-          dispatch({ type: 'local-error', message: '请先创建或打开任务。' })
-        } else if (argument === 'auto') {
-          setConfirmAuto(true)
-        } else if (argument === 'plan') {
-          await lumenApi.updateSessionSettings(sessionId, { collaborationMode: 'plan' })
-          setBootstrap((current) => current ? { ...current, collaborationMode: 'plan' } : current)
-        } else if (argument === 'manual' || argument === 'accept_edits') {
-          await lumenApi.updateSessionSettings(sessionId, {
-            approvalMode: argument,
-            collaborationMode: 'default',
-          })
-          setBootstrap((current) => current ? {
-            ...current,
-            approvalMode: argument,
-            collaborationMode: 'default',
-          } : current)
+        if (argument === 'plan') {
+          await setCollaborationMode('plan')
+        } else if (argument === 'auto' || argument === 'manual' || argument === 'accept_edits') {
+          await setApprovalMode(argument, true)
         } else {
           dispatch({ type: 'local-error', message: `不支持的模式：${argument}` })
         }
@@ -401,14 +542,15 @@ export function LumenApp() {
       }
       if (name === '/model') {
         if (!argument) {
-          dispatch({
-            type: 'local-message',
-            message: `当前模型：${bootstrap?.activeModel ?? '未知'}\n\n${bootstrap?.availableModels.map((model) => `\`${model}\``).join(' · ') || '暂无可用模型'}`,
-          })
+          setModelMenuOpen(true)
         } else {
-          await lumenApi.updateWorkspaceSettings({ model: argument })
-          await refreshChrome()
+          await selectModel(argument)
         }
+        setInput('')
+        return true
+      }
+      if (name === '/tasks') {
+        setTranscriptOpen(true)
         setInput('')
         return true
       }
@@ -568,7 +710,9 @@ export function LumenApp() {
         return true
       }
       if (name === '/copy') {
-        const latest = run.timeline.filter((item) => item.kind === 'assistant').at(-1)
+        const latest = groupTimelineByTurn(run.timeline).flatMap((turn) => (
+          turnPresentation(turn.response, turn.user?.text, Boolean(run.runId)).foreground
+        )).findLast((item) => item.kind === 'assistant')
         if (!latest?.text) {
           dispatch({ type: 'local-message', message: '还没有可复制的助手回复。' })
         } else {
@@ -596,8 +740,8 @@ export function LumenApp() {
         return true
       }
       if (name === '/dequeue') {
-        await dequeueInputs()
         setInput('')
+        await dequeueInputs()
         return true
       }
       dispatch({ type: 'local-error', message: `未知命令：${name}。输入 / 查看可用命令。` })
@@ -615,18 +759,35 @@ export function LumenApp() {
       run.runId,
       run.timeline,
       sessionId,
+      selectModel,
+      setApprovalMode,
+      setCollaborationMode,
+      updateSessionSettings,
     ],
   )
 
+  const executeCommand = useCallback(async (command: string, preserveDraft = false) => {
+    const draft = input
+    try {
+      await handleSlashCommand(command)
+      if (preserveDraft && ['/model', '/mode', '/tasks', '/copy', '/checkpoints', '/skills', '/tools'].includes(command)) {
+        setInput(draft)
+      }
+    } catch (error) {
+      dispatch({ type: 'local-error', message: error instanceof Error ? error.message : '命令执行失败' })
+    }
+  }, [handleSlashCommand, input])
+
   const submit = useCallback(async () => {
+    if (modelChangeRef.current || approvalChangeRef.current || editingRef.current || stoppingRef.current || planReviewRequest.current) return
     const prompt = input.trim() || (attachments.length ? '请分析这些图片。' : '')
     if (!prompt) return
-    if (attachments.length && !bootstrap?.inputModalities.includes('image')) {
-      dispatch({ type: 'local-error', message: '当前模型不支持图片输入，请先切换到视觉模型。' })
-      return
-    }
     try {
       if (prompt.startsWith('/') && (await handleSlashCommand(prompt))) return
+      if (attachments.length && !bootstrap?.inputModalities.includes('image')) {
+        dispatch({ type: 'local-error', message: '当前模型不支持图片输入，请先切换到视觉模型。' })
+        return
+      }
       if (run.runId) {
         await lumenApi.queueInput(run.runId, prompt, queueMode, attachments)
         setInput('')
@@ -659,43 +820,124 @@ export function LumenApp() {
     sessionId,
   ])
 
+  const answerClarification = useCallback(async (answer: string) => {
+    if (!sessionId || run.runId || !run.pendingClarification || modelChangeRef.current
+      || approvalChangeRef.current || editingRef.current || planReviewRequest.current) {
+      throw new Error('当前无法提交回答，请等待运行结束。')
+    }
+    const started = await lumenApi.startRun(sessionId, answer, requestId(), [])
+    dispatch({ type: 'run-registered', runId: started.runId })
+    attachRun(started.runId)
+    void refreshChrome()
+  }, [sessionId, run.runId, run.pendingClarification, attachRun, refreshChrome])
+
   const stop = useCallback(async () => {
-    if (!run.runId) return
+    if (!run.runId || stoppingRef.current) return
+    const runId = run.runId
+    stoppingRef.current = runId
+    setStopping(true)
+    setStopError('')
     try {
-      await lumenApi.cancelRun(run.runId)
+      await lumenApi.cancelRun(runId)
     } catch (error) {
-      dispatch({ type: 'local-error', message: error instanceof Error ? error.message : '取消失败' })
+      if (stoppingRef.current === runId) setStopError(error instanceof Error ? error.message : '停止失败，请重试。')
+    } finally {
+      if (stoppingRef.current === runId) {
+        stoppingRef.current = null
+        setStopping(false)
+      }
     }
   }, [run.runId])
 
-  const setApprovalMode = useCallback(
-    async (mode: ApprovalMode) => {
-      if (!sessionId) return
-      if (mode === 'auto') {
-        setConfirmAuto(true)
-        return
+  useEffect(() => {
+    stoppingRef.current = null
+    setStopping(false)
+    setStopError('')
+  }, [run.runId, sessionId])
+
+  const editMessage = useCallback(async (item: TimelineEntry, text: string) => {
+    if (!sessionId || editingRef.current || run.runId || bootstrap?.activeRunId || modelChangeRef.current || approvalChangeRef.current) {
+      throw new Error('请等待当前运行结束后再编辑消息。')
+    }
+    const sourceId = sessionId
+    editingRef.current = true
+    setMessageEditing(true)
+    try {
+      // Resolve the durable turn identity, including a just-finished SSE row.
+      const source = await lumenApi.session(sourceId)
+      const recorded = source.timeline.find((entry) => entry.kind === 'user' && (
+        entry.id === item.id || (item.interactionId && entry.interaction_id === item.interactionId)
+      ))
+      if (!recorded || typeof recorded.turn_index !== 'number') throw new Error('消息尚未保存，请刷新后重试。')
+      const skill = /^\/skill:([^\s]+)(?:\s+([\s\S]*))?$/.exec(text)
+      const prompt = /^\/prompt(?:\s|$)/.test(text) ? parsePromptInvocation(text) : null
+      const original = runReducer(initialRunState, { type: 'snapshot', snapshot: source }).timeline
+        .find((entry) => entry.id === recorded.id)
+      if ((skill || prompt) && original?.attachments?.length) {
+        throw new Error('Skill 和 Prompt 命令暂不支持携带图片，请使用普通消息重新生成，以保留附件。')
       }
-      await lumenApi.updateSessionSettings(sessionId, { approvalMode: mode })
-      setBootstrap((current) => current ? { ...current, approvalMode: mode } : current)
-    },
-    [sessionId],
-  )
+      const key = JSON.stringify([sourceId, recorded.turn_index, text])
+      if (editRequestRef.current?.key !== key) editRequestRef.current = {
+        key, forkRequestId: requestId(), runRequestId: requestId(),
+      }
+      const intent = editRequestRef.current
+      if (!intent.branchId) {
+        const branch = await lumenApi.forkSession(sourceId, recorded.turn_index, {
+          includeTurn: false, clientRequestId: intent.forkRequestId,
+        })
+        intent.branchId = branch.sessionId
+      }
+      const branch = await lumenApi.session(intent.branchId)
+      if (selectedSessionRef.current !== sourceId) throw new Error('已切换任务，未在此处启动重新生成。')
+      const started = skill
+        ? await lumenApi.invokeSkill(intent.branchId, skill[1], skill[2] ?? '', intent.runRequestId)
+        : prompt
+          ? await lumenApi.invokePrompt(intent.branchId, prompt.reference, prompt.arguments, text, intent.runRequestId)
+          : await lumenApi.startRun(intent.branchId, text, intent.runRequestId, original?.attachments ?? [])
+      if (selectedSessionRef.current === sourceId) {
+        closeStreamRef.current?.()
+        applySessionSnapshot(branch)
+        dispatch({ type: 'run-registered', runId: started.runId })
+        stickToLatestRef.current = true
+        attachRun(started.runId)
+        setSettingsNotice('已从编辑后的消息继续。原对话保留在任务列表中。')
+        setEditedFrom({ sourceId, branchId: intent.branchId })
+      }
+      editRequestRef.current = null
+      void refreshChrome()
+    } finally {
+      editingRef.current = false
+      setMessageEditing(false)
+    }
+  }, [sessionId, run.runId, bootstrap?.activeRunId, applySessionSnapshot, attachRun, refreshChrome])
 
   const approveAuto = useCallback(async () => {
-    if (!sessionId) return
-    await lumenApi.updateSessionSettings(sessionId, { approvalMode: 'auto' })
-    setBootstrap((current) => current ? { ...current, approvalMode: 'auto' } : current)
-    setConfirmAuto(false)
-    await refreshChrome()
-  }, [sessionId])
+    if (!confirmAuto || confirmAuto !== sessionId || approvalChangeRef.current) return
+    approvalChangeRef.current = true
+    setApprovalChanging(true)
+    setAutoError('')
+    try {
+      await updateSessionSettings(confirmAuto, { approvalMode: 'auto' })
+      setConfirmAuto((current) => current === confirmAuto ? null : current)
+    } catch (error) {
+      setAutoError(error instanceof Error ? error.message : '切换失败，请重试。')
+    } finally {
+      approvalChangeRef.current = false
+      setApprovalChanging(false)
+    }
+  }, [confirmAuto, sessionId, updateSessionSettings])
 
   const reviewPlan = useCallback(async (action: 'approve' | 'reject') => {
-    if (!sessionId || !run.planReviewRevision || planReviewBusy) return
+    if (!sessionId || selectedSessionRef.current !== sessionId || !run.planReviewRevision
+      || planReviewRequest.current || run.runId || bootstrap?.activeRunId
+      || !['review_pending', 'approved_waiting_to_execute'].includes(run.planReviewStatus ?? '')) return
     const feedback = planFeedback.trim()
     if (action === 'reject' && !feedback) {
       dispatch({ type: 'local-error', message: '驳回计划时需要填写反馈。' })
       return
     }
+    const operation = Symbol('plan-review')
+    planReviewRequest.current = operation
     setPlanReviewBusy(true)
     try {
       const started = await lumenApi.reviewPlan(
@@ -705,27 +947,39 @@ export function LumenApp() {
         requestId(),
         feedback,
       )
+      if (selectedSessionRef.current !== sessionId || planReviewRequest.current !== operation) return
       dispatch({ type: 'run-registered', runId: started.runId })
-      setBootstrap((current) => current ? {
-        ...current,
+      dispatch({ type: 'session-settings', sessionId, settings: {
         collaborationMode: action === 'approve' ? 'default' : 'plan',
-      } : current)
+      } })
       setPlanFeedback('')
       attachRun(started.runId)
     } catch (error) {
+      if (selectedSessionRef.current !== sessionId || planReviewRequest.current !== operation) return
       dispatch({
         type: 'local-error',
         message: error instanceof Error ? error.message : '计划审批失败',
       })
     } finally {
-      setPlanReviewBusy(false)
+      if (planReviewRequest.current === operation) {
+        planReviewRequest.current = null
+        setPlanReviewBusy(false)
+      }
     }
-  }, [attachRun, planFeedback, planReviewBusy, run.planReviewRevision, sessionId])
+  }, [attachRun, bootstrap?.activeRunId, planFeedback, run.planReviewRevision, run.planReviewStatus, run.runId, sessionId])
 
   const leaveSession = useCallback(() => {
+    planReviewRequest.current = null
+    setPlanReviewBusy(false)
+    setPlanFeedback('')
+    setSidebarOpen(false)
+    setConfirmAuto(null)
+    setAutoError('')
+    setSettingsNotice('')
     closeStreamRef.current?.()
     closeStreamRef.current = null
     setSessionId(null)
+    selectedSessionRef.current = null
     setSessionMenu(null)
     dispatch({ type: 'reset' })
     const url = new URL(window.location.href)
@@ -797,23 +1051,36 @@ export function LumenApp() {
     if (!stickToLatestRef.current) return
     const frame = window.requestAnimationFrame(() => scrollToLatest('auto'))
     return () => window.cancelAnimationFrame(frame)
-  }, [run.timeline, run.queuedInputs.length, scrollToLatest])
+  }, [run.timeline, run.runId, run.queuedInputs.length, scrollToLatest])
 
   const activeSession = sessions.find((item) => item.sessionId === sessionId)
+  useEffect(() => {
+    document.title = `${activeSession?.title ?? '新对话'} · Lumen`
+  }, [activeSession?.title])
+  const scrollNavItems = useMemo(() => run.timeline.filter((item) => item.kind === 'user')
+    .map(({ id, text }) => ({ id, text })), [run.timeline])
   const sessionIsArchived = Boolean(activeSession?.archived)
   const visibleSessions = sessions.filter((item) => item.archived === (sessionView === 'archived'))
-  const workspaceBusy = Boolean(bootstrap?.activeRunId || run.runId)
+  const workspaceBusy = Boolean(bootstrap?.activeRunId || run.runId || messageEditing || planReviewBusy)
+  const approvalMode = run.sessionSettings?.approvalMode ?? bootstrap?.approvalMode ?? 'manual'
+  const collaborationMode = run.sessionSettings?.collaborationMode ?? bootstrap?.collaborationMode ?? 'default'
+  const awaitingPlanReview = (run.planReviewStatus === 'review_pending' || run.planReviewStatus === 'approved_waiting_to_execute')
+    && Boolean(run.planReviewRevision)
+  // A Session may retain an old plan while a new, unrelated turn starts.
+  const hasCurrentPlan = Boolean(run.plan?.steps.length) && run.timeline.findLastIndex((item) => item.kind === 'plan')
+    > run.timeline.findLastIndex((item) => item.kind === 'user')
   const isLanding = !sessionIsArchived
     && !loading
     && run.timeline.length === 0
     && !run.runId
     && run.queuedInputs.length === 0
-  const statusLabel = run.runId
+  const statusLabel = planReviewBusy ? '正在提交方案' : messageEditing ? '正在重新生成'
+    : run.runId
     ? '运行中'
     : workspaceBusy
       ? '其他会话运行中'
       : run.status === 'failed'
-        ? '运行失败'
+        ? (run.pendingEffects.length ? '等待核实操作结果' : '运行失败')
         : run.status === 'cancelled'
           ? '已停止'
           : run.status === 'completed'
@@ -821,68 +1088,73 @@ export function LumenApp() {
             : run.status === 'waiting_for_user'
               ? '等待回答'
             : '就绪'
-  const slashCommands = useMemo<SlashCommand[]>(() => {
-    const modelCommands = (bootstrap?.availableModels ?? []).map((model) => ({
-      value: `/model ${model}`,
-      description: model === bootstrap?.activeModel ? '当前模型' : '切换模型',
-      keywords: 'model',
-      kind: 'model' as const,
-    }))
-    const modeCommands: SlashCommand[] = [
-      { value: '/mode manual', description: '每次确认', keywords: 'approval', kind: 'mode' },
-      { value: '/mode accept_edits', description: '自动接受文件修改', keywords: 'approval', kind: 'mode' },
-      { value: '/mode auto', description: '自动执行', keywords: 'approval', kind: 'mode' },
-    ]
-    const skillCommands = (bootstrap?.skills ?? []).map((skill) => ({
-      value: `/skill:${skill.name} `,
-      description: skill.description || '运行技能',
-      keywords: 'skill',
-      kind: 'skill' as const,
-    }))
-    return [...baseSlashCommands, ...modelCommands, ...modeCommands, ...skillCommands]
-  }, [bootstrap])
+  const slashCommands = useMemo(() => buildSlashCommands(bootstrap), [bootstrap])
   const composerSettings = (
     <div className="composer-settings">
       <ChoiceMenu
         className="is-model"
         label="模型"
+        open={modelMenuOpen}
+        onOpenChange={setModelMenuOpen}
+        searchable
+        alignToComposer
         value={bootstrap?.activeModel ?? ''}
-        disabled={!bootstrap || workspaceBusy}
+        disabled={!bootstrap || workspaceBusy || modelChanging}
         icon={<Sparkle size={14} />}
         options={(bootstrap?.availableModels ?? []).map((model) => ({
           value: model,
           label: model,
-          description: model === bootstrap?.activeModel ? '当前使用的模型' : '切换后用于下一轮任务',
         }))}
-        onChange={(model) => void lumenApi.updateWorkspaceSettings({ model }).then(refreshChrome)}
+        onChange={selectModel}
+      />
+      <ChoiceMenu
+        className={collaborationMode === 'plan' ? 'is-plan-mode' : ''}
+        label="工作方式"
+        value={collaborationMode}
+        icon={<ListChecks size={14} />}
+        disabled={!bootstrap || workspaceBusy}
+        options={[
+          { value: 'default', label: '直接执行', description: '开始处理任务，工具操作仍遵守审批设置。' },
+          { value: 'plan', label: '先规划', description: '只读探索并提出方案，确认后开始执行。' },
+        ]}
+        onChange={setCollaborationMode}
       />
       <ChoiceMenu
         label="审批模式"
-        value={bootstrap?.approvalMode ?? 'manual'}
+        open={modeMenuOpen}
+        onOpenChange={setModeMenuOpen}
+        value={approvalMode}
+        disabled={!bootstrap || loading || workspaceBusy || approvalChanging}
         icon={<ShieldCheck size={14} />}
         options={approvalChoices}
-        onChange={(mode) => void setApprovalMode(mode)}
+        onChange={setApprovalMode}
       />
     </div>
   )
 
   return (
-    <main className="workspace-shell">
-      <aside className={`session-sidebar ${sidebarOpen ? 'is-open' : ''}`}>
+    <DocumentProvider workspace={bootstrap?.workspace ?? ''}><main className={`workspace-shell ${sidebarCollapsed ? 'is-sidebar-collapsed' : ''}`}>
+      <nav className="sidebar-rail" ref={sidebarRailRef} aria-label="收起的侧边栏" inert={sessionSearchOpen}>
+        <button type="button" aria-label="展开侧边栏" title="展开侧边栏" aria-expanded="false" aria-controls="session-sidebar" onClick={() => expandSidebar()}><SidebarSimple size={21} /></button>
+        <button type="button" aria-label="新建任务" title="新建任务" onClick={leaveSession}><NotePencil size={21} /></button>
+        <button type="button" aria-label="搜索任务" title="搜索任务" aria-haspopup="dialog" onClick={openSessionSearch}><MagnifyingGlass size={21} /></button>
+      </nav>
+      <aside id="session-sidebar" ref={sidebarFocusRef} className={`session-sidebar ${sidebarOpen ? 'is-open' : ''}`}
+        role={sidebarOpen ? 'dialog' : undefined} aria-modal={sidebarOpen || undefined} aria-label="任务侧边栏" tabIndex={-1} inert={sessionSearchOpen}>
         <div className="sidebar-brand-row">
-          <button className="brand" type="button" onClick={leaveSession}>lumen</button>
-          <button className="sidebar-close" type="button" aria-label="关闭" onClick={() => setSidebarOpen(false)}>
-            <X size={18} aria-hidden="true" />
+          <button className="brand" type="button" aria-label="返回新任务" onClick={leaveSession}>
+            <LumenLogo />
           </button>
+          <div className="sidebar-header-actions">
+            <button className="sidebar-search-toggle" type="button" aria-label="搜索任务" title="搜索任务" aria-haspopup="dialog" onClick={openSessionSearch}><MagnifyingGlass size={19} /></button>
+            <button className="sidebar-close" type="button" aria-label="收起侧边栏" title="收起侧边栏" aria-expanded="true" aria-controls="session-sidebar" onClick={collapseSidebar}>
+              <SidebarSimple size={20} aria-hidden="true" />
+            </button>
+          </div>
         </div>
         <button className="new-session" type="button" onClick={leaveSession}>
           <NotePencil size={18} aria-hidden="true" /> 新建任务
         </button>
-        <div className="sidebar-section-heading">工作区</div>
-        <div className="sidebar-workspace">
-          <FolderSimple size={16} aria-hidden="true" />
-          <span title={bootstrap?.workspace}>{bootstrap?.workspace.split('/').at(-1) ?? 'workspace'}</span>
-        </div>
         <nav className="session-list" aria-label="历史任务">
           <div className="session-view-tabs" role="tablist" aria-label="任务视图">
             <button
@@ -895,7 +1167,7 @@ export function LumenApp() {
                 setSessionMenu(null)
               }}
             >
-              最近任务
+              最近
             </button>
             <button
               type="button"
@@ -931,11 +1203,12 @@ export function LumenApp() {
                     aria-label={`管理任务：${session.title}`}
                     aria-haspopup="menu"
                     aria-expanded={sessionMenu?.session.sessionId === session.sessionId}
-                    onClick={(event) => setSessionMenu((current) => (
-                      current?.session.sessionId === session.sessionId
-                        ? null
-                        : { session, anchor: event.currentTarget }
-                    ))}
+                    onClick={(event) => {
+                      const anchor = event.currentTarget
+                      setSessionMenu((current) => (
+                        current?.session.sessionId === session.sessionId ? null : { session, anchor }
+                      ))
+                    }}
                   >
                     <DotsThree size={18} weight="bold" aria-hidden="true" />
                   </button>
@@ -944,6 +1217,10 @@ export function LumenApp() {
             ))
           )}
         </nav>
+        <div className="sidebar-workspace" title={bootstrap?.workspace}>
+          <FolderSimple size={16} aria-hidden="true" />
+          <span>{bootstrap?.workspace.split('/').at(-1) ?? 'workspace'}</span>
+        </div>
         {sessionMenu && (
           <SessionActionsMenu
             anchor={sessionMenu.anchor}
@@ -973,14 +1250,14 @@ export function LumenApp() {
         <button className="sidebar-scrim" type="button" tabIndex={-1} aria-label="关闭任务列表" onClick={() => setSidebarOpen(false)} />
       )}
 
-      <section className="agent-workspace">
+      <section className="agent-workspace" inert={sidebarOpen || sessionSearchOpen}>
         <header className={`workspace-header ${isLanding ? 'is-landing' : ''}`}>
           <div className="workspace-heading">
-            <button className="sidebar-toggle" type="button" aria-label="打开任务列表" onClick={() => setSidebarOpen(true)}>
-              <List size={19} aria-hidden="true" />
+            <button className="sidebar-toggle" ref={sidebarToggleRef} type="button" aria-label="展开侧边栏" aria-expanded={sidebarOpen} aria-controls="session-sidebar" onClick={() => expandSidebar()}>
+              <SidebarSimple size={21} aria-hidden="true" />
             </button>
             <div>
-              <h1>{activeSession?.title ?? '新任务'}</h1>
+              <h1>{activeSession?.title ?? '新对话'}</h1>
               {(workspaceBusy || run.status === 'failed' || run.status === 'cancelled') && <p>
                 <span className={workspaceBusy ? 'status-dot is-busy' : 'status-dot'} />
                 {statusLabel}{usageLabel(run.usage)}
@@ -1034,10 +1311,15 @@ export function LumenApp() {
           </div>
         </header>
 
+        {!workspaceBusy && run.pendingEffects.length > 0 && <div className="settings-notice" role="status">
+          已保留产物，有 {run.pendingEffects.length} 项操作结果需要核实。处理后可继续原任务；编辑消息不会清除这些记录。
+          <button type="button" onClick={() => void openInspector()}>查看并处理</button>
+        </div>}
+
         {settingsOpen && (
           <SettingsDialog
             workspace={bootstrap?.workspace ?? ''}
-            runActive={Boolean(run.runId)}
+            runActive={workspaceBusy}
             onClose={() => setSettingsOpen(false)}
           />
         )}
@@ -1048,11 +1330,11 @@ export function LumenApp() {
             workProducts={run.workProducts}
             pendingEffects={run.pendingEffects}
             recoverableEffects={run.recoverableEffects}
-            busy={controlBusy}
+            busy={controlBusy || workspaceBusy}
             onClose={() => setInspectorOpen(false)}
             onRefresh={() => void refreshSessionCapabilities()}
             onAgentAction={(agent, action) => void runAgentAction(agent, action)}
-            onWaive={(effect) => void waiveEffect(effect)}
+            onWaive={waiveEffect}
           />
         )}
 
@@ -1087,38 +1369,11 @@ export function LumenApp() {
         {confirmAuto && (
           <div className="auto-confirm" role="alert">
             <ShieldCheck size={19} />
-            <div><strong>开启 auto 模式？</strong><span>已分类的写入、执行和外部工具将不再逐次确认。</span></div>
-            <button type="button" onClick={() => void approveAuto()}>确认开启</button>
-            <button type="button" className="quiet" onClick={() => setConfirmAuto(false)}>取消</button>
-          </div>
-        )}
-
-        {(run.planReviewStatus === 'review_pending'
-          || run.planReviewStatus === 'approved_waiting_to_execute')
-          && run.planReviewRevision && (
-          <div className="plan-review" role="alert">
-            <div>
-              <strong>计划 revision {run.planReviewRevision} 等待审批</strong>
-              <span>批准后将以当前审批模式开始新的执行 turn。</span>
+            <div><strong>开启 auto 模式？</strong><span>已分类的写入、执行和外部工具将不再逐次确认。</span>
+              {autoError && <span className="auto-confirm-error" role="alert">{autoError}</span>}
             </div>
-            <textarea
-              value={planFeedback}
-              disabled={planReviewBusy}
-              placeholder="如需驳回，请填写修改意见"
-              aria-label="计划驳回反馈"
-              onChange={(event) => setPlanFeedback(event.target.value)}
-            />
-            <button type="button" disabled={planReviewBusy} onClick={() => void reviewPlan('approve')}>
-              {run.planReviewStatus === 'approved_waiting_to_execute' ? '继续执行' : '批准并执行'}
-            </button>
-            <button
-              type="button"
-              className="quiet"
-              disabled={planReviewBusy || !planFeedback.trim()}
-              onClick={() => void reviewPlan('reject')}
-            >
-              驳回并重新规划
-            </button>
+            <button type="button" disabled={approvalChanging || workspaceBusy || loading} onClick={() => void approveAuto()}>{approvalChanging ? '正在切换…' : '确认开启'}</button>
+            <button type="button" className="quiet" disabled={approvalChanging} onClick={() => setConfirmAuto(null)}>取消</button>
           </div>
         )}
 
@@ -1135,6 +1390,7 @@ export function LumenApp() {
               onQueueModeChange={setQueueMode}
               onAttachmentsChange={setAttachments}
               onSubmit={() => void submit()}
+              onCommand={(command, preserveDraft) => void executeCommand(command, preserveDraft)}
               onStop={() => void stop()}
               settingsControl={composerSettings}
               liveControl={(
@@ -1165,6 +1421,12 @@ export function LumenApp() {
                       key={turn.id}
                       turn={turn}
                       active={Boolean(run.runId) && index === turns.length - 1}
+                      clarification={index === turns.length - 1 ? run.pendingClarification : null}
+                      clarificationAnswered={index < turns.length - 1}
+                      onAnswer={answerClarification}
+                      answerDisabled={Boolean(run.runId) || sessionIsArchived || modelChanging || approvalChanging}
+                      onEdit={editMessage}
+                      editDisabled={messageEditing ? '正在重新生成消息' : workspaceBusy ? '请先停止或等待当前运行结束' : sessionIsArchived ? '恢复任务后可编辑消息' : modelChanging || approvalChanging ? '正在更新设置，请稍候' : undefined}
                       onApproval={(callId, approved, scope) => {
                         if (run.runId) {
                           void lumenApi.decideApproval(run.runId, callId, approved, scope)
@@ -1173,8 +1435,12 @@ export function LumenApp() {
                     />
                   ))
                 )}
+                {awaitingPlanReview && run.plan && <PlanProposal plan={run.plan} />}
                 <div className="timeline-end" aria-hidden="true" />
               </section>
+
+              {!loading && <ConversationScrollNav containerRef={timelineRef} items={scrollNavItems}
+                onNavigate={() => { stickToLatestRef.current = false; setShowJumpToLatest(true) }} />}
 
               {showJumpToLatest && (
                 <button className="jump-to-latest" type="button" onClick={() => scrollToLatest()}>
@@ -1198,10 +1464,18 @@ export function LumenApp() {
                 </div>
               ) : (
                 <footer className="workspace-composer">
-                {run.runId && (
+                {awaitingPlanReview && run.planReviewRevision && <PlanReview
+                  key={`${sessionId}:${run.planReviewRevision}`}
+                  revision={run.planReviewRevision} waiting={run.planReviewStatus === 'approved_waiting_to_execute'}
+                  busy={planReviewBusy} disabled={workspaceBusy} feedback={planFeedback} onFeedback={setPlanFeedback}
+                  onReview={(action) => void reviewPlan(action)}
+                />}
+                {run.runId && !awaitingPlanReview && collaborationMode === 'default' && hasCurrentPlan && <PlanProgress
+                  key={sessionId} plan={run.plan!} running={Boolean(run.runId)} stopping={stopping} />}
+                {run.runId && (awaitingPlanReview || collaborationMode === 'plan' || !hasCurrentPlan) && (
                   <div className="run-live-status" role="status">
                     <CircleNotch size={14} className="spin" />
-                    <span><strong>正在处理</strong></span>
+                    <span><strong>{stopping ? '正在停止…' : collaborationMode === 'plan' ? '正在探索并规划' : '正在处理'}</strong></span>
                   </div>
                 )}
                 {run.queuedInputs.length > 0 && (
@@ -1213,6 +1487,8 @@ export function LumenApp() {
                 <Composer
                   value={input}
                   busy={Boolean(run.runId)}
+                  stopping={stopping}
+                  stopError={stopError}
                   queueMode={queueMode}
                   slashCommands={slashCommands}
                   attachments={attachments}
@@ -1223,6 +1499,7 @@ export function LumenApp() {
                   onSubmit={() => void submit()}
                   onStop={() => void stop()}
                   settingsControl={composerSettings}
+                  onCommand={(command, preserveDraft) => void executeCommand(command, preserveDraft)}
                   liveControl={(
                     <LiveVoiceControls
                       enabled={Boolean(bootstrap?.liveEnabled)}
@@ -1232,13 +1509,23 @@ export function LumenApp() {
                     />
                   )}
                 />
+                {(settingsNotice || editedFrom?.branchId === sessionId) && <div className="composer-context-notice">
+                  {settingsNotice && <p className="composer-notice" role="status">{settingsNotice}</p>}
+                  {editedFrom?.branchId === sessionId && <button type="button" className="edit-source-link quiet"
+                    onClick={() => void openSession(editedFrom.sourceId)}>查看原对话</button>}
+                </div>}
                 </footer>
               )}
             </>
           )}
         </div>
       </section>
-    </main>
+      {sessionSearchOpen && <SessionSearchDialog sessions={sessions} loading={loading} returnFocusRef={sessionSearchReturnFocusRef}
+        onClose={() => setSessionSearchOpen(false)} onSelect={(id) => {
+          setSessionSearchOpen(false)
+          void openSession(id)
+        }} />}
+    </main></DocumentProvider>
   )
 }
 
@@ -1337,6 +1624,15 @@ function SettingsDialog({
   const [pathCopied, setPathCopied] = useState(false)
   const [capabilityError, setCapabilityError] = useState('')
   const [capabilityLoading, setCapabilityLoading] = useState(true)
+  const settingsContentRef = useRef<HTMLDivElement>(null)
+  const closeNoticeRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => { settingsContentRef.current?.scrollTo({ top: 0 }) }, [section])
+  useEffect(() => {
+    if (!closeArmed) return
+    closeNoticeRef.current?.scrollIntoView({ block: 'nearest' })
+    closeNoticeRef.current?.querySelector('button')?.focus({ preventScroll: true })
+  }, [closeArmed])
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -1437,29 +1733,28 @@ function SettingsDialog({
   const draftChanged = modelDraftChanged(draft, configuration)
   const requestClose = useCallback(() => {
     if (busy) return
-    if (draftChanged && !closeArmed) {
+    if (draftChanged) {
       setCloseArmed(true)
+      closeNoticeRef.current?.scrollIntoView({ block: 'nearest' })
       return
     }
     onClose()
-  }, [busy, closeArmed, draftChanged, onClose])
+  }, [busy, draftChanged, onClose])
   const dialogRef = useModalFocus(requestClose)
 
   const navItems: Array<{
     id: SettingsSection
     label: string
     icon: typeof GearSix
-    count?: number
   }> = [
     { id: 'overview', label: '通用设置', icon: GearSix },
-    { id: 'models', label: '模型', icon: HardDrives, count: configuration?.models.length },
+    { id: 'models', label: '模型', icon: HardDrives },
     {
       id: 'extensions',
       label: '扩展能力',
       icon: PlugsConnected,
-      count: (capabilities?.skills.length ?? 0) + (capabilities?.mcp_servers.length ?? 0),
     },
-    { id: 'agents', label: 'Agent 预设', icon: Robot, count: capabilities?.agent_profiles.length },
+    { id: 'agents', label: 'Agent 预设', icon: Robot },
   ]
 
   return (
@@ -1472,12 +1767,33 @@ function SettingsDialog({
       tabIndex={-1}
     >
       <section className="settings-dialog">
-        <header className="settings-header">
-          <div>
-            <strong id="settings-title">设置</strong>
-            <span>{workspace || 'Lumen 工作区'}</span>
-          </div>
-          <div>
+        <div className="settings-layout">
+          <aside className="settings-sidebar">
+            <header className="settings-header">
+              <button type="button" className="settings-close" aria-label="关闭设置" disabled={busy} onClick={requestClose}>
+                <X size={22} aria-hidden="true" />
+              </button>
+              <strong id="settings-title">设置</strong>
+            </header>
+          <nav className="settings-nav" aria-label="设置分类">
+            {navItems.map((item) => {
+              const Icon = item.icon
+              return (
+                <button
+                  key={item.id}
+                  type="button"
+                  className={section === item.id ? 'is-active' : ''}
+                  aria-current={section === item.id ? 'page' : undefined}
+                  onClick={() => setSection(item.id)}
+                >
+                  <Icon size={20} aria-hidden="true" />
+                  <span>{item.label}</span>
+                </button>
+              )
+            })}
+          </nav>
+          <div className="settings-workspace">
+            <span title={workspace}>{workspace.split('/').filter(Boolean).at(-1) || 'Lumen 工作区'}</span>
             {configuration?.targetPath && (
               <button
                 type="button"
@@ -1494,31 +1810,19 @@ function SettingsDialog({
                 {pathCopied ? '已复制' : '复制配置路径'}
               </button>
             )}
-            <button type="button" className="settings-close" aria-label="关闭设置" onClick={requestClose}>
-              <X size={17} aria-hidden="true" />
-            </button>
           </div>
-        </header>
-        <div className="settings-layout">
-          <nav className="settings-nav" aria-label="设置分类">
-            {navItems.map((item) => {
-              const Icon = item.icon
-              return (
-                <button
-                  key={item.id}
-                  type="button"
-                  className={section === item.id ? 'is-active' : ''}
-                  aria-current={section === item.id ? 'page' : undefined}
-                  onClick={() => setSection(item.id)}
-                >
-                  <Icon size={16} aria-hidden="true" />
-                  <span>{item.label}</span>
-                  {item.count !== undefined && <small>{item.count}</small>}
-                </button>
-              )
-            })}
-          </nav>
-          <div className="settings-content">
+          </aside>
+          <div className="settings-content" ref={settingsContentRef}>
+            {closeArmed && draftChanged && (
+              <div className="settings-notice is-warning" role="alert" ref={closeNoticeRef}>
+                <WarningCircle size={17} />
+                <span><strong>有尚未保存的更改</strong>关闭设置会放弃当前模型的修改。</span>
+                <div>
+                  <button type="button" onClick={() => { setSection('models'); setCloseArmed(false) }}>继续编辑</button>
+                  <button type="button" className="is-danger" onClick={onClose}>放弃更改</button>
+                </div>
+              </div>
+            )}
             {loading ? (
               <div className="settings-loading"><CircleNotch size={18} className="spin" /> 正在读取配置</div>
             ) : error && !configuration ? (
@@ -1539,7 +1843,8 @@ function SettingsDialog({
                   <div><h2>模型</h2><p>配置推理提供方；密钥只通过环境变量读取。</p></div>
                   <button
                     type="button"
-                    disabled={!editable || busy}
+                    disabled={!editable || busy || draftChanged}
+                    title={draftChanged ? '请先保存或还原当前更改' : undefined}
                     onClick={() => {
                       setDraft(emptyModelDraft())
                       setDeleteArmed(false)
@@ -1561,38 +1866,20 @@ function SettingsDialog({
                 {!configuration?.editable && (
                   <div className="settings-notice"><Info size={17} /><span>{configuration?.editReason}</span></div>
                 )}
-                {closeArmed && draftChanged && (
-                  <div className="settings-notice is-warning" role="alert">
-                    <WarningCircle size={17} />
-                    <span><strong>有尚未保存的更改</strong>关闭设置会放弃当前模型表单中的修改。</span>
-                    <div>
-                      <button type="button" onClick={() => setCloseArmed(false)}>继续编辑</button>
-                      <button type="button" className="is-danger" onClick={onClose}>放弃更改</button>
-                    </div>
-                  </div>
-                )}
                 <div className="model-settings-body">
-                  <div className="model-list" role="listbox" aria-label="已配置模型">
-                    {configuration?.models.map((model) => (
-                      <button
-                        type="button"
-                        role="option"
-                        aria-selected={draft?.originalName === model.name}
-                        className={draft?.originalName === model.name ? 'is-active' : ''}
-                        key={model.name}
-                        disabled={busy || (draftChanged && draft?.originalName !== model.name)}
-                        title={draftChanged && draft?.originalName !== model.name ? '请先保存或还原当前更改' : undefined}
-                        onClick={() => {
-                          setDraft(modelDraft(model))
-                          setDeleteArmed(false)
-                          setCloseArmed(false)
-                        }}
-                      >
-                        <span><strong>{model.name}</strong><small>{model.id}</small></span>
-                        {model.isDefault && <em>默认</em>}
-                      </button>
-                    ))}
-                  </div>
+                  <label className="settings-model-picker">
+                    <span>当前配置</span>
+                    <select aria-label="已配置模型" value={draft?.originalName ?? ''} disabled={busy || draftChanged}
+                      onChange={(event) => {
+                        const selected = configuration?.models.find((model) => model.name === event.target.value)
+                        if (selected) setDraft(modelDraft(selected))
+                        setDeleteArmed(false)
+                        setCloseArmed(false)
+                      }}>
+                      {draft?.originalName === null && <option value="">新模型</option>}
+                      {configuration?.models.map((model) => <option key={model.name} value={model.name}>{model.name}{model.isDefault ? ' · 默认' : ''}</option>)}
+                    </select>
+                  </label>
                   {draft && (
                     <form className="model-form" onSubmit={(event) => { event.preventDefault(); void save() }}>
                       {error && <div className="settings-inline-error" role="alert"><span>{error}</span><button type="button" onClick={() => void load()}>重新读取</button></div>}
@@ -1608,7 +1895,7 @@ function SettingsDialog({
                       {draft.authKind === 'inline' && !draft.apiKeyEnv.trim() && (
                         <div className="settings-notice"><WarningCircle size={17} /><span>此模型来自含内联密钥的配置。先改为环境变量名，Web 才会创建安全覆盖。</span></div>
                       )}
-                      <label className="settings-checkbox"><input type="checkbox" checked={draft.setDefault} disabled={busy || !editable || Boolean(draft.originalName && draft.setDefault)} onChange={(event) => setDraft({ ...draft, setDefault: event.target.checked })} /><span>{draft.originalName && draft.setDefault ? '当前默认模型' : '设为重启后的默认模型'}</span></label>
+                      <label className="settings-checkbox"><span>{draft.originalName && draft.setDefault ? '当前默认模型' : '设为重启后的默认模型'}</span><input type="checkbox" role="switch" checked={draft.setDefault} disabled={busy || !editable || Boolean(draft.originalName && draft.setDefault)} onChange={(event) => setDraft({ ...draft, setDefault: event.target.checked })} /></label>
                       <footer>
                         {draft.originalName && configuration && configuration.models.length > 1 && (
                           <button
@@ -1624,7 +1911,7 @@ function SettingsDialog({
                         <button
                           type="button"
                           className="is-quiet"
-                          disabled={busy}
+                          disabled={busy || !draftChanged}
                           onClick={() => {
                             const original = configuration?.models.find(
                               (model) => model.name === draft.originalName,
@@ -1825,7 +2112,7 @@ function RuntimeInspector({
   onClose: () => void
   onRefresh: () => void
   onAgentAction: (agent: AgentRecord, action: string) => void
-  onWaive: (effect: Record<string, unknown>) => void
+  onWaive: (effect: Record<string, unknown>, reason: string) => Promise<void>
 }) {
   const dialogRef = useModalFocus(onClose)
   return (
@@ -1881,17 +2168,46 @@ function RuntimeInspector({
         <div className="runtime-section">
           <h2>待处理副作用 <small>{pendingEffects.length}</small></h2>
           {pendingEffects.length === 0 ? <p className="runtime-empty">没有待验证副作用。</p> : pendingEffects.map((effect, index) => (
-            <article className="work-record" key={String(effect.id ?? index)}>
-              <strong>{String(effect.operation ?? effect.id ?? `effect-${index + 1}`)}</strong>
-              <span>{String(effect.status ?? 'pending')}</span>
-              <button type="button" disabled={busy} onClick={() => onWaive(effect)}>记录 waiver</button>
-            </article>
+            <EffectRecovery key={String(effect.id ?? index)} effect={effect} busy={busy} onConfirm={onWaive} />
           ))}
           {recoverableEffects.length > 0 && <p className="runtime-meta">可恢复 effects：{recoverableEffects.length}</p>}
         </div>
       </section>
     </div>
   )
+}
+
+function EffectRecovery({ effect, busy, onConfirm }: {
+  effect: Record<string, unknown>
+  busy: boolean
+  onConfirm: (effect: Record<string, unknown>, reason: string) => Promise<void>
+}) {
+  const [reason, setReason] = useState('')
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState('')
+  const savingRef = useRef(false)
+  return <form className="work-record" onSubmit={async (event) => {
+    event.preventDefault()
+    if (busy || savingRef.current || !reason.trim()) return
+    savingRef.current = true
+    setSaving(true)
+    setError('')
+    try { await onConfirm(effect, reason.trim()) }
+    catch (cause) { setError(cause instanceof Error ? cause.message : '记录失败，请重试。') }
+    finally { savingRef.current = false; setSaving(false) }
+  }}>
+    <strong>{String(effect.operation ?? effect.id ?? '待核实操作')}</strong>
+    <p>{String(effect.error ?? effect.summary ?? '执行结果尚未验证。')}</p>
+    <label>核实依据
+      <input value={reason} maxLength={1000} disabled={busy || saving} required
+        onChange={(event) => setReason(event.target.value)} placeholder="说明已检查的结果及可接受的依据" />
+    </label>
+    <p>仅确认这一次操作，不重试外部调用，也不改变后续工具权限。</p>
+    {error && <p role="alert">{error}</p>}
+    <button type="submit" disabled={busy || saving || !reason.trim()}>
+      {saving ? '正在记录…' : '记录人工确认'}
+    </button>
+  </form>
 }
 
 function CheckpointInspector({
@@ -1923,7 +2239,7 @@ function CheckpointInspector({
   )
 }
 
-function TranscriptInspector({
+export function TranscriptInspector({
   timeline,
   density,
   onClose,
@@ -1937,9 +2253,12 @@ function TranscriptInspector({
   const [query, setQuery] = useState('')
   const [copied, setCopied] = useState(false)
   const needle = query.trim().toLowerCase()
+  // Normal reading, searching and copying share the conversation projection.
+  // Verbose inspection deliberately retains the original protocol records.
+  const entries = density === 'verbose' ? timeline : projectThinkingMarkup(timeline)
   const visible = needle
-    ? timeline.filter((item) => JSON.stringify(item).toLowerCase().includes(needle))
-    : timeline
+    ? entries.filter((item) => JSON.stringify(item).toLowerCase().includes(needle))
+    : entries
   const dialogRef = useModalFocus(onClose)
   const copyVisible = async () => {
     const text = visible.map((item) => (
@@ -2060,24 +2379,36 @@ export function groupTimelineByTurn(timeline: TimelineEntry[]): ConversationTurn
   return turns
 }
 
-function ConversationTurn({
+export function ConversationTurn({
   turn,
   active,
   onApproval,
+  onEdit,
+  editDisabled,
+  clarification,
+  onAnswer,
+  answerDisabled,
+  clarificationAnswered,
 }: {
   turn: ConversationTurnState
   active: boolean
+  onEdit?: (item: TimelineEntry, text: string) => Promise<void>
+  editDisabled?: string
+  clarification?: SessionSnapshot['pendingClarification']
+  onAnswer?: (answer: string) => Promise<void>
+  answerDisabled?: boolean
+  clarificationAnswered?: boolean
   onApproval: (callId: string, approved: boolean, scope?: 'once' | 'session' | 'always') => void
 }) {
-  const presentation = turnPresentation(turn.response, turn.user?.text)
+  const presentation = turnPresentation(turn.response, turn.user?.text, active, clarificationAnswered)
   return (
-    <section className="conversation-turn">
-      {turn.user && <TimelineRow item={turn.user} onApproval={onApproval} />}
+    <section className="conversation-turn" data-turn-id={turn.id}>
+      {turn.user && <UserMessage item={turn.user} onEdit={onEdit} editDisabled={editDisabled} />}
       {turn.response.length > 0 && (
         <div className="assistant-turn" aria-label="Lumen 回答">
           <header className="assistant-identity">
             <span className="assistant-mark">
-              <img src="/lumen-avatar.webp" alt="" width="26" height="26" />
+              <LumenMark className="assistant-logo" />
             </span>
             <strong>Lumen</strong>
           </header>
@@ -2085,13 +2416,19 @@ function ConversationTurn({
             {presentation.activity.length > 0 && (
               <TurnActivity
                 active={active}
+                elapsedSeconds={turn.user?.elapsedSeconds}
                 presentation={presentation}
                 onApproval={onApproval}
               />
             )}
-            {presentation.foreground.map((item) => (
+            {presentation.foreground.filter((item) => !(clarification && item.status === 'waiting_for_user')).map((item) => (
               <TimelineRow key={item.id} item={item} onApproval={onApproval} />
             ))}
+            {clarification && onAnswer && (
+              <ClarificationPrompt key={clarification.id} question={clarification}
+                onAnswer={onAnswer} disabled={answerDisabled} />
+            )}
+            {!active && <DocumentResults entries={turn.response} />}
           </div>
         </div>
       )}
@@ -2101,20 +2438,31 @@ function ConversationTurn({
 
 function TurnActivity({
   active,
+  elapsedSeconds,
   presentation,
   onApproval,
 }: {
   active: boolean
+  elapsedSeconds?: number
   presentation: TurnPresentation
   onApproval: (callId: string, approved: boolean, scope?: 'once' | 'session' | 'always') => void
 }) {
-  const [expanded, setExpanded] = useState(active || presentation.requiresAttention)
-  const current = presentation.activity.at(-1)
+  const pendingCalls = presentation.activity.filter((item) => item.pendingApproval).map((item) => item.id).join(',')
+  const phase = pendingCalls ? `approval:${pendingCalls}` : active ? 'running' : presentation.terminalStatus ?? 'completed'
+  const shouldExpand = active || Boolean(pendingCalls)
+    || !['completed', 'waiting_for_user', 'clarification_answered'].includes(phase)
+  const [expanded, setExpanded] = useState(shouldExpand)
+  const contentId = useId()
+  const summaryRef = useRef<HTMLButtonElement>(null)
+  const contentRef = useRef<HTMLDivElement>(null)
+  const duration = !active ? activityDuration(elapsedSeconds) : null
 
   useEffect(() => {
-    if (active || presentation.requiresAttention) setExpanded(true)
-    else setExpanded(false)
-  }, [active, presentation.requiresAttention])
+    if (!shouldExpand && contentRef.current?.contains(document.activeElement)) {
+      summaryRef.current?.focus({ preventScroll: true })
+    }
+    setExpanded(shouldExpand)
+  }, [phase, shouldExpand])
 
   return (
     <section
@@ -2124,93 +2472,47 @@ function TurnActivity({
       <button
         className="turn-activity-summary"
         type="button"
+        ref={summaryRef}
         aria-expanded={expanded}
+        aria-controls={contentId}
+        title={`${activityMeta(presentation)}${duration ? '；耗时包括本轮模型、工具执行及等待' : ''}`}
         onClick={() => setExpanded((value) => !value)}
       >
         <span className="turn-activity-heading">
-          <strong>{activityTitle(presentation, active)}</strong>
-          <small>{active && current ? activityItemLabel(current) : activityMeta(presentation)}</small>
+          <strong>{activityTitle(presentation, active)}{duration ? ` · ${duration}` : ''}</strong>
         </span>
         <CaretDown size={15} className={expanded ? 'is-expanded' : ''} aria-hidden="true" />
       </button>
-      {expanded && (
-        <div className="turn-activity-list">
-          {presentation.activity.map((item) => (
-            <TimelineRow key={item.id} item={item} onApproval={onApproval} />
-          ))}
-        </div>
-      )}
+      <div className="turn-activity-list" id={contentId} ref={contentRef} hidden={!expanded}>
+        {presentation.activity.map((item) => (
+          <TimelineRow key={item.id} item={item} onApproval={onApproval} process active={active} />
+        ))}
+      </div>
     </section>
   )
-}
-
-function PlanPanel({ plan }: { plan: Array<{ id: string; title: string; status: string; note?: string | null }> }) {
-  const [expanded, setExpanded] = useState(false)
-  const completed = plan.filter((step) => step.status === 'completed').length
-  const current = plan.find((step) => step.status === 'in_progress')
-    ?? plan.find((step) => step.status === 'blocked')
-    ?? plan.find((step) => step.status === 'pending')
-  return (
-    <section className="web-plan" aria-label="执行计划">
-      <button
-        className="plan-summary"
-        type="button"
-        aria-expanded={expanded}
-        onClick={() => setExpanded((value) => !value)}
-      >
-        <span className="plan-heading"><strong>计划</strong><small>{current?.title ?? '全部完成'}</small></span>
-        <span className="plan-count">{completed}/{plan.length}</span>
-        <CaretDown size={15} className={expanded ? 'is-expanded' : ''} />
-      </button>
-      <progress max={plan.length} value={completed} aria-label={`计划进度 ${completed}/${plan.length}`} />
-      {expanded && (
-        <ol>
-          {plan.map((step) => (
-            <li key={step.id} className={`is-${step.status}`}>
-              <PlanStepIcon status={step.status} />
-              <span>{step.title}{step.note ? <small>{step.note}</small> : null}</span>
-            </li>
-          ))}
-        </ol>
-      )}
-    </section>
-  )
-}
-
-function PlanStepIcon({ status }: { status: string }) {
-  if (status === 'completed') return <CheckCircle size={15} weight="fill" aria-hidden="true" />
-  if (status === 'in_progress') return <CircleNotch size={15} className="spin" aria-hidden="true" />
-  if (status === 'blocked') return <WarningCircle size={15} weight="fill" aria-hidden="true" />
-  return <Circle size={15} aria-hidden="true" />
 }
 
 function TimelineRow({
   item,
   onApproval,
+  process = false,
+  active = false,
 }: {
   item: TimelineEntry
+  process?: boolean
+  active?: boolean
   onApproval: (callId: string, approved: boolean, scope?: 'once' | 'session' | 'always') => void
 }) {
   const [expanded, setExpanded] = useState(false)
-  const [copied, setCopied] = useState(false)
+  const detailId = useId()
 
-  if (item.kind === 'user') return <article className="timeline-user">{item.text}</article>
-  if (item.kind === 'plan' && item.plan?.steps.length) {
-    return <PlanPanel plan={item.plan.steps} />
-  }
+  if (item.kind === 'plan') return null
   if (item.kind === 'assistant') {
-    const copy = async () => {
-      await navigator.clipboard.writeText(item.text)
-      setCopied(true)
-      window.setTimeout(() => setCopied(false), 1000)
-    }
     return (
       <article className="timeline-assistant">
         <div className="assistant-content">
           <MarkdownMessage content={item.text} />
-          <button className="copy-button" type="button" onClick={copy} aria-label="复制回复">
-            {copied ? <Check size={14} /> : <Copy size={14} />}
-          </button>
+          <CopyButton text={item.text} />
         </div>
       </article>
     )
@@ -2220,67 +2522,74 @@ function TimelineRow({
     const compact = ['completed', 'ok', 'success'].includes(item.status ?? '')
       && !item.isError
       && !item.pendingApproval
-      && !item.presentation
     return (
       <article className={`web-tool-card ${compact ? 'is-compact' : ''} ${item.isError ? 'is-error' : ''} ${item.pendingApproval ? 'is-pending' : ''}`}>
         <button
           className="tool-summary"
           type="button"
           aria-expanded={expanded}
+          aria-controls={detailId}
+          aria-label={`${process ? toolActivityLabel(item) : String(item.callView?.title ?? item.toolName ?? '')}，${toolStatus(item)}`}
+          title={process ? toolActivityLabel(item) : undefined}
           onClick={() => setExpanded((value) => !value)}
         >
-          <ToolGlyph item={item} />
+          <span className={`tool-glyph ${active && item.status === 'running' ? 'is-running' : ''}`} aria-hidden="true"><ToolGlyph item={item} /></span>
           <span>
             <span className="tool-title-line">
-              <strong>{String(item.callView?.title ?? item.toolName ?? '')}</strong>
-              {sourceLabel && <b>{sourceLabel}</b>}
+              <strong>{process ? toolActivityLabel(item) : String(item.callView?.title ?? item.toolName ?? '')}</strong>
+              {sourceLabel && !process && <b>{sourceLabel}</b>}
             </span>
-            <small>{String(item.callView?.detail ?? toolTarget(item))}</small>
+            {!process && <small>{String(item.callView?.detail ?? toolTarget(item))}</small>}
           </span>
-          <em className={`is-${item.status ?? 'idle'}`}>{toolStatus(item)}</em>
-          <CaretDown size={14} className={expanded ? 'is-expanded' : ''} />
+          {(!process || item.pendingApproval || item.isError || item.status === 'denied') && <em className={`is-${item.status ?? 'idle'}`}>{toolStatus(item)}</em>}
+          <CaretDown size={14} className={expanded ? 'is-expanded' : ''} aria-hidden="true" />
         </button>
-        {item.presentation && (
-          <div className="approval-request">
-            <strong>{item.presentation.title}</strong>
-            <pre>{expanded ? item.presentation.full_text : item.presentation.preview}</pre>
-            {item.pendingApproval && item.callId && (
-              <div>
-                <button type="button" onClick={() => onApproval(item.callId!, true, 'once')}>允许一次</button>
-                <button type="button" onClick={() => onApproval(item.callId!, true, 'session')}>本会话始终允许</button>
-                <button type="button" onClick={() => onApproval(item.callId!, true, 'always')}>本项目始终允许</button>
-                <button type="button" className="deny" onClick={() => onApproval(item.callId!, false)}>拒绝</button>
-              </div>
-            )}
-          </div>
-        )}
-        {expanded && !item.presentation && (
-          <div className="tool-detail">
-            {Object.keys(item.args ?? {}).length > 0 && (
-              <section><span>输入</span><pre>{JSON.stringify(item.args ?? {}, null, 2)}</pre></section>
-            )}
-            {(item.resultView?.full_text || item.result) && (
-              <section>
-                <span>输出</span>
-                <pre>{String(item.resultView?.full_text ?? item.result ?? '')}</pre>
-              </section>
-            )}
-          </div>
-        )}
-        {!expanded && (item.resultView?.preview || item.preview) && (
+        <div id={detailId} hidden={!expanded && !item.pendingApproval}>
+          {item.presentation && (expanded || item.pendingApproval) && (
+            <div className="approval-request">
+              <strong>{item.presentation.title}</strong>
+              <pre>{expanded ? item.presentation.full_text : item.presentation.preview}</pre>
+              {item.pendingApproval && item.callId && (
+                <div>
+                  <button type="button" onClick={() => onApproval(item.callId!, true, 'once')}>允许一次</button>
+                  <button type="button" onClick={() => onApproval(item.callId!, true, 'session')}>本会话始终允许</button>
+                  <button type="button" onClick={() => onApproval(item.callId!, true, 'always')}>本项目始终允许</button>
+                  <button type="button" className="deny" onClick={() => onApproval(item.callId!, false)}>拒绝</button>
+                </div>
+              )}
+            </div>
+          )}
+          {expanded && (
+            <div className="tool-detail">
+              {Object.keys(item.args ?? {}).length > 0 && (
+                <section><span>输入</span><pre>{JSON.stringify(item.args ?? {}, null, 2)}</pre></section>
+              )}
+              {(item.resultView?.full_text || item.result) && (
+                <section>
+                  <span>输出</span>
+                  <pre>{String(item.resultView?.full_text ?? item.result ?? '')}</pre>
+                </section>
+              )}
+              {sourceLabel && <p className="tool-source">来源：{sourceLabel}</p>}
+            </div>
+          )}
+        </div>
+        {!expanded && (!process || item.isError) && (item.resultView?.preview || item.preview) && (
           <p>{String(item.resultView?.preview ?? item.preview ?? '')}</p>
         )}
       </article>
     )
   }
-  const label = timelineNoteLabel(item.kind)
+  const isProcessText = process && ['progress', 'thinking', 'commentary'].includes(item.kind)
+  const label = isProcessText ? '' : timelineNoteLabel(item.kind)
   return (
-    <article className={`timeline-note is-${item.kind}`}>
+    <article className={`timeline-note is-${item.kind} ${isProcessText ? 'process-text' : ''}`}>
       <div>
         {label && <strong>{label}</strong>}
         {item.kind === 'progress' || item.kind === 'thinking' || item.kind === 'commentary'
           ? <MarkdownMessage content={item.text} />
-          : <p>{item.text}</p>}
+          : <p>{item.status === 'cancelled' && ['cancelled', 'run cancelled'].includes(item.text.trim().toLowerCase())
+            ? '已停止生成。' : item.text}</p>}
       </div>
     </article>
   )
@@ -2288,9 +2597,9 @@ function TimelineRow({
 
 function ToolGlyph({ item }: { item: TimelineEntry }) {
   const family = String(item.callView?.family ?? '').toLowerCase()
-  if (family === 'mcp') return <ArrowsClockwise size={17} />
+  if (family === 'mcp') return <PlugsConnected size={18} />
   if (family === 'skill') return <Sparkle size={17} />
-  if (family === 'web') return <MagnifyingGlass size={17} />
+  if (family === 'web') return <Globe size={18} />
   const name = item.toolName ?? ''
   const normalized = name.toLowerCase()
   if (normalized.includes('search') || normalized.includes('find')) return <MagnifyingGlass size={17} />
@@ -2298,21 +2607,6 @@ function ToolGlyph({ item }: { item: TimelineEntry }) {
   if (normalized.includes('list') || normalized.includes('directory')) return <FolderOpen size={17} />
   if (normalized.includes('read') || normalized.includes('file')) return <FileCode size={17} />
   return <TerminalWindow size={17} />
-}
-
-function activityItemLabel(item: TimelineEntry) {
-  if (item.kind === 'tool') {
-    const activeVerb = item.callView?.active_verb
-    const title = item.callView?.title
-    const detail = item.callView?.detail
-    const label = typeof activeVerb === 'string'
-      ? activeVerb
-      : typeof title === 'string'
-        ? title
-        : item.toolName ?? '工具'
-    return `${label}${typeof detail === 'string' && detail ? ` · ${detail}` : ''}`
-  }
-  return timelineNoteLabel(item.kind)
 }
 
 function toolStatus(item: TimelineEntry) {
@@ -2353,8 +2647,9 @@ Runtime:
   /agents                           — 查看和协调子 Agent
   /transcript                       — 搜索结构化 transcript
 Model:
-  /model [name]                     — 查看或切换模型
-  /mode [manual|accept_edits|auto]  — 查看或切换审批模式
+  /model [name]                     — 打开模型选择器或按名称切换
+  /mode [manual|accept_edits|auto]  — 打开审批选择器或按名称切换
+  /tasks                            — 查看运行记录中的计划历史
   /plan <task>                      — 先生成计划，确认后再执行
 Context:
   /context                          — 查看上下文预算

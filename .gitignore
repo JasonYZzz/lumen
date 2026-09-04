@@ -13,11 +13,19 @@ __pycache__/
 .coverage
 snapshot_report.html
 node_modules/
+.pnpm-store/
+# Local skill-install staging and release archives are not source artifacts.
+.skill-staging/
+dist/
 .next/
 *.tsbuildinfo
 # Local agent config may contain plaintext API keys.
 agent.yaml
 agent.local.yaml
+.env
+.env.*
+!.env.example
+!.env.template
 # Reference clones of upstream projects (posting, pi, etc.) — not part of
 # Lumen's source tree; used only as design references.
 posting/

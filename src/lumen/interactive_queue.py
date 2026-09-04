@@ -66,6 +66,24 @@ class InteractiveMessageQueue:
         self._messages.clear()
         return messages
 
+    def dequeue_mode(
+        self,
+        mode: QueueMode,
+        *,
+        limit: int | None = None,
+    ) -> tuple[QueuedMessage, ...]:
+        """Atomically take matching messages while preserving queue order."""
+
+        selected: list[QueuedMessage] = []
+        retained: list[QueuedMessage] = []
+        for message in self._messages:
+            if message.mode is mode and (limit is None or len(selected) < limit):
+                selected.append(message)
+            else:
+                retained.append(message)
+        self._messages = retained
+        return tuple(selected)
+
     def snapshot(self) -> tuple[QueuedMessage, ...]:
         return tuple(self._messages)
 

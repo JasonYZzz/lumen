@@ -26,7 +26,8 @@ from lumen.agents.types import (
     SessionAgentState,
 )
 from lumen.attachments import AttachmentRef
-from lumen.collaboration import SessionSettingsState
+from lumen.collaboration import PlanReviewStatus, SessionSettingsState
+from lumen.context.legacy import validate_active_history
 from lumen.context.session_state import SessionContextState
 from lumen.context.types import ProviderRequestReceipt
 from lumen.events import RunStarted, TimelineEventRecord
@@ -36,7 +37,7 @@ from lumen.work_products import EffectReceipt, SessionWorkState
 
 SCHEMA_VERSION = 9
 SUPPORTED_SCHEMA_VERSIONS = tuple(range(1, SCHEMA_VERSION + 1))
-SCHEMA_UPGRADE_TARGETS = (7, 8, 9)
+SCHEMA_UPGRADE_TARGETS = tuple(range(5, SCHEMA_VERSION + 1))
 SESSION_RECORD_TYPES = (
     "agent_event",
     "agent_message",
@@ -109,6 +110,7 @@ class SessionCatalogState(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
     title: str | None = Field(default=None, max_length=80)
+    title_generation_turn: int | None = Field(default=None, ge=0)
     archived_at: str | None = None
     deleted_at: str | None = None
 
@@ -228,8 +230,11 @@ class SessionRepository:
         )
         return SessionMetadata(session_id, agent_name, model_id, created_at, path)
 
-    def fork(self, session_id: str, *, through_turn: int) -> SessionMetadata:
-        """Create a non-destructive session branch ending at ``through_turn``."""
+    def fork(self, session_id: str, *, through_turn: int, include_turn: bool = True) -> SessionMetadata:
+        """Branch through a turn, or before it when replacing that user message.
+
+        Conversation history is a prefix; existing workspace effects are not undone.
+        """
 
         source = self.load(session_id)
         if through_turn < 0 or through_turn >= len(source.turns):
@@ -238,7 +243,7 @@ class SessionRepository:
             agent_name=source.metadata.agent_name,
             model_id=source.metadata.model_id,
         )
-        for turn in source.turns[: through_turn + 1]:
+        for turn in source.turns[: through_turn + int(include_turn)]:
             self.append_turn(
                 created.id,
                 user_input=turn.user_input,
@@ -262,7 +267,17 @@ class SessionRepository:
                 request_receipts=turn.request_receipts,
                 attachments=turn.attachments,
             )
-        self.append_session_settings(created.id, source.settings)
+        settings = source.settings
+        if not include_turn:
+            # A replacement prompt must receive its own plan review, never an
+            # execution approval belonging to a discarded conversation suffix.
+            settings = settings.model_copy(update={
+                "plan_review_status": PlanReviewStatus.NONE,
+                "reviewed_revision": None,
+                "review_client_request_id": None,
+                "execution_run_id": None,
+            })
+        self.append_session_settings(created.id, settings)
         if source.work_state.work_products or source.work_state.effects:
             self.append_work_state(created.id, source.work_state)
         for thread in source.agent_state.threads:
@@ -385,6 +400,7 @@ class SessionRepository:
         path = self._path(session_id)
         if not path.is_file():
             raise FileNotFoundError(f"session not found: {session_id}")
+        self._ensure_schema(path, 5)
         self._append(
             path,
             {
@@ -400,6 +416,7 @@ class SessionRepository:
         path = self._path(session_id)
         if not path.is_file():
             raise FileNotFoundError(f"session not found: {session_id}")
+        self._ensure_schema(path, 6)
         self._append(
             path,
             {
@@ -415,7 +432,7 @@ class SessionRepository:
         path = self._path(session_id)
         if not path.is_file():
             raise FileNotFoundError(f"session not found: {session_id}")
-        self._ensure_schema_v9(path)
+        self._ensure_schema(path, 9)
         self._append(
             path,
             {
@@ -431,7 +448,7 @@ class SessionRepository:
         path = self._path(session_id)
         if not path.is_file():
             raise FileNotFoundError(f"session not found: {session_id}")
-        self._ensure_schema_v7(path)
+        self._ensure_schema(path, 7)
         self._append(
             path,
             {
@@ -447,7 +464,7 @@ class SessionRepository:
         path = self._path(session_id)
         if not path.is_file():
             raise FileNotFoundError(f"session not found: {session_id}")
-        self._ensure_schema_v7(path)
+        self._ensure_schema(path, 7)
         self._append(
             path,
             {
@@ -465,7 +482,7 @@ class SessionRepository:
             raise FileNotFoundError(f"session not found: {session_id}")
         if thread.ref.parent_session_id != session_id:
             raise ValueError("agent thread does not belong to session")
-        self._ensure_schema_v8(path)
+        self._ensure_schema(path, 8)
         self._append(
             path,
             {
@@ -481,7 +498,7 @@ class SessionRepository:
             raise FileNotFoundError(f"session not found: {session_id}")
         if event.session_id != session_id:
             raise ValueError("agent event does not belong to session")
-        self._ensure_schema_v8(path)
+        self._ensure_schema(path, 8)
         self._append(
             path,
             {
@@ -495,7 +512,7 @@ class SessionRepository:
         path = self._path(session_id)
         if not path.is_file():
             raise FileNotFoundError(f"session not found: {session_id}")
-        self._ensure_schema_v8(path)
+        self._ensure_schema(path, 8)
         self._append(
             path,
             {
@@ -509,7 +526,7 @@ class SessionRepository:
         path = self._path(session_id)
         if not path.is_file():
             raise FileNotFoundError(f"session not found: {session_id}")
-        self._ensure_schema_v8(path)
+        self._ensure_schema(path, 8)
         self._append(
             path,
             {
@@ -527,7 +544,7 @@ class SessionRepository:
             raise FileNotFoundError(f"session not found: {session_id}")
         if state.ref.session_id != session_id:
             raise ValueError("live session does not belong to session")
-        self._ensure_schema_v9(path)
+        self._ensure_schema(path, 9)
         self._append(
             path,
             {
@@ -537,50 +554,20 @@ class SessionRepository:
             },
         )
 
-    def _ensure_schema_v7(self, path: Path) -> None:
-        """Append a non-destructive upgrade marker for historical sessions."""
+    def _ensure_schema(self, path: Path, target: int) -> None:
+        """Append one non-destructive marker before a record introduced in ``target``."""
 
+        if target not in SCHEMA_UPGRADE_TARGETS:
+            raise ValueError(f"unsupported schema upgrade target: {target}")
         effective = self._effective_schema_version(path)
-        if effective >= 7:
+        if effective >= target:
             return
         self._append(
             path,
             {
                 "type": "schema_upgrade",
                 "from_version": effective,
-                "to_version": 7,
-                "created_at": self._now(),
-            },
-        )
-
-    def _ensure_schema_v8(self, path: Path) -> None:
-        """Append a non-destructive v8 marker before Agent records."""
-
-        effective = self._effective_schema_version(path)
-        if effective >= 8:
-            return
-        self._append(
-            path,
-            {
-                "type": "schema_upgrade",
-                "from_version": effective,
-                "to_version": 8,
-                "created_at": self._now(),
-            },
-        )
-
-    def _ensure_schema_v9(self, path: Path) -> None:
-        """Append a non-destructive v9 marker before Live or catalog records."""
-
-        effective = self._effective_schema_version(path)
-        if effective >= 9:
-            return
-        self._append(
-            path,
-            {
-                "type": "schema_upgrade",
-                "from_version": effective,
-                "to_version": 9,
+                "to_version": target,
                 "created_at": self._now(),
             },
         )
@@ -594,7 +581,15 @@ class SessionRepository:
                 if line_number == 1:
                     effective = int(record.get("schema_version", 0))
                 elif record.get("type") == "schema_upgrade":
-                    effective = int(record.get("to_version", effective))
+                    from_version = int(record.get("from_version", 0))
+                    to_version = int(record.get("to_version", 0))
+                    if (
+                        from_version != effective
+                        or to_version not in SCHEMA_UPGRADE_TARGETS
+                        or to_version <= effective
+                    ):
+                        raise SessionCorruptError(f"invalid schema_upgrade at line {line_number}")
+                    effective = to_version
         return effective
 
     def append_plan_state(self, session_id: str, state: PlanState) -> None:
@@ -603,6 +598,7 @@ class SessionRepository:
         path = self._path(session_id)
         if not path.is_file():
             raise FileNotFoundError(f"session not found: {session_id}")
+        self._ensure_schema(path, 6)
         self._append(
             path,
             {
@@ -783,8 +779,13 @@ class SessionRepository:
         effective_schema = int(schema_version)
         for line_number, record in enumerate(records[1:], 2):
             if record.get("type") == "schema_upgrade":
+                from_version = int(record.get("from_version", 0))
                 to_version = int(record.get("to_version", 0))
-                if to_version not in SCHEMA_UPGRADE_TARGETS or to_version <= effective_schema:
+                if (
+                    from_version != effective_schema
+                    or to_version not in SCHEMA_UPGRADE_TARGETS
+                    or to_version <= effective_schema
+                ):
                     raise SessionCorruptError(f"invalid schema_upgrade at line {line_number}")
                 effective_schema = to_version
                 continue
@@ -808,11 +809,16 @@ class SessionRepository:
                         f"at line {line_number}"
                     )
                 try:
-                    catalog = SessionCatalogState.model_validate(record.get("state"))
+                    next_catalog = SessionCatalogState.model_validate(record.get("state"))
                 except ValueError as error:
                     raise SessionCorruptError(
                         f"invalid session_catalog at line {line_number}"
                     ) from error
+                # Deletion is terminal. A delayed catalog writer (for example
+                # another Host's title generator) cannot resurrect a Session.
+                # Still validate every record, even after the tombstone.
+                if catalog.deleted_at is None:
+                    catalog = next_catalog
                 continue
             if record.get("type") == "work_state":
                 if effective_schema < 7:
@@ -895,9 +901,9 @@ class SessionRepository:
                 )
                 continue
             if record.get("type") == "context_state":
-                if schema_version < 5:
+                if effective_schema < 5:
                     raise SessionCorruptError(
-                        f"context_state is not valid for schema v{schema_version} at line {line_number}"
+                        f"context_state is not valid for schema v{effective_schema} at line {line_number}"
                     )
                 try:
                     context_state = SessionContextState.model_validate(record.get("state"))
@@ -905,9 +911,9 @@ class SessionRepository:
                     raise SessionCorruptError(f"invalid context_state at line {line_number}") from error
                 continue
             if record.get("type") == "session_settings":
-                if schema_version < 6:
+                if effective_schema < 6:
                     raise SessionCorruptError(
-                        f"session_settings is not valid for schema v{schema_version} at line {line_number}"
+                        f"session_settings is not valid for schema v{effective_schema} at line {line_number}"
                     )
                 try:
                     settings = SessionSettingsState.model_validate(record.get("state"))
@@ -915,9 +921,9 @@ class SessionRepository:
                     raise SessionCorruptError(f"invalid session_settings at line {line_number}") from error
                 continue
             if record.get("type") == "plan_state":
-                if schema_version < 6:
+                if effective_schema < 6:
                     raise SessionCorruptError(
-                        f"plan_state is not valid for schema v{schema_version} at line {line_number}"
+                        f"plan_state is not valid for schema v{effective_schema} at line {line_number}"
                     )
                 try:
                     latest_plan = PlanState.model_validate(record.get("state"))
@@ -937,7 +943,15 @@ class SessionRepository:
                     running_turn_positions[turn.interaction_id] = len(turns) - 1
             else:
                 turns[pending_position] = turn
-            if turn.status in {"completed", "waiting_for_user"}:
+            completed_steps = bool(messages) and any(
+                item.get("kind") == "completed_model_steps"
+                and item.get("message_count") == len(messages)
+                for item in turn.diagnostics
+            ) and not validate_active_history(messages)
+            if turn.status in {"completed", "waiting_for_user"} or (
+                turn.status in {"failed", "cancelled"} and completed_steps
+            ):
+                covered_messages = 0
                 if turn.compaction is not None:
                     candidate = _load_checkpoint(turn.compaction)
                     raw_checkpoint: Any = turn.compaction.get("checkpoint")
@@ -958,13 +972,16 @@ class SessionRepository:
                     )
                     valid = not is_v2_record or (
                         candidate is not None
+                        and len(full_history) <= candidate.source_end <= len(full_history) + len(messages)
                         and _validate_v2_checkpoint(
                             candidate,
-                            full_history,
+                            [*full_history, *messages][:candidate.source_end],
                             latest_compaction_checkpoint,
                         )
                     )
                     if valid:
+                        if is_v2_record and candidate is not None:
+                            covered_messages = candidate.source_end - len(full_history)
                         # Reset only from a verified V2 checkpoint (or a V1/
                         # legacy record accepted in read-only compatibility
                         # mode). A corrupt V2 record is ignored and replay
@@ -977,7 +994,7 @@ class SessionRepository:
                             candidate.source_end if candidate is not None else len(full_history)
                         )
                 full_history.extend(messages)
-                active_history.extend(messages)
+                active_history.extend(messages[covered_messages:])
             # Model history only accepts completed turns, but the latest plan
             # is diagnostic state and remains useful after failure/cancel.
             latest_plan = turn.plan
@@ -1039,8 +1056,13 @@ class SessionRepository:
             for line_number, line in enumerate(file, 2):
                 record = _parse_json_record(line, line_number=line_number, path=path)
                 if record.get("type") == "schema_upgrade":
+                    from_version = int(record.get("from_version", 0))
                     to_version = int(record.get("to_version", 0))
-                    if to_version not in SCHEMA_UPGRADE_TARGETS or to_version <= effective_schema:
+                    if (
+                        from_version != effective_schema
+                        or to_version not in SCHEMA_UPGRADE_TARGETS
+                        or to_version <= effective_schema
+                    ):
                         raise SessionCorruptError(f"invalid schema_upgrade at line {line_number}")
                     effective_schema = to_version
                     continue
@@ -1070,16 +1092,16 @@ class SessionRepository:
                         )
                     continue
                 if record.get("type") == "context_state":
-                    if schema_version < 5:
+                    if effective_schema < 5:
                         raise SessionCorruptError(
-                            f"context_state is not valid for schema v{schema_version} at line {line_number}"
+                            f"context_state is not valid for schema v{effective_schema} at line {line_number}"
                         )
                     continue
                 if record.get("type") == "session_settings":
-                    if schema_version < 6:
+                    if effective_schema < 6:
                         raise SessionCorruptError(
                             "session_settings is not valid for schema "
-                            f"v{schema_version} at line {line_number}"
+                            f"v{effective_schema} at line {line_number}"
                         )
                     continue
                 if record.get("type") == "session_catalog":
@@ -1090,9 +1112,9 @@ class SessionRepository:
                         )
                     continue
                 if record.get("type") == "plan_state":
-                    if schema_version < 6:
+                    if effective_schema < 6:
                         raise SessionCorruptError(
-                            f"plan_state is not valid for schema v{schema_version} at line {line_number}"
+                            f"plan_state is not valid for schema v{effective_schema} at line {line_number}"
                         )
                     continue
                 if record.get("type") != "turn":

@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Lumen · Lumen Fold Brand System</title>
+  <link rel="icon" href="../architecture-guide/favicon.svg" type="image/svg+xml">
+  <style>
+    :root{color-scheme:dark;font-family:Inter,system-ui,sans-serif;background:#090a09;color:#f7f3ea}
+    *{box-sizing:border-box}body{margin:0;padding:clamp(24px,5vw,72px);background:radial-gradient(circle at 25% 15%,#2b1708 0,transparent 28%),#090a09}
+    main{max-width:1120px;margin:auto}header{margin-bottom:40px}h1{margin:0;font-size:clamp(42px,8vw,86px);letter-spacing:-.06em}p{max-width:720px;color:#b9ad99;line-height:1.65}
+    .grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:20px}.panel{min-height:270px;border:1px solid #5c3516;border-radius:20px;background:#0d0e0c;padding:24px;overflow:hidden}.panel.light{background:#f4ecdf;color:#171612}.panel.wide{grid-column:1/-1;min-height:auto}.panel>span{display:block;margin-bottom:18px;color:#eca13a;font:12px/1.4 ui-monospace,monospace;letter-spacing:.12em;text-transform:uppercase}.mark-row{display:flex;align-items:center;justify-content:center;gap:40px;height:190px}.mark-row img{width:132px;height:132px}.mark-row .small{width:32px;height:32px}.lockup{display:block;width:100%;height:auto;border-radius:14px}.tokens{display:grid;grid-template-columns:repeat(5,1fr);gap:12px}.token i{display:block;height:68px;border-radius:10px;border:1px solid #ffffff18}.token b,.token small{display:block;margin-top:8px}.token small{color:#8f8777;font-family:ui-monospace,monospace}@media(max-width:720px){.grid{grid-template-columns:1fr}.panel.wide{grid-column:auto}.tokens{grid-template-columns:repeat(2,1fr)}}
+  </style>
+</head>
+<body>
+  <main>
+    <header><h1>Lumen Fold</h1><p>一个粗体 L，一道透明折叠光隙：Open Agent Harness 将推理转化为行动。以下全部是仓库内实际交付资产。</p></header>
+    <section class="grid">
+      <article class="panel"><span>Color mark · dark surface</span><div class="mark-row"><img src="lumen-mark.svg" alt="Lumen Fold 彩色标志"><img class="small" src="lumen-mark.svg" alt="32 像素标志预览"></div></article>
+      <article class="panel light"><span>Color mark · light surface</span><div class="mark-row"><img src="lumen-mark.svg" alt="浅色背景上的 Lumen 标志"><img class="small" src="lumen-mark.svg" alt="32 像素标志预览"></div></article>
+      <article class="panel wide"><span>Dark lockup</span><img class="lockup" src="lumen-lockup-dark.svg" alt="Lumen 深色组合标志"></article>
+      <article class="panel wide light"><span>Light lockup</span><img class="lockup" src="lumen-lockup-light.svg" alt="Lumen 浅色组合标志"></article>
+      <article class="panel wide"><span>Production palette</span><div class="tokens"><div class="token"><i style="background:#f39a1d"></i><b>Lumen Amber</b><small>#F39A1D</small></div><div class="token"><i style="background:#ffd16a"></i><b>Fold Gold</b><small>#FFD16A</small></div><div class="token"><i style="background:#b85a0a"></i><b>Copper Edge</b><small>#B85A0A</small></div><div class="token"><i style="background:#090a09"></i><b>Carbon</b><small>#090A09</small></div><div class="token"><i style="background:#f7f3ea"></i><b>Warm Paper</b><small>#F7F3EA</small></div></div></article>
+    </section>
+  </main>
+</body>
+</html>

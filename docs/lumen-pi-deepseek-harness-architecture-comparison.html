@@ -7,7 +7,7 @@
   <title>Lumen × Pi × DeepSeek Harness</title>
   <meta name="description" content="Lumen、Pi Agent 与 DeepSeek Harness 的源码级底层原理、状态权威、安全模型和多 Agent 架构对比。" />
   <meta name="theme-color" content="#f3f2ec" />
-  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%230a6b57'/%3E%3Cpath d='M18 15h9v27h20v8H18z' fill='%23fbfaf7'/%3E%3C/svg%3E" />
+  <link rel="icon" href="architecture-guide/favicon.svg" type="image/svg+xml" />
   <style>
     /* Default styles provided by pandoc.
     ** See https://pandoc.org/MANUAL.html#variables-for-html for config info.
@@ -798,6 +798,15 @@ Agent 与 DeepSeek Harness：源码级底层原理与架构对比</h1>
 仓库的固定 commit。<br />
 方法：以源码、契约测试、Accepted
 架构记录和官方仓库文档为一手证据；不以社区文章推断内部实现。</p>
+</blockquote>
+<blockquote>
+<p><strong>实现跟踪（2026-08-27）：</strong> 本页的对比数据与外部
+commit 保持为 2026-08-24 研究快照，不据此覆盖当前实现。Lumen 已完成
+<code>LumenAgentLoop</code> 单轨切换，保留低层
+<code>PydanticAIModelDriver</code> 与请求
+<code>ModelInputManifest</code>；PydanticAI <code>Agent</code> graph 与 selector 已删除。当前事实以<a
+href="architecture-guide/12-current-implementation-audit.md">实现审计</a>与<a
+href="architecture-guide/13-native-agent-loop-migration.md">迁移决策记录</a>为准。</p>
 </blockquote>
 <h2 id="0-版本基线与结论边界">0. 版本基线与结论边界</h2>
 <table>

@@ -156,7 +156,11 @@ class TextResourceAdapter(_FileAdapter):
         selector: str | None,
     ) -> tuple[TargetCandidate, ...]:
         text = self._read_snapshot(snapshot)
-        normalized = (selector or "whole").strip()
+        # An anchor is literal file content, including trailing whitespace.
+        # Normalizing it changes the range that mutation verification checks.
+        normalized = (
+            selector if selector and selector.startswith("anchor:") else (selector or "whole").strip()
+        )
         if normalized in {"", "whole", "file"}:
             return (self._candidate(resource, snapshot, "whole", "entire file", 0, len(text)),)
         if normalized.startswith("anchor:"):

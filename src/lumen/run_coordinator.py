@@ -13,9 +13,12 @@ from lumen.context import CompactionCheckpointV1, CompactionCheckpointV2, Contex
 from lumen.events import (
     InputDequeued,
     InputQueued,
+    RunCancelled,
+    RunCompleted,
     RunEvent,
     RunFailed,
     RunStarted,
+    RunWaitingForUser,
     TimelineEventRecord,
 )
 from lumen.interactive_queue import QueuedMessage, QueueMode
@@ -43,6 +46,7 @@ class CoordinatorState:
     compacted_prefix_length: int = 0
     compacted_source_end: int = 0
     last_user_input: str | None = None
+    last_attachments: tuple[AttachmentRef, ...] = ()
     last_recovery_receipts: tuple[dict[str, object], ...] = ()
 
 
@@ -108,6 +112,7 @@ class RunCoordinator:
                 if loaded.turns
                 else recoverable_orphaned_input(loaded)
             ),
+            last_attachments=(tuple(loaded.turns[-1].attachments) if loaded.turns else ()),
             last_recovery_receipts=(tuple(loaded.turns[-1].recovery_receipts) if loaded.turns else ()),
         )
         return self._state
@@ -126,6 +131,7 @@ class RunCoordinator:
             compacted_prefix_length=state.compacted_prefix_length,
             compacted_source_end=state.compacted_source_end,
             last_user_input=state.last_user_input,
+            last_attachments=state.last_attachments,
             last_recovery_receipts=state.last_recovery_receipts,
         )
 
@@ -201,21 +207,10 @@ class RunCoordinator:
             compacted_prefix_length=state.compacted_prefix_length,
             compacted_source_end=state.compacted_source_end,
             last_user_input=user_input,
+            last_attachments=tuple(running.attachments),
             last_recovery_receipts=state.last_recovery_receipts,
         )
         return True
-        self._state = CoordinatorState(
-            session=state.session,
-            history=state.history,
-            full_history=state.full_history,
-            plan=state.plan,
-            compaction_summary=state.compaction_summary,
-            compaction_checkpoint=state.compaction_checkpoint,
-            compacted_prefix_length=state.compacted_prefix_length,
-            compacted_source_end=state.compacted_source_end,
-            last_user_input=user_input,
-            last_recovery_receipts=state.last_recovery_receipts,
-        )
 
     async def run(
         self,
@@ -233,11 +228,29 @@ class RunCoordinator:
         if runtime is None:
             raise RuntimeError("runtime is not available")
         timeline_events: list[TimelineEventRecord] = []
+        terminal_event: RunCompleted | RunWaitingForUser | RunFailed | RunCancelled | None = None
+
+        def timeline_with_terminal(
+            terminal: RunCompleted | RunWaitingForUser | RunFailed | RunCancelled,
+        ) -> list[TimelineEventRecord]:
+            return [
+                *timeline_events,
+                TimelineEventRecord.from_event(terminal, sequence=len(timeline_events) + 1),
+            ]
 
         async def record_and_emit(event: RunEvent) -> None:
+            nonlocal terminal_event
             visible_event: RunEvent = event
             if isinstance(event, RunStarted):
                 visible_event = RunStarted(run_input.display_text)
+            if isinstance(visible_event, RunCompleted | RunWaitingForUser | RunFailed | RunCancelled):
+                if terminal_event is not None:
+                    raise RuntimeError(
+                        "runtime emitted more than one terminal event: "
+                        f"{type(terminal_event).__name__}, {type(visible_event).__name__}"
+                    )
+                terminal_event = visible_event
+                return
             timeline_events.append(
                 TimelineEventRecord.from_event(visible_event, sequence=len(timeline_events) + 1)
             )
@@ -267,13 +280,46 @@ class RunCoordinator:
                 attachments=run_input.attachments,
             )
         except asyncio.CancelledError as error:
-            self._append_partial(run_input, error, status="cancelled", timeline_events=timeline_events)
+            terminal = terminal_event or RunCancelled("cancelled")
+            self._append_partial(
+                run_input,
+                error,
+                status="cancelled",
+                timeline_events=timeline_with_terminal(terminal),
+            )
+            await emit(terminal)
             raise
         except Exception as error:
-            self._append_partial(run_input, error, status="failed", timeline_events=timeline_events)
+            partial = get_partial_outcome(error)
+            terminal = terminal_event or RunFailed(
+                partial.message if partial is not None else str(error)
+            )
+            self._append_partial(
+                run_input,
+                error,
+                status="failed",
+                timeline_events=timeline_with_terminal(terminal),
+            )
+            await emit(terminal)
             return None
         finally:
             self._active_emit = None
+
+        if terminal_event is None:
+            raise RuntimeError("runtime returned an outcome without a terminal event")
+        expected_terminal = (
+            RunWaitingForUser
+            if outcome.status == "waiting_for_user"
+            else RunCompleted
+            if outcome.status == "completed"
+            else None
+        )
+        if expected_terminal is None or not isinstance(terminal_event, expected_terminal):
+            raise RuntimeError(
+                "runtime outcome status does not match its terminal event: "
+                f"{outcome.status}, {type(terminal_event).__name__}"
+            )
+        durable_timeline_events = timeline_with_terminal(terminal_event)
 
         summary = state.compaction_summary
         checkpoint = state.compaction_checkpoint
@@ -298,6 +344,7 @@ class RunCoordinator:
             compacted_prefix_length=compacted_prefix_length,
             compacted_source_end=compacted_source_end,
             last_user_input=run_input.display_text,
+            last_attachments=run_input.attachments,
             last_recovery_receipts=tuple(outcome.recovery_receipts),
         )
         # Publish the in-memory transition only after the append-only record is
@@ -314,7 +361,7 @@ class RunCoordinator:
                 plan=outcome.plan,
                 diagnostics=outcome.diagnostics,
                 compaction=outcome.compaction,
-                timeline_events=timeline_events,
+                timeline_events=durable_timeline_events,
                 recovery_receipts=outcome.recovery_receipts,
                 request_receipts=outcome.request_receipts,
                 interaction_id=run_input.interaction_id,
@@ -333,6 +380,7 @@ class RunCoordinator:
                     plan=outcome.plan,
                     timeline_events=timeline_events,
                 )
+                await emit(RunFailed(f"terminal_persistence_failed: {type(error).__name__}: {error}"))
             raise
         if runtime.context_engine is not None and outcome.context_fingerprint is not None:
             runtime.context_engine.confirm_persisted(
@@ -343,6 +391,7 @@ class RunCoordinator:
         self._state = next_state
         if runtime.context_engine is not None and runtime.context_engine.memory is not None:
             runtime.context_engine.memory.schedule_session(state.session.id)
+        await emit(terminal_event)
         return outcome
 
     def _append_terminal_persistence_failure(
@@ -416,16 +465,18 @@ class RunCoordinator:
         state = self.state
         partial = get_partial_outcome(error)
         latest_plan = partial.plan if partial is not None else state.plan
+        completed_messages = partial.completed_messages if partial is not None else []
         next_state = CoordinatorState(
             session=state.session,
-            history=list(state.history),
-            full_history=list(state.full_history),
+            history=[*state.history, *completed_messages],
+            full_history=[*state.full_history, *completed_messages],
             plan=latest_plan,
             compaction_summary=state.compaction_summary,
             compaction_checkpoint=state.compaction_checkpoint,
             compacted_prefix_length=state.compacted_prefix_length,
             compacted_source_end=state.compacted_source_end,
             last_user_input=run_input.display_text,
+            last_attachments=run_input.attachments,
             last_recovery_receipts=(
                 tuple(partial.recovery_receipts) if partial is not None else state.last_recovery_receipts
             ),
@@ -433,7 +484,7 @@ class RunCoordinator:
         self._repository.append_turn(
             state.session.id,
             user_input=run_input.display_text,
-            messages=[],
+            messages=completed_messages,
             approvals=partial.approvals if partial is not None else [],
             usage=partial.usage if partial is not None else {},
             status=status,

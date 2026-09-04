@@ -211,7 +211,7 @@ def _parse_frontmatter(text: str) -> tuple[dict[str, object], str]:
     return cast(dict[str, object], parsed), body
 
 
-def _validate_name(raw: str | None, fallback: str) -> str | None:
+def _validate_name(raw: object, fallback: str) -> str | None:
     """Return a valid skill name, or None if invalid.
 
     If ``raw`` is None, use ``fallback`` (the directory name). Validate
@@ -219,6 +219,8 @@ def _validate_name(raw: str | None, fallback: str) -> str | None:
     caller can emit a diagnostic and drop the skill.
     """
 
+    if raw is not None and not isinstance(raw, str):
+        return None
     name = (raw or fallback).strip().lower()
     if not name or len(name) > _MAX_NAME:
         return None
@@ -246,7 +248,7 @@ def load_skill(
 
     try:
         text = file_path.read_text(encoding="utf-8")
-    except OSError:
+    except (OSError, UnicodeError):
         return None
     frontmatter, body = _parse_frontmatter(text)
     description = str(frontmatter.get("description", "")).strip()
@@ -255,7 +257,7 @@ def load_skill(
         # way to know when to use it).
         return None
     name = _validate_name(
-        frontmatter.get("name"),  # type: ignore[arg-type]
+        frontmatter.get("name"),
         fallback=file_path.parent.name,
     )
     if name is None:
@@ -390,7 +392,7 @@ class SkillLoader:
         except OSError:
             return []
         for entry in entries:
-            if entry.name in self._SKIP_DIRS:
+            if entry.name in self._SKIP_DIRS or entry.name.startswith(".lumen-install-"):
                 continue
             if entry.is_symlink():
                 self.warnings.append(f"ignored symlinked skill path outside trusted roots: {entry}")

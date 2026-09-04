@@ -102,13 +102,14 @@ live:
 
 ## 6. 验证入口
 
-- Router contract：`tests/test_live_router.py`
-- OpenAI canonical Adapter 与 Manager：`tests/test_live.py`
-- 百炼 wire contract：`tests/test_bailian_realtime.py`
-- Host PCM、认证、SSE：`tests/test_web_api.py`
+- Host canonical control、PCM、认证与 SSE：`tests/test_web_api.py`
 - Web 状态：`src/web/src/lib/live/live-reducer.test.ts`
 - Web 构建：`pnpm --dir src/web test/typecheck/build`
 - 全量：`uv run ruff check .`、`uv run pyright`、`uv run pytest`
+
+当前仓库没有独立的 `test_live_router.py`、`test_live.py` 或 `test_bailian_realtime.py`。Router route
+冻结、OpenAI canonical Adapter 和百炼 wire translation 仍需要补充隔离 contract tests；在这些测试
+落地前，不能把 Host/API 集成测试描述成完整 Provider 覆盖。
 
 火山 RTC AI 是后续独立 Provider/Media Adapter 候选。其托管 MCP、记忆、RAG 不得成为 Lumen 的第二
 状态权威；只有签名 Function Calling 回调、RTC media 和 Start/Update/StopVoiceChat 控制会接入现有

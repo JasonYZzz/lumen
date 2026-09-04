@@ -1,0 +1,329 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1920" height="1320" viewBox="0 0 1920 1320" role="img" aria-labelledby="title description">
+  <title id="title">Lumen 当前系统底层技术架构</title>
+  <desc id="description">展示客户端适配器、WorkspaceHost 与跨进程单 writer 执行锁、文字与实时语音执行路径、能力安全链、多 Agent、上下文、持久化事实、只读诊断投影与完成门禁的整体架构图。</desc>
+  <defs>
+    <pattern id="minor-grid" width="24" height="24" patternUnits="userSpaceOnUse">
+      <path d="M24 0H0V24" fill="none" stroke="#e6d8b8" stroke-opacity="0.025" stroke-width="1"/>
+    </pattern>
+    <pattern id="major-grid" width="120" height="120" patternUnits="userSpaceOnUse">
+      <path d="M120 0H0V120" fill="none" stroke="#e97835" stroke-opacity="0.05" stroke-width="1"/>
+    </pattern>
+    <marker id="arrow-copper" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto" markerUnits="strokeWidth">
+      <path d="M0 0L9 4.5L0 9Z" fill="#e97835"/>
+    </marker>
+    <marker id="arrow-mint" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto" markerUnits="strokeWidth">
+      <path d="M0 0L9 4.5L0 9Z" fill="#73cdaa"/>
+    </marker>
+    <marker id="arrow-paper" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto" markerUnits="strokeWidth">
+      <path d="M0 0L9 4.5L0 9Z" fill="#9b9279"/>
+    </marker>
+    <marker id="arrow-fault" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto" markerUnits="strokeWidth">
+      <path d="M0 0L9 4.5L0 9Z" fill="#db4f5d"/>
+    </marker>
+    <style>
+      .bg{fill:#04100c}.panel{fill:#06130f;stroke:#e6d8b8;stroke-opacity:.16}.panel-copper{fill:#06130f;stroke:#e97835;stroke-opacity:.6}.panel-mint{fill:#06130f;stroke:#73cdaa;stroke-opacity:.62}.panel-violet{fill:#06130f;stroke:#a9a1dc;stroke-opacity:.62}.panel-fault{fill:#06130f;stroke:#db4f5d;stroke-opacity:.72}.node{fill:#081711;stroke:#e6d8b8;stroke-opacity:.22}.node-authority{fill:#081711;stroke:#e97835;stroke-width:2}.node-mint{fill:#081711;stroke:#73cdaa;stroke-width:1.5}.node-violet{fill:#081711;stroke:#a9a1dc;stroke-width:1.5}.node-fault{fill:#081711;stroke:#db4f5d;stroke-width:1.5}.title{fill:#e6d8b8;font:700 42px 'Avenir Next Condensed','Noto Sans SC','PingFang SC',sans-serif;letter-spacing:1px}.subtitle{fill:#b9ae91;font:400 16px 'Avenir Next','Noto Sans SC','PingFang SC',sans-serif}.eyebrow{fill:#e97835;font:600 12px 'SFMono-Regular','Noto Sans SC',monospace;letter-spacing:2px}.plane{fill:#9b9279;font:600 11px 'SFMono-Regular','Noto Sans SC',monospace;letter-spacing:1.8px}.node-title{fill:#e6d8b8;font:600 18px 'Avenir Next Condensed','Noto Sans SC','PingFang SC',sans-serif}.node-label{fill:#b9ae91;font:400 12px 'Avenir Next','Noto Sans SC','PingFang SC',sans-serif}.mono{fill:#9b9279;font:400 11px 'SFMono-Regular','Noto Sans SC',monospace}.mono-copper{fill:#e97835;font:500 11px 'SFMono-Regular','Noto Sans SC',monospace}.mono-mint{fill:#73cdaa;font:500 11px 'SFMono-Regular','Noto Sans SC',monospace}.mono-violet{fill:#a9a1dc;font:500 11px 'SFMono-Regular','Noto Sans SC',monospace}.mono-fault{fill:#db4f5d;font:500 11px 'SFMono-Regular','Noto Sans SC',monospace}.trace{fill:none;stroke:#e97835;stroke-width:2;marker-end:url(#arrow-copper)}.trace-bi{fill:none;stroke:#73cdaa;stroke-width:2;marker-start:url(#arrow-mint);marker-end:url(#arrow-mint)}.trace-event{fill:none;stroke:#9b9279;stroke-width:1.5;stroke-dasharray:7 6;marker-end:url(#arrow-paper)}.trace-state{fill:none;stroke:#73cdaa;stroke-width:1.5;stroke-dasharray:2 6;marker-end:url(#arrow-mint)}.trace-block{fill:none;stroke:#db4f5d;stroke-width:2;stroke-dasharray:10 5;marker-end:url(#arrow-fault)}.terminal{fill:#04100c;stroke:#e97835;stroke-width:1.5}.terminal-mint{fill:#04100c;stroke:#73cdaa;stroke-width:1.5}.rule{stroke:#e6d8b8;stroke-opacity:.13}.chip{fill:#04100c;stroke:#e6d8b8;stroke-opacity:.2}.chip-mint{fill:#04100c;stroke:#73cdaa;stroke-opacity:.45}.chip-fault{fill:#04100c;stroke:#db4f5d;stroke-opacity:.58}
+    </style>
+  </defs>
+
+  <rect class="bg" width="1920" height="1320"/>
+  <rect width="1920" height="1320" fill="url(#minor-grid)"/>
+  <rect width="1920" height="1320" fill="url(#major-grid)"/>
+
+  <g aria-label="标题与图例">
+    <text x="60" y="65" class="eyebrow">LUMEN · 当前实现 · 会话模式 V9</text>
+    <text x="60" y="112" class="title">当前系统底层技术架构</text>
+    <text x="60" y="142" class="subtitle">一个状态概念，一个运行时权威；客户端适配器只消费命令与事件，不直接拥有 Agent 状态。</text>
+    <g transform="translate(1280 51)">
+      <path d="M0 12H62" class="trace"/>
+      <text x="78" y="16" class="mono">同步执行 / 命令</text>
+      <path d="M0 43H62" class="trace-event"/>
+      <text x="78" y="47" class="mono">事件 / 恢复 / 投影</text>
+      <path d="M310 12H372" class="trace-bi"/>
+      <text x="388" y="16" class="mono">持续读写 / 模型循环</text>
+      <path d="M310 43H372" class="trace-block"/>
+      <text x="388" y="47" class="mono">未验证时阻止完成</text>
+    </g>
+  </g>
+
+  <!-- Plane backgrounds -->
+  <g aria-label="架构平面">
+    <rect x="50" y="175" width="1820" height="130" class="panel"/>
+    <text x="70" y="198" class="plane">01 · 客户端适配层 / 交互与传输</text>
+
+    <rect x="50" y="325" width="1820" height="190" class="panel-copper"/>
+    <text x="70" y="348" class="plane">02 · 应用控制层 / 命令、运行与会话协调</text>
+
+    <rect x="50" y="535" width="1820" height="250" class="panel-violet"/>
+    <text x="70" y="558" class="plane">03 · 执行层 / 模型执行与委派</text>
+
+    <rect x="50" y="805" width="1820" height="230" class="panel-mint"/>
+    <text x="70" y="828" class="plane">04 · 能力与安全层 / 能力、安全与完成控制</text>
+
+    <rect x="50" y="1055" width="1820" height="205" class="panel"/>
+    <text x="70" y="1078" class="plane">05 · 持久事实层 / 持久事实与可重建投影</text>
+  </g>
+
+  <!-- Traces behind nodes -->
+  <g aria-hidden="true">
+    <!-- Clients to Host -->
+    <path d="M255 280V315H760V366" class="trace"/>
+    <path d="M605 280V325H805V366" class="trace"/>
+    <path d="M955 280V335H900V366" class="trace"/>
+    <path d="M1665 280V315H940V366" class="trace"/>
+    <path d="M690 414H455" class="trace"/>
+    <path d="M1010 414H1100" class="trace"/>
+    <path d="M970 462V492H1645V462" class="trace"/>
+
+    <!-- Text runtime -->
+    <path d="M1248 462V545H547V585" class="trace"/>
+    <path d="M720 632H790" class="trace-bi"/>
+    <path d="M1020 632H1080" class="trace-bi"/>
+    <path d="M1310 632H1370" class="trace-bi"/>
+
+    <!-- Multi-agent lane -->
+    <path d="M260 446V585" class="trace"/>
+    <path d="M300 630H375" class="trace"/>
+    <path d="M300 695H375" class="trace-event"/>
+
+    <!-- Live lane -->
+    <path d="M1645 462V575" class="trace"/>
+
+    <!-- Tool/capability lane -->
+    <path d="M605 695V835H267V850" class="trace"/>
+    <path d="M1585 660V790H657V850" class="trace"/>
+    <path d="M445 895H520" class="trace"/>
+    <path d="M795 895H870" class="trace"/>
+    <path d="M1145 895H1215" class="trace"/>
+    <path d="M1470 895H1540" class="trace"/>
+
+    <!-- State and persistence -->
+    <path d="M1248 462V1040H305V1100" class="trace-state"/>
+    <path d="M1645 462V1028H380V1100" class="trace-state"/>
+    <path d="M190 446V1016H160V1100" class="trace-state"/>
+    <path d="M1685 960V1040H420V1100" class="trace-state"/>
+    <path d="M870 695V1045H645V1100" class="trace-state"/>
+    <path d="M940 695V1100" class="trace-state"/>
+    <path d="M195 735V1035H1155V1100" class="trace-state"/>
+
+    <!-- Completion inputs -->
+    <path d="M330 446V970H1235V997" class="trace-block"/>
+    <path d="M1685 960V980" class="trace-block"/>
+    <path d="M1350 462V520H1520V972H1235V997" class="trace-block"/>
+
+    <!-- Read-only projection -->
+    <path d="M500 1160H1300" class="trace-event"/>
+  </g>
+
+  <!-- Client nodes -->
+  <g aria-label="客户端 Adapter">
+    <g transform="translate(90 215)">
+      <rect width="330" height="65" class="node"/>
+      <circle cx="0" cy="32" r="5" class="terminal"/>
+      <text x="18" y="26" class="node-title">Textual 终端界面</text>
+      <text x="18" y="48" class="mono">ui/app.py · 本地事件消费者</text>
+    </g>
+    <g transform="translate(440 215)">
+      <rect width="330" height="65" class="node"/>
+      <circle cx="0" cy="32" r="5" class="terminal"/>
+      <text x="18" y="26" class="node-title">Next.js 网页端</text>
+      <text x="18" y="48" class="mono">FastAPI REST + SSE 适配器</text>
+    </g>
+    <g transform="translate(790 215)">
+      <rect width="330" height="65" class="node"/>
+      <circle cx="0" cy="32" r="5" class="terminal"/>
+      <text x="18" y="26" class="node-title">无界面模式 / 命令行</text>
+      <text x="18" y="48" class="mono">工作区命令 → 命令结果</text>
+    </g>
+    <g transform="translate(1500 215)">
+      <rect width="330" height="65" class="node-violet"/>
+      <circle cx="0" cy="32" r="5" class="terminal-mint"/>
+      <text x="18" y="26" class="node-title">网页实时语音客户端</text>
+      <text x="18" y="48" class="mono-violet">WebRTC / 鉴权 PCM WebSocket</text>
+    </g>
+    <text x="1160" y="252" class="mono-copper">工作区命令 ↓</text>
+    <text x="1290" y="252" class="mono-mint">↑ 有序运行事件 / 实时事件</text>
+  </g>
+
+  <!-- Application control -->
+  <g aria-label="应用控制面">
+    <g transform="translate(90 366)">
+      <rect width="365" height="80" class="node-authority"/>
+      <text x="18" y="24" class="mono-copper">会话控制权威</text>
+      <text x="18" y="49" class="node-title">AgentOrchestrator</text>
+      <text x="18" y="69" class="mono">线程 · 证据 · 交付 · 导入</text>
+    </g>
+    <g transform="translate(690 366)">
+      <rect width="320" height="96" class="node-authority"/>
+      <text x="18" y="24" class="mono-copper">应用层接缝</text>
+      <text x="18" y="51" class="node-title">WorkspaceHost</text>
+      <text x="18" y="72" class="mono">分派命令 · OS 执行锁 · 审批</text>
+      <text x="18" y="88" class="mono">幂等 · 事件日志 · 客户端投影</text>
+    </g>
+    <g transform="translate(1100 366)">
+      <rect width="300" height="96" class="node-authority"/>
+      <text x="18" y="24" class="mono-copper">会话运行权威</text>
+      <text x="18" y="51" class="node-title">RunCoordinator</text>
+      <text x="18" y="72" class="mono">轮次 · 恢复 · 交互队列</text>
+      <text x="18" y="88" class="mono">候选状态 → 落盘同步 → 发布</text>
+    </g>
+    <g transform="translate(1460 366)">
+      <rect width="370" height="96" class="node-violet"/>
+      <text x="18" y="24" class="mono-violet">实时控制权威</text>
+      <text x="18" y="51" class="node-title">LiveSessionManager</text>
+      <text x="18" y="72" class="mono">通话生命周期 · 路由快照 · 转写</text>
+      <text x="18" y="88" class="mono">工具串行化 · 轮转 · 恢复</text>
+    </g>
+    <text x="500" y="405" class="mono-copper">Host 命令适配器</text>
+    <text x="1018" y="405" class="mono-copper">启动运行</text>
+    <text x="1400" y="487" class="mono-violet">启动实时会话</text>
+  </g>
+
+  <!-- Execution -->
+  <g aria-label="模型执行与委派">
+    <g transform="translate(90 585)">
+      <rect width="210" height="150" class="node"/>
+      <text x="16" y="24" class="mono-copper">子运行时接缝</text>
+      <text x="16" y="52" class="node-title">AgentRuntimeFactory</text>
+      <line x1="16" y1="67" x2="194" y2="67" class="rule"/>
+      <text x="16" y="89" class="mono">工具能力交集</text>
+      <text x="16" y="107" class="mono">只读 / 独立工作树</text>
+      <text x="16" y="125" class="mono">V1 最大深度 = 1</text>
+      <text x="16" y="143" class="mono-mint">→ 受限 AgentRuntime</text>
+    </g>
+    <g transform="translate(375 585)">
+      <rect width="345" height="110" class="node-authority"/>
+      <text x="18" y="24" class="mono-copper">执行接缝</text>
+      <text x="18" y="52" class="node-title">AgentRuntime.run() → 运行结果</text>
+      <text x="18" y="75" class="mono">轮次外壳 · 稳定运行事件投影</text>
+      <text x="18" y="93" class="mono">上下文提交 · 部分结果 · 恢复</text>
+    </g>
+    <g transform="translate(790 585)">
+      <rect width="230" height="110" class="node-mint"/>
+      <text x="18" y="24" class="mono-mint">上下文权威</text>
+      <text x="18" y="52" class="node-title">ContextEngine</text>
+      <text x="18" y="75" class="mono">准备 · 提交 · 控制</text>
+      <text x="18" y="93" class="mono">分区预算 · 检查点</text>
+    </g>
+    <g transform="translate(1080 585)">
+      <rect width="230" height="110" class="node-violet"/>
+      <text x="18" y="24" class="mono-violet">模型—工具循环权威</text>
+      <text x="18" y="52" class="node-title">LumenAgentLoop</text>
+      <text x="18" y="75" class="mono">请求 · 工具批次 · 继续 · 重试</text>
+      <text x="18" y="93" class="mono">取消 · 终态候选 · Gateway</text>
+    </g>
+    <g transform="translate(1370 585)">
+      <rect width="145" height="110" class="node-violet"/>
+      <text x="14" y="24" class="mono-violet">模型驱动接缝</text>
+      <text x="14" y="52" class="node-title">ModelDriver</text>
+      <text x="14" y="76" class="mono">PydanticAI 驱动</text>
+      <text x="14" y="94" class="mono">传输 · 生命周期</text>
+    </g>
+    <g transform="translate(1585 575)">
+      <rect width="245" height="170" class="node-violet"/>
+      <text x="16" y="24" class="mono-violet">副作用前冻结路由</text>
+      <text x="16" y="51" class="node-title">LiveProviderRouter</text>
+      <line x1="16" y1="66" x2="229" y2="66" class="rule"/>
+      <text x="16" y="89" class="mono-violet">OpenAIRealtimeAdapter</text>
+      <text x="16" y="107" class="mono">直连 WebRTC + 旁路</text>
+      <text x="16" y="133" class="mono-violet">BailianRealtimeAdapter</text>
+      <text x="16" y="151" class="mono">Host PCM + Provider WebSocket</text>
+    </g>
+    <g transform="translate(375 715)">
+      <rect width="1140" height="42" class="chip"/>
+      <text x="18" y="26" class="mono">模型请求证据：输入清单 · 路由 · Token 分区 · 完整工具摘要 · 上下文指纹 · 请求指纹</text>
+    </g>
+  </g>
+
+  <!-- Capability and safety -->
+  <g aria-label="能力、安全与完成控制">
+    <g transform="translate(90 850)">
+      <rect width="355" height="110" class="node-mint"/>
+      <text x="18" y="24" class="mono-mint">能力目录</text>
+      <text x="18" y="52" class="node-title">ToolRegistry + 工具契约 V2</text>
+      <text x="18" y="75" class="mono">本地工具 · MCP 工具集 · Hook 总线</text>
+      <text x="18" y="94" class="mono">规范值 → 模型 → 客户端投影</text>
+    </g>
+    <g transform="translate(520 850)">
+      <rect width="275" height="110" class="node-mint"/>
+      <text x="18" y="24" class="mono-mint">共享执行接缝</text>
+      <text x="18" y="52" class="node-title">CapabilityGateway</text>
+      <text x="18" y="75" class="mono">模式校验 · 守卫 · 审批</text>
+      <text x="18" y="94" class="mono">凭据 · 超时 · 幂等</text>
+    </g>
+    <g transform="translate(870 850)">
+      <rect width="275" height="110" class="node"/>
+      <text x="18" y="24" class="mono-copper">策略维度</text>
+      <text x="18" y="52" class="node-title">PermissionPolicy</text>
+      <text x="18" y="75" class="mono">风险 → 审批</text>
+      <text x="18" y="94" class="mono">EffectKind · ToolConcurrency</text>
+    </g>
+    <g transform="translate(1215 850)">
+      <rect width="255" height="110" class="node"/>
+      <text x="18" y="24" class="mono-copper">强制执行</text>
+      <text x="18" y="52" class="node-title">工作区 + 操作系统沙箱</text>
+      <text x="18" y="75" class="mono">路径 / 符号链接约束</text>
+      <text x="18" y="94" class="mono">Seatbelt / bubblewrap · 失败关闭</text>
+    </g>
+    <g transform="translate(1540 850)">
+      <rect width="290" height="110" class="node-authority"/>
+      <text x="18" y="24" class="mono-copper">工作对象权威</text>
+      <text x="18" y="52" class="node-title">TaskWorkspace</text>
+      <text x="18" y="75" class="mono">已准备 → 已应用 → 已验证</text>
+      <text x="18" y="94" class="mono">副作用日志 · 回滚 · 恢复</text>
+    </g>
+
+    <g transform="translate(90 980)">
+      <rect width="1130" height="34" class="chip-mint"/>
+      <text x="16" y="22" class="mono-mint">注册作用域：可逆的工具 / Hook / MCP / 能力注册 · 后进先出释放 · 任务静止</text>
+    </g>
+    <g transform="translate(1235 980)">
+      <rect width="595" height="34" class="chip-fault"/>
+      <text x="16" y="22" class="mono-fault">完成门禁 ← 计划证据 + 工作对象验证 + Agent 编排器未解决状态</text>
+    </g>
+  </g>
+
+  <!-- Durable facts -->
+  <g aria-label="持久事实与投影">
+    <g transform="translate(90 1100)">
+      <rect width="410" height="115" class="node-authority"/>
+      <text x="18" y="24" class="mono-copper">规范事实日志</text>
+      <text x="18" y="52" class="node-title">SessionRepository · 模式 v9</text>
+      <text x="18" y="75" class="mono">只追加 JSONL · 落盘同步 · 加载 v1–v8</text>
+      <text x="18" y="94" class="mono">轮次 · 上下文 · 工作 · Agent · 实时记录</text>
+    </g>
+    <g transform="translate(535 1100)">
+      <rect width="220" height="115" class="node-mint"/>
+      <text x="16" y="24" class="mono-mint">大载荷</text>
+      <text x="16" y="52" class="node-title">ArtifactStore</text>
+      <text x="16" y="75" class="mono">内容寻址</text>
+      <text x="16" y="94" class="mono">转写 · 差异 · 媒体</text>
+    </g>
+    <g transform="translate(790 1100)">
+      <rect width="220" height="115" class="node-mint"/>
+      <text x="16" y="24" class="mono-mint">召回状态</text>
+      <text x="16" y="52" class="node-title">MemoryManager</text>
+      <text x="16" y="75" class="mono">SQLite 存储库</text>
+      <text x="16" y="94" class="mono">ContextEngine 投影</text>
+    </g>
+    <g transform="translate(1045 1100)">
+      <rect width="220" height="115" class="node"/>
+      <text x="16" y="24" class="mono-copper">隔离写入</text>
+      <text x="16" y="52" class="node-title">Git 工作树</text>
+      <text x="16" y="75" class="mono">三方导入</text>
+      <text x="16" y="94" class="mono">脏路径冲突保护</text>
+    </g>
+    <g transform="translate(1300 1100)">
+      <rect width="530" height="115" class="node"/>
+      <text x="18" y="24" class="mono">可重建 · 非权威</text>
+      <text x="18" y="52" class="node-title">只读投影</text>
+      <text x="18" y="75" class="mono">运行事件时间线 · 界面归约器 · 能力 / latest_run 报告</text>
+      <text x="18" y="94" class="mono">contracts.json · OpenAPI · 架构内容快照</text>
+    </g>
+  </g>
+
+  <g aria-label="页脚说明">
+    <line x1="50" y1="1280" x2="1870" y2="1280" class="rule"/>
+    <text x="60" y="1305" class="mono">权威规则 · 界面 / Skill / 插件 / 子角色只能投影或收窄能力；都不能扩大父级权限或替代持久权威。</text>
+    <text x="1500" y="1305" class="mono-copper">源码审计 · 2026.09.02</text>
+  </g>
+</svg>

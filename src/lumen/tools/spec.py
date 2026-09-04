@@ -57,7 +57,7 @@ ConcurrencyPolicy = Callable[[dict[str, Any]], ToolConcurrency]
 def _render_model_default(value: Any) -> str:
     if isinstance(value, str):
         return value
-    return json.dumps(value, ensure_ascii=False, sort_keys=True)
+    return json.dumps(value, ensure_ascii=False, sort_keys=True, indent=2)
 
 
 @dataclass(frozen=True, slots=True)

@@ -288,7 +288,7 @@ class PromptEditor(TextArea):
             if key in ("tab", "enter"):
                 # Accept the highlighted suggestion. Enter here does NOT
                 # submit — it confirms the completion.
-                self._dropdown.action_select()
+                self._dropdown.action_select(activate=key == "enter")
                 event.prevent_default()
                 event.stop()
                 return

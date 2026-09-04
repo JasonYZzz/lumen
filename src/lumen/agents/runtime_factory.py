@@ -11,9 +11,17 @@ from typing import cast
 from pydantic_ai import Tool
 from pydantic_ai.messages import ModelMessage, ModelMessagesTypeAdapter
 from pydantic_ai.settings import ModelSettings
-from pydantic_ai.toolsets import AbstractToolset, FilteredToolset
 
-from lumen.config import AgentsConfig, LimitsConfig, ModelSettingsConfig, PermissionsConfig, SandboxConfig
+from lumen.agent_loop import PydanticAIModelDriver
+from lumen.config import (
+    AgentsConfig,
+    ContextConfig,
+    LimitsConfig,
+    ModelSettingsConfig,
+    PermissionsConfig,
+    SandboxConfig,
+)
+from lumen.context import ContextEngine
 from lumen.context.artifacts import ArtifactStore
 from lumen.events import ApprovalRequest, ProgressReported, ToolCallStarted
 from lumen.interactive_queue import QueueMode
@@ -21,8 +29,9 @@ from lumen.models import build_model
 from lumen.runtime import AgentRuntime, ApprovalHandler, CompletionPolicy, ToolApproval
 from lumen.task_control import CONTROL_TOOL_NAMES
 from lumen.tools.builtin import build_builtin_specs
+from lumen.tools.gateway import CapabilityGateway
 from lumen.tools.registry import PermissionPolicy, ToolRegistry
-from lumen.tools.spec import EffectKind
+from lumen.tools.spec import EffectKind, Risk, ToolConcurrency, ToolSpec
 from lumen.work_products import EffectReceipt, EffectStatus, TaskWorkspace
 
 from .orchestrator import AgentRuntimeFactory
@@ -52,9 +61,10 @@ class NativeAgentRuntimeFactory(AgentRuntimeFactory):
         active_model_name: Callable[[], str],
         parent_tools: Callable[[], Sequence[Tool[None]]],
         parent_tool_metadata: Callable[[], dict[str, dict[str, str]]],
-        parent_toolsets: Callable[[], Sequence[AbstractToolset[None]]],
+        parent_capability_gateway: Callable[[], CapabilityGateway],
         enabled_builtins: Sequence[str],
         artifacts: ArtifactStore,
+        context_config: ContextConfig,
         task_workspace: TaskWorkspace | None = None,
     ) -> None:
         self.workspace = Path(workspace).expanduser().resolve()
@@ -65,9 +75,10 @@ class NativeAgentRuntimeFactory(AgentRuntimeFactory):
         self.active_model_name = active_model_name
         self.parent_tools = parent_tools
         self.parent_tool_metadata = parent_tool_metadata
-        self.parent_toolsets = parent_toolsets
+        self.parent_capability_gateway = parent_capability_gateway
         self.enabled_builtins = tuple(enabled_builtins)
         self.artifacts = artifacts
+        self.context_config = context_config
         self.task_workspace = task_workspace
         self._approval_handler: ApprovalHandler | None = None
         self._status_handler: Callable[[str, AgentStatus], Awaitable[None]] | None = None
@@ -139,6 +150,8 @@ class NativeAgentRuntimeFactory(AgentRuntimeFactory):
                 if name in set(self.enabled_builtins) | {"read_artifact"}
                 or metadata.get(name, {}).get("origin", "").startswith("mcp:")
             }
+        request_limits = [v for v in (self.config.request_count, self.limits.request_count) if v is not None]
+        tool_limits = [v for v in (self.config.tool_calls, self.limits.tool_calls) if v is not None]
         return AgentConfigSnapshot(
             model_name=model_name,
             model_id=model.id,
@@ -159,8 +172,8 @@ class NativeAgentRuntimeFactory(AgentRuntimeFactory):
             sandbox_mode=self.sandbox.mode,
             workspace_mode=profile.workspace_mode,
             cwd=str(self.workspace),
-            request_limit=self.config.request_count,
-            tool_call_limit=self.config.tool_calls,
+            request_limit=min(request_limits) if request_limits else None,
+            tool_call_limit=min(tool_limits) if tool_limits else None,
             timeout_seconds=self.config.timeout_seconds,
             profile_revision=profile.revision,
         )
@@ -444,10 +457,45 @@ class NativeAgentRuntimeFactory(AgentRuntimeFactory):
                 )
             )
 
+        child_model = build_model(model_config)
+        replacement_specs: list[tuple[ToolSpec, str]] = []
+        for tool in tools:
+            document = metadata.get(tool.name, {})
+            try:
+                risk = Risk(document.get("risk", Risk.EXTERNAL_UNKNOWN.value))
+            except ValueError:
+                risk = Risk.EXTERNAL_UNKNOWN
+            try:
+                effect = EffectKind(document.get("effect", EffectKind.UNKNOWN.value))
+            except ValueError:
+                effect = EffectKind.UNKNOWN
+            replacement_specs.append(
+                (
+                    ToolSpec(
+                        tool.function,
+                        name=tool.name,
+                        description=tool.description,
+                        timeout=tool.timeout,
+                        risk=risk,
+                        effect_kind=effect,
+                        concurrency=(
+                            None
+                            if tool.sequential
+                            else lambda _arguments: ToolConcurrency.PARALLEL_SAFE
+                        ),
+                    ),
+                    document.get("origin", "child-runtime"),
+                )
+            )
+        capability_gateway = self.parent_capability_gateway().narrow(
+            thread.config.tool_names,
+            replacements=replacement_specs,
+            effect_recorder=record_effect,
+        )
         runtime = AgentRuntime(
-            model=build_model(model_config),
+            model=child_model,
             tools=tools,
-            toolsets=self._toolsets_for(thread),
+            toolsets=(),
             instructions=(
                 f"{profile.instructions}\n\n"
                 "You are a child Agent at depth one. Do not spawn or coordinate other agents. "
@@ -463,6 +511,16 @@ class NativeAgentRuntimeFactory(AgentRuntimeFactory):
             tool_metadata=metadata,
             model_settings=cast(ModelSettings, effective_model_settings),
             effect_recorder=record_effect,
+            context_engine=ContextEngine(
+                config=self.context_config,
+                model=child_model,
+                model_id=model_config.id,
+                model_config=model_config,
+                artifact_root=str(self.artifacts.root),
+            ),
+            capability_gateway=capability_gateway,
+            model_driver=PydanticAIModelDriver(child_model),
+            lumen_model_route=model_config.id,
         )
         self._active_runtimes[thread.ref.id] = runtime
         history = self._load_history(thread.history_ref)
@@ -521,17 +579,18 @@ class NativeAgentRuntimeFactory(AgentRuntimeFactory):
         if queued:
             prompt += "\n\nParent messages:\n" + "\n".join(f"- {item}" for item in queued[-8:])
         try:
-            outcome = await runtime.run(
-                prompt,
-                history,
-                emit,  # type: ignore[arg-type]
-                approve,  # type: ignore[arg-type]
-                session_id=f"{thread.ref.parent_session_id}:{thread.ref.id}",
-                completion_policy=CompletionPolicy(
-                    require_post_mutation_verification=False,
-                    max_retries=1,
-                ),
-            )
+            async with runtime:
+                outcome = await runtime.run(
+                    prompt,
+                    history,
+                    emit,  # type: ignore[arg-type]
+                    approve,  # type: ignore[arg-type]
+                    session_id=f"{thread.ref.parent_session_id}:{thread.ref.id}",
+                    completion_policy=CompletionPolicy(
+                        require_post_mutation_verification=False,
+                        max_retries=1,
+                    ),
+                )
         finally:
             self._active_runtimes.pop(thread.ref.id, None)
         transcript = ModelMessagesTypeAdapter.dump_json(
@@ -615,16 +674,6 @@ class NativeAgentRuntimeFactory(AgentRuntimeFactory):
             if name in parent_metadata:
                 metadata[name] = parent_metadata[name]
         return tools, metadata
-
-    def _toolsets_for(self, thread: AgentThreadState) -> list[AbstractToolset[None]]:
-        allowed = set(thread.config.tool_names)
-        if not allowed:
-            return []
-
-        def selected(_ctx: object, definition: object) -> bool:
-            return str(getattr(definition, "name", "")) in allowed
-
-        return [FilteredToolset(toolset, selected) for toolset in self.parent_toolsets()]
 
     def _load_history(self, ref: str | None) -> list[ModelMessage]:
         if ref is None:

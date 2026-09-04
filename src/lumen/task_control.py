@@ -25,7 +25,13 @@ _PROGRESS_MAX_CHARS = 800
 #: plane": name reservation, timeline filtering, and child-progress forwarding
 #: all consult this set.
 CONTROL_TOOL_NAMES = frozenset(
-    {"set_plan", "update_step", "link_evidence", "report_progress", "request_clarification"}
+    {
+        "set_plan",
+        "update_step",
+        "link_evidence",
+        "report_progress",
+        "request_clarification",
+    }
 )
 
 
@@ -33,15 +39,24 @@ class TaskController:
     def __init__(self) -> None:
         self._state = PlanState()
         self._sink: EventSink | None = None
+        self._plan_updated = False
 
     def start(self, plan: PlanState, sink: EventSink) -> None:
         self._state = deepcopy(plan)
         self._sink = sink
+        self._plan_updated = False
+
+    @property
+    def plan_updated(self) -> bool:
+        """Whether this run claimed/updated the plan, not just inherited it."""
+        return self._plan_updated
 
     def snapshot(self) -> PlanState:
         return deepcopy(self._state)
 
     async def _emit(self, event: RunEvent) -> None:
+        if isinstance(event, (PlanCreated, PlanUpdated)):
+            self._plan_updated = True
         if self._sink is None:
             return
         result: Any = self._sink(event)
@@ -54,17 +69,48 @@ class TaskController:
         goal: str = "",
         constraints: list[str] | None = None,
     ) -> str:
+        """Define or revise the current task's plan, not its progress.
+
+        Keep stable IDs for unchanged steps: their status and evidence survive
+        revisions. Use update_step immediately as each step starts or finishes.
+        For an unrelated task supply a new goal and new step IDs; omit old work.
+        """
         if self._sink is None:
             raise RuntimeError("TaskController.set_plan called before start()")
-        new_steps = [PlanStep.model_validate(step.model_dump()) for step in steps]
+        resolved_goal = goal.strip() or self._state.goal
+        resolved_constraints = list(self._state.constraints if constraints is None else constraints)
+        same_task = resolved_goal == self._state.goal and resolved_constraints == self._state.constraints
+        previous = {step.id: step for step in self._state.steps}
+        preserved = {
+            step.id
+            for step in steps
+            if same_task
+            and step.id in previous
+            and step.model_dump() == previous[step.id].model_dump(include=set(PlanStepInput.model_fields))
+        }
+        # Changed prerequisites invalidate dependent execution state as well.
+        while invalid := {
+            step.id for step in steps if step.id in preserved and set(step.depends_on) - preserved
+        }:
+            preserved -= invalid
+        new_steps = [
+            previous[step.id].model_copy(deep=True)
+            if step.id in preserved
+            else PlanStep.model_validate(step.model_dump())
+            for step in steps
+        ]
+        if same_task and new_steps == self._state.steps:
+            await self._emit(PlanUpdated(self.snapshot()))
+            return "Plan unchanged; use update_step for progress."
         previous_revision = self._state.revision
         self._state = PlanState(
-            goal=goal.strip(),
-            constraints=list(constraints or []),
+            goal=resolved_goal,
+            constraints=resolved_constraints,
             revision=previous_revision + 1,
             state_version=self._state.state_version + 1,
             lifecycle=PlanLifecycle.DRAFT,
             steps=new_steps,
+            evidence=self._state.evidence if same_task else [],
         )
         event_type: type[RunEvent] = PlanCreated if previous_revision == 0 else PlanUpdated
         await self._emit(event_type(self.snapshot()))
@@ -77,6 +123,11 @@ class TaskController:
         note: str | None = None,
         owner: str | None = None,
     ) -> str:
+        """Update one step as soon as it starts, completes, or becomes blocked.
+
+        Do not defer all updates until the final answer. Completed steps stay
+        completed; report a blocker or a justified skip instead of inventing success.
+        """
         if self._sink is None:
             raise RuntimeError("TaskController.update_step called before start()")
         index = self._find_step_index(step_id)

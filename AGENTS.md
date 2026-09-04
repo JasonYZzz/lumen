@@ -48,6 +48,15 @@ Lumen 是通用、可配置的 Agent framework。模型 provider 是可替换实
 
 ## 关键不变量
 
+### 长任务恢复：2026-09-04 踩坑记忆
+
+- 排查中断先区分请求/工具预算、模型空闲、显式总时限、Provider 配额与 context overflow；不能用调大次数修复流式总时限，也不能统一包装成 usage limit。
+- 正常长任务默认没有请求数、工具数或模型总时限硬墙；显式预算仍有效。空闲计时应识别传输数据与 SSE 心跳，不能把持续生成误杀。
+- 原生 Loop 是主模型重试唯一权威；可见候选文字可撤回后重试，已完成工具批次保留，半截工具参数及未知外部动作不得重放。
+- ContextEngine 在请求间执行同轮压缩；中间 checkpoint 未持久化时不能成为持久父节点。Session 按绝对 source_end 去掉已覆盖前缀，保留完整 raw history。
+- 恢复验证至少区分自动重连与失败后 Session 重载，并验证工具只执行一次、usage 不漏计、文本撤回跨 thinking 分段且按 Unicode 字符计数。
+- 文档同步同时检查 Markdown 与 Atlas 首页手写图解；重建 content.generated.js 不会修正 index.html 中的旧结论。最新说明见 `docs/architecture-guide/14-long-running-recovery.md`，历史证据见 `docs/research/2026-09-04-run-resilience-upgrade.md`。
+
 ### Session 与上下文
 
 - Session 是 append-only journal。修改历史事实要追加新 record，不原地改写旧 record。

@@ -224,11 +224,6 @@ class TokenCounterFactory:
 # --------------------------------------------------------------------------- #
 
 
-#: Conservative default when no profile or known model matches. Marked
-#: ``estimated`` so ``/context`` flags that the window is a fallback.
-_DEFAULT_WINDOW_TOKENS = 32_000
-_DEFAULT_MAX_OUTPUT_TOKENS = 4_096
-
 # Compatibility export retained for callers that imported the old table.
 # Resolution no longer consults provider prefixes; all built-ins live in
 # ``context.profiles`` and match exact model slugs.

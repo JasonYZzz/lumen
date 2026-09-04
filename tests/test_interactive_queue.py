@@ -38,6 +38,17 @@ def test_interactive_queue_marks_delivered_messages_non_retractable() -> None:
     assert queue.dequeue_all() == (pending,)
 
 
+def test_interactive_queue_dequeues_one_mode_without_reordering_the_rest() -> None:
+    queue = InteractiveMessageQueue()
+    steer_one = queue.enqueue("steer one", "one", QueueMode.STEER)
+    follow_up = queue.enqueue("follow", "later", QueueMode.FOLLOW_UP)
+    steer_two = queue.enqueue("steer two", "two", QueueMode.STEER)
+
+    assert queue.dequeue_mode(QueueMode.STEER) == (steer_one, steer_two)
+    assert queue.snapshot() == (follow_up,)
+    assert queue.dequeue_mode(QueueMode.FOLLOW_UP, limit=1) == (follow_up,)
+
+
 def test_interactive_queue_enforces_count_and_byte_limits() -> None:
     queue = InteractiveMessageQueue(max_messages=1, max_bytes=8)
     queue.enqueue("one", "12345678", QueueMode.STEER)

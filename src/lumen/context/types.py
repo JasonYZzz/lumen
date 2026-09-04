@@ -29,11 +29,14 @@ the established project pattern for serialisable domain models (``ContextSummary
 
 from __future__ import annotations
 
+import hashlib
 from datetime import datetime
 from enum import StrEnum
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+_EMPTY_SETTINGS_DIGEST = f"sha256:{hashlib.sha256(b'{}').hexdigest()}"
 
 
 class _Contract(BaseModel):
@@ -256,6 +259,71 @@ class ProviderRequestSnapshot(_Contract):
     estimated: bool = True
 
 
+class ReplayEligibility(StrEnum):
+    """How precisely a recorded model request can be reconstructed offline."""
+
+    REPLAYABLE = "replayable"
+    VERIFY_ONLY = "verify_only"
+    NON_REPLAYABLE = "non_replayable"
+
+
+class ModelInputSource(_Contract):
+    """One bounded, body-free source entry in a model-input manifest.
+
+    ``reference`` points to a durable Session fact or content-addressed
+    artifact when one exists. ``content_digest`` proves which rendered value
+    was used without copying Skill, MCP, memory, prompt, or policy bodies into
+    the Session journal.
+    """
+
+    order: int = Field(ge=0)
+    zone: ContextZone
+    kind: SourceKind
+    origin: str = Field(max_length=512)
+    reference: str | None = Field(default=None, max_length=512)
+    revision: str | None = Field(default=None, max_length=256)
+    content_digest: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
+    token_estimate: int = Field(ge=0)
+    replayable: bool
+    non_replayable_reason: str | None = Field(default=None, max_length=512)
+
+
+class ModelInputManifest(_Contract):
+    """Bounded proof of the Lumen-visible inputs for one provider request.
+
+    The manifest deliberately stores only counts, ordered source references,
+    and SHA-256 digests. Full messages remain in the append-only Session
+    journal and large/transient source bodies remain in ArtifactStore. This is
+    audit evidence, not a second canonical history.
+    """
+
+    schema_version: Literal[1] = 1
+    session_id: str = Field(max_length=256)
+    step: int = Field(ge=1)
+    route: str = Field(max_length=512)
+    provider: str = Field(max_length=128)
+    model: str = Field(max_length=384)
+    context_fingerprint: str = Field(max_length=256)
+    message_count: int = Field(ge=0)
+    tool_count: int = Field(ge=0)
+    instructions_digest: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
+    message_history_digest: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
+    tool_schema_digest: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
+    # Default keeps Session v9 manifests written before settings evidence was
+    # added loadable without rewriting their append-only records.
+    settings_digest: str = Field(
+        default=_EMPTY_SETTINGS_DIGEST,
+        pattern=r"^sha256:[0-9a-f]{64}$",
+    )
+    context_sources_digest: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
+    stable_prefix_digest: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
+    dynamic_tail_digest: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
+    request_fingerprint: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
+    sources: tuple[ModelInputSource, ...] = Field(default_factory=tuple, max_length=128)
+    replay_eligibility: ReplayEligibility = ReplayEligibility.VERIFY_ONLY
+    non_replayable_reasons: tuple[str, ...] = Field(default_factory=tuple, max_length=128)
+
+
 class ProviderRequestReceipt(_Contract):
     """Bounded durable ledger entry for one provider-bound model step."""
 
@@ -273,6 +341,7 @@ class ProviderRequestReceipt(_Contract):
     visible_tool_digest: str
     context_fingerprint: str
     estimated: bool = True
+    input_manifest: ModelInputManifest | None = None
 
     @classmethod
     def from_snapshot(
@@ -281,6 +350,7 @@ class ProviderRequestReceipt(_Contract):
         *,
         route: str,
         context_fingerprint: str,
+        input_manifest: ModelInputManifest | None = None,
     ) -> ProviderRequestReceipt:
         provider, separator, model = route.partition(":")
         if not separator:
@@ -300,6 +370,7 @@ class ProviderRequestReceipt(_Contract):
             visible_tool_digest=snapshot.visible_tool_digest,
             context_fingerprint=context_fingerprint,
             estimated=snapshot.estimated,
+            input_manifest=input_manifest,
         )
 
 
@@ -517,9 +588,13 @@ __all__ = [
     "FileState",
     "MemoryCandidateRef",
     "ModelContextSpec",
+    "ModelInputManifest",
+    "ModelInputSource",
     "ObservationState",
     "PressureItem",
+    "ProviderRequestReceipt",
     "ProviderRequestSnapshot",
+    "ReplayEligibility",
     "RetentionPolicy",
     "RollingContextState",
     "SourceKind",

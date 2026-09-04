@@ -18,8 +18,12 @@ flowchart TB
     Host --> Coordinator["RunCoordinator"]
     Coordinator --> Runtime["AgentRuntime"]
     Runtime <--> Context["ContextEngine"]
-    Runtime <--> Model["Pydantic AI / Model adapter"]
-    Runtime <--> Tools["Local tools + MCP toolsets"]
+    Runtime --> Native["LumenAgentLoop（唯一 Loop 权威）"]
+    Native --> Driver["ModelDriver"]
+    Driver --> PydanticDriver["PydanticAIModelDriver"]
+    PydanticDriver --> Model["Provider model"]
+    Driver --> Model
+    Runtime <--> Tools["CapabilityGateway / Local + MCP"]
 
     Context <--> Memory["MemoryManager + SQLite"]
     Context <--> Artifacts["Artifact store"]
@@ -45,6 +49,25 @@ flowchart TB
 | 上下文层 | token 预算、压缩、记忆、artifact | `context/` |
 | 能力层 | 本地工具、MCP、Skill、Hook、子 Agent | `tools/`、`mcp_*`、`skills.py`、`agents/` |
 
+### 当前系统底层技术架构图
+
+![Lumen 当前系统底层技术架构图](images/current-system-architecture.svg)
+
+这张图按运行时责任而不是源码目录组织当前实现：
+
+- **应用控制面只有一个入口。** TUI、Web、headless 与 Realtime 的客户端差异止于 Adapter；命令、
+  进程内 active run、跨进程 OS advisory execution lock、审批和公开事件统一由 `WorkspaceHost` 管理。
+- **文字与语音是两条执行路径，但不是两套能力系统。** 文字路径进入 `RunCoordinator` 与
+  `AgentRuntime`；Realtime 进入 `LiveSessionManager` 与 Provider Adapter。两者最终共享
+  `ToolRegistry`、`CapabilityGateway`、权限策略、Effect 记录与完成门禁。
+- **多 Agent 和 Work Product 各有唯一权威。** `AgentOrchestrator` 拥有线程、证据、送达与导入状态；
+  `TaskWorkspace` 拥有 mutation journal、验证、回滚和恢复。`AgentRuntimeFactory` 只创建权限收窄的
+  child runtime，不复制生命周期状态。
+- **持久事实与可重建投影分离。** Session v9 JSONL、ArtifactStore 和 Memory repository 保存事实或大正文；
+  Timeline、UI reducer、capability report、OpenAPI 和 contract catalog 都是可重建的只读投影。
+- **完成是跨 Module 的联合门禁。** Plan evidence、TaskWorkspace verification 或 AgentOrchestrator 的
+  unresolved state 任一未满足时，文字与严格 Realtime 路径都不能声明完成。
+
 ## 1.2 最重要的 deep modules
 
 ### WorkspaceHost
@@ -54,7 +77,8 @@ flowchart TB
 它隐藏的复杂度包括：
 
 - 每个 session 对应一个 `_SessionActor`；
-- workspace 级单 run 互斥；
+- workspace 级单 run 互斥；进程内状态锁负责 Host 命令竞争，OS advisory lock 负责跨进程单 writer，
+  第二个 Host 仍可读取 Session；
 - `client_request_id` 幂等；
 - run 事件 journal 与订阅；
 - pending approval 的创建、决策与取消清理；
@@ -62,15 +86,23 @@ flowchart TB
 
 ### AgentRuntime
 
-`AgentRuntime.run(...) -> RunOutcome` 是执行 seam。它将 Pydantic AI 的底层事件翻译为稳定的 Lumen `RunEvent`，并统一处理：
+`AgentRuntime.run(...) -> RunOutcome` 是执行 seam。它通过低层 `ModelDriver` 驱动唯一的
+`LumenAgentLoop`，再把类型化 `LoopEvent` 投影到稳定 `RunEvent`。当前
+`PydanticAIModelDriver` 复用 PydanticAI Provider Adapter，但主模型—工具 turn 不使用其 Agent graph。
+该 Module 统一处理：
 
 - planning/progress 控制工具；
 - context prepare/commit；
-- provider 重试；
+- Provider 恢复；`LumenAgentLoop` 统一管理空闲超时、退避和请求重试，撤回失败候选文字，保留已完成工具批次及 usage；检测到 Provider 内置工具活动时禁止重放；
 - 流式文本与 commentary 回撤；
 - 并行工具调度；
-- deferred approval；
+- 工具审批与 typed denial；
 - 部分失败结果保存。
+
+`LumenAgentLoop` 通过唯一 `CapabilityGateway` 执行本地/MCP capability；缺少 Gateway 或工具续接
+契约时仍 fail closed。Hook、blocking clarification、steer/follow-up 与 recovery receipt 共用现有
+权威。生产路径没有 engine selector；Provider conformance、provider-private/suspended part、deferred
+MCP 与各 Surface 通过同一 Lumen Loop 契约验证。
 
 ### ContextEngine
 

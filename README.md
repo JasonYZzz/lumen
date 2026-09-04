@@ -1,6 +1,13 @@
 # Lumen
 
-Lumen（拉丁文 *lumen*，意为“光”）是一个轻量、可配置的 Python Agent 框架：模型根据自然语言提示自行选择本地工具或 MCP 工具，读取工具结果后继续运行，直到形成最终回答。项目使用 Pydantic AI 负责多模型与 tool-call loop，并提供 Textual TUI、FastAPI + Next.js Web 客户端和 headless CLI 三种入口。
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/brand/lumen-lockup-dark.svg">
+    <img src="docs/brand/lumen-lockup-light.svg" width="620" alt="Lumen — open agent harness">
+  </picture>
+</p>
+
+Lumen（拉丁文 *lumen*，意为“光”）是一个轻量、可配置的 Python Agent 框架：模型根据自然语言提示自行选择本地工具或 MCP 工具，读取工具结果后继续运行，直到形成最终回答。`LumenAgentLoop` 是唯一模型—工具循环权威；低层 `PydanticAIModelDriver` 保留 PydanticAI 成熟的 Model/Provider 适配价值。Textual TUI、FastAPI + Next.js Web 和 headless CLI 共用同一运行契约。
 
 Lumen 是框架身份，OpenAI、Anthropic、Google 或任何 OpenAI-compatible 模型只是可替换的推理 provider。Python 包、CLI 命令与本地配置目录统一使用 `lumen` / `.lumen/`。
 
@@ -23,28 +30,29 @@ flowchart LR
 - YAML 配置模型、提示词、限制、本地插件和多个 MCP 服务。
 - **三种一致入口**：全屏 TUI、本机单工作区 Web 客户端，以及适合脚本/CI 的 `lumen -p` headless 模式；共用会话、审批、上下文、记忆、Skill 和 MCP 运行内核。
 - **Web 实时语音**：通过 capability-aware Router 支持 OpenAI Realtime 与阿里云百炼 Qwen Realtime；API Key、工具执行、审批和完成门禁始终留在 Lumen Host。语音与文字 turn 共用 Session v9、工作对象、MCP 和 Agent 能力。
-- stdio 与 Streamable HTTP MCP；工具统一使用 `<server>_<tool>` 名称，默认通过 tool search 延迟加载完整 schema，并可用 `/mcp` 查看连接与工作集。传输层断线自动重连一次并重试，仍失败则把"server 不可用"反馈给模型继续对话，不会中断整个 run。
+- stdio 与 Streamable HTTP MCP；工具统一使用 `<server>_<tool>` 名称，通过 `search_tools` 的有界目录、关键词搜索或分页浏览发现后加载完整 schema，`/mcp` 查看连接状态。只有明确声明 `tool_effects: observe` 的调用在断线后自动重连重试一次；其他调用返回 `mcp_outcome_unknown`，要求先核实远端结果。
 - 内置只读工具 `read_file`、`list_directory`、`search_text`，严格限制在 `--cwd` 工作区内。
 - 可选启用的工作区能力工具 `write_file`、`edit_file`、`run_command`，默认需要审批。
 - 计划与公开进度：模型在动手前调用 `set_plan`，过程中通过 `report_progress` 输出简短、公开的进度说明。
 - **Agent Skills**：扫描 `.lumen/skills/` 和 `~/.lumen/skills/` 发现 `SKILL.md` 技能包，模型自主按需加载或用户手动 `/skill:<name>` 触发；精确正文以内容寻址 artifact 固定在当前 session，resume 恢复同一 revision。
-- **风险分级并行编排**：`parallel_safe` 只并行 READ 工具，`parallel` 放开全部工具；同轮审批聚合展示。
+- **显式并发契约**：`sequential` 逐个执行；当前原生 Loop 中 `parallel_safe` 和 `parallel` 都只重叠 Gateway 判定为 `ToolConcurrency.PARALLEL_SAFE` 的调用，未声明并发能力时串行。Risk 只决定审批；同轮审批聚合展示。
 - **原生多 Agent Runtime**：`AgentOrchestrator` 持久化 depth-one Agent Thread，统一提供并行调度、消息路由、权限收窄、隔离 worktree、证据、恢复与完成门禁；旧 child 工具仅作为弃用兼容入口。
+- **自研 Agent Loop**：`LumenAgentLoop` 是唯一模型—工具循环权威，负责模型请求、工具批次、继续、重试、取消和 terminal candidate；Provider 传输与生命周期由低层 `PydanticAIModelDriver` 适配。
 - **生命周期钩子**：command/Python 钩子覆盖 prompt、工具前后与 stop，本地和 MCP 工具共用同一执行 seam。
 - **MCP resources/prompts/OAuth**：资源显式激活为当前 session 的 retrieved-context snapshot，prompt 按需渲染并标记外部来源；OAuth 使用 PKCE、刷新令牌与 0600 本地凭证。
 - 时间线 TUI：默认 Normal 信息密度会折叠 commentary，并按读取、搜索、本地探索、Web、MCP 等可见意图分别聚合低风险活动；命令、修改、失败和审批保持独立。进行态/完成态使用 `Reading/Read`、`Searching/Searched` 等明确文案，可用 `Ctrl+O` 切到 Verbose 审计视图。还提供语义化 loading、Lazy 消息渲染、流式 Markdown、工具专用卡片、固定队列式审批、可搜索 transcript、Agent 面板和请求/工具/token/耗时度量。
 - 工具展示由 Tool Contract V2 生成可重放的 `ToolCallView/ToolResultView`；TUI 与 Web 消费同一 schema intent，未知工具自动降级为通用卡片，展示失败不影响工具真实结果。
 - 结构化上下文：system、memory、Skill、MCP catalog、历史和当前输入分区计费并执行硬上限；超过软阈值时只摘要上一 checkpoint 之后的 delta，完整 JSONL 历史仍追加持久化。
 - 大工具输出 receipt 化：旧轮次的超大工具结果只留摘要与 head/tail，正文写入 0600 内容寻址 artifact；模型追问细节时可用 `read_artifact` 按 ref 分页读回全文，涉密输出（`artifact_policy="never"`）永不落盘也不可回读。
-- Provider request ledger：每个 terminal turn 持久化实际模型 route、逐 step token 预算、visible tool digest 与 context fingerprint，便于复盘“哪一个模型以哪组能力发出了请求”；不保存密钥和大正文。
+- Provider request ledger：每个 terminal turn 持久化实际模型 route、逐 step token 预算、完整有序工具 schema digest、Context fingerprint，以及内嵌的 `ModelInputManifest`（来源 ref/digest、stable prefix、dynamic tail、request fingerprint 与 replay eligibility）；不保存密钥、instructions、完整消息或大正文。
 - 持久记忆：显式记忆默认可用，自动学习默认关闭；可审计 SQLite/Markdown 投影、项目隔离、敏感信息过滤、崩溃恢复与 incognito 开关。
-- 会话恢复：可恢复计划、压缩 checkpoint、活动 Skill/MCP snapshot 与待回答澄清，按用户指令 `/new`、`/resume <id>`、`/retry`。
+- 会话恢复：可恢复计划、压缩 checkpoint、活动 Skill/MCP snapshot 与待回答澄清；孤立 running turn 显示为 interrupted，`/retry` 恢复输入与附件，未解决的 unknown Effect 会阻止重试。执行期使用 OS advisory workspace lock 保证跨进程单 writer，只读 Session 不受影响。
 
 ## 公开进度与私有推理
 
 - `report_progress` 仅承载面向用户的简短说明：发现、改动、错误、恢复与下一步动作。
 - 系统提示词明确禁止把私有思维链（chain-of-thought）写入进度。
-- 运行时从不读取模型专属的推理字段；进度始终是结构化、经过校验的公开文本。
+- 运行时不会把模型专属 reasoning/thinking 当成公开进度、最终文本或 canonical completion 证据；公开进度始终是结构化、经过校验的文本。
 - provider 返回的 reasoning/thinking 流（如 extended thinking）以只读的 `ThinkingDelta` 事件呈现为可折叠的 "Model reasoning" 块：仅用于展示，不进入最终答案，也不会被工具调用回撤；verbose 密度下默认展开。
 
 ## 工作区能力工具
@@ -52,9 +60,11 @@ flowchart LR
 - `write_file(path, content, overwrite=False)`：UTF-8 原子写入；默认拒绝覆盖，需显式 `overwrite=True`。
 - `edit_file(path, find, replace)`：要求 `find` 在文件中精确出现一次，否则失败。
 - `run_command(argv, cwd=".", timeout=None, env=None)`：以 `argv` 数组直接 `exec`，**不经过 shell**；超时或取消时终止整个进程组；stdout/stderr 并发 drain,各自只保留头尾各 64 KiB(中间丢弃但计入总字节数),所以 100 MB 的输出也不会撑爆内存,同时开头和结尾(通常是真正的报错/堆栈)都保留可见。
-- `web_fetch(url, start_char=1, max_chars=20000)`：抓取公共 http(s) URL 的一页可读文本；HTML 转 plain text，JSON/XML/YAML 原样返回，支持按 `next_start_char` 翻页。SSRF 防护：DNS 解析后拒绝 loopback/私网/链路本地地址，重定向逐跳重新校验，响应体上限 2 MiB。`Risk=external`（默认需审批），`EffectKind=observe`（可并行）。
+- `web_fetch(url, start_char=1, max_chars=20000)`：抓取公共 http(s) URL 的一页可读文本；HTML 转 plain text，JSON/XML/YAML 原样返回，支持按 `next_start_char` 翻页。SSRF 防护：DNS 解析后拒绝 loopback/私网/链路本地地址，重定向逐跳重新校验；默认最多解析 2 MiB 内容，当前会先读取完整 HTTP 响应。`Risk=external`（默认需审批），`EffectKind=observe`；当前未声明并发策略，按 exclusive 执行。
 - `web_search(query)`：需在 `tools.web.search` 配置 provider（`tavily` 或 `brave`）与 `api_key_env` 后才会注册；返回 `title — url — snippet` 行。
-- 上述工具均受 `--cwd` 工作区约束，禁止 `..` 与符号链接越界。
+- `download_file(url, path, overwrite=False, sha256=None)`：把公共 URL 的 UTF-8 原始文件直接下载到工作区；不经模型转写或 HTML 提取，仅返回路径、字节数和 SHA-256。流式限制下载大小，拒绝二进制、HTML 页面、哈希不符和路径逃逸；原子发布并通过 TaskWorkspace journal 验证。`Risk=external`、`EffectKind=mutation`，默认需审批，Plan 模式不允许执行；需加入 `tools.builtins` 显式启用。
+- 文件工具及命令 cwd 受 `--cwd` 工作区约束，禁止路径逃逸；Web 工具访问公共 URL，使用独立的网络与审批约束。
+- `install_skill(source, path=None, ref=None, name=None, scope="project", overwrite=False)`：从 GitHub 或工作区本地目录安装完整 Skill，包括二进制资源、脚本可执行标记和空目录。自动解析默认分支并固定 commit，目录发布后验证全部内容，返回简短回执；安装后当前运行即可通过 `list_skills` / `load_skill` 发现与加载。需在 `tools.builtins` 显式启用；与其他写工具共用审批，Plan 模式不可执行。
 
 ```yaml
 tools:
@@ -63,6 +73,8 @@ tools:
     - list_directory
     - search_text
     - web_fetch
+    - download_file
+    - install_skill
     - write_file
     - edit_file
     - run_command
@@ -77,9 +89,20 @@ tools:
 
 命令执行同时经过审批策略和 OS 沙箱。默认 `workspace_write`：macOS 使用 Seatbelt、Linux 使用 bubblewrap，网络关闭，隔离 `HOME/TMPDIR`，环境变量按 allowlist 构建；适配器缺失时 fail closed。只有显式配置 `sandbox.mode: disabled` 才放弃隔离。
 
+启用安装工具后可直接说“安装 https://github.com/leonxlnx/taste-skill 中的 skills/taste-skill”。支持仓库 URL、`owner/repo`、GitHub `tree/blob/raw` URL 和 `./本地目录`；含 `/` 的分支使用显式 `ref`。多 Skill 仓库会返回候选路径，必须明确选择。默认安装到受信任项目的 `.lumen/skills/<name>/`；`scope="user"` 写入 `~/.lumen/skills/`。设置 `agent.user_skill_install_enabled: true` 可单独授权这个受管目录，无需关闭 `workspace_write` 命令沙箱，仍经过安装工具审批。该开关默认关闭，当前项目和示例配置已启用；原 `sandbox.mode: disabled` 的安装能力保留兼容。用户明确要求全局时不会静默改装到项目目录。
+
+需要澄清时，Web 显示可点击选项与自由回答框；点击后继续原会话，刷新页面也能恢复尚未回答的问题。此前的工具重试和过程文字默认收起，完整内容仍可在处理过程和运行记录中查看。
+
+相同内容重复安装不修改文件；更新需明确 `overwrite=True`，受管目录存在本地修改时拒绝覆盖。安装保留来源与 commit 元数据，并复用 TaskWorkspace 目录快照与恢复；不会执行下载的脚本或 Skill 正文。私有 GitHub 仓库读取操作者环境中的 `GH_TOKEN` / `GITHUB_TOKEN`，当前不提供 Git/SSH 回退。压缩包和展开内容各限 32 MiB，文件和目录各限 4096，拒绝路径逃逸、符号链接与大小写冲突。已有会话激活的正文仍使用原 artifact，重新加载才更新。
+
+`sandbox.network` 只约束 SandboxRunner 子进程，不是 Host 的全局网络开关。已配置的 MCP/Web 工具
+按各自权限执行；命令失败应根据 stderr、退出码和结果中的 sandbox 策略诊断。Skill 的正文和相邻
+资源通过 `load_skill` / `read_skill_resource` 读取，无需让命令访问用户级 Skill 目录。
+
 ## 计划与时间线符号
 
 - `set_plan` 后 TUI 显示计划面板：`✓` 完成、`●` 进行中、`○` 待办、`!` 阻塞。
+- 修订同一目标的计划会保留未改动步骤的进度与证据；步骤开始/结束时通过 `update_step` 即时更新。普通模式也会在最终回答前检查本轮计划的待办项，不由 UI 自动填成完成；Plan 模式的未来步骤仍保持待审批。
 - 每个工具调用渲染为一张卡片，包含来源（builtin/plugin/mcp/control）、风险等级、耗时，必要时附带内联审批选择器（`→ Allow / Deny`，左右键切换 + Enter 确认，无突兀按钮）。
 - provider 的文本增量到达 runtime 后立即发送给 TUI，由 33ms 合并帧增量渲染，不等待整轮或整段回答结束。
 - 因为 provider 可能先输出文字、随后才给出工具调用，Lumen 会先显示暂定文本；若同一响应后来调用工具，则通过 `TextRetracted` 将该段原位转为淡色 `CommentaryDelta`，最终答案不会重复。
@@ -158,17 +181,18 @@ agent:
         # window_tokens / max_output_tokens / tokenizer 均可按部署显式覆盖
 ```
 
-解析优先级为模型显式字段 → 显式 profile → 精确模型 slug alias → 80k conservative fallback。旧 `soft_token_limit` / `keep_recent_tokens` 仍可读取，但 `/context` 和配置诊断会显示弃用提示。
+解析优先级为模型显式字段 → 显式 profile → 精确模型 slug alias → 80k conservative fallback。未知模型的初始输出 reserve 按 window 自适应：以 16K 为现代基线、32K 为未验证能力上限，同时不超过窗口的 1/4；发生 `LENGTH` 时可继续有界扩容。旧 `soft_token_limit` / `keep_recent_tokens` 仍可读取，但 `/context` 和配置诊断会显示弃用提示。
 
 - token 估算按模型 profile 选择 adapter，而不是按 provider 前缀：GPT-5.6 使用 `o200k_base`（缺少本地 `tiktoken` 时回退），DeepSeek/Kimi/GLM 与未知模型使用 conservative-CJK；不会下载或远程调用 tokenizer。压缩软触发、zone 预算与 provider preflight 共用同一份计数器。
 - 摘要由独立的、无工具 Agent 以严格结构化输出（`ContextSummary`）生成；失败时执行确定性历史降级，无法在固定前缀与输出预留下安全装入时会在 provider 调用前明确报错。
 - 摘要以 `<history-summary trust="recalled">` 写入活动上下文并带明确 metadata；checkpoint 持久化 parent、连续 message source range 与 digest；**完整原始历史始终以追加方式持久化**。
 - **token 预算切点**（对照 coding-agent 的 `findCutPoint`）：压缩时从最新消息反向累积 token，达到 `keep_recent_tokens` 预算后**向前吸附到安全边界**（用户 prompt 请求的起点），保证工具结果永远不会和它的调用分离。替代了旧的固定轮次计数（6 轮可能 2K 或 60K token，不可控）。
 - **每个工具结果独立截断**：序列化给摘要器时，每个工具结果单独截到 `summary_tool_result_chars` 字符，避免单个巨型输出挤掉其他轮次（对照 coding-agent 的 `TOOL_RESULT_MAX_CHARS = 2000`）。
+- **同一 run 的动态窗口**：每次 Provider I/O 前重新计量；当前 run 新产生的大型工具结果会先变成可回读的 artifact receipt，再裁剪旧 canonical history，避免长工具输出在单个 turn 内持续膨胀。
 - **真正的 delta 摘要**：多次压缩时，前次 rolling state 作为 `<previous-summary>` 传入，而摘要器只接收 checkpoint V2 绝对 transcript cursor 之后的新消息。恢复时校验 parent、连续范围、source/state digest 和 full-history 长度；损坏 checkpoint 不推进状态，而从最后一个合法 checkpoint 继续回放原始 JSONL。
 - **单一 rolling state，不堆叠摘要**：模型始终只注入最新 V2 rolling state 与 recent window。旧 checkpoint 保留为不可变 episode archive，仅在当前问题相关时按需检索；后台候选只在 turn 已经持久化后生成，采用前再次校验 cursor/digest。
-- **持久化后发布**：ContextEngine 的 `commit` 先构造候选 active history；RunCoordinator 完成 JSONL append + `fsync` 后才发布 checkpoint/cursor 和内存状态，因此写盘失败不会造成“内存已压缩、磁盘未记录”。
-- **逐步骤真实预检**：Pydantic AI 完成动态 instructions/tool schema 解析后，`before_model_request` 重新计数实际 messages/tools；必要时只裁剪旧 canonical history，仍超 hard limit 时在 provider I/O 前失败。
+- **持久化后发布**：ContextEngine 的 `commit` 先构造候选 active history；RunCoordinator 缓冲 `RunCompleted` / `RunWaitingForUser` 等 terminal candidate，完成 JSONL append + `fsync` 后才发布 terminal event、checkpoint/cursor 和内存状态，因此写盘失败不会造成“客户端已完成、磁盘未记录”或“内存已压缩、磁盘未记录”。
+- **逐步骤真实预检**：`LumenAgentLoop` 在每次低层 Driver 调用前通过 `ContextEngine.adapt_request_history()` 冻结实际 messages、instructions 与有序工具 schema，并生成 manifest。必要时只裁剪旧 canonical history；仍超 hard limit 时在 provider I/O 前失败。
 - **Prompt 分层**：native role/message 是语义边界；Plan/Skill 使用 system-role `<session-policy-context>`，Memory/MCP 使用 user-role `<context-data>`，标签内正文保留 Markdown 并统一 XML 转义。
 
 ## 原生多 Agent Runtime
@@ -185,34 +209,44 @@ agents:
   default_agent: default
   recovery: safe
   worktree_root: ~/.lumen/worktrees
-  request_count: 10
-  tool_calls: 20
-  timeout_seconds: 180
+  request_count: null
+  tool_calls: null
+  timeout_seconds: null
 ```
 
 内置 `explorer` 只继承父 Agent 已启用工具中的 `observe` 交集；`default` / `worker` 在独立 Git worktree 中执行本地修改。项目可在 `.lumen/agents/*.md`、用户可在 `~/.lumen/agents/*.md` 定义角色，项目角色仅在项目已信任时加载，并且角色只能收窄父 Agent 的工具和权限。远程动作仍通过根 Host 的审批通道；worktree 导入前做三方预检和 dirty path 重叠检查，绝不覆盖用户未提交修改。旧 `delegation` 配置与 child 工具仍作为弃用兼容入口。
 
 ## 运行限制（usage limits）
 
-每次 run 的 LLM 调用次数和工具调用次数有上限，防失控花费。**默认值**已为多步计划任务校准:
+长任务默认不设模型请求数、工具调用数和单请求总时长硬上限。部署者仍可显式配置预算；已有配置中的有限值继续生效，`null` 表示关闭该项硬限制：
 
 ```yaml
 agent:
   limits:
-    request_count: 50          # 单次 run 最多 50 次 LLM 请求(默认)
-    tool_calls: 100            # 最多 100 次工具调用
+    request_count: null        # 可选的单次 run 模型请求预算
+    tool_calls: null           # 可选的单次 run 工具调用预算
+    output_limit_retries: 3    # 隐式输出上限被截断后的安全重试次数
     tool_timeout_seconds: 60
+    model_stream_idle_timeout_seconds: 300  # 无数据到达的等待上限
+    model_request_timeout_seconds: null     # 可选绝对时限，持续输出不会重置
+    model_retries: 5
+    model_retry_delay_seconds: 2
+    model_retry_max_delay_seconds: 60
     skill_script_timeout_seconds: 30
     parallel_tool_calls: parallel_safe  # sequential | parallel_safe | parallel
 ```
 
 > **没有 `total_tokens` 字段**（已彻底删除）。Context 增长由 `ContextEngine` 按当前模型的 ratio policy 自动压缩，不使用累计 token 硬墙中断任务。旧 `soft_token_limit` 仍可作为兼容绝对覆盖；新配置建议使用 `soft_ratio`。如果 `agent.yaml` 里还有 `total_tokens: ...`，必须删除，否则 `StrictModel` 会因未知字段报错。
 
-> **如果你的复杂任务中途被 "Run stopped at a usage limit" 中断**,把 `agent.yaml` 里的 `request_count` 调高(例如 80 或 100)。8 步计划每步平均 2-3 次请求 = 16-24 次,加反思/重试可能到 40+。
+> 请求/工具预算耗尽、连接空闲超时、显式总时限和 Provider 配额耗尽分别报告。根 Agent 与原生子 Agent 默认均可持续运行；子 Agent 的显式请求/工具预算会与父配置取更严格值。取消、工具超时、审批、effect 和完成门禁继续有效。
 
 ## 运行时健壮性
 
-- **provider 自动重试**：对瞬时错误（429 限流、503 服务不可用、连接重置、超时）自动重试最多 3 次，指数退避（1s → 2s → 4s）。仅在流开始前重试——一旦 token 已流式输出到时间线就不再重试（避免重复内容）。非瞬时错误（usage limit、tool 截断）不重试，直接报错。
+当前实现、故障分类与踩坑检查见[长任务持续执行与排障](docs/architecture-guide/14-long-running-recovery.md)。
+
+- **Provider 自动恢复**：瞬时错误默认重试最多 5 次，指数退避带抖动，遵循允许等待范围内的 `Retry-After`。OpenAI/Anthropic SDK 隐式重试关闭，重试由原生 Loop 统一记录。已输出的候选文字先撤回再生成；已完成工具步骤保持不变。检测到 Provider 内置工具活动时不自动重放。配额耗尽、拒答、内容过滤和协议错误直接报告。
+- **滑动等待**：OpenAI/Anthropic 以 HTTP 流数据（含心跳）刷新空闲计时；其他 ModelDriver 以标准事件刷新。持续输出不再触发默认 300 秒总时限。
+- **同轮压缩**：每个完成工具批次后的模型请求都会检查上下文压力，必要时滚动总结并保留目标和最近完整批次。Provider 报告上下文超限时允许一次有效压缩后的恢复请求。失败或取消仍保留已完成模型/工具消息，继续任务时无需重做这些步骤。
 - **异常时保留部分输出**：运行中途失败（取消、超时、模型错误）时，已缓冲的流式文本会先 flush 到时间线，再显示错误消息。用户不会再看到"半截答案消失"。
 - **`@` 文件补全不阻塞 UI**：`search_files`（含 `fd` 子进程或 `os.walk` 回退）在线程池中执行（`asyncio.to_thread`），不再冻结 TUI。
 - **原子写入不留垃圾**：`write_file` / `edit_file` 的临时文件在 `os.replace` 失败或取消时自动清理（`except BaseException` 中 `unlink`），不再累积 `.tmp-*` 孤儿文件。
@@ -282,7 +316,13 @@ lumen web --cwd . --stop
 
 Web 侧栏支持任务重命名、归档、恢复和删除。只点击“新建任务”不会提前持久化空 Session；没有 turn 且没有显式标题的历史空 Session 也不会出现在列表。首条任务输入被 Host 接受时，会先追加带唯一 `interaction_id` 的 `running` turn，再调度模型或工具；terminal turn 以相同 ID 追加并在读取投影中取代 running 状态，因此进程重启也不会得到空时间线，且完成后不会重复显示用户输入。`SessionRepository` 在统一 JSONL 写入 Seam 使用 Pydantic JSON 语义规范化 provider、MCP 和 usage 载荷；例如 provider 返回的 `Decimal` 计费值会精确保存为十进制字符串，而未知的不透明对象仍然安全失败。若完整 terminal record 仍因其他富载荷无法序列化，`RunCoordinator` 会改为追加只含已流出 timeline 与错误信息的最小 `failed` terminal record；Host 还会对协调层外的未处理异常执行同样的最终对账，避免 UI 已显示的助手文本在切换任务后静默消失。规范化标题同时追加到 v9 `session_catalog`，归档和删除状态也追加到同一 JSONL journal。旧版本遗留的“只有自动标题、没有 turn、但已有 effect/Agent 证据”的中断记录会只读恢复标题中的输入并明确提示回答不可重建，不改写历史。删除使用 tombstone 从客户端视图移除，不原地改写历史，活动 run、未处理 Agent 或未验证 Work Product 会阻止归档与删除。
 
-Web 转录按用户 turn 组织阅读层级：最终回答、计划、澄清和错误保持在主阅读流；thinking、commentary、progress、工具、MCP、Skill、Agent 与 Work Product 事件归入同一个可展开的“处理过程”。运行中或等待审批时过程自动展开，成功完成后默认收起；折叠只改变 Web 投影，不删除 Session journal 中的任何事件或工具输入输出。
+Web 转录按用户 turn 组织阅读层级：最终回答、计划摘要、澄清和错误保持在主阅读流；thinking、commentary、progress、工具、MCP、Skill、Agent 与 Work Product 事件归入同一个可展开的“处理过程”。过程默认收起，需要处理当前审批时自动展开；工具调用前的中间助手说明也归入过程，最终回答保持直接可读。折叠只改变 Web 投影，不删除 Session journal 中的任何事件或工具输入输出。代码块提供独立复制按钮，宽表格在自己的区域横向滚动。
+
+Web 输入区采用紧凑圆角输入框。点击 `+` 可添加图片或打开模型、计划、审批、复制与分支等快捷操作；输入 `/` 按名称、说明或关键词检索命令。菜单优先展示动作名称，`Enter` 执行完整命令或打开选择器，`Tab` 只补全。`/model` 和输入区模型按钮共用可搜索选择器，`/model <name>` 仍可直接切换；运行期间由 Host 拒绝模型切换。通过快捷入口查看模型、计划或审批会保留草稿。侧栏提供任务标题搜索与收起功能。
+
+计划采用“正文摘要 → 单列步骤 → 按需展开说明”的层级。右上角计划入口或 `/tasks` 打开最新计划侧栏，显示目标、版本、完成数、跳过数、依赖与验收条件；跳过不计为完成。待确认方案放在输入框附近，支持查看完整计划、提交调整意见和确认执行。工作方式（直接执行 / 先规划）与审批模式分别显示；步骤全部完成不会被前端推断为执行授权或 Run 成功。
+
+历史工具错误不会让已结束的处理过程一直展开或显示“需要确认”；失败记录仍可展开查看。Web 的 `@文件` 支持在光标处插入、键盘选择和中文/空格路径，并保持高亮层与输入光标的字宽、换行和滚动同步。
 
 右上角“设置”在新任务页和已打开任务中始终可用。模型页读取脱敏后的最终配置、来源和字段状态；保存时只接受 API key 环境变量名，不接收或回显密钥明文。Web 不改写可能含注释或凭据的 User/Project/Local YAML，而是原子写入 `.lumen/agent.web.yaml` 受管覆盖层；并发修改、未受管的同名文件、无效合并结果和活动 Run 都会安全失败。首次把旧的单模型配置转换为模型注册表时会保留原模型和原默认选择；含内联密钥的单模型必须先改为环境变量引用，不能被不安全地复制进受管层。保存后需要重启 Web 才会重建模型注册表。扩展能力与 Agent 预设页当前使用 `ResourceManager.capabilities_report()` 提供真实只读清单。
 
@@ -367,6 +407,9 @@ LUMEN_API_URL=http://127.0.0.1:8765 pnpm --dir src/web dev
 | `Ctrl+O` | 切换 Normal / Verbose transcript 密度 |
 | `Shift+Tab` | 按 manual → accept_edits → Plan → auto 循环会话工作模式；Plan 是独立 collaboration mode |
 | `Alt+C` | 复制最近一条完整助手回复（也可用 `/copy`） |
+| `Alt+P` | 打开可搜索模型选择器；选择或取消均保留已有草稿 |
+| `Alt+M` | 打开工作/审批模式选择器；使用既有模式切换契约 |
+| `Alt+T` | 展开或收起最近的计划（也可用 `/tasks`） |
 | `↑` / `↓` | 编辑器首行首列时:浏览 prompt 历史 |
 | `Ctrl+↑` / `Ctrl+↓` | 任意位置浏览 prompt 历史（Emacs 风格） |
 | `Tab` | 接受补全建议 |
@@ -375,6 +418,8 @@ LUMEN_API_URL=http://127.0.0.1:8765 pnpm --dir src/web dev
 | `End` | 回到最新活动并恢复智能追尾 |
 
 > `@` 和 `/` 均在任意 token 边界(空白后或行首)触发补全,不限于行首。
+
+TUI 中，当整段输入是 `/model`、`/mode` 或 `/tasks` 补全时，按 `Enter` 直接打开对应交互；`Tab` 只插入命令。模型选择器支持搜索、方向键、`Enter` 选择和 `Esc` 取消，运行中只读。计划获得焦点后，`Enter` / `Space` 折叠步骤，`E` 展开或收起说明；`skipped` 使用独立标记与计数。
 
 #### 界面与视觉
 
@@ -660,14 +705,17 @@ uv run lumen
 
 ### Slash 命令(传统方式,仍保留)
 
-也可以直接在输入框用 `/` 触发（带自动补全）。TUI 的 25 条可见命令由 `src/lumen/ui/slash_commands.py` 注册表统一派生 `/help`、补全、运行中 gate 和命令面板；`/quit` 只作为 `/exit` 的隐藏兼容别名。以下是快速索引，参数、运行中行为以及 Web 支持情况见 [`docs/commands.md`](docs/commands.md)：
+也可以直接在输入框用 `/` 触发（带自动补全）。TUI 的 30 条可见命令由 `src/lumen/ui/slash_commands.py` 注册表统一派生 `/help`、补全、运行中 gate 和命令面板；`/quit` 只作为 `/exit` 的隐藏兼容别名。以下是快速索引，参数、运行中行为以及 Web 支持情况见 [`docs/commands.md`](docs/commands.md)：
 
 ```text
 /help
 /clear                   # 清空可见 Timeline,保留当前 session 与模型上下文
 /new                     # 新建会话
+/children [action] <id>  # TUI 查看或协调 Agent；/agents 是隐藏 canonical alias
+/checkpoints             # 浏览 receipt 并从历史 turn 创建非破坏式分支
 /model [name]            # 无参数:列出全部模型;有参数:切换活动模型
 /mode [manual|accept_edits|plan|auto]  # 无参数:查看当前权限模式;有参数:切换
+/status                  # 查看 workspace、session、权限、沙箱和 UI 状态
 /theme [lumen-dark|lumen-light]  # 无参数:列出可用主题并标出当前;有参数:即时切换(仅当前会话)
 /sessions                # 列出历史 session
 /resume <session-uuid>   # 恢复某个 session
@@ -695,7 +743,10 @@ uv run lumen
 /memory edit <id> --set <new content>
 /memory use|learn|incognito on|off
 /memory rebuild          # 从 SQLite 权威存储重建 Markdown 投影
-/retry                   # 重发上一条 prompt；精确匹配 recovery receipt 时不重复副作用
+/retry                   # 重发上一条 prompt/附件；精确 receipt 可复用，未解决 Effect 会阻止中断重试
+/edit                    # 编辑上一条 prompt，并在保留原历史的新分支上重发
+/transcript              # 打开结构化、可搜索 transcript
+/copy                    # 复制最近一条完整助手回复
 /exit                    # 退出（/quit 仍作为隐藏别名可用）
 ```
 
@@ -734,25 +785,27 @@ agent:
       id: openai:deepseek-v4-flash
       api_key_env: DEEPSEEK_API_KEY           # 或 api_key: sk-...(明文,仅本地)
       base_url: https://api.deepseek.com
-      settings: {max_tokens: 4096}
+      settings: {max_tokens: 65536}
     glm-5.2:
       id: openai:glm-5.2
       api_key_env: DASHSCOPE_API_KEY
       base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
-    qwen3-max:
-      id: openai:qwen3-max
+    qwen3.8-max:
+      id: anthropic:qwen3.8-max
       api_key_env: DASHSCOPE_API_KEY
-      base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
+      base_url: https://YOUR_WORKSPACE.cn-beijing.maas.aliyuncs.com/apps/anthropic
+      context: {profile: alibaba-qwen3.8}
+      settings: {max_tokens: 65536}
 ```
 
-启动后用 `--model <name>` 或 TUI `/model <name>` 实时切换。切换会**重建 AgentRuntime**(Pydantic AI 在构造期绑定模型),MCP 连接、会话历史、计划、工具注册全部保留,只换底层模型实例。
+启动后用 `--model <name>` 或 TUI `/model <name>` 实时切换。切换会事务性**重建 AgentRuntime**：candidate Runtime 与 Driver 先在局部 Scope 内完整打开，随后以一次无等待发布同时替换 Runtime、Scope 与活动模型名，再关闭旧 Scope；构建期间并发读取仍看到完整旧 Runtime。Host 使用与启动 run 相同的状态锁禁止切换/start 竞争。MCP 连接、会话历史、计划和工具注册全部保留，只替换活动模型运行实例。
 
 ### 内置 provider
 
 | Provider 前缀 | 说明 |
 |---------------|------|
 | `openai:` | OpenAI 官方,或任意 OpenAI 兼容端点(配合 `base_url`)。 |
-| `anthropic:` | Anthropic 官方。 |
+| `anthropic:` | Anthropic 官方或 Anthropic Messages 兼容端点（配合 `base_url`）。 |
 | `google:` / `gemini:` | Google AI。 |
 | `ollama:` | Ollama 本地服务(走 OpenAI 兼容协议,需配 `base_url`)。 |
 
@@ -794,7 +847,7 @@ agent:
 
 - **DeepSeek V4 Flash / Pro**：`base_url: https://api.deepseek.com`，默认 `api: responses`。其 Responses 实现支持 function tools、reasoning Items 和语义化 SSE，但不支持 `previous_response_id`、`conversation`、`store` 或 background（[官方兼容性明细](https://api-docs.deepseek.com/zh-cn/guides/responses_api/)）。
 - **Kimi Code K3**：`id: openai:k3`，`base_url: https://api.kimi.com/coding/v1`，默认 `api: responses`；K3 已验证支持 `input_image`，应声明 `input_modalities: [text, image]`；需要回退时显式 `api: chat`（[Kimi K3 模型能力](https://www.kimi.com/code/docs/kimi-code/models.html) / [provider 协议配置](https://www.kimi.com/code/docs/kimi-code-cli/configuration/providers.html#openai-responses)）。
-- **阿里云百炼 GLM-5.2 / Qwen**：`base_url: https://dashscope.aliyuncs.com/compatible-mode/v1`，默认 `api: responses`；旧 Chat 路径可显式设 `api: chat`（[Chat Completions 文档](https://help.aliyun.com/zh/model-studio/compatibility-of-openai-with-dashscope) / [Responses API 文档](https://help.aliyun.com/zh/model-studio/compatibility-with-openai-responses-api)）。已验证的合法 model id：`glm-5.2`、`qwen3.7-max`、`qwen3-max` 等。
+- **阿里云百炼 GLM-5.2 / Qwen**：OpenAI 与 Anthropic 兼容端点均可使用；协议前缀只选择传输，不推断模型能力。当前 Token Plan Qwen 配置使用已验证的 Anthropic 兼容端点 `https://token-plan.cn-beijing.maas.aliyuncs.com/apps/anthropic`。`qwen3.8-max` / `qwen3.8-flash` 可使用 `alibaba-qwen3.8` profile（1M context、131072 最大输出）（[Qwen3.8 Max 规格](https://help.aliyun.com/zh/model-studio/qwen3-8-max) / [Token Plan 快速开始](https://help.aliyun.com/zh/model-studio/token-plan-personal-quick-start)）。
 
 ### 本地 oMLX / Qwen3.8
 
@@ -891,29 +944,22 @@ mcp_servers:
 `/resources` 与 `/prompts` 只列目录；只有显式 `/resource` 才把外部资源以
 `untrusted_external` 标签注入 retrieved-context zone，避免自动撑大历史。
 
-已内置示例的两个真实 MCP 服务(在 `agent.yaml` / `agent.example.yaml`):
+可复制的 MCP 配置集中维护在 [agent.example.yaml](agent.example.yaml)，测试使用占位环境变量验证
+该文件；本机私有 `agent.yaml` 不属于发行契约。远端 URL、鉴权与工具名称以操作者配置和实际
+Server 返回值为准，示例不能证明远端连通性。`required: false` 的 Server 启动失败会形成 warning
+和 error 状态，并出现在模型的启动状态快照中；`required: true` 的失败会阻止启动。
 
-```yaml
-mcp_servers:
-  tyc-mcp:                              # 天眼查
-    transport: streamable_http
-    url: https://mcp.tianyancha.com/v1
-    headers:
-      Authorization: ${TYC_TOKEN}       # 直接写 token 也行
-    required: false                     # 远程服务,失败只警告不崩
-  exa:                                  # Exa 搜索
-    transport: streamable_http
-    url: https://mcp.exa.ai/mcp
-    headers:
-      x-api-key: ${EXA_API_KEY}
-    required: false
-```
+`tool_risks: read` 只声明审批风险。已审核确认为只读的工具还需独立声明 `tool_effects: observe`，
+才能使用安全重试。strict 模式在调用前拒绝 `unknown` effect，返回 `effect_contract_required`，
+而不是先执行再等到完成时失败。缺失声明同时出现在启动 warning、MCP 状态投影和工具说明中。
+已发生但结果不确定的远端操作仍保留待核实记录；模型不能通过改报告、改进度或再次声明完成来解除。
+Web 的“查看并处理”可按单条操作记录人工确认依据，沿用 Host 的验证 waiver 契约；不会重试远端调用。
 
-注意 tyc 用 `Authorization: <token>`(无 `Bearer` 前缀),exa 用 `x-api-key`,各自按官方要求设置。两个都是 `required: false`,远程不可达时只会在顶栏打 `error` 标记并加一条警告,不会阻塞启动。
-
-可选 MCP 失败会在顶栏以 `error` 标记并在警告中说明；`required: true` 的服务失败会让启动直接报错。
-
-`defer_tools: true` 是默认值。Lumen 始终保留工具名称、短描述和来源用于发现；完整参数 schema 由 Pydantic AI 的原生/本地 tool search 按 provider 能力解析。需要每轮直接可见的少数工具放入 `always_load_tools`。`/mcp` 显示每个 server 的连接状态、工具总数、deferred 与 always-loaded 数量；`/context` 进一步显示当前请求中每个 schema 的加载状态和 token 成本。
+`defer_tools: true` 是默认值。`search_tools` 的实际 Schema description 包含约 6,000 字符的工具名称/
+用途目录，完整参数 Schema 仍延迟加载。搜索支持 Unicode；跨语言未命中时使用 `queries: [""]`
+或 `["*"]` 浏览下一批最多 10 个未加载工具。发现结果从下一次请求生效，不改变审批、effect 或子 Agent
+权限。少数每轮必需的工具可放入 `always_load_tools`。`/mcp` 查看连接与加载配置，`/context` 查看
+当前请求的 Schema 状态和 token 成本。
 
 ## Hooks
 
@@ -1046,9 +1092,9 @@ mkdir -p .lumen/skills/my-skill
 
 ## 上下文与持久记忆
 
-`ContextEngine.prepare / commit / control` 是运行时唯一的上下文入口，但不是第二套 provider payload builder。`ContextAssembler` 负责 zone 预算、来源、trust 和裁剪；Pydantic AI 在每个模型步骤动态组合 instructions、native tools、provider history 和当前输入。稳定内容只在 provider 请求前重注入，commit 只保存 canonical history，避免恢复或压缩后重复膨胀。`/context` 按 session 给出 zone、来源、每步真实请求快照和 token 压力；未知模型窗口明确标记为估算值。完整逻辑见 [`docs/architecture-guide/03-context-and-memory.md`](docs/architecture-guide/03-context-and-memory.md)。
+`ContextEngine.prepare / commit / control` 是运行时唯一的上下文入口，但不是第二套 Session history。`ContextAssembler` 负责 zone 预算、来源、trust 和裁剪；`LumenAgentLoop` 在每次 Driver 调用前冻结 instructions、tools、provider history 与当前输入。稳定内容只在 provider 请求前重注入，commit 只保存 canonical history，避免恢复或压缩后重复膨胀。`/context` 按 session 给出 zone、来源、每步真实请求快照、token 压力，以及从 durable receipts/usage/timeline 生成的最新 Run 脱敏诊断；未知模型窗口和非工具耗时明确标记为估算值。完整逻辑见 [`docs/architecture-guide/03-context-and-memory.md`](docs/architecture-guide/03-context-and-memory.md)。
 
-完整的 12 章技术正文、当前实现审计与核心源码可以在 [`docs/architecture-guide/index.html`](docs/architecture-guide/index.html) 的 Trace Reader 中直接预览。它使用确定性生成的离线证据快照；正文或源码变化后，CI freshness gate 会阻止仍携带旧内容的 Atlas 通过。
+完整的 13 章技术正文、当前实现审计与核心源码可以在 [`docs/architecture-guide/index.html`](docs/architecture-guide/index.html) 的 Trace Reader 中直接预览。它使用确定性生成的当前事实快照；research、plans、archive 与 spikes 不混入检索。正文或源码变化后，CI freshness gate 会阻止仍携带旧内容的 Atlas 通过。文档权威与归档分层见 [`docs/README.md`](docs/README.md)。
 
 记忆配置默认安全值如下：
 

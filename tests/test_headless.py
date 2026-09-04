@@ -294,3 +294,21 @@ def test_cli_print_exits_nonzero_and_reports_errors(
 
     assert result.exit_code == 1
     assert "usage limit reached" in result.stderr
+
+
+def test_cli_print_preserves_success_exit_code(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = tmp_path / "agent.yaml"
+    config.write_text(_minimal_config(), encoding="utf-8")
+
+    async def fake_run(*_args: object, **_kwargs: object) -> HeadlessResult:
+        return HeadlessResult(session_id="s-1", text="done")
+
+    monkeypatch.setattr(cli, "run_headless", fake_run)
+    result = CliRunner().invoke(
+        app, ["--print", "hi", "--config", str(config), "--cwd", str(tmp_path)]
+    )
+
+    assert result.exit_code == 0
+    assert "Error: 0" not in result.output

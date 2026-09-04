@@ -78,6 +78,7 @@ from lumen.context.legacy import (
     validate_active_history,
 )
 from lumen.context.profiles import (
+    DEFAULT_UNKNOWN_OUTPUT_TOKENS,
     ModelCapabilityProfile,
     ResolvedContextPolicy,
     TokenizerSpec,
@@ -107,10 +108,13 @@ from lumen.context.types import (
     FileState,
     MemoryCandidateRef,
     ModelContextSpec,
+    ModelInputManifest,
+    ModelInputSource,
     ObservationState,
     PressureItem,
     ProviderRequestReceipt,
     ProviderRequestSnapshot,
+    ReplayEligibility,
     RetentionPolicy,
     RollingContextState,
     SourceKind,
@@ -121,6 +125,7 @@ from lumen.context.types import (
 )
 
 __all__ = [
+    "DEFAULT_UNKNOWN_OUTPUT_TOKENS",
     # engine Seam + DTOs
     "ActiveResourceRef",
     "ActiveSkillRef",
@@ -168,6 +173,8 @@ __all__ = [
     "MemoryCandidateRef",
     "ModelCapabilityProfile",
     "ModelContextSpec",
+    "ModelInputManifest",
+    "ModelInputSource",
     "ObservationState",
     "PendingClarification",
     "PreparedContext",
@@ -177,6 +184,7 @@ __all__ = [
     "ProviderRequestSnapshot",
     "ProviderTokenCounter",
     "ReductionResult",
+    "ReplayEligibility",
     "RequestBudgetEstimator",
     "ResolvedContextPolicy",
     "ResolvedSessionContext",

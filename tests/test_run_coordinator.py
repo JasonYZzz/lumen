@@ -4,12 +4,14 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from pydantic_ai import Tool
+from pydantic_ai.exceptions import ModelHTTPError
 from pydantic_ai.messages import ModelMessage, ModelResponse, TextPart
-from pydantic_ai.models.function import AgentInfo, FunctionModel
+from pydantic_ai.models.function import AgentInfo, DeltaToolCall, FunctionModel
 
 from lumen.config import ContextConfig, LimitsConfig
 from lumen.context import ContextEngine
-from lumen.events import RunEvent, RunStarted
+from lumen.events import RunCompleted, RunEvent, RunFailed, RunStarted
 from lumen.plan import PlanState, PlanStep, StepStatus
 from lumen.run_coordinator import RunCoordinator, RunInput
 from lumen.runtime import (
@@ -46,9 +48,12 @@ async def test_coordinator_owns_session_run_and_resume_state(tmp_path: Path) -> 
     )
     session = coordinator.new_session()
     events: list[RunEvent] = []
+    durable_terminal_statuses: list[str] = []
 
     async def emit(event: RunEvent) -> None:
         events.append(event)
+        if isinstance(event, RunCompleted):
+            durable_terminal_statuses.append(repository.load(session.session.id).turns[-1].status)
 
     async def approve(_request: Any) -> ToolApproval:
         return ToolApproval(True)
@@ -60,6 +65,8 @@ async def test_coordinator_owns_session_run_and_resume_state(tmp_path: Path) -> 
     assert coordinator.state.history
     loaded = repository.load(session.session.id)
     assert loaded.turns[0].status == "completed"
+    assert durable_terminal_statuses == ["completed"]
+    assert isinstance(events[-1], RunCompleted)
     assert loaded.turns[0].user_input == "hello"
 
     resumed = coordinator.resume(session.session.id)
@@ -172,6 +179,72 @@ async def test_coordinator_persists_failed_partial_outcome(tmp_path: Path) -> No
     assert turn.usage is not None
 
 
+@pytest.mark.parametrize("automatic", [False, True])
+async def test_completed_write_survives_stream_failure_and_session_resume(
+    tmp_path: Path, automatic: bool,
+) -> None:
+    executions = 0
+    attempts = 0
+
+    def write_note(content: str) -> str:
+        """Write one note."""
+        nonlocal executions
+        executions += 1
+        return content
+
+    async def stream(messages: list[ModelMessage], _info: AgentInfo):  # type: ignore[no-untyped-def]
+        nonlocal attempts
+        attempts += 1
+        has_result = any(
+            part.part_kind == "tool-return" for message in messages for part in message.parts
+        )
+        if not has_result:
+            yield {0: DeltaToolCall("write_note", '{"content":"once"}', tool_call_id="write-1")}
+        elif attempts == 2:
+            yield "discarded draft"
+            if automatic:
+                raise ModelHTTPError(503, "test", {"error": "temporarily unavailable"})
+            raise RuntimeError("provider failed after write")
+        else:
+            yield "finished from saved tool result"
+
+    runtime = AgentRuntime(
+        model=FunctionModel(stream_function=stream),
+        tools=[Tool(write_note, sequential=True, requires_approval=True)], toolsets=[],
+        instructions="write once", limits=LimitsConfig(model_retry_delay_seconds=0),
+        tool_metadata={"write_note": {"origin": "test", "risk": "write"}},
+    )
+    repository = SessionRepository(tmp_path)
+    coordinator = RunCoordinator(
+        repository=repository, agent_name="agent", model_id=lambda: "test", runtime=lambda: runtime,
+    )
+    session = coordinator.new_session().session
+    events: list[RunEvent] = []
+
+    async def emit(event: RunEvent) -> None:
+        events.append(event)
+
+    async def approve(_request: Any) -> ToolApproval:
+        return ToolApproval(True)
+
+    outcome = await coordinator.run("write once", emit, approve)
+    if not automatic:
+        assert outcome is None
+        loaded = repository.load(session.id)
+        assert loaded.turns[-1].status == "failed"
+        assert len(loaded.full_history) == 3
+        assert loaded.history == coordinator.state.history
+        coordinator.resume(session.id)
+        outcome = await coordinator.run("continue", emit, approve)
+    assert outcome is not None
+    assert outcome.output == "finished from saved tool result"
+    assert executions == 1
+    assert attempts == 3
+    if automatic:
+        assert not any(isinstance(event, RunFailed) for event in events)
+        assert outcome.usage["model_attempts"] == 3
+
+
 async def test_jsonl_failure_does_not_publish_completed_state(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -192,8 +265,10 @@ async def test_jsonl_failure_does_not_publish_completed_state(
 
     monkeypatch.setattr(repository, "append_turn", fail_append)
 
-    async def emit(_event: RunEvent) -> None:
-        return None
+    events: list[RunEvent] = []
+
+    async def emit(event: RunEvent) -> None:
+        events.append(event)
 
     async def approve(_request: Any) -> ToolApproval:
         return ToolApproval(True)
@@ -204,6 +279,8 @@ async def test_jsonl_failure_does_not_publish_completed_state(
     assert coordinator.state is before
     assert coordinator.state.history == []
     assert coordinator.state.full_history == []
+    assert not any(isinstance(event, RunCompleted) for event in events)
+    assert isinstance(events[-1], RunFailed)
 
 
 async def test_jsonl_failure_does_not_publish_context_checkpoint(

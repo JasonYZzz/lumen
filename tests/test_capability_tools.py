@@ -7,8 +7,11 @@ from typing import Any
 
 import pytest
 
+from lumen.context.artifacts import ArtifactStore
+from lumen.sessions import SessionRepository
 from lumen.tools.capability import build_capability_specs
 from lumen.tools.workspace import WorkspaceViolation
+from lumen.work_products import EffectStatus, TaskWorkspace
 
 
 def capability(tmp_path: Path, name: str) -> Callable[..., Any]:
@@ -91,6 +94,36 @@ def test_edit_rejects_missing_match(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="0 matches"):
         edit_file("code.py", "missing", "x")
     assert path.read_text(encoding="utf-8") == "alpha\n"
+
+
+@pytest.mark.parametrize(
+    ("original", "find", "replacement"),
+    [
+        ("prefix\nbase64\n", "base64\n", "base64suffix\n"),
+        ("prefix\n  value \t\nend\n", "  value \t\n", "  changed\n"),
+        ("prefix\r\nvalue\r\nend\r\n", "value\r\n", "changed\r\n"),
+        ("prefix\n  \nend\n", "  \n", "\t\n"),
+    ],
+)
+def test_journaled_edit_preserves_exact_anchor_bytes(
+    tmp_path: Path, original: str, find: str, replacement: str,
+) -> None:
+    repository = SessionRepository(tmp_path / "sessions")
+    session = repository.create(agent_name="test", model_id="test")
+    workspace = TaskWorkspace(tmp_path, ArtifactStore(tmp_path / "artifacts"), repository)
+    workspace.bind_session(session.id)
+    path = tmp_path / "data.txt"
+    path.write_bytes(original.encode())
+    specs = build_capability_specs(tmp_path, max_timeout=2, task_workspace=workspace)
+    edit = next(spec.function for spec in specs if spec.name == "edit_file")
+
+    edit("data.txt", find, replacement)
+
+    assert path.read_bytes() == original.replace(find, replacement, 1).encode()
+    effects = repository.load(session.id).work_state.effects
+    assert len(effects) == 1
+    assert effects[0].status is EffectStatus.VERIFIED
+    assert not workspace.completion_blockers(session.id)
 
 
 async def test_run_command_captures_exit_code_without_shell(tmp_path: Path) -> None:

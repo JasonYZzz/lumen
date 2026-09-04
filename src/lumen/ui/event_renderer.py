@@ -97,6 +97,7 @@ class EventRendererMixin:
             self._refresh_interactive_queue()
         elif isinstance(event, RunStarted):
             await self._close_assistant_segment()
+            self._provisional_assistant_segments = []
             self.query_one("#prompt", PromptEditor).placeholder = "Ask Lumen…"
             self._active_plan_panel = None
             self.query_one(PlanReviewPanel).hide()
@@ -108,12 +109,22 @@ class EventRendererMixin:
             await self._ensure_assistant_segment(messages)
             assert self._assistant_stream is not None
             self._assistant_stream.append(event.text)
+            document, text = self._provisional_assistant_segments[-1]
+            self._provisional_assistant_segments[-1] = (document, text + event.text)
             activity.suspend("Writing response")
         elif isinstance(event, TextRetracted):
-            document = self._assistant_container
             await self._close_assistant_segment()
-            if document is not None:
-                await document.remove()
+            remaining = event.characters
+            while remaining > 0 and self._provisional_assistant_segments:
+                document, text = self._provisional_assistant_segments.pop()
+                removed = min(remaining, len(text))
+                remaining -= removed
+                text = text[:len(text) - removed]
+                if text:
+                    document.set_source(text)
+                    self._provisional_assistant_segments.append((document, text))
+                else:
+                    await document.remove()
         elif isinstance(event, CommentaryDelta):
             await self._close_assistant_segment()
             await self._append_commentary(event.text)
@@ -360,6 +371,7 @@ class EventRendererMixin:
             return
         document = AssistantMarkdown("", classes="assistant-message")
         self._assistant_container = document
+        self._provisional_assistant_segments.append((document, ""))
         await messages.mount(document)
 
         async def render_markdown(text: str) -> None:

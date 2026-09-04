@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 64 64" role="img" aria-labelledby="title desc">
+  <title id="title">Lumen Fold</title>
+  <desc id="desc">L 形带在转角折叠为一道透明光隙。</desc>
+  <defs>
+    <linearGradient id="fold" x1="12" y1="7" x2="56" y2="58" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#FFD16A"/><stop offset=".48" stop-color="#F39A1D"/><stop offset="1" stop-color="#B85A0A"/>
+    </linearGradient>
+    <mask id="fold-cut" maskUnits="userSpaceOnUse" x="0" y="0" width="64" height="64">
+      <rect width="64" height="64" fill="#fff"/>
+      <path d="M30 31c-.4 5.5-2.7 9-5.8 12.8-3.6 4.4-3.3 9.2.2 13.5-3.9-2.4-5.6-5.6-4.4-9.2 1.1-3.3 4.7-6.9 6.8-9.9 2-2.8 2.8-5.5 3.2-7.2Z" fill="#000"/>
+    </mask>
+  </defs>
+  <path d="M20 5C13.4 5 8 10.4 8 17v25c0 9.9 8.1 18 18 18h22c6.6 0 12-5.4 12-12s-5.4-12-12-12H32V17c0-6.6-5.4-12-12-12Z" fill="url(#fold)" mask="url(#fold-cut)"/>
+</svg>

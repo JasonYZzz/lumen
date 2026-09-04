@@ -10,11 +10,13 @@ from pathlib import Path
 from typing import Any, Protocol, TypeVar
 from uuid import uuid4
 
+from lumen.completion import CompletionBlocker
 from lumen.context.artifacts import ArtifactStore
 from lumen.tools.spec import EffectKind
 from lumen.tools.workspace import Workspace
 
 from .adapters import AdapterError, ResourceAdapter, StructuredResourceAdapter, TextResourceAdapter
+from .directories import USER_SKILLS_PREFIX, DirectoryResourceAdapter
 from .types import (
     EffectReceipt,
     EffectStatus,
@@ -59,6 +61,7 @@ class TaskWorkspace:
         auto_attach: bool = True,
         strict: bool = True,
         max_context_items: int = 8,
+        user_skills: Path | None = None,
     ) -> None:
         self.workspace = Workspace(root)
         self.artifacts = artifacts
@@ -74,6 +77,9 @@ class TaskWorkspace:
         self._states: dict[str, SessionWorkState] = {}
         self._pending_events: dict[str, list[WorkProductEvent]] = {}
         self._adapters: dict[WorkProductKind, ResourceAdapter] = {
+            WorkProductKind.DIRECTORY: DirectoryResourceAdapter(
+                self.workspace, artifacts, user_skills=user_skills,
+            ),
             WorkProductKind.TEXT: TextResourceAdapter(self.workspace, artifacts),
             WorkProductKind.JSON: StructuredResourceAdapter(
                 self.workspace, artifacts, WorkProductKind.JSON
@@ -436,29 +442,42 @@ class TaskWorkspace:
         *,
         tool_name: str,
         effect_kind: EffectKind,
-        success: bool,
+        success: bool | None,
         summary: str,
         resource: str | None = None,
+        receipt_id: str | None = None,
     ) -> EffectReceipt | None:
         """Record non-adapter tool effects without inventing resource snapshots."""
 
         if not self.enabled or self._session_id.get() is None or effect_kind is EffectKind.OBSERVE:
             return None
-        session_id, _state = self._bound()
-        if effect_kind in {EffectKind.EXECUTION, EffectKind.EXTERNAL_ACTION}:
+        session_id, state = self._bound()
+        prior = next((item for item in state.effects if item.id == receipt_id), None)
+        if receipt_id is not None and (
+            prior is None or prior.operation != tool_name or prior.effect_kind is not effect_kind
+        ):
+            raise ValueError("effect receipt does not belong to this invocation")
+        if success is None:
+            status = EffectStatus.PREPARED
+        elif not success and prior is not None:
+            # Errors after dispatch cannot prove that a remote mutation did not
+            # happen. Preserve uncertainty rather than authorizing replay.
+            status = EffectStatus.RECONCILIATION_REQUIRED
+        elif effect_kind in {EffectKind.EXECUTION, EffectKind.EXTERNAL_ACTION}:
             status = EffectStatus.VERIFIED if success else EffectStatus.FAILED
         elif effect_kind is EffectKind.UNKNOWN and success and self.strict:
             status = EffectStatus.RECONCILIATION_REQUIRED
         else:
             status = EffectStatus.VERIFIED if success else EffectStatus.FAILED
         effect = EffectReceipt(
-            id=f"effect:{uuid4()}",
+            id=receipt_id or f"effect:{uuid4()}",
             effect_kind=effect_kind,
             operation=tool_name,
             status=status,
             resource=resource,
             summary=summary,
-            error=None if success else summary,
+            error=summary if success is False else None,
+            created_at=prior.created_at if prior is not None else _now(),
         )
         self._save_effect(session_id, effect)
         return effect
@@ -778,13 +797,29 @@ class TaskWorkspace:
                 state = self._state(resolved)
         return state
 
+    def check_tool_effect(self, tool_name: str, effect_kind: EffectKind) -> str | None:
+        """Reject unclassifiable work before an irreversible external call."""
+
+        if self.enabled and self.strict and effect_kind is EffectKind.UNKNOWN:
+            return (
+                f"effect_contract_required: {tool_name} was not executed. Its effect is unknown in "
+                "strict mode. The operator must declare its actual effect in tool_effects using the "
+                "raw MCP tool name (observe only for verified read-only tools). Approval risk does "
+                "not declare an effect. Use another configured capability or report this blocker; "
+                "do not edit configuration or artifacts to bypass it."
+            )
+        return None
+
     def completion_issues(self, session_id: str | None = None) -> list[str]:
+        return [str(issue) for issue in self.completion_blockers(session_id)]
+
+    def completion_blockers(self, session_id: str | None = None) -> list[CompletionBlocker]:
         if not self.enabled or not self.strict:
             return []
         resolved = session_id or self._session_id.get()
         if resolved is None:
             return []
-        issues: list[str] = []
+        issues: list[CompletionBlocker] = []
         state = self._state(resolved)
         for index, effect in enumerate(state.effects):
             if effect.status in {
@@ -792,7 +827,18 @@ class TaskWorkspace:
                 EffectStatus.APPLIED,
                 EffectStatus.RECONCILIATION_REQUIRED,
             }:
-                issues.append(f"effect {effect.id} ({effect.operation}) is {effect.status.value}")
+                model_recoverable = effect.work_product_id is not None
+                recovery = (
+                    "Inspect the work product and verify or restore its actual contents."
+                    if model_recoverable else
+                    "Resolve it through the Host work-state recovery interface; only an explicit "
+                    "user verification waiver can accept an unverified external outcome. "
+                    "Writing effect IDs into a report or changing plan progress cannot resolve it."
+                )
+                issues.append(CompletionBlocker(
+                    f"effect {effect.id} ({effect.operation}) is {effect.status.value}. {recovery}",
+                    model_recoverable=model_recoverable,
+                ))
             elif (
                 effect.status is EffectStatus.FAILED
                 and effect.after is not None
@@ -802,10 +848,12 @@ class TaskWorkspace:
                     for later in state.effects[index + 1 :]
                 )
             ):
-                issues.append(f"effect {effect.id} ({effect.operation}) failed after mutation")
+                issues.append(CompletionBlocker(
+                    f"effect {effect.id} ({effect.operation}) failed after mutation"
+                ))
         for product in state.work_products:
             if product.status is WorkProductStatus.RECONCILIATION_REQUIRED:
-                issues.append(f"work product {product.id} requires reconciliation")
+                issues.append(CompletionBlocker(f"work product {product.id} requires reconciliation"))
         return issues
 
     def waive_effects(self, session_id: str, scope: tuple[str, ...], reason: str) -> int:
@@ -977,6 +1025,10 @@ class TaskWorkspace:
         return product
 
     def _resolve_kind(self, resource: str, declared: str | None) -> WorkProductKind:
+        if resource.startswith(USER_SKILLS_PREFIX):
+            if declared not in {None, WorkProductKind.DIRECTORY.value}:
+                raise AdapterError("managed skill resources require directory kind")
+            return WorkProductKind.DIRECTORY
         if declared is not None:
             return WorkProductKind(declared.lower())
         suffix = Path(resource).suffix.lower()
@@ -987,6 +1039,11 @@ class TaskWorkspace:
         return WorkProductKind.TEXT
 
     def _canonical_resource(self, resource: str) -> str:
+        if resource.startswith(USER_SKILLS_PREFIX):
+            adapter = self._adapters[WorkProductKind.DIRECTORY]
+            assert isinstance(adapter, DirectoryResourceAdapter)
+            adapter.path(resource)
+            return resource
         return self.workspace.resolve_for_mutation(resource).relative_to(self.workspace.root).as_posix()
 
     def _store_change(self, change: Any, kind: WorkProductKind) -> tuple[str, str]:

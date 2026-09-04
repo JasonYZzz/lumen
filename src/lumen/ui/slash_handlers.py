@@ -34,7 +34,6 @@ from lumen.application import (
     SelectModel,
     SetContextSource,
 )
-from lumen.approval import ApprovalMode
 from lumen.collaboration import CollaborationMode
 from lumen.context import ContextControlResult
 from lumen.ui.command_gate import (
@@ -318,18 +317,10 @@ class SlashHandlersMixin:
         self._refresh_topbar()
 
     async def _cmd_model(self: LumenApp, parts: list[str], raw: str) -> None:
-        """``/model [name]`` — list configured models, or switch the active model."""
+        """``/model [name]`` — open the picker, or switch through the Host."""
 
         if len(parts) == 1:
-            # List configured models with the active one marked.
-            available = self.resources.available_models()
-            active = self.resources.active_model_name()
-            rows: list[str] = []
-            for name in available:
-                model_cfg = self.resources.model_registry[name]
-                marker = "* " if name == active else "  "
-                rows.append(f"{marker}{name}  ->  {model_cfg.id}")
-            await self._append_system("\n".join(rows) or "No models configured.")
+            self.action_choose_model()
             return
         if len(parts) != 2:
             await self._unknown_command(parts[0].lower())
@@ -356,27 +347,7 @@ class SlashHandlersMixin:
         """``/mode [manual|accept_edits|plan|auto]`` — show or switch the approval mode."""
 
         if len(parts) == 1:
-            # Report the current mode and what it means, so the user knows what
-            # they're toggling without having to read the README.
-            is_plan = self._collaboration_mode is CollaborationMode.PLAN
-            current = self._approval_mode
-            behaviour = (
-                "auto-approving classified tools (unknown remote tools still require confirmation)"
-                if current is ApprovalMode.AUTO
-                else (
-                    "read-only exploration; file changes and commands are blocked"
-                    if is_plan
-                    else (
-                        "auto-approving builtin file edits; confirming commands and remote writes"
-                        if current is ApprovalMode.ACCEPT_EDITS
-                        else "allowing reads; confirming edits, commands, and external actions"
-                    )
-                )
-            )
-            await self._append_system(
-                f"Mode: {'plan' if is_plan else current.value} ({behaviour}). "
-                "Press Shift+Tab to cycle, or use /mode manual|accept_edits|plan|auto."
-            )
+            self.action_choose_mode()
             return
         if len(parts) != 2:
             await self._unknown_command(parts[0].lower())
@@ -388,6 +359,9 @@ class SlashHandlersMixin:
             )
             return
         self._request_approval_mode(target_mode)
+
+    async def _cmd_tasks(self: LumenApp, parts: list[str], raw: str) -> None:
+        self.action_toggle_plan()
 
     async def _cmd_status(self: LumenApp, parts: list[str], raw: str) -> None:
         """``/status`` — detailed context moved out of the idle welcome panel."""

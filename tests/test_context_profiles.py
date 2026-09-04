@@ -14,6 +14,8 @@ from lumen.context.legacy import ContextStateChange, ContextSummary, merge_conte
         ("openai:deepseek-v4-flash", "deepseek-v4-flash", 1_000_000, "conservative"),
         ("openai:kimi-k3", "kimi-k3", 1_000_000, "conservative"),
         ("openai:glm-5.2", "glm-5.2", 1_000_000, "conservative"),
+        ("anthropic:qwen3.8-max", "alibaba-qwen3.8", 1_000_000, "conservative"),
+        ("openai:qwen3.8-flash", "alibaba-qwen3.8", 1_000_000, "conservative"),
         ("openai:unknown-vendor", "conservative-fallback", 80_000, "conservative"),
     ],
 )
@@ -58,6 +60,24 @@ def test_context_resolution_precedence_is_field_profile_alias_fallback() -> None
     assert alias.profile_id == "kimi-k3"
     assert fallback.profile_id == "conservative-fallback"
     assert fallback.estimated
+    assert fallback.output_reserve_tokens == 16_384
+
+    large_unknown = resolve_context_policy(
+        ModelSettingsConfig(
+            id="openai:future-model",
+            context=ModelContextOverride(window_tokens=1_000_000),
+        ),
+        ContextConfig(),
+    )
+    small_unknown = resolve_context_policy(
+        ModelSettingsConfig(
+            id="openai:small-local-model",
+            context=ModelContextOverride(window_tokens=32_000),
+        ),
+        ContextConfig(),
+    )
+    assert large_unknown.output_reserve_tokens == 32_768
+    assert small_unknown.output_reserve_tokens == 8_000
 
 
 def test_requested_output_is_reserved_in_full_and_cannot_exceed_architecture() -> None:
@@ -72,6 +92,13 @@ def test_requested_output_is_reserved_in_full_and_cannot_exceed_architecture() -
             ModelSettingsConfig(id="openai:gpt-5.6", settings={"max_tokens": 128_001}),
             ContextConfig(),
         )
+
+    qwen = resolve_context_policy(
+        ModelSettingsConfig(id="anthropic:qwen3.8-max"),
+        ContextConfig(),
+    )
+    assert qwen.architectural_max_output_tokens == 131_072
+    assert qwen.output_reserve_tokens == 131_072
 
 
 def test_tokenizer_factory_never_downloads_and_has_local_fallback() -> None:

@@ -6,6 +6,27 @@ from lumen.config import AppConfig, ConfigLoadError, load_config
 from lumen.context import resolve_context_policy
 
 
+def test_run_limits_are_opt_in_and_finite_legacy_values_remain_valid() -> None:
+    from pydantic import ValidationError
+
+    from lumen.config import AgentsConfig, LimitsConfig
+
+    defaults = LimitsConfig()
+    assert defaults.request_count is None
+    assert defaults.tool_calls is None
+    assert defaults.model_request_timeout_seconds is None
+    assert defaults.model_stream_idle_timeout_seconds == 300
+    assert defaults.model_retries == 5
+    finite = LimitsConfig(request_count=60, tool_calls=100, model_request_timeout_seconds=300)
+    assert (finite.request_count, finite.tool_calls, finite.model_request_timeout_seconds) == (60, 100, 300)
+    assert LimitsConfig(tool_calls=0).tool_calls == 0
+    assert AgentsConfig().timeout_seconds is None
+    with pytest.raises(ValidationError):
+        LimitsConfig(request_count=0)
+    with pytest.raises(ValidationError):
+        LimitsConfig(model_stream_idle_timeout_seconds=0)
+
+
 def write_config(path: Path, body: str) -> Path:
     path.write_text(body, encoding="utf-8")
     return path
@@ -120,6 +141,7 @@ agent: {model: {id: test}}
     assert config.context.keep_recent_tokens == 20_000
     assert config.context.summary_tool_result_chars == 2_000
     assert config.context.summary_max_tokens == 2_000
+    assert config.agent.limits.output_limit_retries == 3
     assert config.work_products.enabled is True
     assert config.work_products.auto_attach is True
     assert config.work_products.strict is True
@@ -471,30 +493,6 @@ def test_repo_example_config_loads_without_drift(monkeypatch: pytest.MonkeyPatch
     exa = config.mcp_servers["exa"]
     assert exa.tool_risks == {"web_fetch_exa": "read", "web_search_exa": "read"}
     assert all(not server.read_only_tools for server in config.mcp_servers.values())
-
-
-def test_project_config_uses_expected_model_registry() -> None:
-    """Displayed logical name, default selection and backend family must agree."""
-
-    project_config = Path(__file__).resolve().parents[1] / "agent.yaml"
-    config = load_config(project_config)
-    assert config.agent.default_model_name() == "deepseek-v4-flash"
-    assert set(config.agent.model_registry()) == {
-        "deepseek-v4-flash",
-        "deepseek-v4-pro",
-        "kimi-k3",
-        "omlx-qwen3.8-27b-4bit",
-    }
-    assert config.agent.model_registry()["deepseek-v4-flash"].id == "openai:deepseek-v4-flash"
-    assert config.agent.model_registry()["deepseek-v4-pro"].id == "openai:deepseek-v4-pro"
-    kimi = config.agent.model_registry()["kimi-k3"]
-    assert kimi.id == "openai:k3"
-    assert kimi.api == "responses"
-    assert kimi.input_modalities == ("text", "image")
-    omlx = config.agent.model_registry()["omlx-qwen3.8-27b-4bit"]
-    assert omlx.id == "openai:Qwen3.8-27B-4bit"
-    assert omlx.api == "responses"
-    assert omlx.context.window_tokens == 262_144
 
 
 @pytest.mark.parametrize("legacy_mode", ["plan", "ask"])

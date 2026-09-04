@@ -103,9 +103,9 @@ class AgentConfigSnapshot(BaseModel):
     sandbox_mode: str = "disabled"
     workspace_mode: WorkspaceMode = WorkspaceMode.READ_ONLY
     cwd: str
-    request_limit: int = 10
-    tool_call_limit: int = 20
-    timeout_seconds: float = 180.0
+    request_limit: int | None = Field(default=None, ge=1)
+    tool_call_limit: int | None = Field(default=None, ge=0)
+    timeout_seconds: float | None = Field(default=None, gt=0)
     profile_revision: str = ""
 
 

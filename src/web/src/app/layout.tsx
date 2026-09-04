@@ -4,7 +4,10 @@ import './globals.css'
 
 export const metadata: Metadata = {
   title: 'Lumen',
-  description: 'Lumen coding agent',
+  description: 'Lumen open agent harness',
+  icons: {
+    icon: '/favicon.svg',
+  },
 }
 
 export const viewport: Viewport = {

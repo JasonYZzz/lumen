@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from pathlib import Path
+from textwrap import indent
 from typing import Any
 
 import pytest
@@ -36,8 +37,10 @@ STATES = (
     "idle",
     "slash-menu",
     "slash-filter",
+    "skill-menu",
     "loading",
     "todo",
+    "model-picker",
     "stream",
     "code-block",
     "tool",
@@ -59,16 +62,16 @@ def test_welcome_wordmark_is_a_compact_lumen_glyph_set() -> None:
     rendered = _render_wordmark(highlight="#FFC166", primary="#C99552")
     lines = rendered.plain.splitlines()
     assert len(lines) == 4
-    assert all(len(line) == 29 for line in lines)
+    assert all(len(line) == 38 for line in lines)
 
 
-def _snapshot_app(tmp_path: Path) -> LumenApp:
+def _snapshot_app(tmp_path: Path, *, skill_description: str = "Stable snapshot fixture.") -> LumenApp:
     # Keep the model-invocable skill tools deterministic instead of depending
     # on whichever user-global skills happen to exist on the test machine.
     skill_dir = tmp_path / ".lumen" / "skills" / "snapshot"
     skill_dir.mkdir(parents=True)
     (skill_dir / "SKILL.md").write_text(
-        "---\nname: snapshot\ndescription: Stable snapshot fixture.\n---\nFixture body.\n",
+        "---\nname: snapshot\ndescription: |\n" + indent(skill_description, "  ") + "\n---\nFixture body.\n",
         encoding="utf-8",
     )
     config_path = tmp_path / "agent.yaml"
@@ -93,11 +96,18 @@ sessions: {directory: sessions}
 def test_tui_state_snapshot(
     snap_compare: Callable[..., bool],
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
     state: str,
     theme: str,
     terminal_size: tuple[int, int],
 ) -> None:
-    app = _snapshot_app(tmp_path)
+    # User-global Skill catalogs must not leak into menu snapshots.
+    monkeypatch.setattr(Path, "home", lambda: tmp_path / "home")
+    app = _snapshot_app(tmp_path, skill_description=(
+        "Create architecture diagrams with a long description that must never replace the skill name.\n"
+        "Keep this second paragraph in the same bounded row."
+        if state == "skill-menu" else "Stable snapshot fixture."
+    ))
 
     async def arrange(pilot: Pilot[Any]) -> None:
         pilot.app.theme = theme
@@ -118,10 +128,12 @@ def test_tui_state_snapshot(
         app.query_one(RunActivityIndicator).set_animation_enabled(False)
         if state == "idle":
             return
-        if state in {"slash-menu", "slash-filter"}:
+        if state == "model-picker":
+            app.action_choose_model()
+        elif state in {"slash-menu", "slash-filter", "skill-menu"}:
             editor = app.query_one("#prompt")
             editor.focus()
-            keys = "/" if state == "slash-menu" else "/ex"
+            keys = "/skill:" if state == "skill-menu" else "/" if state == "slash-menu" else "/ex"
             for key in keys:
                 await pilot.press(key)
         elif state == "loading":

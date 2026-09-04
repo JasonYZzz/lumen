@@ -89,7 +89,10 @@ class RenameSessionBody(WebModel):
 
 
 class ForkSessionBody(WebModel):
+    model_config = ConfigDict(populate_by_name=True, extra="forbid", strict=True)
     through_turn: int = Field(alias="throughTurn", ge=0)
+    include_turn: bool = Field(default=True, alias="includeTurn")
+    client_request_id: str | None = Field(default=None, alias="clientRequestId", min_length=1, max_length=200)
 
 
 class PlanReviewBody(WebModel):

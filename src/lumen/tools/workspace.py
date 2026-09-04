@@ -98,7 +98,7 @@ class Workspace:
             else:
                 self._require_revision(target, expected_revision)
                 os.replace(temporary, target)
-            self._fsync_directory(target.parent)
+            self.fsync_directory(target.parent)
         except BaseException:
             temporary.unlink(missing_ok=True)
             raise
@@ -111,7 +111,7 @@ class Workspace:
         self._require_revision(target, expected_revision)
         if target.exists():
             target.unlink()
-            self._fsync_directory(target.parent)
+            self.fsync_directory(target.parent)
 
     def _require_revision(self, target: Path, expected_revision: str) -> None:
         actual = self.revision(target)
@@ -122,7 +122,7 @@ class Workspace:
             )
 
     @staticmethod
-    def _fsync_directory(path: Path) -> None:
+    def fsync_directory(path: Path) -> None:
         descriptor = os.open(path, os.O_RDONLY)
         try:
             os.fsync(descriptor)

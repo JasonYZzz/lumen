@@ -15,6 +15,7 @@ const CONTROL_TOOL_NAMES = new Set([
 ])
 
 export interface RunState {
+  sessionSettings: Pick<SessionSnapshot, 'sessionId' | 'approvalMode' | 'collaborationMode'> | null
   timeline: TimelineEntry[]
   plan: PlanState | null
   planReviewStatus: string | null
@@ -22,6 +23,7 @@ export interface RunState {
   runId: string | null
   status: 'idle' | 'running' | 'waiting_for_user' | 'completed' | 'failed' | 'cancelled'
   usage: Record<string, unknown> | null
+  pendingClarification: SessionSnapshot['pendingClarification']
   queuedInputs: Array<{ id: string; text: string; mode: string }>
   transcriptDensity: 'normal' | 'verbose'
   workProducts: Array<Record<string, unknown>>
@@ -32,6 +34,7 @@ export interface RunState {
 }
 
 export const initialRunState: RunState = {
+  sessionSettings: null,
   timeline: [],
   plan: null,
   planReviewStatus: null,
@@ -39,6 +42,7 @@ export const initialRunState: RunState = {
   runId: null,
   status: 'idle',
   usage: null,
+  pendingClarification: null,
   queuedInputs: [],
   transcriptDensity: 'normal',
   workProducts: [],
@@ -49,6 +53,7 @@ export const initialRunState: RunState = {
 }
 
 export type RunAction =
+  | { type: 'session-settings'; sessionId: string; settings: Partial<Pick<SessionSnapshot, 'approvalMode' | 'collaborationMode'>> }
   | { type: 'event'; event: EventEnvelope }
   | { type: 'snapshot'; snapshot: SessionSnapshot }
   | { type: 'run-registered'; runId: string }
@@ -71,6 +76,10 @@ function string(value: unknown, fallback = '') {
 
 function boolean(value: unknown) {
   return value === true
+}
+
+function elapsedSeconds(value: unknown) {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : undefined
 }
 
 function object(value: unknown): Record<string, unknown> {
@@ -120,6 +129,19 @@ function snapshotTimeline(items: Array<Record<string, unknown>>): TimelineEntry[
     id: string(item.id, `restored-${index}`),
     kind: string(item.kind, 'system') as TimelineEntry['kind'],
     text: string(item.text),
+    elapsedSeconds: elapsedSeconds(item.elapsed_seconds ?? item.elapsedSeconds),
+    turnIndex: typeof item.turn_index === 'number' ? item.turn_index : undefined,
+    interactionId: string(item.interaction_id ?? item.interactionId) || undefined,
+    attachments: Array.isArray(item.attachments) ? item.attachments.map((raw) => {
+      const attachment = object(raw)
+      return {
+        artifactRef: string(attachment.artifact_ref ?? attachment.artifactRef),
+        kind: 'image' as const,
+        mediaType: string(attachment.media_type ?? attachment.mediaType),
+        filename: string(attachment.filename),
+        byteSize: Number(attachment.byte_size ?? attachment.byteSize),
+      }
+    }) : [],
     callId: string(item.call_id ?? item.callId) || undefined,
     toolName: string(item.tool_name ?? item.toolName) || undefined,
     args: object(item.args),
@@ -138,6 +160,10 @@ function snapshotTimeline(items: Array<Record<string, unknown>>): TimelineEntry[
 
 export function runReducer(state: RunState, action: RunAction): RunState {
   if (action.type === 'reset') return initialRunState
+  if (action.type === 'session-settings') {
+    if (state.sessionSettings?.sessionId !== action.sessionId) return state
+    return { ...state, sessionSettings: { ...state.sessionSettings, ...action.settings } }
+  }
   if (action.type === 'agents-refreshed') return { ...state, agents: action.agents }
   if (action.type === 'transcript-density') {
     return { ...state, transcriptDensity: action.density }
@@ -166,22 +192,28 @@ export function runReducer(state: RunState, action: RunAction): RunState {
       status: 'failed',
       timeline: [
         ...state.timeline,
-        { id: `error-${state.timeline.length + 1}`, kind: 'error', text: action.message },
+        { id: `error-${state.timeline.length + 1}`, kind: 'error', text: action.message, status: 'failed' },
       ],
     }
   }
   if (action.type === 'run-registered') {
-    return { ...state, runId: action.runId, status: 'running' }
+    return { ...state, runId: action.runId, status: 'running', pendingClarification: null }
   }
   if (action.type === 'snapshot') {
     return {
       ...initialRunState,
+      sessionSettings: {
+        sessionId: action.snapshot.sessionId,
+        approvalMode: action.snapshot.approvalMode,
+        collaborationMode: action.snapshot.collaborationMode,
+      },
       timeline: snapshotTimeline(action.snapshot.timeline),
       plan: action.snapshot.plan,
       planReviewStatus: action.snapshot.planReviewStatus,
       planReviewRevision: action.snapshot.plan.revision || null,
       runId: action.snapshot.activeRunId,
-      status: action.snapshot.activeRunId ? 'running' : 'idle',
+      status: action.snapshot.activeRunId ? 'running' : action.snapshot.pendingClarification ? 'waiting_for_user' : 'idle',
+      pendingClarification: action.snapshot.pendingClarification,
       transcriptDensity: action.snapshot.transcriptDensity,
       workProducts: action.snapshot.workProducts,
       pendingEffects: action.snapshot.pendingEffects,
@@ -194,13 +226,16 @@ export function runReducer(state: RunState, action: RunAction): RunState {
   const { event } = action
   const data = event.data
   if (event.type === 'run.started') {
+    const restored = state.timeline.findIndex((item) => item.kind === 'user'
+      && item.turnIndex !== undefined && item.interactionId === event.runId)
     return {
       ...state,
       runId: event.runId,
       status: 'running',
+      pendingClarification: null,
       timeline: [
-        ...state.timeline,
-        { id: `user-${event.sequence}`, kind: 'user', text: string(data.prompt) },
+        ...(restored >= 0 ? state.timeline.slice(0, restored) : state.timeline),
+        { id: `user-${event.runId}-${event.sequence}`, kind: 'user', text: string(data.prompt), interactionId: event.runId },
       ],
     }
   }
@@ -209,13 +244,20 @@ export function runReducer(state: RunState, action: RunAction): RunState {
   }
   if (event.type === 'assistant.retracted') {
     const characters = typeof data.characters === 'number' ? data.characters : 0
-    const index = state.timeline.findLastIndex((item) => item.kind === 'assistant')
-    if (index < 0) return state
-    const item = state.timeline[index]
-    const remaining = characters ? item.text.slice(0, -characters) : item.text
     const timeline = [...state.timeline]
-    if (remaining) timeline[index] = { ...item, text: remaining }
-    else timeline.splice(index, 1)
+    let remaining = characters
+    for (let index = timeline.length - 1; index >= 0 && remaining > 0; index -= 1) {
+      const item = timeline[index]
+      if (item.kind === 'user') break
+      if (item.kind !== 'assistant') continue
+      // Backend counts Unicode code points; JS string.length counts UTF-16 units.
+      const points = Array.from(item.text)
+      const removed = Math.min(remaining, points.length)
+      remaining -= removed
+      const text = points.slice(0, points.length - removed).join('')
+      if (text) timeline[index] = { ...item, text }
+      else timeline.splice(index, 1)
+    }
     return { ...state, timeline }
   }
   if (event.type === 'commentary.delta') {
@@ -226,11 +268,16 @@ export function runReducer(state: RunState, action: RunAction): RunState {
   }
   if (event.type === 'clarification.requested') {
     const choices = Array.isArray(data.choices)
-      ? data.choices.map((item) => `- ${String(item)}`).join('\n')
-      : ''
-    const text = `${string(data.question)}${choices ? `\n${choices}` : ''}`
+      ? data.choices.filter((item): item is string => typeof item === 'string')
+      : []
+    const question = string(data.question)
+    const text = question + (choices.length ? `\n${choices.map((choice) => `- ${choice}`).join('\n')}` : '')
     return {
       ...state,
+      pendingClarification: {
+        id: string(data.question_id), question, choices,
+        related_plan_step: string(data.related_plan_step) || null, created_at: event.createdAt,
+      },
       timeline: [
         ...state.timeline,
         { id: `clarification-${event.sequence}`, kind: 'system', text, status: 'waiting_for_user' },
@@ -418,7 +465,15 @@ export function runReducer(state: RunState, action: RunAction): RunState {
     }
   }
   if (event.type === 'usage.updated') {
-    return { ...state, usage: object(data.usage) }
+    const elapsed = elapsedSeconds(data.elapsed_seconds)
+    const userIndex = state.timeline.findLastIndex((item) => item.kind === 'user')
+    return {
+      ...state,
+      usage: object(data.usage),
+      timeline: state.timeline.map((item, index) => index === userIndex && elapsed !== undefined
+        ? { ...item, elapsedSeconds: elapsed }
+        : item),
+    }
   }
   if (event.type.startsWith('context.compaction.')) {
     const text = event.type.endsWith('started')
@@ -462,7 +517,7 @@ export function runReducer(state: RunState, action: RunAction): RunState {
       runId: null,
       timeline: [
         ...state.timeline,
-        { id: `cancelled-${event.sequence}`, kind: 'system', text: string(data.message, 'Run cancelled') },
+        { id: `cancelled-${event.sequence}`, kind: 'system', text: string(data.message, 'Run cancelled'), status: 'cancelled' },
       ],
     }
   }
@@ -473,7 +528,7 @@ export function runReducer(state: RunState, action: RunAction): RunState {
       runId: null,
       timeline: [
         ...state.timeline,
-        { id: `error-${event.sequence}`, kind: 'error', text: string(data.message, 'Run failed') },
+        { id: `error-${event.sequence}`, kind: 'error', text: string(data.message, 'Run failed'), status: 'failed' },
       ],
     }
   }

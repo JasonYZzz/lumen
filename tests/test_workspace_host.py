@@ -6,6 +6,7 @@ from collections.abc import Sequence
 from decimal import Decimal
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Literal
 
 import pytest
 from pydantic_ai import Tool
@@ -13,6 +14,7 @@ from pydantic_ai.messages import BinaryContent, ModelMessage, ModelRequest, Tool
 from pydantic_ai.models.function import AgentInfo, DeltaToolCall, FunctionModel
 
 from lumen.agents import AgentConfigSnapshot, AgentThreadRef, AgentThreadState
+from lumen.agents.types import AgentStatus
 from lumen.application import (
     ApprovalAlreadyResolvedError,
     ApprovePlan,
@@ -22,10 +24,12 @@ from lumen.application import (
     DecideApproval,
     DeleteSession,
     EventEnvelope,
+    ForkSessionAtTurn,
     InvalidStateError,
     InvokeSkill,
     ListSessions,
     RenameSession,
+    RetryRun,
     SessionNotFoundError,
     SetCollaborationMode,
     SetSessionArchived,
@@ -35,6 +39,7 @@ from lumen.application import (
     WorkspaceBusyError,
     WorkspaceHost,
 )
+from lumen.application.run_lock import WorkspaceRunLock
 from lumen.attachments import AttachmentStore
 from lumen.config import LimitsConfig
 from lumen.context import ArtifactStore
@@ -45,6 +50,7 @@ from lumen.skills import Skill
 from lumen.tools.spec import EffectKind
 from lumen.trust import ApprovalRuleStore
 from lumen.work_products import EffectStatus, TaskWorkspace
+from lumen.work_products.types import EffectReceipt
 
 
 class LocalResources:
@@ -109,6 +115,107 @@ def _runtime(output: str = "web ready") -> AgentRuntime:
         limits=LimitsConfig(),
         tool_metadata={},
     )
+
+
+@pytest.mark.parametrize("action", ["complete", "rename", "rename_placeholder", "delete", "failure"])
+async def test_title_generation_does_not_block_runs_or_override_user_management(
+    tmp_path: Path, action: str,
+) -> None:
+    entered, release = asyncio.Event(), asyncio.Event()
+    sources: list[str] = []
+
+    class TitleResources(LocalResources):
+        async def generate_session_title(self, input_text: str) -> str:
+            sources.append(input_text)
+            entered.set()
+            try:
+                await release.wait()
+            except asyncio.CancelledError:
+                # Even a provider returning after cancellation cannot overwrite a manual title.
+                await release.wait()
+            if action == "failure":
+                raise TimeoutError("provider unavailable")
+            return '"架构分享提纲"'
+
+    resources = TitleResources(tmp_path, _runtime())
+    host = WorkspaceHost(resources)  # type: ignore[arg-type]
+    await host.open()
+    try:
+        created = await host.dispatch(CreateSession())
+        started = await host.dispatch(StartRun(created.session_id, "请整理架构分享提纲", "title-request"))
+        initial = (await host.dispatch(ListSessions())).sessions[0]
+        assert (initial.title, initial.title_pending) == ("新对话", True)
+        await asyncio.wait_for(entered.wait(), timeout=1)
+        events = await asyncio.wait_for(_collect_run(host, started.run_id), timeout=2)
+        assert events[-1].type == "run.completed"
+        assert (await host.dispatch(ListSessions())).sessions[0].title_pending
+        history = resources.session_repository.load(created.session_id).turns
+        if action.startswith("rename"):
+            await host.dispatch(RenameSession(
+                created.session_id, "新对话" if action == "rename_placeholder" else "我的标题",
+            ))
+        elif action == "delete":
+            await host.dispatch(DeleteSession(created.session_id))
+        release.set()
+        async with asyncio.timeout(1):
+            # Metadata is observed through the public list contract, independently of run events.
+            while any(item.title_pending for item in (await host.dispatch(ListSessions())).sessions):  # noqa: ASYNC110
+                await asyncio.sleep(0)
+        await host.close()
+        result = (await host.dispatch(ListSessions())).sessions
+        if action == "delete":
+            assert result == []
+        else:
+            expected = {
+                "complete": "架构分享提纲", "rename": "我的标题",
+                "rename_placeholder": "新对话", "failure": "请整理架构分享提纲",
+            }[action]
+            assert (result[0].title, result[0].title_pending) == (expected, False)
+        assert sources == ["请整理架构分享提纲"]
+        assert resources.session_repository.load(created.session_id).turns == history
+    finally:
+        release.set()
+        await host.close()
+
+
+async def _collect_run(host: WorkspaceHost, run_id: str) -> list[EventEnvelope]:
+    return [event async for event in host.subscribe(run_id)]
+
+
+async def test_pending_title_recovers_from_recorded_input_after_host_restart(tmp_path: Path) -> None:
+    entered = asyncio.Event()
+
+    class InterruptedResources(LocalResources):
+        async def generate_session_title(self, input_text: str) -> str:
+            entered.set()
+            await asyncio.Event().wait()
+            return input_text
+
+    first = WorkspaceHost(InterruptedResources(tmp_path, _runtime()))  # type: ignore[arg-type]
+    await first.open()
+    created = await first.dispatch(CreateSession())
+    started = await first.dispatch(StartRun(created.session_id, "需要恢复的标题", "restart-title"))
+    await _collect_run(first, started.run_id)
+    await asyncio.wait_for(entered.wait(), timeout=1)
+    await first.close()
+    repository = SessionRepository(tmp_path / "sessions")
+    assert repository.load(created.session_id).catalog.title_generation_turn == 0
+
+    class ResumedResources(LocalResources):
+        async def generate_session_title(self, input_text: str) -> str:
+            assert input_text == "需要恢复的标题"
+            return "已恢复的标题"
+
+    second = WorkspaceHost(ResumedResources(tmp_path, _runtime()))  # type: ignore[arg-type]
+    await second.open()
+    try:
+        async with asyncio.timeout(1):
+            while (await second.dispatch(ListSessions())).sessions[0].title_pending:  # noqa: ASYNC110
+                await asyncio.sleep(0)
+        assert (await second.dispatch(ListSessions())).sessions[0].title == "已恢复的标题"
+        assert len(repository.load(created.session_id).turns) == 1
+    finally:
+        await second.close()
 
 
 async def test_workspace_host_sends_image_artifacts_without_persisting_base64(
@@ -303,6 +410,104 @@ async def test_workspace_host_manages_session_catalog_and_hides_empty_sessions(
         await host.close()
 
 
+async def test_visibility_changes_preserve_unresolved_effects_and_invalidate_other_host_cache(
+    tmp_path: Path,
+) -> None:
+    resources = LocalResources(tmp_path, _runtime())
+    resources.task_workspace = TaskWorkspace(tmp_path, resources.artifact_store, resources.session_repository)
+    host = WorkspaceHost(resources)  # type: ignore[arg-type]
+    other = WorkspaceHost(LocalResources(tmp_path, _runtime()))  # type: ignore[arg-type]
+    await host.open()
+    await other.open()
+    try:
+        session = await host.dispatch(CreateSession())
+        repo = resources.session_repository
+        repo.append_turn_started(session.session_id, user_input="failed research", interaction_id="old-run")
+        for i in range(6):
+            repo.append_effect(session.session_id, EffectReceipt(
+                id=f"effect:{i}", effect_kind=EffectKind.UNKNOWN, operation="exa_web_search_exa",
+                status=EffectStatus.RECONCILIATION_REQUIRED,
+            ))
+        await other.snapshot(session.session_id)  # Populate a different Host's actor cache.
+        before = repo.load(session.session_id)
+        original_bytes = before.metadata.path.read_bytes()
+        await host.dispatch(SetSessionArchived(session.session_id, True))
+        assert repo.load(session.session_id).work_state == before.work_state
+        await host.dispatch(SetSessionArchived(session.session_id, False))
+        with pytest.raises(InvalidStateError, match="待核实"):
+            await host.dispatch(StartRun(session.session_id, "retry", "retry"))
+        assert (await host.dispatch(DeleteSession(session.session_id))).status == "deleted"
+        after = repo.load(session.session_id)
+        assert after.catalog.deleted_at is not None
+        assert after.metadata.path.read_bytes().startswith(original_bytes)
+        assert after.work_state == before.work_state
+        assert after.turns == before.turns
+        deleted_bytes = after.metadata.path.read_bytes()
+        assert (await host.dispatch(DeleteSession(session.session_id))).status == "deleted"
+        assert after.metadata.path.read_bytes() == deleted_bytes
+        with pytest.raises(SessionNotFoundError):
+            await other.snapshot(session.session_id)
+        assert (await other.dispatch(ListSessions(include_archived=True))).sessions == []
+    finally:
+        await other.close()
+        await host.close()
+
+
+@pytest.mark.parametrize("action", ["archive", "delete"])
+async def test_visibility_changes_do_not_release_another_execution_lease(
+    tmp_path: Path, action: str, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    host = WorkspaceHost(LocalResources(tmp_path, _runtime()))  # type: ignore[arg-type]
+    session = await host.dispatch(CreateSession())
+    command = (
+        DeleteSession(session.session_id)
+        if action == "delete" else SetSessionArchived(session.session_id, True)
+    )
+    # Another Host / process owning the OS lock must prevent catalog mutation.
+    owner = WorkspaceRunLock(tmp_path)
+    assert owner.acquire()
+    try:
+        with pytest.raises(WorkspaceBusyError):
+            await host.dispatch(command)
+        assert owner.held
+    finally:
+        owner.release()
+    owned_lock = WorkspaceRunLock(tmp_path)
+    monkeypatch.setattr(host, "_workspace_run_lock", owned_lock)
+    assert owned_lock.acquire()
+    try:
+        with pytest.raises(WorkspaceBusyError):
+            await host.dispatch(command)
+        assert owned_lock.held
+        contender = WorkspaceRunLock(tmp_path)
+        assert not contender.acquire()
+    finally:
+        owned_lock.release()
+    await host.dispatch(command)
+
+
+@pytest.mark.parametrize("status", [
+    AgentStatus.RUNNING, AgentStatus.APPROVAL_PENDING, AgentStatus.IMPORT_PENDING,
+])
+async def test_visibility_gate_checks_agent_activity_instead_of_completion(
+    tmp_path: Path, status: AgentStatus,
+) -> None:
+    resources = LocalResources(tmp_path, _runtime())
+    host = WorkspaceHost(resources)  # type: ignore[arg-type]
+    session = await host.dispatch(CreateSession())
+    resources.session_repository.append_agent_thread(session.session_id, AgentThreadState(
+        ref=AgentThreadRef(id="child", path="/root/child", parent_session_id=session.session_id,
+                           root_run_id="older-run", agent_type="worker"),
+        config=AgentConfigSnapshot(model_name="test", model_id="test", cwd=str(tmp_path)),
+        status=status, task="work", task_name="child", idempotency_key="sha256:" + "0" * 64,
+    ))
+    if status is AgentStatus.IMPORT_PENDING:
+        await host.dispatch(DeleteSession(session.session_id))
+    else:
+        with pytest.raises(InvalidStateError, match="execution is active"):
+            await host.dispatch(DeleteSession(session.session_id))
+
+
 async def test_workspace_host_persists_first_prompt_and_timeline_before_run_finishes(
     tmp_path: Path,
 ) -> None:
@@ -364,6 +569,200 @@ async def test_workspace_host_persists_first_prompt_and_timeline_before_run_fini
         if started_run_id is not None:
             _ = [event async for event in host.subscribe(started_run_id)]
         await host.close()
+
+
+async def test_workspace_host_allows_second_host_reads_but_rejects_concurrent_execution(
+    tmp_path: Path,
+) -> None:
+    entered = asyncio.Event()
+    release = asyncio.Event()
+    second_history: list[list[ModelMessage]] = []
+
+    async def first_stream(
+        _messages: list[ModelMessage], _info: AgentInfo
+    ):  # type: ignore[no-untyped-def]
+        entered.set()
+        await release.wait()
+        yield "first complete"
+
+    async def second_stream(
+        messages: list[ModelMessage], _info: AgentInfo
+    ):  # type: ignore[no-untyped-def]
+        second_history.append(messages)
+        yield "second complete"
+
+    first_resources = LocalResources(
+        tmp_path,
+        AgentRuntime(
+            model=FunctionModel(stream_function=first_stream),
+            tools=[],
+            toolsets=[],
+            instructions="help",
+            limits=LimitsConfig(),
+            tool_metadata={},
+        ),
+    )
+    second_resources = LocalResources(
+        tmp_path,
+        AgentRuntime(
+            model=FunctionModel(stream_function=second_stream),
+            tools=[],
+            toolsets=[],
+            instructions="help",
+            limits=LimitsConfig(),
+            tool_metadata={},
+        ),
+    )
+    first = WorkspaceHost(first_resources)  # type: ignore[arg-type]
+    second = WorkspaceHost(second_resources)  # type: ignore[arg-type]
+    await first.open()
+    await second.open()
+    first_run_id: str | None = None
+    try:
+        created = await first.dispatch(CreateSession())
+        started = await first.dispatch(StartRun(created.session_id, "first", "first-request"))
+        first_run_id = started.run_id
+        await asyncio.wait_for(entered.wait(), timeout=1)
+
+        read_only = await second.snapshot(created.session_id)
+        assert read_only.active_run_id is None
+        assert read_only.timeline[-1].status == "interrupted"
+        with pytest.raises(WorkspaceBusyError, match="another Lumen process"):
+            await second.dispatch(StartRun(created.session_id, "compete", "competing-request"))
+
+        release.set()
+        _ = [event async for event in first.subscribe(started.run_id)]
+        continued = await second.dispatch(
+            StartRun(created.session_id, "continue", "second-request")
+        )
+        _ = [event async for event in second.subscribe(continued.run_id)]
+    finally:
+        release.set()
+        if first_run_id is not None:
+            _ = [event async for event in first.subscribe(first_run_id)]
+        await second.close()
+        await first.close()
+
+    assert second_history
+    assert "first complete" in str(second_history[0])
+    loaded = SessionRepository(tmp_path / "sessions").load(created.session_id)
+    assert [turn.status for turn in loaded.turns] == ["completed", "completed"]
+
+
+async def test_workspace_host_retry_restores_interrupted_turn_attachments(tmp_path: Path) -> None:
+    image_bytes = b"\x89PNG\r\n\x1a\ninterrupted-attachment"
+    received: list[bytes] = []
+
+    async def stream(
+        messages: list[ModelMessage], _info: AgentInfo
+    ):  # type: ignore[no-untyped-def]
+        for message in messages:
+            if not isinstance(message, ModelRequest):
+                continue
+            for part in message.parts:
+                if isinstance(part, UserPromptPart) and not isinstance(part.content, str):
+                    received.extend(
+                        item.data for item in part.content if isinstance(item, BinaryContent)
+                    )
+        yield "recovered"
+
+    artifact_store = ArtifactStore(tmp_path / "artifacts")
+    resources = LocalResources(
+        tmp_path,
+        AgentRuntime(
+            model=FunctionModel(stream_function=stream),
+            tools=[],
+            toolsets=[],
+            instructions="help",
+            limits=LimitsConfig(),
+            tool_metadata={},
+            attachment_store=AttachmentStore(artifact_store),
+        ),
+        artifact_store=artifact_store,
+    )
+    session = resources.session_repository.create(agent_name="test-agent", model_id="test-model")
+    attachment = AttachmentStore(artifact_store).store_image(
+        filename="interrupted.png",
+        media_type="image/png",
+        content=image_bytes,
+    )
+    resources.session_repository.append_turn_started(
+        session.id,
+        user_input="inspect the interrupted image",
+        interaction_id="orphaned-run",
+        attachments=(attachment,),
+    )
+
+    host = WorkspaceHost(resources)  # type: ignore[arg-type]
+    await host.open()
+    try:
+        snapshot = await host.snapshot(session.id)
+        retried = await host.dispatch(RetryRun(session.id, "retry-interrupted"))
+        _ = [event async for event in host.subscribe(retried.run_id)]
+    finally:
+        await host.close()
+
+    assert snapshot.timeline[-1].status == "interrupted"
+    assert received == [image_bytes]
+    loaded = resources.session_repository.load(session.id)
+    assert [turn.status for turn in loaded.turns] == ["running", "completed"]
+    assert loaded.turns[-1].attachments == [attachment]
+
+
+async def test_workspace_host_blocks_interrupted_retry_with_unresolved_unknown_effect(
+    tmp_path: Path,
+) -> None:
+    provider_called = False
+
+    async def stream(
+        _messages: list[ModelMessage], _info: AgentInfo
+    ):  # type: ignore[no-untyped-def]
+        nonlocal provider_called
+        provider_called = True
+        yield "unsafe duplicate"
+
+    resources = LocalResources(
+        tmp_path,
+        AgentRuntime(
+            model=FunctionModel(stream_function=stream),
+            tools=[],
+            toolsets=[],
+            instructions="help",
+            limits=LimitsConfig(),
+            tool_metadata={},
+        ),
+    )
+    resources.task_workspace = TaskWorkspace(
+        tmp_path,
+        resources.artifact_store,
+        resources.session_repository,
+    )
+    session = resources.session_repository.create(agent_name="test-agent", model_id="test-model")
+    resources.task_workspace.bind_session(session.id)
+    resources.session_repository.append_turn_started(
+        session.id,
+        user_input="repeat an unknown remote action",
+        interaction_id="orphaned-unknown-effect",
+    )
+    effect = resources.task_workspace.record_tool_effect(
+        tool_name="remote_action",
+        effect_kind=EffectKind.UNKNOWN,
+        success=True,
+        summary="remote endpoint returned success before the process stopped",
+    )
+    assert effect is not None
+    assert effect.status is EffectStatus.RECONCILIATION_REQUIRED
+
+    host = WorkspaceHost(resources)  # type: ignore[arg-type]
+    await host.open()
+    try:
+        with pytest.raises(InvalidStateError, match="resolve interrupted run effects") as captured:
+            await host.dispatch(RetryRun(session.id, "retry-unknown-effect"))
+    finally:
+        await host.close()
+
+    assert provider_called is False
+    assert effect.id in str(captured.value.details["issues"])
 
 
 async def test_workspace_host_persists_terminal_failure_when_completed_turn_write_fails(
@@ -603,6 +1002,92 @@ async def test_workspace_host_cancel_is_persisted_and_idempotent(tmp_path: Path)
     assert again.status == "cancelled"
     assert events[-1].type == "run.cancelled"
     assert turn.status == "cancelled"
+
+
+@pytest.mark.parametrize("mode", ["default", "plan"])
+async def test_edited_message_uses_only_prefix_and_new_prompt(
+    tmp_path: Path, mode: Literal["default", "plan"],
+) -> None:
+    received: list[list[str]] = []
+
+    async def stream(messages: list[ModelMessage], _info: AgentInfo):  # type: ignore[no-untyped-def]
+        received.append([
+            part.content for message in messages if isinstance(message, ModelRequest)
+            for part in message.parts if isinstance(part, UserPromptPart) and isinstance(part.content, str)
+        ])
+        if mode == "plan" and not any(isinstance(part, ToolReturnPart) for part in messages[-1].parts):
+            yield {0: DeltaToolCall(
+                "set_plan", '{"goal":"Draft the updated request","steps":[{"id":"one","title":"Implement"}]}',
+                tool_call_id=f"plan-{len(received)}",
+            )}
+            return
+        yield "reply"
+
+    resources = LocalResources(tmp_path, AgentRuntime(
+        model=FunctionModel(stream_function=stream), tools=[], toolsets=[], instructions="help",
+        limits=LimitsConfig(), tool_metadata={},
+    ))
+    host = WorkspaceHost(resources)  # type: ignore[arg-type]
+    await host.open()
+    try:
+        session = await host.dispatch(CreateSession())
+        await host.dispatch(SetCollaborationMode(session.session_id, mode))
+        for index, prompt in enumerate(["prefix", "old question", "old follow-up"]):
+            started = await host.dispatch(StartRun(session.session_id, prompt, f"source-{index}"))
+            assert [event async for event in host.subscribe(started.run_id)][-1].type == "run.completed"
+        source = resources.session_repository.load(session.session_id)
+        before = source.metadata.path.read_bytes()
+        command = ForkSessionAtTurn(session.session_id, 1, include_turn=False, client_request_id="edit-1")
+        forked = await host.dispatch(command)
+        assert await host.dispatch(command) == forked
+        with pytest.raises(InvalidStateError, match="different parameters"):
+            await host.dispatch(ForkSessionAtTurn(
+                session.session_id, 0, include_turn=False, client_request_id="edit-1",
+            ))
+        started = await host.dispatch(StartRun(forked.session_id, "replacement", "replacement-run"))
+        assert await host.dispatch(StartRun(forked.session_id, "replacement", "replacement-run")) == started
+        assert [event async for event in host.subscribe(started.run_id)][-1].type == "run.completed"
+        assert [prompt.rsplit("\n\n", 1)[-1] for prompt in received[-1]] == ["prefix", "replacement"]
+        branch = resources.session_repository.load(forked.session_id)
+        assert [turn.user_input for turn in branch.turns] == ["prefix", "replacement"]
+        assert str(branch.settings.collaboration_mode) == mode
+        assert source.metadata.path.read_bytes() == before
+    finally:
+        await host.close()
+
+
+@pytest.mark.parametrize("mode", ["default", "plan"])
+async def test_edit_and_start_preserve_source_until_external_results_are_resolved(
+    tmp_path: Path, mode: Literal["default", "plan"],
+) -> None:
+    resources = LocalResources(tmp_path, _runtime())
+    resources.task_workspace = TaskWorkspace(tmp_path, resources.artifact_store, resources.session_repository)
+    host = WorkspaceHost(resources)  # type: ignore[arg-type]
+    await host.open()
+    try:
+        session = await host.dispatch(CreateSession())
+        await host.dispatch(SetCollaborationMode(session.session_id, mode))
+        resources.session_repository.append_turn_started(
+            session.session_id, user_input="old prompt", interaction_id="old-run",
+        )
+        resources.task_workspace.bind_session(session.session_id)
+        effect = resources.task_workspace.record_tool_effect(
+            tool_name="remote", effect_kind=EffectKind.UNKNOWN, success=True, summary="old outcome",
+        )
+        assert effect is not None
+        count = len(list(resources.session_repository.directory.glob("*.jsonl")))
+        before = resources.session_repository.load(session.session_id).metadata.path.read_bytes()
+        with pytest.raises(InvalidStateError, match="待核实"):
+            await host.dispatch(ForkSessionAtTurn(session.session_id, 0, include_turn=False))
+        with pytest.raises(InvalidStateError, match="待核实"):
+            await host.dispatch(StartRun(session.session_id, "replacement", "replace"))
+        assert len(list(resources.session_repository.directory.glob("*.jsonl"))) == count
+        assert resources.session_repository.load(session.session_id).metadata.path.read_bytes() == before
+        await host.dispatch(WaivePlanVerification(session.session_id, (effect.id,), "result checked by user"))
+        forked = await host.dispatch(ForkSessionAtTurn(session.session_id, 0, include_turn=False))
+        assert forked.session_id != session.session_id
+    finally:
+        await host.close()
 
 
 async def test_host_creates_scoped_user_waiver_receipt(tmp_path: Path) -> None:

@@ -6,7 +6,13 @@ from collections.abc import Sequence
 from pathlib import Path
 
 import pytest
-from pydantic_ai.messages import ModelMessage, ModelRequest, RetryPromptPart, ToolReturnPart
+from pydantic_ai.messages import (
+    ModelMessage,
+    ModelRequest,
+    RetryPromptPart,
+    ToolReturnPart,
+    ToolSearchReturnPart,
+)
 from pydantic_ai.models.function import AgentInfo, DeltaToolCall, FunctionModel
 
 from lumen.config import LimitsConfig, load_config
@@ -51,12 +57,26 @@ mcp_servers:
         assert manager.tool_metadata["calc_add"]["risk"] == "read"
 
         async def model_stream(messages: list[ModelMessage], info: AgentInfo):  # type: ignore[no-untyped-def]
-            calc = next(tool for tool in info.function_tools if tool.name == "calc_add")
-            # FunctionModel exposes the native tool-search corpus directly;
-            # real providers either use native search or the local fallback.
-            assert calc.defer_loading is True
-            assert calc.with_native == "tool_search"
-            if last_tool_return(messages) is None:
+            names = {tool.name for tool in info.function_tools}
+            searched = any(
+                isinstance(part, ToolSearchReturnPart)
+                for message in messages
+                if isinstance(message, ModelRequest)
+                for part in message.parts
+            )
+            result = last_tool_return(messages)
+            if not searched:
+                assert "search_tools" in names
+                assert "calc_add" not in names
+                yield {
+                    0: DeltaToolCall(
+                        "search_tools",
+                        '{"queries":["calculator add"]}',
+                        tool_call_id="search-call",
+                    )
+                }
+            elif result is None:
+                assert "calc_add" in names
                 yield {0: DeltaToolCall("calc_add", '{"a":2,"b":3}', tool_call_id="mcp-call")}
             else:
                 yield "calculation complete"
@@ -64,10 +84,11 @@ mcp_servers:
         runtime = AgentRuntime(
             model=FunctionModel(stream_function=model_stream),
             tools=[],
-            toolsets=[manager.mcp_bundles[0].toolset],
+            toolsets=[],
             instructions="Use the calculator.",
             limits=LimitsConfig(),
             tool_metadata=manager.tool_metadata,
+            capability_gateway=manager.capability_gateway,
         )
         events: list[RunEvent] = []
 

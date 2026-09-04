@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="720" height="220" viewBox="0 0 720 220" role="img" aria-labelledby="title desc">
+  <title id="title">Lumen 浅色横向组合标志</title>
+  <desc id="desc">浅色背景上的 Lumen Fold 标志、lumen 字标和 Open agent harness 说明。</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="720" y2="220" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#FFFCF5"/><stop offset="1" stop-color="#F2E8D8"/>
+    </linearGradient>
+    <linearGradient id="fold" x1="12" y1="7" x2="56" y2="58" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#FFC857"/><stop offset=".48" stop-color="#E9820E"/><stop offset="1" stop-color="#9D3F08"/>
+    </linearGradient>
+    <mask id="fold-cut" maskUnits="userSpaceOnUse" x="0" y="0" width="64" height="64">
+      <rect width="64" height="64" fill="#fff"/>
+      <path d="M30 31c-.4 5.5-2.7 9-5.8 12.8-3.6 4.4-3.3 9.2.2 13.5-3.9-2.4-5.6-5.6-4.4-9.2 1.1-3.3 4.7-6.9 6.8-9.9 2-2.8 2.8-5.5 3.2-7.2Z" fill="#000"/>
+    </mask>
+  </defs>
+  <rect x="1" y="1" width="718" height="218" rx="28" fill="url(#bg)" stroke="#D7B78E" stroke-width="2"/>
+  <g transform="translate(48 38) scale(2.2)">
+    <path d="M20 5C13.4 5 8 10.4 8 17v25c0 9.9 8.1 18 18 18h22c6.6 0 12-5.4 12-12s-5.4-12-12-12H32V17c0-6.6-5.4-12-12-12Z" fill="url(#fold)" mask="url(#fold-cut)"/>
+  </g>
+  <text x="226" y="126" fill="#171612" font-family="Geist, Inter, Avenir Next, Helvetica Neue, sans-serif" font-size="78" font-weight="590" letter-spacing="-4">lumen</text>
+  <text x="232" y="164" fill="#9E4A0B" font-family="SFMono-Regular, Cascadia Code, monospace" font-size="15" letter-spacing="4">OPEN AGENT HARNESS</text>
+</svg>

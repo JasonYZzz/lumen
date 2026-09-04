@@ -32,4 +32,7 @@ UTF-8 JSON：
 
 Python hook 配置为 `module` + `factory`。目标 callable 接收 `HookContext`，可同步或
 异步返回 `HookDecision`、同字段 mapping 或 `None`。导入失败会在启动时 fail fast；
-运行时异常会记录 diagnostic 并默认放行。使用 `/hooks` 查看注册项、最近触发时间和 deny 次数。
+运行时异常会记录 diagnostic 并默认放行。在唯一的 `CapabilityGateway` 路径中，pre hook 修改后的参数先进入
+审批与单调 `ToolGuard`；post hook 只改返回模型的文本投影，不改 canonical output、客户端展示或 effect
+receipt。若公开 pre-invoke Adapter 整体意外抛出，Gateway 会 fail closed。使用 `/hooks` 查看注册项、最近
+触发时间和 deny 次数。

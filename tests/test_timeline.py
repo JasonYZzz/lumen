@@ -16,6 +16,7 @@ from lumen.events import (
     PlanCreated,
     PlanUpdated,
     ProgressReported,
+    RunCancelled,
     RunFailed,
     RunStarted,
     TextDelta,
@@ -24,6 +25,7 @@ from lumen.events import (
     TimelineEventRecord,
     ToolCallFinished,
     ToolCallStarted,
+    UsageUpdated,
     WorkProductChanged,
 )
 from lumen.plan import PlanState, PlanStep, StepStatus
@@ -36,6 +38,46 @@ from lumen.timeline import (
 )
 from lumen.tools.spec import EffectKind
 from lumen.work_products import EffectReceipt, EffectStatus
+
+
+def test_timeline_duration_replays_runtime_measurement_without_rewriting_history(tmp_path: Path) -> None:
+    repository = SessionRepository(tmp_path)
+    session = repository.create(agent_name="agent", model_id="test")
+    events = [RunStarted("inspect"), ThinkingDelta("working"), UsageUpdated({}, elapsed_seconds=155.9)]
+    repository.append_turn(
+        session.id,
+        user_input="inspect",
+        messages=[],
+        approvals=[],
+        usage={},
+        status="completed",
+        timeline_events=[
+            TimelineEventRecord.from_event(event, sequence=index) for index, event in enumerate(events, 1)
+        ],
+    )
+    before = session.path.read_bytes()
+    live = TimelineStore()
+    for event in events:
+        live.apply(event)
+    restored = TimelineStore(RepositoryTimelineAdapter(repository, session.id))
+    restored.load_older()
+    assert live.items[0].elapsed_seconds == restored.items[0].elapsed_seconds == 155.9
+    assert len(live.items) == len(restored.items) == 2
+    assert session.path.read_bytes() == before
+    live.apply(RunStarted("next"))
+    for invalid in (-1.0, float("inf"), float("nan")):
+        live.apply(UsageUpdated({}, elapsed_seconds=invalid))
+    assert live.items[-1].elapsed_seconds is None
+    live.apply(UsageUpdated({}, elapsed_seconds=0.5))
+    assert live.items[-1].elapsed_seconds == 0.5
+    assert live.items[0].elapsed_seconds == 155.9
+
+
+def test_timeline_terminal_outcomes_are_explicit_for_client_disclosures() -> None:
+    store = TimelineStore(InMemoryTimelineAdapter())
+    store.apply(RunFailed("failed"))
+    store.apply(RunCancelled("cancelled"))
+    assert [item.status for item in store.window()] == ["failed", "cancelled"]
 
 
 def test_timeline_coalesces_thinking_deltas_into_one_segment() -> None:
@@ -265,6 +307,20 @@ def test_repository_adapter_recovers_pre_fix_title_only_run_with_execution_evide
             TimelineKind.ERROR,
             "任务在对话记录持久化前中断。已恢复任务输入。无法重建未写入磁盘的助手回复。",
         ),
+    ]
+
+
+def test_retraction_spans_thinking_and_uses_unicode_characters() -> None:
+    store = TimelineStore(InMemoryTimelineAdapter())
+    store.apply(RunStarted("question"))
+    store.apply(TextDelta("保留🙂草"))
+    store.apply(ThinkingDelta("thinking"))
+    store.apply(TextDelta("稿🙂"))
+    store.apply(TextRetracted(3))
+    assert [(item.kind, item.text) for item in store.window()] == [
+        (TimelineKind.USER, "question"),
+        (TimelineKind.ASSISTANT, "保留🙂"),
+        (TimelineKind.THINKING, "thinking"),
     ]
 
 

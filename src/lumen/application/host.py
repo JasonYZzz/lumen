@@ -2,14 +2,17 @@ from __future__ import annotations
 
 import asyncio
 import mimetypes
+import re
 from collections import Counter
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Generator
+from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Protocol, cast, overload
 from uuid import uuid4
 
+from lumen.agents.types import ACTIVE_AGENT_STATUSES
 from lumen.approval import ApprovalDecision, ApprovalMode, ApprovalPolicy
 from lumen.attachments import (
     MAX_ATTACHMENTS_PER_INPUT,
@@ -25,6 +28,7 @@ from lumen.collaboration import (
 )
 from lumen.configuration import ConfigurationConflictError, ConfigurationEditError
 from lumen.context import ContextCompactCommand, ContextMemoryCommand, ContextReportCommand
+from lumen.context.memory.redaction import redact_secrets
 from lumen.events import (
     AgentLifecycleChanged,
     ApprovalRequest,
@@ -39,11 +43,14 @@ from lumen.events import (
     ToolApprovalPending,
 )
 from lumen.files import expand_file_mentions
+from lumen.files.documents import read_workspace_document
 from lumen.interactive_queue import QueueMode
 from lumen.live import LiveConnectRequest, LiveEvent
 from lumen.live.manager import LiveSessionManager
+from lumen.live.types import LiveConnectionState
 from lumen.plan import EvidenceKind, EvidenceReceipt, PlanLifecycle
 from lumen.run_coordinator import RunCoordinator, RunInput
+from lumen.run_diagnostics import build_run_diagnostic
 from lumen.runtime import AgentRuntime, CompletionPolicy, ToolApproval
 from lumen.sessions import SessionData, SessionMetadata, SessionRepository
 from lumen.skills import expand_skill_for_message
@@ -123,6 +130,7 @@ from .models import (
     WorkspaceBusyError,
     WorkspaceCommand,
 )
+from .run_lock import WorkspaceRunLock
 
 
 class WorkspaceResources(Protocol):
@@ -149,7 +157,6 @@ class WorkspaceResources(Protocol):
     def hook_summary(self) -> list[dict[str, object]]: ...
     def capabilities_report(self) -> dict[str, Any]: ...
     def summary(self) -> dict[str, Any]: ...
-
 
 @dataclass(slots=True)
 class _PendingApproval:
@@ -186,9 +193,13 @@ class WorkspaceHost:
         self._sessions: dict[str, _SessionActor] = {}
         self._runs: dict[str, _RunRecord] = {}
         self._requests: dict[tuple[str, str], str] = {}
+        self._fork_requests: dict[tuple[str, str], tuple[ForkSessionAtTurn, SessionCreated]] = {}
         self._active_run_id: str | None = None
         self._state_lock = asyncio.Lock()
+        self._workspace_run_lock = WorkspaceRunLock(resources.workspace)
         self._opened = False
+        self._title_tasks: dict[str, asyncio.Task[None]] = {}
+        self._title_slots = asyncio.Semaphore(2)
         self._approval_policy = ApprovalPolicy()
         # Production resources own a workspace-scoped rule store; test doubles
         # inject a hermetic one. The fallback keeps the host self-sufficient.
@@ -218,6 +229,19 @@ class WorkspaceHost:
         if not self._opened:
             await self.resources.open()
             self._opened = True
+            # Recover interrupted metadata work only when no other Host owns
+            # an active workspace run. The recorded turn remains the source.
+            pending = [
+                metadata.id for metadata in self.resources.session_repository.list()
+                if (catalog := self.resources.session_repository.load(metadata.id).catalog)
+                .title_generation_turn is not None and catalog.deleted_at is None
+            ]
+            if pending and self._workspace_run_lock.acquire():
+                try:
+                    for session_id in pending:
+                        self._schedule_title(session_id)
+                finally:
+                    self._workspace_run_lock.release()
         return self
 
     async def close(self) -> None:
@@ -234,14 +258,27 @@ class WorkspaceHost:
                 approved=False,
                 message="Live session closed",
             )
+        title_tasks = list(self._title_tasks.values())
+        for task in title_tasks:
+            task.cancel()
+        await asyncio.gather(*title_tasks, return_exceptions=True)
         if self._opened:
             await self.resources.close()
             self._opened = False
+        if self._active_run_id is None and self._live_execution_id is None:
+            self._workspace_run_lock.release()
 
     def capabilities(self) -> dict[str, Any]:
         """Expose the ResourceManager read projection to every client Adapter."""
 
         return self.resources.capabilities_report()
+
+    async def read_document(self, path: str) -> bytes:
+        """Read a workspace document for client preview without changing Session state."""
+        try:
+            return await asyncio.to_thread(read_workspace_document, self.resources.workspace, path)
+        except (OSError, ValueError) as error:
+            raise InvalidStateError("Document unavailable: check its path, type and 20 MiB limit") from error
 
     @overload
     async def dispatch(self, command: CreateSession) -> SessionCreated: ...
@@ -430,15 +467,34 @@ class WorkspaceHost:
                 )
             return CommandAcknowledged("ok", {"items": items})
         if isinstance(command, ForkSessionAtTurn):
-            if self._active_run_id is not None:
-                raise WorkspaceBusyError(
-                    "cannot rewind while an agent run is active",
-                    details={"run_id": self._active_run_id},
-                )
-            created = self.resources.session_repository.fork(
-                command.session_id, through_turn=command.through_turn
-            )
-            return SessionCreated(created.id)
+            async with self._state_lock:
+                source = self._managed_session(command.session_id)
+                key = (command.session_id, command.client_request_id or "")
+                previous = self._fork_requests.get(key) if command.client_request_id else None
+                if previous is not None:
+                    if previous[0] != command:
+                        raise InvalidStateError("fork request ID was already used with different parameters")
+                    return previous[1]
+                if self._active_run_id is not None or self._live_execution_id is not None:
+                    raise WorkspaceBusyError("cannot fork while an agent or Live execution is active")
+                if not 0 <= command.through_turn < len(source.turns):
+                    raise InvalidStateError("turn index out of range")
+                if not self._workspace_run_lock.acquire():
+                    raise WorkspaceBusyError("another Lumen process is running in this workspace")
+                try:
+                    if not command.include_turn:
+                        self._check_effect_recovery(command.session_id)
+                    created = self.resources.session_repository.fork(
+                        command.session_id,
+                        through_turn=command.through_turn,
+                        include_turn=command.include_turn,
+                    )
+                finally:
+                    self._workspace_run_lock.release()
+                result = SessionCreated(created.id)
+                if command.client_request_id:
+                    self._fork_requests[key] = (command, result)
+                return result
         if isinstance(command, CancelRun):
             return await self._cancel(command.run_id)
         if isinstance(command, DecideApproval):
@@ -525,11 +581,30 @@ class WorkspaceHost:
             return await self._select_model(command)
         if isinstance(command, RetryRun):
             actor = self._actor(command.session_id)
-            previous = actor.coordinator.state.last_user_input
+            state = actor.coordinator.state
+            previous = state.last_user_input
             if previous is None:
                 raise InvalidStateError("session has no previous input to retry")
+            loaded = self.resources.session_repository.load(command.session_id)
+            if loaded.turns and loaded.turns[-1].status == "running":
+                task_workspace = getattr(self.resources, "task_workspace", None)
+                completion_issues = getattr(task_workspace, "completion_issues", None)
+                if callable(completion_issues):
+                    result = cast(Any, completion_issues)(command.session_id)
+                    issues = [str(item) for item in cast(list[object], result)]
+                    if issues:
+                        raise InvalidStateError(
+                            "resolve interrupted run effects before retrying",
+                            details={"issues": issues},
+                        )
             return await self._start_run(
-                StartRun(command.session_id, previous, command.client_request_id), is_retry=True
+                StartRun(
+                    command.session_id,
+                    previous,
+                    command.client_request_id,
+                    attachments=state.last_attachments,
+                ),
+                is_retry=True,
             )
         if isinstance(command, InvokeSkill):
             return await self._invoke_skill(command)
@@ -611,6 +686,7 @@ class WorkspaceHost:
                     model_id=metadata.model_id,
                     title=title,
                     archived=archived,
+                    title_pending=loaded.catalog.title_generation_turn is not None,
                 )
             )
         return SessionList(items)
@@ -622,22 +698,63 @@ class WorkspaceHost:
         if len(normalized) > 80:
             raise InvalidStateError("session title cannot exceed 80 characters")
         loaded = self._managed_session(session_id)
-        updated = loaded.catalog.model_copy(update={"title": normalized})
+        updated = loaded.catalog.model_copy(update={"title": normalized, "title_generation_turn": None})
         self.resources.session_repository.append_session_catalog(session_id, updated)
+        if task := self._title_tasks.get(session_id):
+            task.cancel()
         return CommandAcknowledged("renamed", {"title": normalized})
 
-    def _seed_session_title(self, session_id: str, input_text: str, loaded: SessionData) -> None:
-        """Make the first accepted prompt discoverable before its run reaches a terminal turn."""
+    def _seed_session_title(self, session_id: str, loaded: SessionData) -> None:
+        """Publish a placeholder after durable input admission; generation never blocks a run."""
 
-        if loaded.catalog.title is not None or loaded.turns:
+        if loaded.catalog.title is not None:
             return
-        normalized = " ".join(input_text.split())
-        if not normalized:
-            return
-        if len(normalized) > 80:
-            normalized = normalized[:79].rstrip() + "…"
-        updated = loaded.catalog.model_copy(update={"title": normalized})
+        updated = loaded.catalog.model_copy(update={
+            "title": "新对话", "title_generation_turn": len(loaded.turns),
+        })
         self.resources.session_repository.append_session_catalog(session_id, updated)
+        self._schedule_title(session_id)
+
+    def _schedule_title(self, session_id: str) -> None:
+        if session_id not in self._title_tasks:
+            self._title_tasks[session_id] = asyncio.create_task(
+                self._generate_title(session_id), name=f"lumen-title-{session_id}",
+            )
+
+    async def _generate_title(self, session_id: str) -> None:
+        try:
+            loaded = self._managed_session(session_id)
+            index = loaded.catalog.title_generation_turn
+            if index is None or index >= len(loaded.turns):
+                return
+            source = redact_secrets(loaded.turns[index].user_input)[:2000]
+            fallback = " ".join(source.split())
+            fallback = fallback[:39].rstrip() + "…" if len(fallback) > 40 else fallback
+            title = fallback or "新对话"
+            generator = getattr(self.resources, "generate_session_title", None)
+            if generator is not None:
+                try:
+                    async with self._title_slots:
+                        result = await asyncio.wait_for(generator(source), timeout=15)
+                    result = re.sub(r"<(think|thinking)>.*?</\1>", "", result, flags=re.S | re.I)
+                    candidate = " ".join(redact_secrets(result).strip().strip('"\'`“”').split())
+                    if candidate and "<" not in candidate and len(candidate) <= 80:
+                        title = candidate
+                except Exception:
+                    # Auxiliary metadata must never fail the user's agent run;
+                    # keep a bounded local title and expose no provider errors.
+                    pass
+            current = self._managed_session(session_id)
+            if current.catalog.title_generation_turn == index:
+                self.resources.session_repository.append_session_catalog(
+                    session_id, current.catalog.model_copy(update={
+                        "title": title, "title_generation_turn": None,
+                    }),
+                )
+        except (SessionNotFoundError, OSError):
+            pass
+        finally:
+            self._title_tasks.pop(session_id, None)
 
     def _set_session_archived(
         self,
@@ -645,49 +762,78 @@ class WorkspaceHost:
         *,
         archived: bool,
     ) -> CommandAcknowledged:
-        loaded = self._managed_session(session_id)
-        if archived:
-            self._require_session_management_safe(session_id)
-        archived_at = datetime.now(UTC).isoformat() if archived else None
-        updated = loaded.catalog.model_copy(update={"archived_at": archived_at})
-        self.resources.session_repository.append_session_catalog(session_id, updated)
+        with self._session_management(session_id) as loaded:
+            if (loaded.catalog.archived_at is not None) != archived:
+                archived_at = datetime.now(UTC).isoformat() if archived else None
+                updated = loaded.catalog.model_copy(update={"archived_at": archived_at})
+                self.resources.session_repository.append_session_catalog(session_id, updated)
         return CommandAcknowledged("archived" if archived else "restored")
 
     def _delete_session(self, session_id: str) -> CommandAcknowledged:
-        loaded = self._managed_session(session_id)
-        self._require_session_management_safe(session_id)
-        updated = loaded.catalog.model_copy(update={"deleted_at": datetime.now(UTC).isoformat()})
-        self.resources.session_repository.append_session_catalog(session_id, updated)
+        with self._session_management(session_id, include_deleted=True) as loaded:
+            if loaded.catalog.deleted_at is None:
+                updated = loaded.catalog.model_copy(update={"deleted_at": datetime.now(UTC).isoformat()})
+                self.resources.session_repository.append_session_catalog(session_id, updated)
         self._sessions.pop(session_id, None)
+        if task := self._title_tasks.get(session_id):
+            task.cancel()
         return CommandAcknowledged("deleted")
 
-    def _managed_session(self, session_id: str) -> Any:
+    def _managed_session(self, session_id: str, *, include_deleted: bool = False) -> SessionData:
         try:
             loaded = self.resources.session_repository.load(session_id)
         except FileNotFoundError as error:
             raise SessionNotFoundError(str(error)) from error
-        if loaded.catalog.deleted_at is not None:
+        if loaded.catalog.deleted_at is not None and not include_deleted:
             raise SessionNotFoundError(f"session not found: {session_id}")
         return loaded
 
-    def _require_session_management_safe(self, session_id: str) -> None:
+    @contextmanager
+    def _session_management(
+        self, session_id: str, *, include_deleted: bool = False,
+    ) -> Generator[SessionData]:
+        """Change visibility under the writer lease, never waive completion evidence."""
+
+        # acquire() is reentrant for this instance. Never release the lease
+        # owned by an active run or a Live tool execution in the finally block.
+        if self._workspace_run_lock.held or self._active_run_id or self._live_execution_id:
+            raise WorkspaceBusyError("cannot change Session visibility while the workspace is running")
+        if not self._workspace_run_lock.acquire():
+            raise WorkspaceBusyError("another Lumen process is running in this workspace")
+        try:
+            loaded = self._managed_session(session_id, include_deleted=include_deleted)
+            self._require_session_management_safe(session_id, loaded)
+            yield loaded
+        finally:
+            self._workspace_run_lock.release()
+
+    def _require_session_management_safe(self, session_id: str, loaded: SessionData) -> None:
         actor = self._sessions.get(session_id)
         issues: list[str] = []
         if actor is not None and actor.active_run_id is not None:
             issues.append("the Session has an active run")
-        orchestrator = getattr(self.resources, "agent_orchestrator", None)
-        agent_issues = getattr(orchestrator, "completion_issues", None)
-        if callable(agent_issues):
-            result = cast(Any, agent_issues)(session_id)
-            issues.extend(str(item) for item in cast(list[object], result))
-        task_workspace = getattr(self.resources, "task_workspace", None)
-        work_issues = getattr(task_workspace, "completion_issues", None)
-        if callable(work_issues):
-            result = cast(Any, work_issues)(session_id)
-            issues.extend(str(item) for item in cast(list[object], result))
+        # Inspect the complete durable Agent projection, not a completion gate
+        # filtered to whichever root run happens to be bound to the orchestrator.
+        issues.extend(
+            f"agent {thread.ref.path} is {thread.status.value}"
+            for thread in loaded.agent_state.threads if thread.status in ACTIVE_AGENT_STATUSES
+        )
+        live_states = {state.ref.id: state for state in loaded.live_state.sessions}
+        owned_live = self._live_manager.states_for(session_id) if self._live_manager is not None else ()
+        live_states.update({state.ref.id: state for state in owned_live})
+        owned_ids = {state.ref.id for state in owned_live}
+        issues.extend(
+            f"Live session {state.ref.id} is {state.connection.value}; end the connection first"
+            for state in live_states.values()
+            if state.connection not in {LiveConnectionState.CLOSED, LiveConnectionState.FAILED}
+            and (
+                state.connection is not LiveConnectionState.RECONCILIATION_REQUIRED
+                or state.ref.id in owned_ids
+            )
+        )
         if issues:
             raise InvalidStateError(
-                "cannot archive or delete a Session with unresolved work",
+                "cannot change Session visibility while execution is active",
                 details={"issues": issues},
             )
 
@@ -846,13 +992,13 @@ class WorkspaceHost:
         return manager
 
     def _actor(self, session_id: str) -> _SessionActor:
+        # Another Host can append a tombstone after this actor was cached.
+        # The journal remains authoritative for every public access.
+        loaded = self._managed_session(session_id)
         actor = self._sessions.get(session_id)
         if actor is not None:
             return actor
         try:
-            loaded = self.resources.session_repository.load(session_id)
-            if loaded.catalog.deleted_at is not None:
-                raise SessionNotFoundError(f"session not found: {session_id}")
             coordinator = self._coordinator()
             state = coordinator.resume(session_id)
         except FileNotFoundError as error:
@@ -878,6 +1024,24 @@ class WorkspaceHost:
             model_id=lambda: self.resources.active_model_config().id,
             runtime=lambda: self.resources.runtime,
         )
+
+    def _check_effect_recovery(self, session_id: str) -> None:
+        """Reject new execution before copying an unresolved external outcome."""
+
+        workspace = getattr(self.resources, "task_workspace", None)
+        if workspace is None:
+            return
+        workspace.bind_session(session_id)
+        blockers = [
+            str(item) for item in workspace.completion_blockers(session_id)
+            if not item.model_recoverable
+        ]
+        if blockers:
+            raise InvalidStateError(
+                "此任务有待核实的外部操作。请先在运行详情中处理后再继续或编辑消息。"
+                "原对话和产物已保留。重新生成不会解除这些记录。",
+                details={"code": "effect_recovery_required", "issues": blockers},
+            )
 
     async def _start_run(
         self,
@@ -909,34 +1073,53 @@ class WorkspaceHost:
             loaded = self._managed_session(command.session_id)
             if loaded.catalog.archived_at is not None:
                 raise InvalidStateError("restore the archived Session before starting a run")
-            self._seed_session_title(command.session_id, command.input, loaded)
-            actor = self._actor(command.session_id)
-            run_id = str(uuid4())
-            record = _RunRecord(
-                id=run_id,
-                session_id=command.session_id,
-                client_request_id=command.client_request_id,
-                journal=EventJournal(session_id=command.session_id, run_id=run_id),
-            )
-            actor.coordinator.persist_run_start(command.input, run_id, attachments)
-            self._runs[run_id] = record
-            self._requests[request_key] = run_id
-            self._active_run_id = run_id
-            actor.active_run_id = run_id
-            for event in initial_events:
-                await record.journal.append(event)
-            record.task = asyncio.create_task(
-                self._execute(
-                    actor,
-                    record,
-                    command.input,
-                    model_prompt=model_prompt,
-                    is_retry=is_retry,
-                    completion_revision=completion_revision,
-                    attachments=attachments,
-                ),
-                name=f"lumen-run-{run_id}",
-            )
+            if not self._workspace_run_lock.acquire():
+                raise WorkspaceBusyError("another Lumen process is running in this workspace")
+            try:
+                # A read-only Host may have cached this actor while another
+                # process held the execution lock. Refresh from the journal
+                # after admission so the new writer cannot run from stale state.
+                loaded = self._managed_session(command.session_id)
+                if loaded.catalog.archived_at is not None:
+                    raise InvalidStateError("restore the archived Session before starting a run")
+                self._check_effect_recovery(command.session_id)
+                actor = self._sessions.get(command.session_id)
+                if actor is None:
+                    actor = self._actor(command.session_id)
+                else:
+                    state = actor.coordinator.resume(command.session_id)
+                    actor.metadata = state.session
+                    actor.settings = loaded.settings
+                run_id = str(uuid4())
+                record = _RunRecord(
+                    id=run_id,
+                    session_id=command.session_id,
+                    client_request_id=command.client_request_id,
+                    journal=EventJournal(session_id=command.session_id, run_id=run_id),
+                )
+                actor.coordinator.persist_run_start(command.input, run_id, attachments)
+                self._seed_session_title(command.session_id, loaded)
+                self._runs[run_id] = record
+                self._requests[request_key] = run_id
+                self._active_run_id = run_id
+                actor.active_run_id = run_id
+                for event in initial_events:
+                    await record.journal.append(event)
+                record.task = asyncio.create_task(
+                    self._execute(
+                        actor,
+                        record,
+                        command.input,
+                        model_prompt=model_prompt,
+                        is_retry=is_retry,
+                        completion_revision=completion_revision,
+                        attachments=attachments,
+                    ),
+                    name=f"lumen-run-{run_id}",
+                )
+            except BaseException:
+                self._workspace_run_lock.release()
+                raise
         return RunStartedResult(run_id, command.session_id)
 
     async def _execute(
@@ -1149,6 +1332,7 @@ class WorkspaceHost:
             async with self._state_lock:
                 if self._active_run_id == record.id:
                     self._active_run_id = None
+                    self._workspace_run_lock.release()
             await record.journal.close()
 
     def _run(self, run_id: str) -> _RunRecord:
@@ -1257,6 +1441,8 @@ class WorkspaceHost:
         async with self._state_lock:
             if self._active_run_id is not None or self._live_execution_id is not None:
                 return False
+            if not self._workspace_run_lock.acquire():
+                return False
             self._live_execution_id = live_session_id
             return True
 
@@ -1264,6 +1450,7 @@ class WorkspaceHost:
         async with self._state_lock:
             if self._live_execution_id == live_session_id:
                 self._live_execution_id = None
+                self._workspace_run_lock.release()
 
     def _require_live_manager(self) -> LiveSessionManager:
         if self._live_manager is None:
@@ -1572,12 +1759,13 @@ class WorkspaceHost:
         )
 
     async def _select_model(self, command: SelectModel) -> CommandAcknowledged:
-        if self._active_run_id is not None:
-            raise WorkspaceBusyError("cannot switch model while a run is active")
-        select_model = getattr(self.resources, "select_model", None)
-        if select_model is None:
-            raise InvalidStateError("resource manager does not support model switching")
-        await select_model(command.model)
+        async with self._state_lock:
+            if self._active_run_id is not None:
+                raise WorkspaceBusyError("cannot switch model while a run is active")
+            select_model = getattr(self.resources, "select_model", None)
+            if select_model is None:
+                raise InvalidStateError("resource manager does not support model switching")
+            await select_model(command.model)
         return CommandAcknowledged("updated", {"model": command.model})
 
     async def _invoke_skill(self, command: InvokeSkill) -> RunStartedResult:
@@ -1687,6 +1875,9 @@ class WorkspaceHost:
             source_summary = getattr(self.resources, "context_source_summary", None)
             if source_summary is not None:
                 payload["sources"] = source_summary(command.session_id)
+            loaded = self.resources.session_repository.load(command.session_id)
+            if loaded.turns:
+                payload["latest_run"] = build_run_diagnostic(loaded.turns[-1])
         return CommandAcknowledged(
             result.status,
             {"message": result.message, "payload": payload},

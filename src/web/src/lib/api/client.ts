@@ -68,6 +68,14 @@ export async function exchangeLaunchToken() {
 }
 
 export const lumenApi = {
+  readDocument: async (path: string, signal?: AbortSignal): Promise<Blob> => {
+    const response = await fetch(`${apiBaseUrl}/api/v1/files/content?path=${encodeURIComponent(path)}`, { credentials: 'include', signal })
+    if (!response.ok) {
+      const body = await response.json().catch(() => null) as ApiErrorBody | null
+      throw new Error(body?.error?.message || `文档读取失败 (${response.status})`)
+    }
+    return response.blob()
+  },
   bootstrap: () => requestJson<Bootstrap>('/api/v1/bootstrap'),
   capabilities: () => requestJson<CapabilityInventory>('/api/v1/capabilities'),
   configuration: () => requestJson<ConfigurationSnapshot>('/api/v1/configuration'),
@@ -292,10 +300,10 @@ export const lumenApi = {
     (await requestJson<{ items: CheckpointRecord[] }>(
       `/api/v1/sessions/${sessionId}/checkpoints`,
     )).items,
-  forkSession: (sessionId: string, throughTurn: number) =>
+  forkSession: (sessionId: string, throughTurn: number, options?: { includeTurn: boolean; clientRequestId: string }) =>
     requestJson<{ sessionId: string }>(`/api/v1/sessions/${sessionId}/fork`, {
       method: 'POST',
-      body: JSON.stringify({ throughTurn }),
+      body: JSON.stringify({ throughTurn, ...options }),
     }),
   waiveVerification: (sessionId: string, scope: string[], reason: string) =>
     requestJson<Record<string, unknown>>(

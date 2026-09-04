@@ -3,7 +3,7 @@
 import type { CSSProperties, RefObject } from 'react'
 import { useCallback, useEffect, useLayoutEffect, useState } from 'react'
 
-type PopoverPlacement = 'vertical' | 'side'
+type PopoverPlacement = 'vertical' | 'side' | 'above'
 
 interface AnchoredPopoverOptions {
   open: boolean
@@ -12,6 +12,7 @@ interface AnchoredPopoverOptions {
   width: number
   placement?: PopoverPlacement
   gap?: number
+  matchAnchorWidth?: boolean
 }
 
 export function useAnchoredPopover({
@@ -21,6 +22,7 @@ export function useAnchoredPopover({
   width,
   placement = 'vertical',
   gap = 8,
+  matchAnchorWidth = false,
 }: AnchoredPopoverOptions): CSSProperties {
   const [style, setStyle] = useState<CSSProperties>({ visibility: 'hidden' })
 
@@ -30,13 +32,16 @@ export function useAnchoredPopover({
 
     const viewportWidth = window.innerWidth
     const viewportHeight = window.innerHeight
-    const safeWidth = Math.min(width, viewportWidth - 24)
     const anchorRect = anchor.getBoundingClientRect()
+    const safeWidth = Math.min(matchAnchorWidth ? anchorRect.width : width, viewportWidth - 24)
     const measuredHeight = Math.min(popover.scrollHeight, viewportHeight - 24)
     let left: number
     let top: number
 
-    if (placement === 'side') {
+    if (placement === 'above') {
+      left = Math.min(Math.max(12, anchorRect.left), viewportWidth - safeWidth - 12)
+      top = Math.max(12, anchorRect.top - measuredHeight - gap)
+    } else if (placement === 'side') {
       const fitsRight = anchorRect.right + gap + safeWidth <= viewportWidth - 12
       const fitsLeft = anchorRect.left - gap - safeWidth >= 12
       if (fitsRight || fitsLeft) {
@@ -67,10 +72,10 @@ export function useAnchoredPopover({
       top,
       left,
       width: safeWidth,
-      maxHeight: viewportHeight - 24,
+      maxHeight: placement === 'above' ? Math.max(0, anchorRect.top - gap - 12) : viewportHeight - 24,
       visibility: 'visible',
     })
-  }, [anchor, gap, open, placement, popoverRef, width])
+  }, [anchor, gap, open, placement, popoverRef, width, matchAnchorWidth])
 
   useLayoutEffect(() => {
     if (!open) {
@@ -83,13 +88,16 @@ export function useAnchoredPopover({
 
   useEffect(() => {
     if (!open) return
+    const observer = new ResizeObserver(updatePosition)
+    if (popoverRef.current) observer.observe(popoverRef.current)
     window.addEventListener('resize', updatePosition)
     window.addEventListener('scroll', updatePosition, true)
     return () => {
+      observer.disconnect()
       window.removeEventListener('resize', updatePosition)
       window.removeEventListener('scroll', updatePosition, true)
     }
-  }, [open, updatePosition])
+  }, [open, popoverRef, updatePosition])
 
   return style
 }

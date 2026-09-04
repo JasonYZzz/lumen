@@ -7,6 +7,7 @@ import { useMascotMotionPreference } from './mascot-motion-preference'
 import type { MascotSceneProps } from './mascot-types'
 import { useMascotVisibility } from './mascot-visibility'
 import { RasterMascotRenderer } from './raster-mascot-renderer'
+import { VideoMascotRenderer } from './video-mascot-renderer'
 import styles from './mascot.module.css'
 
 const RiveMascotRenderer = dynamic(
@@ -17,6 +18,26 @@ const RiveMascotRenderer = dynamic(
 const RIVE_ENABLED = process.env.NEXT_PUBLIC_MASCOT_RENDERER === 'rive'
 
 export function MascotScene({ activity, motionMode, className }: MascotSceneProps) {
+  return process.env.NEXT_PUBLIC_MASCOT_RENDERER === 'layered' || RIVE_ENABLED
+    ? <LegacyMascotScene activity={activity} motionMode={motionMode} className={className} />
+    : <AnimatedMascotScene activity={activity} motionMode={motionMode} className={className} />
+}
+
+function AnimatedMascotScene({ activity, motionMode, className }: MascotSceneProps) {
+  const stageRef = useRef<HTMLDivElement>(null)
+  const visible = useMascotVisibility(stageRef)
+  const preference = useMascotMotionPreference(motionMode)
+  const [interaction, setInteraction] = useState(0)
+  return <div ref={stageRef} className={`${styles.stage} ${className ?? ''}`} data-active={visible}>
+    <button type="button" className={styles.petButton} aria-label="和九尾狐打招呼"
+      onClick={() => setInteraction(value => value + 1)}>
+      <VideoMascotRenderer activity={activity} motionMode={preference.mode} active={visible} interaction={interaction} />
+    </button>
+  </div>
+}
+
+/** Explicit rollback only; these older renderers never run alongside video playback. */
+function LegacyMascotScene({ activity, motionMode, className }: MascotSceneProps) {
   const stageRef = useRef<HTMLDivElement>(null)
   const visible = useMascotVisibility(stageRef)
   const preference = useMascotMotionPreference(motionMode)

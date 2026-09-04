@@ -15,6 +15,45 @@ function event(type: EventEnvelope['type'], data: Record<string, unknown>, seque
 }
 
 describe('runReducer', () => {
+  it('preserves structured clarification choices and clears them only when a new run is accepted', () => {
+    const requested = runReducer(initialRunState, { type: 'event', event: event('clarification.requested', {
+      question_id: 'q1', question: '请选择', choices: ['全局安装', '取消'],
+    }) })
+    expect(requested.pendingClarification).toMatchObject({ id: 'q1', question: '请选择', choices: ['全局安装', '取消'] })
+    const waiting = runReducer(requested, { type: 'event', event: event('run.waiting_for_user', {}) })
+    expect(waiting.pendingClarification).toEqual(requested.pendingClarification)
+    const failed = runReducer(waiting, { type: 'local-error', message: 'network error' })
+    expect(failed.pendingClarification).toEqual(requested.pendingClarification)
+    const accepted = runReducer(waiting, { type: 'run-registered', runId: 'answer' })
+    expect(accepted.pendingClarification).toBeNull()
+  })
+  it('replaces an active snapshot suffix when replaying the same run from its first event', () => {
+    const restored = { ...initialRunState, timeline: [
+      { id: 'prefix', kind: 'user' as const, text: 'prefix', turnIndex: 0, interactionId: 'old' },
+      { id: 'restored', kind: 'user' as const, text: 'current', turnIndex: 1, interactionId: 'run-1' },
+      { id: 'partial', kind: 'assistant' as const, text: 'already streamed' },
+    ] }
+    const state = runReducer(restored, { type: 'event', event: event('run.started', { prompt: 'current' }) })
+    expect(state.timeline.map((item) => item.text)).toEqual(['prefix', 'current'])
+  })
+  it('keeps turn identities distinct when each run restarts its event sequence', () => {
+    let state = runReducer(initialRunState, { type: 'event', event: event('run.started', { prompt: 'first' }) })
+    state = runReducer(state, { type: 'event', event: event('run.completed', {}, 2) })
+    state = runReducer(state, {
+      type: 'event', event: { ...event('run.started', { prompt: 'second' }), runId: 'run-2' },
+    })
+    expect(new Set(state.timeline.map((item) => item.id)).size).toBe(2)
+  })
+  it('associates Runtime duration with only its own turn and rejects invalid measurements', () => {
+    let state = runReducer(initialRunState, { type: 'event', event: event('run.started', { prompt: 'first' }) })
+    state = runReducer(state, { type: 'event', event: event('usage.updated', { elapsed_seconds: 155.9 }, 2) })
+    state = runReducer(state, { type: 'event', event: event('run.completed', {}, 3) })
+    state = runReducer(state, { type: 'event', event: event('run.started', { prompt: 'second' }, 4) })
+    state = runReducer(state, { type: 'event', event: event('usage.updated', { elapsed_seconds: -1 }, 5) })
+    expect(state.timeline.map((item) => item.elapsedSeconds)).toEqual([155.9, undefined])
+    state = runReducer(state, { type: 'event', event: event('usage.updated', { elapsed_seconds: 8 }, 6) })
+    expect(state.timeline.map((item) => item.elapsedSeconds)).toEqual([155.9, 8])
+  })
   it('coalesces thinking deltas into one reasoning entry separate from the answer', () => {
     let state = runReducer(initialRunState, {
       type: 'event',
@@ -62,6 +101,21 @@ describe('runReducer', () => {
       ['assistant', 'draft '],
     ])
     expect(state.status).toBe('completed')
+  })
+
+  it('retracts Unicode text across thinking segments', () => {
+    let state = runReducer(initialRunState, {
+      type: 'event', event: event('run.started', { prompt: 'question' }),
+    })
+    for (const item of [
+      event('assistant.delta', { text: '保留🙂草' }, 2),
+      event('thinking.delta', { text: 'thinking' }, 3),
+      event('assistant.delta', { text: '稿🙂' }, 4),
+      event('assistant.retracted', { characters: 3 }, 5),
+    ]) state = runReducer(state, { type: 'event', event: item })
+    expect(state.timeline.map((item) => [item.kind, item.text])).toEqual([
+      ['user', 'question'], ['assistant', '保留🙂'], ['thinking', 'thinking'],
+    ])
   })
 
   it('updates one tool card through approval and completion events', () => {
@@ -246,7 +300,20 @@ describe('runReducer', () => {
       plan: { revision: 2, steps: [{ id: 'one', title: 'Inspect', status: 'in_progress' }] },
     })
     expect(state.status).toBe('failed')
-    expect(state.timeline.at(-1)).toMatchObject({ kind: 'error', text: 'provider unavailable' })
+    expect(state.timeline.at(-1)).toMatchObject({ kind: 'error', text: 'provider unavailable', status: 'failed' })
+  })
+
+  it('updates a single live plan card after each step instead of waiting for completion', () => {
+    let state = runReducer(initialRunState, { type: 'event', event: event('run.started', { prompt: 'work' }) })
+    for (const [index, statuses] of [['pending', 'pending'], ['completed', 'in_progress'], ['completed', 'completed']].entries()) {
+      state = runReducer(state, { type: 'event', event: event('plan.updated', {
+        plan: { revision: 1, state_version: index + 1, steps: statuses.map((status, i) => ({ id: String(i), title: String(i), status })) },
+      }, index + 2) })
+      expect(state.status).toBe('running')
+      const plans = state.timeline.filter(item => item.kind === 'plan')
+      expect(plans).toHaveLength(1)
+      expect(plans[0].plan?.steps.map(step => step.status)).toEqual(statuses)
+    }
   })
 
   it('tracks plan review pending and resolved events', () => {

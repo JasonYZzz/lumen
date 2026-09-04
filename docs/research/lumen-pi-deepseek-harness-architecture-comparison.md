@@ -4,6 +4,12 @@
 > 证据范围：Lumen 当前本地 worktree；Pi 与 DeepSeek Harness 官方 GitHub 仓库的固定 commit。  
 > 方法：以源码、契约测试、Accepted 架构记录和官方仓库文档为一手证据；不以社区文章推断内部实现。
 
+> **实现跟踪（2026-08-27）：** 本文的对比数据与外部 commit 保持为 2026-08-24 研究快照，不据此
+> 覆盖当前实现。Lumen 已完成 `LumenAgentLoop` 单轨切换，保留低层 `PydanticAIModelDriver` 和请求
+> `ModelInputManifest`；PydanticAI `Agent` graph 与 selector 已删除。当前事实以
+> [实现审计](../architecture-guide/12-current-implementation-audit.md) 与
+> [迁移决策记录](../architecture-guide/13-native-agent-loop-migration.md) 为准。
+
 ## 0. 版本基线与结论边界
 
 | 项目 | 本次基线 | 状态说明 |

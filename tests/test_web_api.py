@@ -23,7 +23,9 @@ from lumen.runtime import AgentRuntime
 from lumen.sessions import SessionRepository
 from lumen.tools.gateway import CapabilityGateway
 from lumen.tools.registry import PermissionPolicy, ToolRegistry
+from lumen.tools.spec import EffectKind
 from lumen.ui.host_session import HostSessionAdapter
+from lumen.work_products import TaskWorkspace
 
 
 class ApiAgentOrchestrator:
@@ -145,6 +147,7 @@ class ApiResources:
         self.workspace = root
         self.session_repository = SessionRepository(root / "sessions")
         self.artifact_store = ArtifactStore(root / "artifacts")
+        self.task_workspace: TaskWorkspace | None = None
         self.agent_orchestrator = ApiAgentOrchestrator()
         self.configuration = ApiConfiguration()
         self.runtime = AgentRuntime(
@@ -287,6 +290,51 @@ def test_web_and_tui_adapters_expose_shared_operator_capabilities(tmp_path: Path
         assert callable(getattr(HostSessionAdapter, method))
 
 
+def test_document_content_uses_authenticated_host_read_and_safe_download_headers(tmp_path: Path) -> None:
+    (tmp_path / "report.html").write_text("<script>alert(1)</script>", encoding="utf-8")
+    host = WorkspaceHost(ApiResources(tmp_path))  # type: ignore[arg-type]
+    app = create_web_app(host, launch_token="launch-secret", api_only=True)
+    with TestClient(app, base_url="http://testserver") as client:
+        assert client.get("/api/v1/files/content", params={"path": "report.html"}).status_code == 401
+        client.get("/auth/exchange", params={"token": "launch-secret"})
+        response = client.get("/api/v1/files/content", params={"path": "report.html"})
+        assert response.status_code == 200
+        assert response.content == b"<script>alert(1)</script>"
+        assert response.headers["content-type"] == "application/octet-stream"
+        assert response.headers["content-disposition"].startswith("attachment;")
+        assert response.headers["content-security-policy"] == "sandbox; default-src 'none'"
+        assert response.headers["cache-control"] == "no-store"
+        for path in ("../report.html", ".env", "missing.md"):
+            assert client.get("/api/v1/files/content", params={"path": path}).status_code == 400
+
+
+def test_session_modes_are_persisted_separately_from_workspace_defaults(tmp_path: Path) -> None:
+    host = WorkspaceHost(ApiResources(tmp_path))  # type: ignore[arg-type]
+    app = create_web_app(host, launch_token="launch-secret", api_only=True)
+    with TestClient(app, base_url="http://testserver") as client:
+        client.get("/auth/exchange", params={"token": "launch-secret"})
+        headers = {"Origin": "http://testserver"}
+        session_id = client.post("/api/v1/sessions", headers=headers).json()["sessionId"]
+        updated = client.patch(
+            f"/api/v1/sessions/{session_id}/settings",
+            headers=headers,
+            json={"approvalMode": "auto", "collaborationMode": "plan"},
+        )
+        assert updated.status_code == 200
+        assert updated.json()["approval_mode"] == "auto"
+        assert updated.json()["collaboration_mode"] == "plan"
+        defaults = client.get("/api/v1/bootstrap").json()
+        assert defaults["approvalMode"] == "manual"
+        assert defaults["collaborationMode"] == "default"
+        current = client.get(f"/api/v1/sessions/{session_id}").json()
+        assert current["approvalMode"] == "auto"
+        assert current["collaborationMode"] == "plan"
+        other_id = client.post("/api/v1/sessions", headers=headers).json()["sessionId"]
+        other = client.get(f"/api/v1/sessions/{other_id}").json()
+        assert other["approvalMode"] == "manual"
+        assert other["collaborationMode"] == "default"
+
+
 def test_web_api_authenticates_and_streams_a_run(tmp_path: Path) -> None:
     host = WorkspaceHost(ApiResources(tmp_path))  # type: ignore[arg-type]
     app = create_web_app(host, launch_token="launch-secret", api_only=True)
@@ -389,6 +437,8 @@ def test_web_api_authenticates_and_streams_a_run(tmp_path: Path) -> None:
         snapshot = client.get(f"/api/v1/sessions/{session_id}").json()
         assert snapshot["lastUserInput"] == "hello"
         assert snapshot["activeRunId"] is None
+        user_row = next(item for item in snapshot["timeline"] if item["kind"] == "user")
+        assert user_row["elapsed_seconds"] >= 0
         assert snapshot["workProducts"] == []
         assert snapshot["pendingEffects"] == []
         assert snapshot["recoverableEffects"] == []
@@ -415,6 +465,28 @@ def test_web_api_authenticates_and_streams_a_run(tmp_path: Path) -> None:
         )
         assert forked.status_code == 201
         assert forked.json()["sessionId"] != session_id
+
+        edited = client.post(
+            f"/api/v1/sessions/{session_id}/fork", headers=headers,
+            json={"throughTurn": 0, "includeTurn": False, "clientRequestId": "edit-first"},
+        )
+        assert edited.status_code == 201
+        retried = client.post(
+            f"/api/v1/sessions/{session_id}/fork", headers=headers,
+            json={"throughTurn": 0, "includeTurn": False, "clientRequestId": "edit-first"},
+        )
+        assert retried.json() == edited.json()
+        empty_branch = client.get(f"/api/v1/sessions/{edited.json()['sessionId']}")
+        assert empty_branch.json()["timeline"] == []
+        users = [item for item in snapshot["timeline"] if item["kind"] == "user"]
+        assert users[0]["turn_index"] == 0
+        assert users[0]["interaction_id"]
+        assert users[0]["attachments"][0]["filename"] == "diagram.png"
+        invalid = client.post(
+            f"/api/v1/sessions/{session_id}/fork", headers=headers,
+            json={"throughTurn": 0, "includeTurn": "false"},
+        )
+        assert invalid.status_code == 422
 
         agents = client.get(f"/api/v1/sessions/{session_id}/agents")
         assert agents.status_code == 200
@@ -452,6 +524,7 @@ def test_web_api_authenticates_and_streams_a_run(tmp_path: Path) -> None:
             "modelId": "test-model",
             "title": "Managed conversation",
             "archived": True,
+            "titlePending": False,
         }
 
         restored = client.delete(f"/api/v1/sessions/{session_id}/archive", headers=headers)
@@ -459,6 +532,32 @@ def test_web_api_authenticates_and_streams_a_run(tmp_path: Path) -> None:
         deleted = client.delete(f"/api/v1/sessions/{session_id}", headers=headers)
         assert deleted.json() == {"status": "deleted"}
         assert client.get(f"/api/v1/sessions/{session_id}").status_code == 404
+
+
+def test_web_delete_failed_research_preserves_effect_journal_and_is_idempotent(tmp_path: Path) -> None:
+    resources = ApiResources(tmp_path)
+    work = TaskWorkspace(tmp_path, resources.artifact_store, resources.session_repository)
+    resources.task_workspace = work
+    host = WorkspaceHost(resources)  # type: ignore[arg-type]
+    app = create_web_app(host, launch_token="launch-secret", api_only=True)
+    with TestClient(app, base_url="http://testserver") as client:
+        client.get("/auth/exchange", params={"token": "launch-secret"})
+        headers = {"Origin": "http://testserver"}
+        session_id = client.post("/api/v1/sessions", headers=headers).json()["sessionId"]
+        work.bind_session(session_id)
+        for _ in range(6):
+            work.record_tool_effect(tool_name="exa_web_search_exa", effect_kind=EffectKind.UNKNOWN,
+                                    success=True, summary="historical search")
+        before = resources.session_repository.load(session_id)
+        assert len(client.get(f"/api/v1/sessions/{session_id}").json()["pendingEffects"]) == 6
+        for _ in range(2):
+            deleted = client.delete(f"/api/v1/sessions/{session_id}", headers=headers)
+            assert deleted.status_code == 200
+            assert deleted.json() == {"status": "deleted"}
+        assert client.get(f"/api/v1/sessions/{session_id}").status_code == 404
+        after = resources.session_repository.load(session_id)
+        assert after.work_state == before.work_state
+        assert after.catalog.deleted_at is not None
 
 
 def test_web_api_rejects_mutation_from_wrong_origin(tmp_path: Path) -> None:
@@ -506,9 +605,12 @@ def test_web_api_establishes_and_ends_a_live_session(tmp_path: Path) -> None:
         )
         live_id = started.json()["liveSessionId"]
         snapshot = client.get(f"/api/v1/live/{live_id}")
+        assert client.delete(f"/api/v1/sessions/{session_id}", headers=headers).status_code == 400
+        assert client.post(f"/api/v1/sessions/{session_id}/archive", headers=headers).status_code == 400
         interrupted = client.post(f"/api/v1/live/{live_id}/interrupt", headers=headers)
         ended = client.delete(f"/api/v1/live/{live_id}", headers=headers)
         events = client.get(f"/api/v1/live/{live_id}/events")
+        assert client.delete(f"/api/v1/sessions/{session_id}", headers=headers).status_code == 200
 
     assert started.status_code == 201
     assert started.json()["answerSdp"] == transport.answer_sdp

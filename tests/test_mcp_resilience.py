@@ -1,10 +1,9 @@
-"""Resilience tests for the MCP transport wrapper (P0-1).
+"""Effect-aware recovery contracts for the MCP transport Adapter.
 
 A broken MCP *connection* (dead stdio process, dropped HTTP stream) must not
-terminate the agent run: ``ResilientMcpToolset`` reconnects and retries once,
-and failing that converts the outage into a model-visible ``ModelRetry``.
-Server-side business errors are already handled by pydantic-ai itself; these
-tests pin the transport-level behaviour plus the guarded session teardown.
+terminate the agent run. Declared observe tools may reconnect and retry once;
+unknown or mutating effects return ``mcp_outcome_unknown`` without replay.
+These tests pin the transport policy, cancellation, and guarded teardown.
 """
 
 from __future__ import annotations
@@ -20,11 +19,14 @@ from pydantic_ai.exceptions import ModelRetry
 from pydantic_ai.mcp import MCPToolset
 from pydantic_ai.toolsets import AbstractToolset, ToolsetTool
 
+from lumen.config import McpServerConfig, PermissionsConfig
 from lumen.mcp_tools import (
     ResilientMcpToolset,
     _is_transport_error,  # type: ignore[reportPrivateUsage]
+    build_mcp_toolset,
 )
 from lumen.resources import _guarded_mcp_client_exit  # type: ignore[reportPrivateUsage]
+from lumen.tools.registry import PermissionPolicy
 
 _CTX = cast(RunContext[None], None)
 _TOOL = cast(ToolsetTool[None], None)
@@ -75,6 +77,7 @@ def _make_toolset(
         client=cast(MCPToolset[None], client),
         server_name="calc",
         status_sink=sink,
+        retryable_tools=frozenset({"calc_add"}),
     )
 
 
@@ -92,6 +95,46 @@ def test_transport_error_classification() -> None:
 
 
 # -- reconnect + retry --------------------------------------------------------
+
+
+async def test_undeclared_effect_is_not_replayed_after_ambiguous_disconnect() -> None:
+    inner = _FakeInnerToolset([ConnectionError("response lost after executing")])
+    client = _FakeClient()
+    toolset = ResilientMcpToolset(
+        cast(AbstractToolset[None], inner),
+        client=cast(MCPToolset[None], client),
+        server_name="remote",
+    )
+    with pytest.raises(ModelRetry, match="mcp_outcome_unknown"):
+        await toolset.call_tool("remote_action", {}, _CTX, _TOOL)
+    assert inner.calls == 1
+    assert client.exits == client.enters == 0
+
+
+@pytest.mark.parametrize("observe", [False, True])
+async def test_retry_policy_uses_effect_declaration_not_read_risk(
+    observe: bool, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    bundle = build_mcp_toolset(
+        "calc",
+        McpServerConfig(
+            transport="streamable_http", url="https://example.test/mcp",
+            tool_risks={"add": "read"}, tool_effects={"add": "observe"} if observe else {},
+        ),
+        PermissionPolicy(PermissionsConfig()),
+        timeout=5,
+    )
+    assert isinstance(bundle.toolset, ResilientMcpToolset)
+    inner = _FakeInnerToolset([ConnectionError("lost response")])
+    client = _FakeClient()
+    monkeypatch.setattr(bundle.toolset, "wrapped", inner)
+    monkeypatch.setattr(bundle.toolset, "_client", client)
+    if observe:
+        assert await bundle.toolset.call_tool("calc_add", {}, _CTX, _TOOL) == {"echo": {}}
+    else:
+        with pytest.raises(ModelRetry, match="mcp_outcome_unknown"):
+            await bundle.toolset.call_tool("calc_add", {}, _CTX, _TOOL)
+    assert inner.calls == (2 if observe else 1)
 
 
 async def test_transport_error_reconnects_and_retries() -> None:

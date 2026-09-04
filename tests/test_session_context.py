@@ -55,6 +55,8 @@ async def test_context_sources_are_session_scoped_and_resume_exact_artifacts(tmp
     resolved = resumed.resolve_documents(session_a.id)
     assert resolved.skill_documents[0]["body"] == "revision one"
     assert resolved.resource_documents[0]["body"] == "remote snapshot"
+    assert str(resolved.skill_documents[0]["body_artifact_ref"]).startswith("sha256:")
+    assert str(resolved.resource_documents[0]["body_artifact_ref"]).startswith("sha256:")
 
     resumed.deactivate(session_a.id, "skill", "review")
     assert resumed.resolve_documents(session_a.id).skill_documents == ()

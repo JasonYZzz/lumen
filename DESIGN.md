@@ -239,6 +239,10 @@ The chapter bus uses numbered, monospaced rows separated by hairlines. Hover cre
 
 Authority modules are square inset nodes with copper terminal markers, uppercase semantic labels, condensed titles, and monospaced implementation details. Execution, capability, event, and persistence links use distinct solid, double, dashed, or terminal-ended forms, all explained by a visible legend.
 
+### Authority Blueprint
+
+The full-system blueprint is a standalone, printable SVG organized into five horizontal planes: Client Adapters, Application Control, Execution, Capability & Safety, and Durable Facts. It uses the same copper/mint/violet/fault trace grammar as the in-page topology, but preserves exact Module, Interface, state, and contract names as deterministic vector text. A local overflow frame keeps the 1920×1320 source legible on narrow screens; full-size and download actions expose the original without turning the diagram into a second state authority.
+
 ### Source Ledgers
 
 Ledger rows align a subdued key with a brighter monospaced value and divide entries with paper hairlines. Verified summaries add mint state words or terminals and remain adjacent to their source, schema, or contract evidence.

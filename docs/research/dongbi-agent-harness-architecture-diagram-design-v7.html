@@ -1,0 +1,274 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="东壁科研垂直 Agent Harness v7 平台总体架构 Diagram Design 版本">
+  <title>东壁 Agent Harness v7 平台总体架构</title>
+  <link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&amp;family=Geist+Mono:wght@400;500;600&amp;family=Instrument+Serif:ital@0;1&amp;family=Noto+Sans+SC:wght@400;500;600&amp;family=Noto+Serif+SC:wght@400&amp;display=swap" rel="stylesheet">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --paper: #f5f2ea; --paper-2: #fffefa; --ink: #171714; --muted: #68675f;
+      --soft: #8b897f; --rule: rgba(23,23,20,0.12); --rule-solid: #d9d5c9;
+      --accent: #315cff; --accent-tint: rgba(49,92,255,0.08); --link: #244cc5;
+      --font-sans: 'Geist', 'Noto Sans SC', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+      --font-serif: 'Instrument Serif', 'Noto Serif SC', 'Songti SC', serif;
+      --font-mono: 'Geist Mono', ui-monospace, monospace;
+    }
+    html, body { min-height: 100%; background: var(--paper); color: var(--ink); }
+    body { display: flex; align-items: center; justify-content: center; padding: 16px; font-family: var(--font-sans); }
+    main { width: min(100%, 1440px); overflow-x: auto; }
+    svg { display: block; width: 100%; min-width: 1120px; height: auto; }
+    @media print { body { padding: 0; } main { width: 100%; } svg { min-width: 0; } }
+  </style>
+</head>
+<body>
+  <main>
+    <svg viewBox="0 0 1440 1000" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="dongbi-v7-platform-title dongbi-v7-platform-desc">
+      <title id="dongbi-v7-platform-title">东壁 Agent Harness v7 平台总体架构</title>
+      <desc id="dongbi-v7-platform-desc">平台架构图展示接入与产品、应用边界与执行控制、唯一稳定运行时、能力接缝、可替换 Provider、数据可靠性基础、事件读侧与交付，以及贯穿全层的治理与可靠性纵轴。</desc>
+      <defs>
+        <style>
+          .sans { font-family: 'Geist', 'Noto Sans SC', 'PingFang SC', 'Microsoft YaHei', sans-serif; }
+          .serif { font-family: 'Instrument Serif', 'Noto Serif SC', 'Songti SC', serif; }
+          .mono { font-family: 'Geist Mono', ui-monospace, monospace; }
+          .zone-label { font-family: 'Geist Mono', ui-monospace, monospace; font-size: 8px; font-weight: 500; letter-spacing: 0.12em; fill: #8b897f; }
+          .tag { font-family: 'Geist Mono', ui-monospace, monospace; font-size: 8px; font-weight: 500; letter-spacing: 0.08em; fill: #8b897f; }
+          .layer-title { font-family: 'Geist', 'Noto Sans SC', 'PingFang SC', 'Microsoft YaHei', sans-serif; font-size: 16px; font-weight: 600; fill: #171714; }
+          .node-title { font-family: 'Geist', 'Noto Sans SC', 'PingFang SC', 'Microsoft YaHei', sans-serif; font-size: 12px; font-weight: 600; fill: #171714; }
+          .body-copy { font-family: 'Geist', 'Noto Sans SC', 'PingFang SC', 'Microsoft YaHei', sans-serif; font-size: 12px; font-weight: 500; fill: #68675f; }
+          .tech-copy { font-family: 'Geist Mono', ui-monospace, monospace; font-size: 8px; font-weight: 400; fill: #68675f; letter-spacing: 0.02em; }
+          .arrow-cn { font-family: 'Geist', 'Noto Sans SC', 'PingFang SC', 'Microsoft YaHei', sans-serif; font-size: 12px; font-weight: 500; fill: #68675f; }
+        </style>
+        <marker id="arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#68675f"/></marker>
+        <marker id="arrow-accent" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#315cff"/></marker>
+        <marker id="arrow-link" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#244cc5"/></marker>
+      </defs>
+
+      <rect width="1440" height="1000" fill="#f5f2ea"/>
+
+      <!-- Header -->
+      <text x="40" y="28" class="mono" font-size="8" font-weight="500" letter-spacing="0.18em" fill="#315cff">DONGBI · RESEARCH AGENT INFRASTRUCTURE</text>
+      <text x="40" y="64" class="serif" font-size="40" font-weight="400" fill="#171714">东壁 Agent Harness v7 平台总体架构</text>
+      <text x="40" y="84" class="sans" font-size="12" font-weight="500" fill="#68675f">接入与产品 · 应用控制 · 唯一稳定运行时 · 能力接缝 · Provider · 事务事实 · 事件交付 · 横切治理</text>
+      <text x="1400" y="28" class="mono" font-size="8" text-anchor="end" letter-spacing="0.12em" fill="#8b897f">PLATFORM OVERVIEW · 7 LAYERS + GOVERNANCE RAIL</text>
+
+      <!-- Platform boundary and three major zones -->
+      <rect x="40" y="96" width="1360" height="792" rx="8" fill="none" stroke="rgba(49,92,255,0.42)" stroke-width="1.2" stroke-dasharray="4,4"/>
+      <rect x="56" y="92" width="176" height="16" rx="4" fill="#f5f2ea"/>
+      <text x="64" y="104" class="zone-label" fill="#315cff">东壁 AGENT PLATFORM</text>
+      <rect x="56" y="116" width="1072" height="184" rx="8" fill="rgba(23,23,20,0.02)" stroke="rgba(23,23,20,0.12)" stroke-width="0.8"/>
+      <rect x="72" y="120" width="240" height="16" rx="4" fill="#f5f2ea"/>
+      <text x="80" y="132" class="zone-label">接入与控制 · ACCESS / CONTROL</text>
+      <rect x="56" y="316" width="1072" height="348" rx="8" fill="rgba(23,23,20,0.02)" stroke="rgba(23,23,20,0.12)" stroke-width="0.8"/>
+      <rect x="72" y="320" width="264" height="16" rx="4" fill="#f5f2ea"/>
+      <text x="80" y="332" class="zone-label">运行与能力 · RUNTIME / CAPABILITY</text>
+      <rect x="56" y="680" width="1072" height="188" rx="8" fill="rgba(23,23,20,0.02)" stroke="rgba(23,23,20,0.12)" stroke-width="0.8"/>
+      <rect x="72" y="684" width="240" height="16" rx="4" fill="#f5f2ea"/>
+      <text x="80" y="696" class="zone-label">事实与交付 · FACTS / DELIVERY</text>
+
+      <!-- Governance rail zone -->
+      <rect x="1160" y="116" width="216" height="752" rx="8" fill="rgba(49,92,255,0.04)" stroke="rgba(49,92,255,0.44)" stroke-width="1.2" stroke-dasharray="4,4"/>
+      <rect x="1176" y="128" width="184" height="16" rx="4" fill="transparent" stroke="rgba(49,92,255,0.40)" stroke-width="0.8"/>
+      <text x="1268" y="140" class="tag" text-anchor="middle" fill="#315cff">GOVERNANCE &amp; RELIABILITY</text>
+      <text x="1268" y="164" class="node-title" text-anchor="middle" fill="#315cff">治理与可靠性纵轴</text>
+
+      <!-- All connectors are painted before nodes. -->
+      <line x1="592" y1="200" x2="592" y2="224" stroke="#244cc5" stroke-width="1.2" marker-end="url(#arrow-link)"/>
+      <line x1="592" y1="284" x2="592" y2="340" stroke="#315cff" stroke-width="1.2" marker-end="url(#arrow-accent)"/>
+      <rect x="608" y="300" width="96" height="16" rx="4" fill="#f5f2ea"/>
+      <text x="656" y="312" class="arrow-cn" text-anchor="middle" fill="#315cff">受理并启动</text>
+      <line x1="448" y1="456" x2="448" y2="480" stroke="#315cff" stroke-width="1.2" marker-end="url(#arrow-accent)"/>
+      <rect x="464" y="460" width="80" height="16" rx="4" fill="#f5f2ea"/>
+      <text x="504" y="472" class="arrow-cn" text-anchor="middle" fill="#315cff">能力请求</text>
+      <line x1="880" y1="556" x2="880" y2="580" stroke="#244cc5" stroke-width="1.2" marker-end="url(#arrow-link)"/>
+      <path d="M 1104,612 H 1128 Q 1136,612 1136,604 V 432 Q 1136,424 1128,424 H 1104" fill="none" stroke="#68675f" stroke-width="1" stroke-dasharray="4,3" marker-end="url(#arrow)"/>
+      <rect x="1024" y="460" width="96" height="16" rx="4" fill="#f5f2ea"/>
+      <text x="1072" y="472" class="arrow-cn" text-anchor="middle">观察与回执</text>
+      <path d="M 80,424 H 56 Q 48,424 48,432 V 730 Q 48,738 56,738 H 80" fill="none" stroke="#68675f" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="56" y="648" width="112" height="16" rx="4" fill="#f5f2ea"/>
+      <text x="112" y="660" class="arrow-cn" text-anchor="middle">原子提交事实</text>
+      <line x1="592" y1="772" x2="592" y2="796" stroke="#68675f" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <path d="M 80,828 H 40 Q 32,828 32,820 V 176 Q 32,168 40,168 H 80" fill="none" stroke="#68675f" stroke-width="1" stroke-dasharray="4,3" marker-end="url(#arrow)"/>
+      <rect x="40" y="300" width="112" height="16" rx="4" fill="#f5f2ea"/>
+      <text x="96" y="312" class="arrow-cn" text-anchor="middle">异步结果交付</text>
+
+      <!-- L1: Access and product -->
+      <rect x="80" y="140" width="1024" height="60" rx="8" fill="#f5f2ea"/>
+      <rect x="80" y="140" width="1024" height="60" rx="8" fill="#fffefa" stroke="#171714" stroke-width="1"/>
+      <line x1="336" y1="140" x2="336" y2="200" stroke="#d9d5c9" stroke-width="0.8"/>
+      <line x1="592" y1="140" x2="592" y2="200" stroke="#d9d5c9" stroke-width="0.8"/>
+      <line x1="848" y1="140" x2="848" y2="200" stroke="#d9d5c9" stroke-width="0.8"/>
+      <rect x="92" y="148" width="32" height="16" rx="4" fill="transparent" stroke="rgba(23,23,20,0.32)" stroke-width="0.8"/>
+      <text x="108" y="160" class="tag" text-anchor="middle">L1</text>
+      <text x="208" y="168" class="node-title" text-anchor="middle">Agent 接口与适配器</text>
+      <text x="208" y="188" class="tech-copy" text-anchor="middle">AUTH · RATE LIMIT · PROTOCOL</text>
+      <text x="464" y="168" class="node-title" text-anchor="middle">科研门户与 SDK</text>
+      <text x="464" y="188" class="tech-copy" text-anchor="middle">USER · TASK · API / SDK</text>
+      <text x="720" y="168" class="node-title" text-anchor="middle">证据查询与反馈接口</text>
+      <text x="720" y="188" class="tech-copy" text-anchor="middle">CLAIM · CITATION · FEEDBACK</text>
+      <text x="976" y="168" class="node-title" text-anchor="middle">运营与研发控制台</text>
+      <text x="976" y="188" class="tech-copy" text-anchor="middle">DOMAIN · RELEASE · EVAL · AUDIT</text>
+
+      <!-- L2: Application boundary and execution control -->
+      <rect x="80" y="224" width="1024" height="60" rx="8" fill="#f5f2ea"/>
+      <rect x="80" y="224" width="1024" height="60" rx="8" fill="#fffefa" stroke="#171714" stroke-width="1"/>
+      <line x1="336" y1="224" x2="336" y2="284" stroke="#d9d5c9" stroke-width="0.8"/>
+      <line x1="592" y1="224" x2="592" y2="284" stroke="#d9d5c9" stroke-width="0.8"/>
+      <line x1="848" y1="224" x2="848" y2="284" stroke="#d9d5c9" stroke-width="0.8"/>
+      <rect x="92" y="232" width="32" height="16" rx="4" fill="transparent" stroke="rgba(23,23,20,0.32)" stroke-width="0.8"/>
+      <text x="108" y="244" class="tag" text-anchor="middle">L2</text>
+      <text x="208" y="252" class="node-title" text-anchor="middle">应用服务</text>
+      <text x="208" y="272" class="tech-copy" text-anchor="middle">SESSION · TURN · RUN · IDEMPOTENCY</text>
+      <text x="464" y="252" class="node-title" text-anchor="middle">运行协调器</text>
+      <text x="464" y="272" class="tech-copy" text-anchor="middle">ATTEMPT · LEASE · FENCING · RECOVERY</text>
+      <text x="720" y="252" class="node-title" text-anchor="middle">Agent 编排器</text>
+      <text x="720" y="272" class="tech-copy" text-anchor="middle">THREAD · TASK · MAILBOX · JOIN</text>
+      <rect x="848" y="224" width="256" height="60" rx="8" fill="rgba(49,92,255,0.08)" stroke="#315cff" stroke-width="1.2"/>
+      <text x="976" y="252" class="node-title" text-anchor="middle" fill="#315cff">受理边界</text>
+      <text x="976" y="272" class="tech-copy" text-anchor="middle" fill="#244cc5">PREPARE → ACCEPTED → ONE TERMINAL</text>
+
+      <!-- L3: The one stable Agent Runtime -->
+      <rect x="80" y="340" width="1024" height="116" rx="8" fill="#f5f2ea"/>
+      <rect x="80" y="340" width="1024" height="116" rx="8" fill="rgba(49,92,255,0.08)" stroke="#315cff" stroke-width="1.2"/>
+      <rect x="92" y="352" width="96" height="16" rx="4" fill="transparent" stroke="rgba(49,92,255,0.48)" stroke-width="0.8"/>
+      <text x="140" y="364" class="tag" text-anchor="middle" fill="#315cff">STABLE CORE</text>
+      <text x="96" y="392" class="layer-title" fill="#315cff">L3 统一稳定运行时</text>
+      <text x="96" y="412" class="tech-copy" fill="#244cc5">ONE AGENTRUNTIME.RUN()</text>
+      <text x="96" y="428" class="tech-copy" fill="#244cc5">ROOT = LOCAL SUB</text>
+      <text x="96" y="444" class="tech-copy" fill="#244cc5">LIFECYCLE AUTHORITY</text>
+      <rect x="272" y="352" width="816" height="24" rx="4" fill="rgba(255,254,250,0.78)" stroke="rgba(49,92,255,0.22)" stroke-width="0.8"/>
+      <text x="284" y="368" class="tag" fill="#315cff">可靠运行外环</text>
+      <text x="1076" y="368" class="tech-copy" text-anchor="end">RESTORE / INITIALIZE → LEASE + GUARD → RUNTIME SCOPE → OUTCOME / RECOVERY</text>
+      <rect x="272" y="384" width="816" height="24" rx="4" fill="rgba(255,254,250,0.78)" stroke="rgba(49,92,255,0.22)" stroke-width="0.8"/>
+      <text x="284" y="400" class="tag" fill="#315cff">有效执行快照</text>
+      <text x="1076" y="400" class="tech-copy" text-anchor="end">RELEASE ∩ ROLE ∩ PRINCIPAL ∩ WORKSPACE ∩ POLICY ∩ PROVIDER HEALTH</text>
+      <rect x="272" y="416" width="816" height="28" rx="4" fill="rgba(255,254,250,0.78)" stroke="rgba(49,92,255,0.22)" stroke-width="0.8"/>
+      <text x="284" y="436" class="tag" fill="#315cff">稳定 AgentLoop</text>
+      <text x="1076" y="436" class="tech-copy" text-anchor="end">输入解析 → 上下文 → 模型决策 → 动作执行 → 观察 → 校验 → 原子提交</text>
+
+      <!-- L4: Capability seam and plugin management -->
+      <rect x="80" y="480" width="1024" height="76" rx="8" fill="#f5f2ea"/>
+      <rect x="80" y="480" width="1024" height="76" rx="8" fill="#fffefa" stroke="#171714" stroke-width="1"/>
+      <line x1="240" y1="480" x2="240" y2="556" stroke="#d9d5c9" stroke-width="0.8"/>
+      <line x1="384" y1="480" x2="384" y2="556" stroke="#d9d5c9" stroke-width="0.8"/>
+      <line x1="528" y1="480" x2="528" y2="556" stroke="#d9d5c9" stroke-width="0.8"/>
+      <line x1="672" y1="480" x2="672" y2="556" stroke="#d9d5c9" stroke-width="0.8"/>
+      <line x1="816" y1="480" x2="816" y2="556" stroke="#d9d5c9" stroke-width="0.8"/>
+      <line x1="960" y1="480" x2="960" y2="556" stroke="#d9d5c9" stroke-width="0.8"/>
+      <rect x="92" y="488" width="32" height="16" rx="4" fill="transparent" stroke="rgba(23,23,20,0.32)" stroke-width="0.8"/>
+      <text x="108" y="500" class="tag" text-anchor="middle">L4</text>
+      <text x="96" y="524" class="layer-title">能力接缝</text>
+      <text x="96" y="544" class="tech-copy">PLUGIN &amp; SEAM</text>
+      <text x="312" y="512" class="node-title" text-anchor="middle">领域包与场景</text>
+      <text x="312" y="532" class="tech-copy" text-anchor="middle">DOMAINPACK · SCENARIO</text>
+      <text x="312" y="548" class="tech-copy" text-anchor="middle">VERSION · SIGNATURE</text>
+      <text x="456" y="512" class="node-title" text-anchor="middle">Skill 与上下文</text>
+      <text x="456" y="532" class="tech-copy" text-anchor="middle">SKILL HUB · CONTRIBUTOR</text>
+      <text x="456" y="548" class="tech-copy" text-anchor="middle">CONTEXT ENGINE</text>
+      <text x="600" y="512" class="node-title" text-anchor="middle">Tool / RAG / 产物</text>
+      <text x="600" y="532" class="tech-copy" text-anchor="middle">TOOL · KNOWLEDGE</text>
+      <text x="600" y="548" class="tech-copy" text-anchor="middle">ARTIFACT RENDERER</text>
+      <text x="744" y="512" class="node-title" text-anchor="middle">校验与评测</text>
+      <text x="744" y="532" class="tech-copy" text-anchor="middle">VALIDATOR REGISTRY</text>
+      <text x="744" y="548" class="tech-copy" text-anchor="middle">EVALUATION SYSTEM</text>
+      <text x="888" y="512" class="node-title" text-anchor="middle">策略与隔离</text>
+      <text x="888" y="532" class="tech-copy" text-anchor="middle">POLICY · APPROVAL</text>
+      <text x="888" y="548" class="tech-copy" text-anchor="middle">CREDENTIAL · SANDBOX</text>
+      <text x="1032" y="512" class="node-title" text-anchor="middle">Provider 注册表</text>
+      <text x="1032" y="532" class="tech-copy" text-anchor="middle">SINGLE / NAMED</text>
+      <text x="1032" y="548" class="tech-copy" text-anchor="middle">PLUGIN MANAGER</text>
+
+      <!-- L5: Replaceable providers -->
+      <rect x="80" y="580" width="1024" height="64" rx="8" fill="#f5f2ea"/>
+      <rect x="80" y="580" width="1024" height="64" rx="8" fill="rgba(23,23,20,0.03)" stroke="rgba(23,23,20,0.30)" stroke-width="1"/>
+      <line x1="240" y1="580" x2="240" y2="644" stroke="#d9d5c9" stroke-width="0.8"/>
+      <line x1="456" y1="580" x2="456" y2="644" stroke="#d9d5c9" stroke-width="0.8"/>
+      <line x1="672" y1="580" x2="672" y2="644" stroke="#d9d5c9" stroke-width="0.8"/>
+      <line x1="888" y1="580" x2="888" y2="644" stroke="#d9d5c9" stroke-width="0.8"/>
+      <rect x="92" y="588" width="32" height="16" rx="4" fill="transparent" stroke="rgba(23,23,20,0.24)" stroke-width="0.8"/>
+      <text x="108" y="600" class="tag" text-anchor="middle">L5</text>
+      <text x="96" y="624" class="layer-title">Provider</text>
+      <text x="348" y="608" class="node-title" text-anchor="middle">模型网关 Provider</text>
+      <text x="348" y="628" class="tech-copy" text-anchor="middle">MODEL · EMBEDDING · ROUTE · COST</text>
+      <text x="564" y="608" class="node-title" text-anchor="middle">记忆与检索 Provider</text>
+      <text x="564" y="628" class="tech-copy" text-anchor="middle">MEMORY · RAG · SEARCH · GRAPH</text>
+      <text x="780" y="608" class="node-title" text-anchor="middle">工具与沙箱 Provider</text>
+      <text x="780" y="628" class="tech-copy" text-anchor="middle">TOOL · MCP · EXECUTOR · RECEIPT</text>
+      <text x="996" y="608" class="node-title" text-anchor="middle">Subagent Provider</text>
+      <text x="996" y="628" class="tech-copy" text-anchor="middle">LOCAL · REMOTE · ACP · NORMALIZED RUN</text>
+
+      <!-- L6: Facts and reliability substrate -->
+      <rect x="80" y="704" width="1024" height="68" rx="8" fill="#f5f2ea"/>
+      <rect x="80" y="704" width="1024" height="68" rx="8" fill="rgba(23,23,20,0.05)" stroke="#68675f" stroke-width="1"/>
+      <line x1="240" y1="704" x2="240" y2="772" stroke="#d9d5c9" stroke-width="0.8"/>
+      <line x1="456" y1="704" x2="456" y2="772" stroke="#d9d5c9" stroke-width="0.8"/>
+      <line x1="672" y1="704" x2="672" y2="772" stroke="#d9d5c9" stroke-width="0.8"/>
+      <line x1="888" y1="704" x2="888" y2="772" stroke="#d9d5c9" stroke-width="0.8"/>
+      <rect x="92" y="712" width="32" height="16" rx="4" fill="transparent" stroke="rgba(104,103,95,0.48)" stroke-width="0.8"/>
+      <text x="108" y="724" class="tag" text-anchor="middle">L6</text>
+      <text x="96" y="748" class="layer-title">数据与可靠性</text>
+      <text x="96" y="764" class="tech-copy">FACT AUTHORITY</text>
+      <text x="348" y="732" class="node-title" text-anchor="middle">PostgreSQL 事务事实源</text>
+      <text x="348" y="752" class="tech-copy" text-anchor="middle">RUN · STEP · JOURNAL · EFFECT</text>
+      <text x="348" y="764" class="tech-copy" text-anchor="middle">FEEDBACK · OUTBOX</text>
+      <text x="564" y="732" class="node-title" text-anchor="middle">Redis 运行协调</text>
+      <text x="564" y="752" class="tech-copy" text-anchor="middle">STREAMS · LEASE · CHECKPOINT</text>
+      <text x="564" y="764" class="tech-copy" text-anchor="middle">QUEUE · WAKEUP · CACHE</text>
+      <text x="780" y="732" class="node-title" text-anchor="middle">OSS 与候选召回</text>
+      <text x="780" y="752" class="tech-copy" text-anchor="middle">EVIDENCE · DATASET · ARTIFACT</text>
+      <text x="780" y="764" class="tech-copy" text-anchor="middle">SEARCH · MILVUS (OPTIONAL)</text>
+      <text x="996" y="732" class="node-title" text-anchor="middle">可观测与安全底座</text>
+      <text x="996" y="752" class="tech-copy" text-anchor="middle">OTEL · LOG · TRACE · METRIC</text>
+      <text x="996" y="764" class="tech-copy" text-anchor="middle">SECRET · RETENTION</text>
+
+      <!-- L7: Event read side and delivery -->
+      <rect x="80" y="796" width="1024" height="60" rx="8" fill="#f5f2ea"/>
+      <rect x="80" y="796" width="1024" height="60" rx="8" fill="#fffefa" stroke="#171714" stroke-width="1"/>
+      <line x1="240" y1="796" x2="240" y2="856" stroke="#d9d5c9" stroke-width="0.8"/>
+      <line x1="528" y1="796" x2="528" y2="856" stroke="#d9d5c9" stroke-width="0.8"/>
+      <line x1="816" y1="796" x2="816" y2="856" stroke="#d9d5c9" stroke-width="0.8"/>
+      <rect x="92" y="804" width="32" height="16" rx="4" fill="transparent" stroke="rgba(23,23,20,0.32)" stroke-width="0.8"/>
+      <text x="108" y="816" class="tag" text-anchor="middle">L7</text>
+      <text x="96" y="840" class="layer-title">事件读侧</text>
+      <text x="384" y="824" class="node-title" text-anchor="middle">EventProjector</text>
+      <text x="384" y="844" class="tech-copy" text-anchor="middle">JOURNAL / OUTBOX · WATERMARK · IDEMPOTENCY</text>
+      <text x="672" y="824" class="node-title" text-anchor="middle">运行与证据 Projection</text>
+      <text x="672" y="844" class="tech-copy" text-anchor="middle">RUN · PROGRESS · CLAIM · CITATION · EVIDENCE</text>
+      <text x="960" y="824" class="node-title" text-anchor="middle">客户端结果交付</text>
+      <text x="960" y="844" class="tech-copy" text-anchor="middle">SSE · WEBHOOK · MQ · CURSOR · RETRY</text>
+
+      <!-- Governance rail details -->
+      <g><rect x="1176" y="180" width="184" height="72" rx="8" fill="#fffefa" stroke="rgba(49,92,255,0.24)" stroke-width="0.8"/><text x="1268" y="204" class="node-title" text-anchor="middle">租户、主体与工作区</text><text x="1268" y="224" class="tech-copy" text-anchor="middle">TENANT · PRINCIPAL · ROLE</text><text x="1268" y="240" class="tech-copy" text-anchor="middle">WORKSPACE · QUOTA · ACL</text></g>
+      <g><rect x="1176" y="268" width="184" height="72" rx="8" fill="#fffefa" stroke="rgba(49,92,255,0.24)" stroke-width="0.8"/><text x="1268" y="292" class="node-title" text-anchor="middle">版本、领域包与发布</text><text x="1268" y="312" class="tech-copy" text-anchor="middle">RELEASE · DOMAINPACK</text><text x="1268" y="328" class="tech-copy" text-anchor="middle">SIGN · CANARY · ROLLBACK</text></g>
+      <g><rect x="1176" y="356" width="184" height="72" rx="8" fill="#fffefa" stroke="rgba(49,92,255,0.24)" stroke-width="0.8"/><text x="1268" y="380" class="node-title" text-anchor="middle">策略、审批与凭证</text><text x="1268" y="400" class="tech-copy" text-anchor="middle">POLICY · APPROVAL</text><text x="1268" y="416" class="tech-copy" text-anchor="middle">CREDENTIAL · MINIMUM SCOPE</text></g>
+      <g><rect x="1176" y="444" width="184" height="72" rx="8" fill="#fffefa" stroke="rgba(49,92,255,0.24)" stroke-width="0.8"/><text x="1268" y="468" class="node-title" text-anchor="middle">安全、隔离与保留</text><text x="1268" y="488" class="tech-copy" text-anchor="middle">SANDBOX · DATA SECURITY</text><text x="1268" y="504" class="tech-copy" text-anchor="middle">RETENTION · COMPLIANCE</text></g>
+      <g><rect x="1176" y="532" width="184" height="72" rx="8" fill="#fffefa" stroke="rgba(49,92,255,0.24)" stroke-width="0.8"/><text x="1268" y="556" class="node-title" text-anchor="middle">校验、评测与反馈治理</text><text x="1268" y="576" class="tech-copy" text-anchor="middle">VALIDATOR · OFFLINE EVAL</text><text x="1268" y="592" class="tech-copy" text-anchor="middle">FEEDBACK · RELEASE GATE</text></g>
+      <g><rect x="1176" y="620" width="184" height="72" rx="8" fill="#fffefa" stroke="rgba(49,92,255,0.24)" stroke-width="0.8"/><text x="1268" y="644" class="node-title" text-anchor="middle">审计、预算、成本与 SLO</text><text x="1268" y="664" class="tech-copy" text-anchor="middle">AUDIT · BUDGET · COST</text><text x="1268" y="680" class="tech-copy" text-anchor="middle">LATENCY · ERROR · ALERT</text></g>
+      <rect x="1176" y="716" width="184" height="120" rx="8" fill="rgba(49,92,255,0.08)" stroke="#315cff" stroke-width="1"/>
+      <text x="1268" y="744" class="node-title" text-anchor="middle" fill="#315cff">跨层约束</text>
+      <text x="1268" y="768" class="body-copy" text-anchor="middle">Provider 只拥有实现</text>
+      <text x="1268" y="788" class="body-copy" text-anchor="middle">Kernel 拥有运行语义</text>
+      <line x1="1196" y1="804" x2="1340" y2="804" stroke="rgba(49,92,255,0.24)" stroke-width="0.8"/>
+      <text x="1268" y="824" class="tech-copy" text-anchor="middle" fill="#244cc5">NO SECOND LOOP</text>
+
+      <!-- Legend outside the diagram field -->
+      <line x1="40" y1="908" x2="1400" y2="908" stroke="rgba(23,23,20,0.12)" stroke-width="0.8"/>
+      <text x="40" y="932" class="tag">LEGEND / 读图说明</text>
+      <line x1="200" y1="928" x2="240" y2="928" stroke="#315cff" stroke-width="1.2" marker-end="url(#arrow-accent)"/>
+      <text x="256" y="932" class="body-copy">主要受理 / 执行 / 能力调用</text>
+      <line x1="496" y1="928" x2="536" y2="928" stroke="#68675f" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <text x="552" y="932" class="body-copy">事务事实与内部事件</text>
+      <line x1="760" y1="928" x2="800" y2="928" stroke="#68675f" stroke-width="1" stroke-dasharray="4,3" marker-end="url(#arrow)"/>
+      <text x="816" y="932" class="body-copy">回执 / 反馈 / 异步交付</text>
+      <rect x="1048" y="916" width="32" height="24" rx="4" fill="rgba(49,92,255,0.04)" stroke="rgba(49,92,255,0.44)" stroke-width="1" stroke-dasharray="4,4"/>
+      <text x="1096" y="932" class="body-copy">治理与安全边界</text>
+      <rect x="1288" y="916" width="32" height="24" rx="4" fill="rgba(23,23,20,0.05)" stroke="#68675f" stroke-width="1"/>
+      <text x="1336" y="932" class="body-copy">事实 / 状态</text>
+      <text x="40" y="976" class="mono" font-size="8" letter-spacing="0.10em" fill="#8b897f">DIAGRAM DESIGN · FIT · FAITHFUL · MIXED-ENGINEERING AUDIENCE</text>
+      <text x="1400" y="976" class="mono" font-size="8" text-anchor="end" letter-spacing="0.10em" fill="#8b897f">7 LAYERS · 3 ZONES · 1 GOVERNANCE RAIL · 1 STABLE CORE</text>
+    </svg>
+  </main>
+</body>
+</html>

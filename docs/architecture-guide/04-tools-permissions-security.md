@@ -7,11 +7,16 @@ flowchart LR
     Spec["ToolSpec"] --> Registry["ToolRegistry"]
     Registry --> Risk["Risk classification"]
     Risk --> Policy["PermissionPolicy"]
-    Policy --> PA["Pydantic Tool / MCP toolset"]
-    PA --> Pre["pre_tool_use hooks"]
-    Pre --> Gate{"审批?"}
+    Policy --> Catalog["CapabilityGateway catalog"]
+    Catalog --> NL["LumenAgentLoop invocation"]
+    NL --> Contract["effect contract preflight"]
+    Contract --> Pre["pre_tool_use hooks"]
+    Pre --> Validate["schema validate / coerce / freeze"]
+    Validate --> Gate{"审批?"}
     Gate -->|拒绝| Denied["ToolDenied observation"]
-    Gate -->|允许| Exec["执行 adapter"]
+    Gate -->|允许| Guard{"单调 ToolGuard"}
+    Guard -->|拒绝| Denied
+    Guard -->|允许| Exec["执行 adapter"]
     Exec --> Post["post_tool_use hooks"]
     Post --> Result["ToolCallFinished"]
     Result --> Model["返回模型"]
@@ -19,7 +24,11 @@ flowchart LR
 
 `ToolSpec` 描述 callable、名称、说明、`Risk`、`EffectKind`、超时、`ToolOutputSpec` 和显式 concurrency policy。`ToolOutputSpec` 先把返回值验证为 canonical JSON value，再分别派生模型文本与客户端 presentation；host-only renderer 不进入 provider 输入 schema。默认 concurrency 是 `exclusive`，`EffectKind.OBSERVE` 不再自动证明线程安全。`ToolRegistry` 负责名称唯一性和来源；`PermissionPolicy` 将工具转成 allow / confirm / deny。`Risk` 只回答是否审批，`EffectKind` 回答状态追踪与验证要求，二者不能合并。
 
-`CapabilityGateway` 使用同一输出契约，并在执行前聚合只读冻结 identity 上的 `ToolGuard`。Guard 只有 abstain/deny；任一 deny 都是单调的，无法被后续 Hook 或 Adapter 放宽。legacy `ToolSpec(function=...)` 仍通过兼容 Adapter 工作，待所有 builtin/MCP 完成显式输出迁移后删除。
+`CapabilityGateway` 是本地与 MCP 工具的唯一执行权威。本地 callable 的 pre Hook 参数先经过 Pydantic schema validation/coercion，形成唯一冻结 invocation；审批、并发分类、幂等 key、恢复签名、只读 `ToolGuard`、presentation 和实际调用都消费同一参数事实。Guard 只有 abstain/deny；任一 deny 都是单调的，无法被后续 Hook 或 Adapter 放宽。legacy `ToolSpec(function=...)` 仍通过构造兼容 Adapter 工作，待所有 builtin/MCP 完成显式输出迁移后删除。
+
+`agent.limits.parallel_tool_calls: sequential` 禁止调用重叠。当前原生 Loop 对 `parallel_safe` 和
+`parallel` 均按实际 invocation 的 `ToolConcurrency` 分批，exclusive 调用形成串行屏障。
+旧 SDK ToolDefinition 的 sequential 标志是兼容投影，不能覆盖 Gateway 的并发契约。
 
 `ToolPresentationSpec` 是 Tool Contract V2 的只读展示投影。runtime 只从 durable args/result 生成 schema-validated `ToolCallView` 与 `ToolResultView`，随后把 intent 放入 `ToolCallStarted/Finished`；TUI 与 Web 只负责渲染。未知工具使用通用 fallback，renderer 异常记录为有界 diagnostic，并且不能把已经成功的 authoritative tool outcome 改成失败。Session replay 直接重放同一 view，不读取 live callable 或 provider object。
 
@@ -29,10 +38,10 @@ flowchart LR
 
 | Risk | 含义 | 示例 |
 |---|---|---|
-| `read` | 无外部副作用的本地读取 | `read_file`、`search_text` |
+| `read` | 读取类审批级别，不推导 EffectKind | `read_file`、显式声明 read 的 MCP 工具 |
 | `write` | 修改工作区 | `write_file`、`edit_file` |
 | `execute` | 启动进程或执行代码 | `run_command`、Skill script |
-| `external` | 已明确分类的远端操作 | 配置过风险的 MCP 工具 |
+| `external` | 已明确分类的远端操作 | `web_fetch`、`web_search` |
 | `external_unknown` | 未声明语义的远端能力 | 新发现且未分类的 MCP 工具 |
 
 `external_unknown` 是故意设置的安全断点：auto 模式也不能自动批准它。
@@ -72,9 +81,12 @@ flowchart TD
 
 `run_command` 使用 argv 直接执行，不经过 shell；stdout/stderr 并发 drain，只保留有界头尾，同时记录总字节数。取消或超时时终止整个进程组。
 
-命令还通过 `SandboxAdapter` 执行：默认 `workspace_write` 在 macOS 使用 Seatbelt、Linux 使用 bubblewrap，隔离 `HOME`/临时目录、关闭网络并按 allow-list 构造环境；adapter 不可用时拒绝执行。`run_command` receipt 只证明命令执行，不声称捕获命令产生的全部文件副作用。
+命令还通过 `SandboxRunner` 执行：默认 `workspace_write` 在 macOS 使用 Seatbelt、Linux 使用 bubblewrap，隔离 `HOME`/临时目录、关闭网络并按 allow-list 构造环境；adapter 不可用时拒绝执行。`run_command` receipt 只证明命令执行，不声称捕获命令产生的全部文件副作用。
 
-`web_fetch` 与按配置注册的 `web_search` 属于 `Risk=external`、`EffectKind=observe`。抓取会在 DNS 解析和每次重定向后拒绝 loopback、私网与链路本地地址，并限制响应体大小；搜索 API key 只从配置指定的环境变量读取。
+`web_fetch` 与按配置注册的 `web_search` 属于 `Risk=external`、`EffectKind=observe`，当前默认
+exclusive。抓取会在 DNS 解析和每次重定向后拒绝 loopback、私网与链路本地地址；`fetch_max_bytes`
+限制解析的内容字节数，当前 HTTP Adapter 先读取完整响应，不能将该参数描述为传输或峰值内存上限。
+搜索 API key 只从配置指定的环境变量读取。
 
 ## 4.5 Hook 链
 
@@ -88,6 +100,11 @@ Hook 支持 command adapter 与 Python adapter，事件包括：
 
 多个匹配 hook 串行执行，首个 deny 短路。pre hook 可以修改参数，post hook 可以修改结果。command hook 通过 stdin 接收 JSON context，并受超时控制。
 
+pre hook 修改后的参数先完成 schema validation/coercion 并被冻结，再进入审批和单调 `ToolGuard`，
+因此审批、guard、恢复与实际执行看到完全相同的参数；post hook 只能改写返回模型的 `model_output` 投影，不能修改 canonical output、客户端
+presentation 或 effect receipt。`HookBus` 自身会把单个运行时异常记录为 diagnostic 并继续；若整个公开
+pre-invoke Adapter 意外抛出，`CapabilityGateway` 仍会 fail closed。
+
 ## 4.6 安全边界
 
 必须区分三个概念：
@@ -97,3 +114,33 @@ Hook 支持 command adapter 与 Python adapter，事件包括：
 3. **OS sandbox**：进程实际能访问的系统资源和网络。
 
 Lumen 当前三项都实现，但保证不同：审批是意图授权，`Workspace` 是路径解析约束，Seatbelt/bubblewrap 是 OS 强制。显式 `sandbox.mode: disabled` 会移除第三层，因此只应在受信环境使用；角色、Skill、插件与 child Agent 都不能扩大父级 sandbox 权限。
+
+`sandbox.network` 约束 `run_command` / Skill 脚本等 SandboxRunner 子进程，不是整个 Host 的网络开关。
+已配置 MCP transport 与内置 web 工具使用各自 Interface、审批和访问约束。命令内 curl 的失败不能
+推导为 MCP 不可用。`run_command` Schema 与结果明确给出该命令的 sandbox mode、网络策略和作用范围；
+退出码、stderr 是失败证据，策略值本身不是对 DNS、TLS 或服务可用性的诊断。
+
+Seatbelt 默认允许读取受限的公共 TLS 配置/证书、DNS 配置、已允许路径的祖先 metadata、
+系统开发工具路径 metadata 和必要设备；独立临时 HOME/TMP 与已允许写入路径可回读。
+不开放整个 `/etc`、TLS 私钥目录或用户 HOME。系统依赖可读不等于联网放行，network=false
+仍不生成网络 allow 规则，`.git` / `.lumen` 写保护与 fail-closed 保持不变。
+
+## 4.7 外部结果与完成恢复
+
+`TaskWorkspace.check_tool_effect` 在 strict 模式拒绝 unknown effect，ResourceManager 把它接入
+Gateway 的既有 pre-invoke Interface，主 Runtime、派生 Gateway 与 Live 共用该判断。审批通过
+不能补足副作用契约；MCP `readOnlyHint` 或工具名称也不会隐式扩大已配置权限。
+
+非自记录的 mutation、external_action、unknown 调用在 dispatch 前追加 `prepared` receipt，
+随后以同一 effect ID 追加结果。超时、取消及派发后异常保留 `reconciliation_required`，进程中断
+留下的 prepared 在恢复时同样进入对账；成功的 observe 不生成 effect。文件工具继续拥有自己的
+snapshot / apply / verify journal；run_command 仍只提供 execution receipt。
+
+`CompletionBlocker.model_recoverable` 明确恢复责任。普通计划/本地产物问题保留有界模型重试；
+无本地 work product 可验证的外部结果立即以 `completion_recovery_required` 停止完成声明，
+不把 operator recovery 当成让模型重写正文的提示词。纯字符串 `evaluate()` 是兼容投影，原生
+Loop 使用保留恢复责任的 `assess()`。
+
+Host 在 StartRun 受理和编辑分支创建前检查待核实外部结果；后者与运行受理共用工作区进程锁。
+只有调用既有、带范围与原因的 `WaivePlanVerification` 才能人工接受该结果，模型无此控制工具。
+这不会重新分类历史事实、重放远端动作或修改以后的工具审批权限。

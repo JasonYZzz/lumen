@@ -10,7 +10,7 @@ from contextlib import asynccontextmanager, suppress
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any, cast
-from urllib.parse import urlencode
+from urllib.parse import quote, urlencode
 
 from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.exceptions import RequestValidationError
@@ -354,6 +354,7 @@ def create_web_app(
                     "modelId": item.model_id,
                     "title": item.title,
                     "archived": item.archived,
+                    "titlePending": item.title_pending,
                 }
                 for item in cast(Any, result).sessions
             ]
@@ -589,7 +590,9 @@ def create_web_app(
 
     @app.post("/api/v1/sessions/{session_id}/fork", status_code=201)
     async def fork_session(session_id: str, body: ForkSessionBody) -> dict[str, str]:
-        result = await host.dispatch(ForkSessionAtTurn(session_id, body.through_turn))
+        result = await host.dispatch(ForkSessionAtTurn(
+            session_id, body.through_turn, body.include_turn, body.client_request_id
+        ))
         return {"sessionId": result.session_id}
 
     @app.post("/api/v1/agents/{agent_id}/actions")
@@ -685,6 +688,17 @@ def create_web_app(
     async def decide_approval(run_id: str, call_id: str, body: ApprovalBody) -> dict[str, str]:
         result = await host.dispatch(DecideApproval(run_id, call_id, body.approved, body.scope))
         return {"status": cast(Any, result).status}
+
+    @app.get("/api/v1/files/content", response_class=Response)
+    async def document_content(path: str) -> Response:
+        content = await host.read_document(path)
+        # Always download on direct navigation; preview clients isolate rendering themselves.
+        return Response(content, media_type="application/octet-stream", headers={
+            "Content-Disposition": f"attachment; filename*=UTF-8''{quote(Path(path).name, safe='')}",
+            "Content-Security-Policy": "sandbox; default-src 'none'",
+            "X-Content-Type-Options": "nosniff",
+            "Cache-Control": "no-store",
+        })
 
     @app.get("/api/v1/files/search")
     async def file_search(q: str = "@", limit: int = 20) -> dict[str, Any]:

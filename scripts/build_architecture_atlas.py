@@ -20,9 +20,16 @@ ROOT_DOCUMENTS = (
     REPOSITORY_ROOT / "README.md",
     REPOSITORY_ROOT / "AGENTS.md",
     REPOSITORY_ROOT / "agent.example.yaml",
+    REPOSITORY_ROOT / "docs" / "README.md",
     REPOSITORY_ROOT / "docs" / "commands.md",
     REPOSITORY_ROOT / "docs" / "generated" / "contracts.json",
     REPOSITORY_ROOT / "pyproject.toml",
+)
+CURRENT_DOCUMENT_ROOTS = (
+    REPOSITORY_ROOT / "docs" / "architecture-guide",
+    REPOSITORY_ROOT / "docs" / "brand",
+    REPOSITORY_ROOT / "docs" / "hooks",
+    REPOSITORY_ROOT / "docs" / "skills",
 )
 LANGUAGES = {
     ".css": "css",
@@ -64,7 +71,8 @@ def _slugify(value: str) -> str:
 
 def _iter_content_files() -> Iterable[Path]:
     candidates = set(ROOT_DOCUMENTS)
-    candidates.update((REPOSITORY_ROOT / "docs").rglob("*.md"))
+    for root in CURRENT_DOCUMENT_ROOTS:
+        candidates.update(root.rglob("*.md"))
     candidates.update((REPOSITORY_ROOT / "tests").rglob("*.py"))
     for root in (REPOSITORY_ROOT / "src" / "lumen", REPOSITORY_ROOT / "src" / "web" / "src"):
         candidates.update(path for path in root.rglob("*") if path.suffix in TEXT_SUFFIXES)

@@ -47,6 +47,7 @@ from lumen.ui.approval_panel import ApprovalPanel
 from lumen.ui.autocomplete import CompletionDropdown
 from lumen.ui.checkpoint_screen import CheckpointScreen
 from lumen.ui.child_run_screen import ChildRunScreen
+from lumen.ui.choice_picker import ChoicePickerScreen
 from lumen.ui.commands import LumenCommandProvider
 from lumen.ui.completion_controller import CompletionControllerMixin
 from lumen.ui.composer import ComposerHistory, PromptEditor
@@ -130,6 +131,9 @@ class LumenApp(
         Binding("ctrl+r", "search_history", "History search", show=False),
         Binding("ctrl+b", "show_children", "Agents", show=False),
         Binding("alt+c", "copy_last_response", "Copy last response", show=False),
+        Binding("alt+p", "choose_model", "Choose model", show=False, priority=True),
+        Binding("alt+m", "choose_mode", "Choose mode", show=False, priority=True),
+        Binding("alt+t", "toggle_plan", "Task plan", show=False, priority=True),
         Binding(
             "shift+tab",
             "toggle_approval_mode",
@@ -316,6 +320,7 @@ class LumenApp(
         self._assistant_stream: StreamingMarkdownController | None = None
         # One widget represents one logical assistant Markdown document.
         self._assistant_container: AssistantMarkdown | None = None
+        self._provisional_assistant_segments: list[tuple[AssistantMarkdown, str]] = []
         self._commentary_container: CommentaryBlock | None = None
         self._thinking_container: CommentaryBlock | None = None
         # The active plan belongs to the current user turn and lives inside
@@ -1214,6 +1219,56 @@ class LumenApp(
 
     async def action_switch_model(self, model_name: str) -> None:
         await self._handle_command(f"/model {model_name}")
+
+    def action_choose_model(self) -> None:
+        """Direct and slash entry points share the existing command gate."""
+
+        def selected(name: str | None) -> None:
+            if name is not None:
+                self.run_worker(self.action_switch_model(name))
+
+        self.push_screen(
+            ChoicePickerScreen(
+                [
+                    (name, self.resources.model_registry[name].id)
+                    for name in self.resources.available_models()
+                ],
+                self.resources.active_model_name(),
+                title="Choose model",
+                hint="A run is active. Stop it before switching models." if self._run_is_active()
+                else "↑↓ choose · Enter apply · Esc cancel\nApplies to the next turn. Your draft is kept.",
+                read_only=self._run_is_active(),
+            ),
+            selected,
+        )
+
+    def action_choose_mode(self) -> None:
+        def selected(mode: str | None) -> None:
+            if mode is not None:
+                self.run_worker(self._handle_command(f"/mode {mode}"))
+
+        active = "plan" if self._collaboration_mode is CollaborationMode.PLAN else self._approval_mode.value
+        self.push_screen(ChoicePickerScreen(
+            [
+                ("manual", "Allow reads; confirm edits, commands and external actions"),
+                ("accept_edits", "Accept file edits; confirm other actions by policy"),
+                ("plan", "Read-only exploration; review a proposal before execution"),
+                ("auto", "Automatically allow classified actions within Sandbox limits"),
+            ],
+            active,
+            title="Choose permission mode",
+            hint="↑↓ choose · Enter apply · Esc cancel\nAuto still requires confirmation before enabling.",
+        ), selected)
+
+    def action_toggle_plan(self) -> None:
+        panels = list(self.query(PlanPanel))
+        if not panels:
+            self.notify("No task plan yet.")
+            return
+        panel = panels[-1]
+        panel.collapse(not panel.is_collapsed)
+        panel.focus()
+        panel.scroll_visible()
 
     async def action_list_tools(self) -> None:
         await self._handle_command("/tools")

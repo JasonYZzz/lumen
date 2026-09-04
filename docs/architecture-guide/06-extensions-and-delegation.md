@@ -27,6 +27,8 @@ flowchart LR
 - 将原始工具名映射为 `<server>_<tool>`；
 - 为每个工具确定 risk 和 approval；
 - 根据 `defer_tools` 与 `always_load_tools` 控制 schema 可见性；
+- 通过 `search_tools` 的有界目录和分页浏览发现延迟工具，不扩大审批权限；
+- 按独立的 `tool_effects` 声明决定断线恢复，只有 observe 可自动重试一次；
 - required server 启动失败时阻止启动，optional server 只产生 warning；
 - resources/prompts 由 `McpContentRegistry` 单独管理。
 
@@ -71,7 +73,7 @@ sequenceDiagram
     AO-->>Parent: semantic state and result summary
 ```
 
-`AgentOrchestrator` 由 `WorkspaceHost` 按根 Session 生命周期持有，是 Agent 状态、消息和调度的唯一权威；模型工具只是薄 Adapter。`AgentRuntimeFactory` 复用正常的 `AgentRuntime` 创建隔离 child runtime，并在创建时固化实际生效的模型、工具、审批、sandbox、cwd 与限额快照。
+`AgentOrchestrator` 由 `WorkspaceHost` 按根 Session 生命周期持有，是 Agent 状态、消息和调度的唯一权威；模型工具只是薄 Adapter。`NativeAgentRuntimeFactory` 创建完整隔离的 Lumen child Runtime，显式注入 `ContextEngine`、`PydanticAIModelDriver` 和收窄后的 `CapabilityGateway`，并在创建时固化实际生效的模型、工具、审批、sandbox、cwd 与限额快照。child 与根 Runtime 共用 `LumenAgentLoop` 契约，但拥有独立 Driver 生命周期与执行 receipt 状态。
 
 当前 V1 约束：
 

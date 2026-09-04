@@ -520,6 +520,8 @@ def main(
                 typer.echo(f"Error: {result.error}", err=True)
             raise typer.Exit(result.exit_code())
         LumenApp(config, manager, resume_id=resume).run()
+    except typer.Exit:
+        raise
     except (ConfigLoadError, OSError, RuntimeError, ValueError, TypeError, KeyError) as error:
         typer.echo(f"Error: {error}", err=True)
         raise typer.Exit(1) from error

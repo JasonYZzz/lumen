@@ -12,7 +12,7 @@ import asyncio
 from pathlib import Path
 
 import pytest
-from textual.widgets import Static
+from textual.widgets import OptionList, Static
 
 from lumen.config import load_config
 from lumen.events import ApprovalRequest
@@ -20,6 +20,7 @@ from lumen.plan import PlanState
 from lumen.resources import ResourceManager
 from lumen.ui.app import LumenApp
 from lumen.ui.approval_panel import ApprovalPanel
+from lumen.ui.choice_picker import ChoicePickerScreen
 
 
 def _make_app(
@@ -161,15 +162,19 @@ async def test_manual_session_rule_skips_repeated_capability_prompt(tmp_path: Pa
 # ---------------------------------------------------------------------------
 
 
-async def test_mode_command_reports_current(tmp_path: Path) -> None:
+async def test_mode_command_opens_picker_with_current_mode(tmp_path: Path) -> None:
     app = _make_app(tmp_path, default_mode="manual")
     async with app.run_test() as pilot:
         await pilot.pause()
         await app.handle_input("/mode")
         await pilot.pause()
-        text = "\n".join(str(w.content) for w in app.query("#messages Static").results(Static))
-        assert "manual" in text
-        assert "allowing reads; confirming edits" in text
+        assert isinstance(app.screen, ChoicePickerScreen)
+        options = app.screen.query_one(OptionList)
+        assert options.highlighted == 0
+        assert options.get_option_at_index(0).id == "manual"
+        await pilot.press("down", "enter")
+        await pilot.pause()
+        assert app.approval_mode == "accept_edits"
 
 
 async def test_mode_command_switches_to_auto(tmp_path: Path) -> None:

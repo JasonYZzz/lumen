@@ -148,6 +148,7 @@ export interface SessionSummary {
   modelId: string
   title: string
   archived: boolean
+  titlePending?: boolean
 }
 
 export interface PlanStep {
@@ -186,6 +187,10 @@ export interface TimelineEntry {
   id: string
   kind: TimelineKind
   text: string
+  elapsedSeconds?: number
+  turnIndex?: number
+  interactionId?: string
+  attachments?: AttachmentRef[]
   callId?: string
   toolName?: string
   args?: Record<string, unknown>

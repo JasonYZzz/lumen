@@ -4,7 +4,7 @@
 
 | 你要修改的问题 | 首先阅读 | 通常还需阅读 |
 |---|---|---|
-| Agent 为什么没继续调用工具 | `runtime.py` | `tools/execution.py`、provider 配置 |
+| Agent 为什么没继续调用工具 | `runtime.py`、`agent_loop/loop.py` | `agent_loop/pydantic_driver.py`、`tools/gateway.py`、`resources.py`、provider 配置 |
 | TUI 与 Web 状态不一致 | `application/host.py` | `application/events.py`、`api/app.py` |
 | resume 后上下文错误 | `run_coordinator.py` | `sessions.py`、`context/engine.py` |
 | token 超限或压缩异常 | `context/engine.py` | `assembler.py`、`compaction.py`、`budget.py`、`tokenizers.py` |
@@ -12,12 +12,12 @@
 | 工具结果、模型文本与 UI 卡片不一致 | `tools/spec.py` | `tools/presentation.py`、`tools/gateway.py`、`events.py` |
 | 安全工具被串行或非安全工具被并行 | `tools/spec.py`（`concurrency_for`） | `runtime.py`、`tools/gateway.py` |
 | 文件 mutation 报 `STALE_RESOURCE` | `tools/workspace.py` | `tools/capability.py`、`work_products/adapters.py` |
-| MCP 工具未出现 | `mcp_tools.py` | `resources.py`、`config.py` |
-| MCP 断线/调用报错中断 run | `mcp_tools.py`（`ResilientMcpToolset`） | `resources.py`、`tools/execution.py` |
+| MCP 工具未出现 | `runtime.py`（`_lumen_tool_schemas` / `search_tools`） | `resources.py`、`mcp_tools.py`、`config.py` |
+| MCP 断线/调用报错中断 run | `mcp_tools.py`（`ResilientMcpToolset`） | `resources.py`、`agent_loop/loop.py`、`tools/gateway.py` |
 | 历史 receipt 细节丢失 | `resources.py`（`read_artifact`） | `context/artifacts.py`、`context/transcript.py` |
 | Skill 未加载/脚本被拒绝 | `skills.py` | `resources.py`、Skill `SKILL.md` |
 | Web 断线后漏事件 | `application/events.py` | `api/app.py`、Web reducer |
-| `/context` 与实际 provider 请求不一致 | `runtime.py`（request preflight） | `context/types.py`、`run_coordinator.py`、`sessions.py` |
+| `/context` 与实际 provider 请求不一致 | `run_diagnostics.py`、`agent_loop/loop.py`（request manifest） | `context/types.py`、`run_coordinator.py`、`sessions.py` |
 | 重开/切换模型后工具或 listener 重复 | `lifecycle.py` | `resources.py`、`tools/registry.py`、`tools/gateway.py` |
 | CLI/TUI/Web 能力清单不一致 | `resources.py`（`capabilities_report`） | `application/host.py`、`api/app.py`、`ui/slash_handlers.py` |
 | Web 抓取被拒绝或搜索未注册 | `tools/web.py` | `resources.py`、`config.py`、DNS/redirect SSRF 校验 |
@@ -35,8 +35,9 @@ cli.py
   -> run_coordinator.py
   -> runtime.py
        -> context/engine.py
-       -> pydantic_ai Agent
-       -> tools / MCP / hooks / agents
+       -> agent_loop/LumenAgentLoop（唯一 Loop 权威）
+       -> PydanticAIModelDriver -> pydantic_ai Model / Provider Adapter
+       -> CapabilityGateway -> tools / MCP / hooks / agents
   -> sessions.py
   -> events.py
   -> ui/app.py 或 api/app.py
@@ -69,7 +70,8 @@ uv build
 flowchart TD
     F["新需求"] --> Q{"改变什么?"}
     Q -->|客户端交互| Host["WorkspaceHost command/event"]
-    Q -->|模型循环| Runtime["AgentRuntime"]
+    Q -->|turn 外层与公开事件| Runtime["AgentRuntime"]
+    Q -->|模型—工具状态机| Loop["LumenAgentLoop"]
     Q -->|上下文来源/保留| Context["ContextEngine / Assembler"]
     Q -->|新模型能力/输出契约| Tool["ToolSpec / ToolRegistry / MCP toolset"]
     Q -->|客户端工具展示| Presentation["ToolPresentationSpec"]
@@ -84,5 +86,6 @@ flowchart TD
 
 1. 继续缩小 `WorkspaceHost.dispatch` 的命令认知面，同时保持它是所有客户端共享的唯一应用 seam；
 2. 为 Agent progress、Live recovery 和 Work Product completion gate 增加跨 TUI/Web/headless 的契约矩阵；
-3. 统一插件、Hook、命令和 UI 扩展的发行 Interface；
-4. 增加真实模型任务基准，而不只验证确定性单元行为。
+3. 用既有 request receipts、usage 与 `latest_run` 投影建立真实 Provider 任务基线，不新增 telemetry
+   store 或后台平台；
+4. 只有出现第二个真实发行 Implementation 或稳定替换需求时，才扩展插件、Hook 或 UI 发行 Interface。

@@ -1,0 +1,443 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>ChatGPT / Codex Plan UI 高保真交互原型</title>
+<style>
+  :root{
+    --bg:#ffffff;
+    --sidebar:#f7f7f8;
+    --text:#171717;
+    --muted:#6f6f73;
+    --muted2:#96969a;
+    --line:#e7e7e7;
+    --line2:#ededed;
+    --soft:#f3f3f3;
+    --soft2:#f8f8f8;
+    --blue:#0b6ffb;
+    --blue-soft:#eaf3ff;
+    --green:#1f8a4c;
+    --danger:#c64242;
+    --shadow:0 8px 30px rgba(0,0,0,.08), 0 1px 2px rgba(0,0,0,.04);
+    --composer-shadow:0 8px 24px rgba(0,0,0,.06), 0 0 0 1px rgba(0,0,0,.07);
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%;margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,"PingFang SC","Microsoft YaHei",sans-serif;color:var(--text);background:var(--bg)}
+  button,input,textarea{font:inherit}
+  button{cursor:pointer}
+  .app{height:100%;display:flex;overflow:hidden;background:#fff}
+  .sidebar{width:260px;background:var(--sidebar);border-right:1px solid #eee;display:flex;flex-direction:column;padding:12px 10px 14px;flex:0 0 auto}
+  .brand-row{display:flex;align-items:center;justify-content:space-between;padding:2px 6px 12px}
+  .brand-btn{display:flex;align-items:center;gap:8px;border:0;background:transparent;padding:8px 8px;border-radius:9px;font-weight:600;font-size:15px;color:#232323}
+  .brand-btn:hover,.icon-btn:hover,.nav-item:hover,.thread:hover{background:#ececed}
+  .logo-mark{width:24px;height:24px;border-radius:8px;display:grid;place-items:center;background:#fff;border:1px solid #e3e3e3;font-weight:700;font-size:13px}
+  .icon-btn{border:0;background:transparent;width:34px;height:34px;border-radius:8px;display:grid;place-items:center;color:#4f4f52}
+  .new-task{display:flex;align-items:center;gap:10px;border:0;background:transparent;border-radius:9px;padding:9px 10px;margin:2px 2px 6px;color:#202020;font-size:14px;text-align:left}
+  .new-task:hover{background:#ececed}
+  .nav{display:flex;flex-direction:column;gap:2px}
+  .nav-item{display:flex;align-items:center;gap:10px;border:0;background:transparent;border-radius:9px;padding:8px 10px;color:#38383b;font-size:14px;text-align:left}
+  .nav-item.active{background:#ececed;font-weight:500}
+  .section-label{font-size:12px;color:#8c8c90;padding:18px 10px 8px}
+  .threads{display:flex;flex-direction:column;gap:2px;min-height:0;overflow:auto}
+  .thread{border:0;background:transparent;border-radius:9px;padding:9px 10px;text-align:left;font-size:13px;color:#3b3b3e;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .thread.active{background:#ececed;color:#161616}
+  .profile{margin-top:auto;display:flex;align-items:center;gap:10px;border-radius:10px;padding:8px 9px;color:#444;font-size:13px}
+  .avatar{width:28px;height:28px;border-radius:50%;background:linear-gradient(135deg,#f3d3e8,#dfd9ff);display:grid;place-items:center;font-weight:700;font-size:11px;color:#5f4565}
+
+  .main{flex:1;position:relative;display:flex;flex-direction:column;min-width:0;background:#fff}
+  .topbar{height:54px;flex:0 0 auto;display:flex;align-items:center;justify-content:space-between;padding:0 18px;border-bottom:1px solid rgba(0,0,0,.03);background:rgba(255,255,255,.96);z-index:15}
+  .top-title{display:flex;align-items:center;gap:8px;font-size:14px;font-weight:600}
+  .top-actions{display:flex;align-items:center;gap:4px}
+  .content{flex:1;overflow:auto;scroll-behavior:smooth;padding:26px 0 250px}
+  .conversation{width:min(760px,calc(100% - 48px));margin:0 auto}
+  .message{margin:0 0 28px}
+  .user-wrap{display:flex;justify-content:flex-end}
+  .user-bubble{max-width:72%;padding:11px 14px;border-radius:18px;background:#f4f4f4;font-size:15px;line-height:1.55;color:#222}
+  .assistant{font-size:15px;line-height:1.72;color:#242424}
+  .assistant p{margin:0 0 12px}
+  .assistant h3{font-size:15px;margin:18px 0 10px;font-weight:650}
+  .muted-run{display:flex;align-items:center;gap:9px;color:#777;font-size:13px;margin:8px 0}
+  .mini-spinner{width:14px;height:14px;border-radius:50%;border:2px solid #d7d7d7;border-top-color:#737373;animation:spin .9s linear infinite;flex:0 0 auto}
+  @keyframes spin{to{transform:rotate(360deg)}}
+  .tool-row{display:flex;align-items:center;gap:8px;color:#777;font-size:13px;padding:4px 0}
+  .tool-icon{width:20px;height:20px;border-radius:6px;background:#f1f1f1;display:grid;place-items:center;color:#777;font-size:11px}
+  .divider{height:1px;background:#efefef;margin:22px 0}
+
+  .proposal{margin-top:14px;border-top:1px solid #ececec;padding-top:14px}
+  .proposal-title{font-weight:650;font-size:14px;margin-bottom:10px}
+  .proposal ol{margin:0;padding-left:22px}
+  .proposal li{padding:5px 0 5px 2px;line-height:1.55}
+  .proposal-note{margin-top:12px;color:#707075;font-size:13px}
+
+  .file-card{display:flex;align-items:center;gap:11px;border:1px solid #e9e9e9;background:#fff;border-radius:13px;padding:11px 12px;width:330px;margin-top:13px;box-shadow:0 1px 2px rgba(0,0,0,.02)}
+  .file-icon{width:34px;height:34px;border-radius:8px;background:#f2f2f2;display:grid;place-items:center;font-size:16px}
+  .file-meta{min-width:0;flex:1}.file-name{font-size:13px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.file-sub{font-size:12px;color:#89898d;margin-top:2px}
+
+  .dock{position:absolute;left:0;right:0;bottom:0;padding:0 24px 18px;background:linear-gradient(to top,#fff 0%,#fff 74%,rgba(255,255,255,.94) 86%,rgba(255,255,255,0) 100%);z-index:20;pointer-events:none}
+  .dock-inner{width:min(820px,calc(100% - 24px));margin:0 auto;display:flex;flex-direction:column;align-items:stretch;gap:10px;pointer-events:auto;position:relative}
+  .status-row{display:flex;align-items:center;justify-content:space-between;min-height:38px}
+  .status-left{display:flex;align-items:center;gap:8px}
+  .progress-pill{border:1px solid #dedede;background:#fff;min-height:36px;border-radius:999px;display:flex;align-items:center;gap:8px;padding:6px 11px 6px 9px;box-shadow:0 3px 12px rgba(0,0,0,.06);font-size:13px;color:#343434;max-width:520px}
+  .progress-pill:hover{background:#fafafa}
+  .progress-dot{width:20px;height:20px;border-radius:50%;display:grid;place-items:center;flex:0 0 auto}
+  .progress-title{font-weight:570;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .progress-sub{color:#8a8a8e;font-variant-numeric:tabular-nums;white-space:nowrap}
+  .chev{color:#9a9a9d;transition:transform .18s}.chev.open{transform:rotate(180deg)}
+  .change-pill{border:1px solid #e2e2e2;background:#fff;border-radius:999px;padding:7px 10px;font-size:12px;color:#777;box-shadow:0 2px 9px rgba(0,0,0,.04)}
+
+  .plan-popover{position:absolute;left:0;bottom:112px;width:390px;border:1px solid #e2e2e2;border-radius:18px;background:#fff;box-shadow:var(--shadow);padding:10px;display:none;z-index:40}
+  .plan-popover.show{display:block}
+  .plan-head{display:flex;align-items:center;justify-content:space-between;padding:8px 10px 10px}
+  .plan-head-title{font-size:13px;font-weight:650}.plan-head-meta{font-size:12px;color:#8a8a8e}
+  .plan-list{display:flex;flex-direction:column;gap:2px}
+  .plan-item{display:flex;gap:10px;align-items:flex-start;padding:9px 10px;border-radius:10px;font-size:13px;color:#4f4f52}
+  .plan-item.current{background:#f6f6f6;color:#1f1f1f}
+  .state-icon{width:18px;height:18px;flex:0 0 auto;display:grid;place-items:center;border-radius:50%;margin-top:1px;font-size:11px}
+  .state-icon.done{color:#3a7f55}.state-icon.pending{color:#a4a4a8}.state-icon.running{color:#555}
+  .plan-item-title{line-height:1.45}.plan-active{font-size:12px;color:#888;margin-top:2px}
+
+  .approval-card{position:absolute;left:0;right:0;bottom:98px;margin:auto;width:min(660px,calc(100% - 40px));border:1px solid #e1e1e1;border-radius:18px;background:#fff;box-shadow:var(--shadow);padding:16px;display:none;z-index:45}
+  .approval-card.show{display:block}
+  .approval-title{font-size:14px;font-weight:650;margin-bottom:4px}.approval-sub{font-size:12.5px;color:#7b7b7f;margin-bottom:12px}
+  .approval-options{display:flex;flex-direction:column;gap:7px}
+  .choice{width:100%;border:1px solid #e3e3e3;background:#fff;border-radius:12px;padding:11px 12px;text-align:left;display:flex;align-items:center;justify-content:space-between;color:#242424;font-size:13px}
+  .choice:hover{background:#f7f7f7}.choice.primary{background:#191919;color:#fff;border-color:#191919}.choice.primary:hover{background:#2b2b2b}
+  .choice-note{color:#929296;font-size:12px}.choice.primary .choice-note{color:#cfcfcf}
+
+  .composer-shell{border-radius:26px;background:#fff;box-shadow:var(--composer-shadow);padding:12px 12px 9px;position:relative}
+  .composer-text{min-height:44px;width:100%;border:0;outline:0;resize:none;padding:2px 4px 8px;font-size:15px;line-height:1.45;color:#202020;background:transparent}
+  .composer-text::placeholder{color:#a1a1a4}
+  .composer-bottom{display:flex;align-items:center;justify-content:space-between;gap:10px}
+  .composer-left,.composer-right{display:flex;align-items:center;gap:5px;min-width:0}
+  .round-btn{width:30px;height:30px;border:0;background:transparent;border-radius:50%;display:grid;place-items:center;color:#646467}
+  .round-btn:hover{background:#f0f0f0}
+  .select-chip{border:0;background:transparent;border-radius:999px;padding:6px 9px;display:flex;align-items:center;gap:6px;font-size:12.5px;color:#5f5f63;white-space:nowrap}
+  .select-chip:hover{background:#f1f1f1}
+  .mode-chip{border:0;background:var(--blue-soft);color:#1769bd;border-radius:999px;padding:6px 9px;display:none;align-items:center;gap:6px;font-size:12.5px;font-weight:550;white-space:nowrap}
+  .mode-chip.show{display:flex}
+  .send{width:32px;height:32px;border:0;background:#171717;border-radius:50%;display:grid;place-items:center;color:#fff;flex:0 0 auto}
+  .send.stop{background:#171717}.stop-square{width:9px;height:9px;border-radius:2px;background:#fff}
+  .send:disabled{background:#d9d9d9;cursor:default}
+  .model-chip{border:0;background:transparent;border-radius:999px;padding:6px 7px;font-size:12px;color:#727276;white-space:nowrap}.model-chip:hover{background:#f1f1f1}
+  .fineprint{text-align:center;color:#a2a2a6;font-size:10.5px;margin-top:7px}
+
+  .plus-menu{position:absolute;left:8px;bottom:58px;width:220px;border:1px solid #e2e2e2;border-radius:14px;background:#fff;box-shadow:var(--shadow);padding:6px;display:none;z-index:50}
+  .plus-menu.show{display:block}
+  .menu-item{width:100%;border:0;background:transparent;border-radius:9px;padding:9px 10px;display:flex;align-items:center;justify-content:space-between;font-size:13px;color:#3f3f42;text-align:left}
+  .menu-item:hover{background:#f4f4f4}.menu-left{display:flex;align-items:center;gap:9px}.menu-icon{width:18px;color:#75757a}.kbd{color:#a0a0a4;font-size:11px}
+
+  .permission-menu{position:absolute;left:48px;bottom:58px;width:238px;border:1px solid #e2e2e2;border-radius:14px;background:#fff;box-shadow:var(--shadow);padding:6px;display:none;z-index:50}
+  .permission-menu.show{display:block}
+  .perm-option{padding:9px 10px;border-radius:10px;font-size:13px;display:flex;align-items:flex-start;gap:9px}.perm-option:hover{background:#f5f5f5}.perm-option.active{background:#f5f5f5}
+  .perm-dot{width:15px;height:15px;border-radius:50%;border:1px solid #bdbdbd;margin-top:1px;display:grid;place-items:center}.perm-option.active .perm-dot:after{content:"";width:7px;height:7px;border-radius:50%;background:#555}
+  .perm-copy strong{font-size:13px;font-weight:600}.perm-copy span{display:block;color:#8a8a8e;font-size:11.5px;line-height:1.35;margin-top:2px}
+
+  .scene-badge{position:fixed;top:12px;right:16px;z-index:100;border:1px solid #e0e0e0;background:rgba(255,255,255,.92);backdrop-filter:blur(14px);border-radius:999px;box-shadow:0 4px 16px rgba(0,0,0,.05);display:flex;align-items:center;padding:3px;gap:2px}
+  .scene-badge button{border:0;background:transparent;border-radius:999px;padding:6px 10px;font-size:11.5px;color:#777}.scene-badge button.active{background:#222;color:#fff}
+  .scene-note{position:fixed;right:18px;top:53px;z-index:99;font-size:10.5px;color:#9a9a9e;background:rgba(255,255,255,.9);padding:3px 7px;border-radius:8px}
+
+  .toast{position:fixed;left:50%;bottom:158px;transform:translateX(-50%) translateY(8px);background:#202020;color:#fff;border-radius:999px;padding:8px 12px;font-size:12px;opacity:0;pointer-events:none;transition:.2s;z-index:100}.toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
+
+  .hidden{display:none!important}
+
+  @media (max-width:980px){.sidebar{width:220px}.conversation{width:min(720px,calc(100% - 30px))}.dock-inner{width:min(760px,calc(100% - 8px))}}
+  @media (max-width:760px){.sidebar{display:none}.scene-note{display:none}.content{padding-bottom:230px}.dock{padding:0 10px 10px}.conversation{width:calc(100% - 28px)}.plan-popover{width:calc(100% - 8px)}.user-bubble{max-width:86%}.model-chip{display:none}.change-pill{display:none}.topbar{padding:0 12px}}
+</style>
+</head>
+<body>
+<div class="app">
+  <aside class="sidebar">
+    <div class="brand-row">
+      <button class="brand-btn"><span class="logo-mark">✦</span><span>ChatGPT Work</span><span style="font-size:11px;color:#8b8b8f">⌄</span></button>
+      <button class="icon-btn" title="搜索">⌕</button>
+    </div>
+    <button class="new-task"><span style="font-size:18px">＋</span>新任务</button>
+    <div class="nav">
+      <button class="nav-item active"><span>◫</span>工作</button>
+      <button class="nav-item"><span>⌁</span>Codex</button>
+      <button class="nav-item"><span>◷</span>已计划</button>
+      <button class="nav-item"><span>⬡</span>插件</button>
+    </div>
+    <div class="section-label">任务</div>
+    <div class="threads">
+      <button class="thread active" data-scene="auto">Agent UI 竞品调研</button>
+      <button class="thread" data-scene="plan">产品架构重构计划</button>
+      <button class="thread">季度产品分析</button>
+      <button class="thread">RAG 评测体系设计</button>
+    </div>
+    <div class="profile"><span class="avatar">ZY</span><span>yu zhang</span><span style="margin-left:auto;color:#999">•••</span></div>
+  </aside>
+
+  <main class="main">
+    <header class="topbar">
+      <div class="top-title"><span id="conversationTitle">Agent UI 竞品调研</span><span style="color:#aaa;font-size:11px">⌄</span></div>
+      <div class="top-actions">
+        <button class="icon-btn" title="分享">↗</button>
+        <button class="icon-btn" title="更多">•••</button>
+      </div>
+    </header>
+
+    <section class="content" id="content">
+      <div class="conversation" id="conversation"></div>
+    </section>
+
+    <div class="dock">
+      <div class="dock-inner">
+        <div class="status-row" id="statusRow">
+          <div class="status-left">
+            <button class="progress-pill" id="progressPill" aria-expanded="false">
+              <span class="progress-dot"><span class="mini-spinner" id="pillSpinner"></span></span>
+              <span class="progress-title" id="progressTitle">Step 2 / 5 · 梳理 Plan / Progress 交互</span>
+              <span class="progress-sub" id="progressTime">1m 42s</span>
+              <span class="chev" id="progressChev">⌃</span>
+            </button>
+          </div>
+          <button class="change-pill" id="changePill">12 sources</button>
+        </div>
+
+        <div class="plan-popover" id="planPopover">
+          <div class="plan-head"><div class="plan-head-title">Task progress</div><div class="plan-head-meta" id="planMeta">2 of 5</div></div>
+          <div class="plan-list" id="planList"></div>
+        </div>
+
+        <div class="approval-card" id="approvalCard">
+          <div class="approval-title">Implement this plan?</div>
+          <div class="approval-sub">Switch to execution and carry out the proposed plan.</div>
+          <div class="approval-options">
+            <button class="choice primary" id="approvePlan"><span>Yes, implement this plan</span><span class="choice-note">Enter</span></button>
+            <button class="choice" id="revisePlan"><span>No, tell ChatGPT what to do differently</span><span class="choice-note">Keep planning</span></button>
+          </div>
+        </div>
+
+        <div class="composer-shell">
+          <div class="plus-menu" id="plusMenu">
+            <button class="menu-item"><span class="menu-left"><span class="menu-icon">▱</span>添加文件或照片</span></button>
+            <button class="menu-item" id="togglePlanFromMenu"><span class="menu-left"><span class="menu-icon">💡</span>Plan mode</span><span class="kbd">⌘⇧P</span></button>
+            <button class="menu-item"><span class="menu-left"><span class="menu-icon">◎</span>Goal</span></button>
+          </div>
+          <div class="permission-menu" id="permissionMenu">
+            <div class="perm-option active"><span class="perm-dot"></span><div class="perm-copy"><strong>Ask for approval</strong><span>超出工作区或高风险操作前暂停并询问。</span></div></div>
+            <div class="perm-option"><span class="perm-dot"></span><div class="perm-copy"><strong>Approve for me</strong><span>由自动审查处理符合条件的权限请求。</span></div></div>
+            <div class="perm-option"><span class="perm-dot"></span><div class="perm-copy"><strong>Full access</strong><span>允许更广泛的本机与网络操作。</span></div></div>
+          </div>
+          <textarea class="composer-text" id="composer" rows="1" placeholder="Do anything"></textarea>
+          <div class="composer-bottom">
+            <div class="composer-left">
+              <button class="round-btn" id="plusBtn" aria-label="Add">＋</button>
+              <button class="mode-chip" id="planChip"><span>💡</span><span>Plan</span></button>
+              <button class="select-chip" id="permissionBtn"><span style="font-size:12px">◉</span><span>Ask for approval</span><span style="font-size:10px">⌄</span></button>
+            </div>
+            <div class="composer-right">
+              <button class="model-chip">5.6 Sol&nbsp; Medium⌄</button>
+              <button class="round-btn" title="语音">♩</button>
+              <button class="send stop" id="sendBtn"><span class="stop-square"></span></button>
+            </div>
+          </div>
+        </div>
+        <div class="fineprint">ChatGPT can make mistakes. Check important info.</div>
+      </div>
+    </div>
+  </main>
+</div>
+
+<div class="scene-badge" aria-label="原型场景切换">
+  <button id="sceneAutoBtn" class="active">普通 · 自动计划</button>
+  <button id="scenePlanBtn">Plan Mode</button>
+</div>
+<div class="scene-note">原型控制（非 ChatGPT UI）</div>
+<div class="toast" id="toast">已切换</div>
+
+<script>
+const scenes = {
+  auto: {
+    title:'Agent UI 竞品调研',
+    planMode:false,
+    phase:'running',
+    step:2,total:5,time:'1m 42s',count:'12 sources',
+    steps:[
+      ['done','确认调研范围','已完成'],
+      ['running','梳理 Plan / Progress 交互','正在比较 ChatGPT 与 Codex 的执行态…'],
+      ['pending','核对 Plan Mode 审批流程',''],
+      ['pending','提炼交互设计原则',''],
+      ['pending','输出高保真原型','']
+    ],
+    html:`
+      <div class="message user-wrap"><div class="user-bubble">深度调研 ChatGPT、Codex、Claude、Kimi 处理复杂任务时自动生成计划清单的 UI 和交互，并给我一套可参考的产品设计。</div></div>
+      <div class="message assistant">
+        <p>我会先核对当前公开的一手界面和交互，再做横向比较。这个任务包含多个相互依赖的阶段，我会按步骤推进。</p>
+        <div class="muted-run"><span class="mini-spinner"></span><span>Working for 1m 42s</span></div>
+        <div class="tool-row"><span class="tool-icon">⌕</span><span>Searching current OpenAI product docs</span></div>
+        <div class="tool-row"><span class="tool-icon">↗</span><span>Reading Codex task progress behavior</span></div>
+        <div class="tool-row"><span class="tool-icon">□</span><span>Comparing plan approval patterns</span></div>
+      </div>`
+  },
+  plan: {
+    title:'产品架构重构计划',
+    planMode:true,
+    phase:'proposal',
+    step:0,total:6,time:'',count:'Plan mode',
+    steps:[
+      ['pending','确认目标与边界',''],
+      ['pending','审查现有架构与约束',''],
+      ['pending','拆分 Runtime / Gateway 职责',''],
+      ['pending','设计迁移与兼容策略',''],
+      ['pending','定义测试与回滚方案',''],
+      ['pending','形成实施顺序','']
+    ],
+    html:`
+      <div class="message user-wrap"><div class="user-bubble">重构我们的 Agent Harness：保持唯一 Runtime，同时把 Tool、Skill、MCP、Memory、Sandbox 都改成统一插件协议。先给我计划，不要直接改。</div></div>
+      <div class="message assistant">
+        <p>我先检查职责边界和现有约束，再给出可执行计划。当前处于 <strong>Plan mode</strong>。</p>
+        <div class="tool-row"><span class="tool-icon">□</span><span>Inspecting runtime boundaries</span></div>
+        <div class="tool-row"><span class="tool-icon">⌘</span><span>Reading capability contracts</span></div>
+        <div class="proposal">
+          <div class="proposal-title">Proposed plan</div>
+          <ol>
+            <li>确认 Runtime 保持唯一执行内核，并冻结稳定 Agent Loop 的职责边界。</li>
+            <li>梳理 Tool / Skill / MCP / Memory / Sandbox 的现有接口与生命周期差异。</li>
+            <li>定义统一 Capability Plugin 协议、注册机制和运行时快照。</li>
+            <li>把权限、校验、超时、重试和规范化下沉到 Capability Gateway。</li>
+            <li>设计旧接口到插件协议的兼容层、迁移顺序与回滚策略。</li>
+            <li>补充契约测试、运行轨迹回放和关键回归用例后再实施。</li>
+          </ol>
+          <div class="proposal-note">我会停在这里，等你确认或要求调整后再开始实施。</div>
+        </div>
+      </div>`
+  }
+};
+
+const conversation=document.getElementById('conversation');
+const content=document.getElementById('content');
+const progressPill=document.getElementById('progressPill');
+const progressTitle=document.getElementById('progressTitle');
+const progressTime=document.getElementById('progressTime');
+const changePill=document.getElementById('changePill');
+const planPopover=document.getElementById('planPopover');
+const progressChev=document.getElementById('progressChev');
+const planList=document.getElementById('planList');
+const planMeta=document.getElementById('planMeta');
+const planChip=document.getElementById('planChip');
+const approvalCard=document.getElementById('approvalCard');
+const composer=document.getElementById('composer');
+const sendBtn=document.getElementById('sendBtn');
+const plusMenu=document.getElementById('plusMenu');
+const permissionMenu=document.getElementById('permissionMenu');
+const toast=document.getElementById('toast');
+let current='auto';
+let timer=null;
+let elapsed=102;
+
+function renderPlanList(scene){
+  planList.innerHTML=scene.steps.map(([state,title,sub],i)=>{
+    const icon=state==='done'?'✓':state==='running'?'<span class="mini-spinner" style="width:14px;height:14px;border-width:1.5px"></span>':'○';
+    return `<div class="plan-item ${state==='running'?'current':''}">
+      <span class="state-icon ${state}">${icon}</span>
+      <div><div class="plan-item-title">${title}</div>${sub?`<div class="plan-active">${sub}</div>`:''}</div>
+    </div>`
+  }).join('');
+  const done=scene.steps.filter(s=>s[0]==='done').length;
+  planMeta.textContent=`${done} of ${scene.total}`;
+}
+
+function setScene(name){
+  current=name;
+  clearInterval(timer);
+  elapsed=102;
+  planPopover.classList.remove('show');
+  progressChev.classList.remove('open');
+  const s=scenes[name];
+  document.getElementById('conversationTitle').textContent=s.title;
+  conversation.innerHTML=s.html;
+  renderPlanList(s);
+  planChip.classList.toggle('show',s.planMode);
+  approvalCard.classList.toggle('show',s.phase==='proposal');
+  document.getElementById('statusRow').classList.toggle('hidden',s.phase==='proposal');
+  sendBtn.classList.toggle('stop',s.phase==='running');
+  sendBtn.innerHTML=s.phase==='running'?'<span class="stop-square"></span>':'<span style="font-size:17px;line-height:1">↑</span>';
+  composer.placeholder=s.planMode?'Describe what you want to plan':'Do anything';
+  document.getElementById('sceneAutoBtn').classList.toggle('active',name==='auto');
+  document.getElementById('scenePlanBtn').classList.toggle('active',name==='plan');
+  document.querySelectorAll('.thread[data-scene]').forEach(x=>x.classList.toggle('active',x.dataset.scene===name));
+  if(s.phase==='running'){
+    progressTitle.textContent=`Step ${s.step} / ${s.total} · ${s.steps[s.step-1][1]}`;
+    progressTime.textContent=s.time;
+    changePill.textContent=s.count;
+    startTimer();
+  }
+  setTimeout(()=>{content.scrollTop=content.scrollHeight},20);
+}
+
+function startTimer(){
+  timer=setInterval(()=>{
+    elapsed++;
+    const m=Math.floor(elapsed/60),sec=String(elapsed%60).padStart(2,'0');
+    progressTime.textContent=`${m}m ${sec}s`;
+  },1000);
+}
+
+function showToast(msg){toast.textContent=msg;toast.classList.add('show');setTimeout(()=>toast.classList.remove('show'),1300)}
+
+progressPill.addEventListener('click',()=>{
+  planPopover.classList.toggle('show');
+  progressChev.classList.toggle('open');
+  progressPill.setAttribute('aria-expanded',planPopover.classList.contains('show'));
+});
+
+document.getElementById('plusBtn').addEventListener('click',e=>{e.stopPropagation();plusMenu.classList.toggle('show');permissionMenu.classList.remove('show')});
+document.getElementById('permissionBtn').addEventListener('click',e=>{e.stopPropagation();permissionMenu.classList.toggle('show');plusMenu.classList.remove('show')});
+document.getElementById('togglePlanFromMenu').addEventListener('click',()=>{plusMenu.classList.remove('show');setScene('plan');showToast('Plan mode 已开启')});
+document.getElementById('planChip').addEventListener('click',()=>{setScene('auto');showToast('已返回普通模式')});
+
+document.getElementById('approvePlan').addEventListener('click',()=>{
+  const s=scenes.plan;
+  s.phase='running';s.step=1;s.time='0m 08s';s.count='0 files changed';
+  s.steps[0]=['running','确认目标与边界','正在把已批准计划转换为执行任务…'];
+  approvalCard.classList.remove('show');
+  document.getElementById('statusRow').classList.remove('hidden');
+  renderPlanList(s);
+  progressTitle.textContent=`Step 1 / 6 · 确认目标与边界`;
+  progressTime.textContent='0m 08s';changePill.textContent='0 files changed';
+  planChip.classList.remove('show');
+  sendBtn.classList.add('stop');sendBtn.innerHTML='<span class="stop-square"></span>';
+  conversation.insertAdjacentHTML('beforeend',`<div class="message assistant"><p>开始实施已批准的计划。</p><div class="muted-run"><span class="mini-spinner"></span><span>Working</span></div><div class="tool-row"><span class="tool-icon">□</span><span>Reviewing runtime boundaries before edits</span></div></div>`);
+  elapsed=8;clearInterval(timer);startTimer();
+  setTimeout(()=>content.scrollTop=content.scrollHeight,30);
+});
+
+document.getElementById('revisePlan').addEventListener('click',()=>{
+  approvalCard.classList.remove('show');
+  composer.value='第 3 步不要立即统一所有 Memory 接口，先保留兼容适配层。';
+  composer.focus();
+  showToast('继续留在 Plan mode');
+});
+
+sendBtn.addEventListener('click',()=>{
+  if(sendBtn.classList.contains('stop')){showToast('已请求停止当前任务');return;}
+  if(!composer.value.trim()) return;
+  const text=composer.value.trim();composer.value='';
+  conversation.insertAdjacentHTML('beforeend',`<div class="message user-wrap"><div class="user-bubble">${text.replace(/[&<>]/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[m]))}</div></div><div class="message assistant"><p>我会按你的补充继续更新计划。</p></div>`);
+  approvalCard.classList.add('show');
+  setTimeout(()=>content.scrollTop=content.scrollHeight,30);
+});
+
+document.getElementById('sceneAutoBtn').addEventListener('click',()=>setScene('auto'));
+document.getElementById('scenePlanBtn').addEventListener('click',()=>setScene('plan'));
+document.querySelectorAll('.thread[data-scene]').forEach(x=>x.addEventListener('click',()=>setScene(x.dataset.scene)));
+
+document.addEventListener('click',e=>{
+  if(!e.target.closest('.composer-shell')){plusMenu.classList.remove('show');permissionMenu.classList.remove('show')}
+});
+
+composer.addEventListener('input',()=>{
+  composer.style.height='auto';composer.style.height=Math.min(composer.scrollHeight,120)+'px';
+  if(!sendBtn.classList.contains('stop')) sendBtn.disabled=!composer.value.trim();
+});
+composer.addEventListener('keydown',e=>{
+  if((e.metaKey||e.ctrlKey)&&e.shiftKey&&e.key.toLowerCase()==='p') {e.preventDefault(); setScene(current==='plan'?'auto':'plan');}
+});
+
+setScene('auto');
+</script>
+</body>
+</html>

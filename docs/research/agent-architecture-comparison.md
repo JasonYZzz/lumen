@@ -171,11 +171,11 @@ Codex 同样分离 sandbox 与 approvals：前者定义技术边界，后者定�
 
 ## 9. Lumen 当前实现：运行模式与输入规划链路
 
-> 2026-08-11 更新：本节关于旧 `DelegationManager`、完成门禁和多入口分叉的描述是实施前基线。当前实现已经升级为 Session v8 原生 `AgentOrchestrator`、统一 WorkspaceHost 契约、Agent evidence 与完成门禁；以 [原生多 Agent Runtime 决策记录](../architecture-guide/10-native-multi-agent-runtime.md) 为准。
+> 2026-08-27 更新：本节关于旧 `DelegationManager`、完成门禁和多入口分叉的描述是实施前基线。原生 `AgentOrchestrator` 由 Session v8 records 引入，并由当前 Session v9 继续承载；统一 WorkspaceHost 契约、Agent evidence 与完成门禁已经落地。单 Agent loop 已切换为 `LumenAgentLoop` 单一权威，PydanticAI 仅保留低层 Model/Provider Adapter。最新状态以 [原生多 Agent Runtime 决策记录](../architecture-guide/10-native-multi-agent-runtime.md) 与 [LumenAgentLoop 单轨决策记录](../architecture-guide/13-native-agent-loop-migration.md) 为准。
 
 ### 9.1 结论
 
-Lumen 当前不是经典的“双模型 Planner → Executor”，也不是把 ReAct、Loop、Plan-and-Execute 做成三个独立 runtime。它的内核是一个由 Pydantic AI 驱动的结构化 tool loop：模型输出文本或工具调用，运行时执行工具并把结果送回模型，直到得到最终输出。复杂任务的 `set_plan` 是同一模型、同一 loop 中的控制工具；计划被结构化保存和重新注入上下文，但没有独立 planner、DAG scheduler 或 verifier agent。
+Lumen 当前不是经典的“双模型 Planner → Executor”，也不是把 ReAct、Loop、Plan-and-Execute 做成三个独立 runtime。`LumenAgentLoop` 是唯一结构化 tool loop；低层 `PydanticAIModelDriver` 负责 Provider wire translation。模型输出文本或工具调用，Gateway 把工具结果送回模型，直到得到 terminal candidate。复杂任务的 `set_plan` 是同一模型、同一 loop 中的控制工具；计划被结构化保存和重新注入上下文，但没有独立 planner、DAG scheduler 或 verifier agent。
 
 因此，Lumen 的“模式”应按四个正交维度理解：
 
@@ -184,41 +184,41 @@ Lumen 当前不是经典的“双模型 Planner → Executor”，也不是把 R
 | 推理/执行 loop | 直接回答；model-driven tool loop；同 loop 内显式计划 | 模型根据上下文决定直接结束、调用任务工具，或先调用 `set_plan` |
 | 权限模式 | `manual`、`accept_edits`、`plan`、`auto` | 改变审批与允许的副作用，不会替换核心 loop |
 | 工具调度 | `sequential`、`parallel_safe`、`parallel` | 控制同批工具调用的串并行；当前本地配置默认是 `sequential` |
-| 交互与委派 | `steer`、`follow_up`；可选深度一只读 delegation | 控制运行中用户输入何时注入，以及是否把有边界的只读子任务交给子 agent |
+| 交互与委派 | `steer`、`follow_up`；深度一原生 Agent Thread | 控制运行中用户输入的请求边界，以及只读 explorer/隔离 worktree worker 的委派 |
 
-当前项目配置的有效基线是：权限 `manual`、工具串行、delegation 关闭。TUI 的 Plan mode 还额外注入只读规划提示，并在用户批准后以新的执行 turn 继续；这是一种两阶段 UX，不是另一套 planner runtime。
+TUI 的 Plan mode 会注入只读规划提示，并在用户批准后以新的执行 turn 继续；这是一种两阶段 UX，不是另一套 planner runtime。Default、Plan、TUI、Web 与 headless 最终都穿过 `WorkspaceHost → RunCoordinator → AgentRuntime` 的共同契约。
 
 ### 9.2 输入如何变成行动与计划
 
-1. **入口预处理**：适配层展开文件引用、skills 等输入。TUI 还会根据当前模式给 prompt 加说明；Web/headless 目前不会注入等价的 Plan 提示。
+1. **入口预处理**：客户端 Adapter 展开文件引用、skills 等输入，并把模式语义投影为共同的 Host 命令。
 2. **上下文装配**：`ContextEngine` 把 system/control instructions、权限与 session policy、当前结构化 plan、项目说明、skills、memory/retrieval、历史消息、当前用户输入和 tool schemas 分区装配，并在超预算时压缩。
 3. **模型动态路由**：control instructions 建议在“至少三个动作、任何文件修改、命令执行或多个协调工具”等情形调用 `set_plan`。这是可见的 prompt heuristic，由模型判断，不是确定性 intent classifier。
-4. **控制与执行**：`TaskController` 校验并持久化 plan；普通工具先经过 hook、风险分类和审批，再执行。工具结果、拒绝和错误都作为 observation 返回同一个模型。
+4. **控制与执行**：Plan 控制工具校验并持久化 plan；所有本地/MCP 工具只经 `CapabilityGateway`，按 pre Hook、审批、guard、执行/replay、Effect、post Hook 的固定顺序运行。工具结果、拒绝和 typed error 都作为 observation 返回同一个模型。
 5. **在线重规划**：模型根据新 observation 继续调用工具、更新步骤、报告进度或提问。计划会作为 task state 在后续请求中重新注入。
 6. **结束与持久化**：最终文本、澄清、限制、取消或错误结束 turn；`RunCoordinator` 持久化消息、计划、审批和 checkpoint。
 
-计划结构当前只有 step `id/title/status/note` 与 revision，并约束同一时间最多一个 `in_progress`。它还没有依赖关系、验收标准、证据、owner，也没有 runtime completion guard：模型可以在计划仍未完成时直接给最终答案；`set_plan` 还可以整体替换原计划。因此 Lumen 是“结构化、可观察的动态计划”，但还不是“可形式验证的执行工作流”。
+计划结构仍以 step `id/title/status/note` 与 revision 为主，并约束同一时间最多一个 `in_progress`。`CompletionGate` 会联合检查未完成计划、未验证 mutation、审批、reconciliation 与 Agent evidence，但计划本身还没有通用依赖图、owner 或形式化验收语言。因此 Lumen 是“带运行时完成门禁的结构化动态计划”，还不是通用 DAG 工作流引擎。
 
-### 9.3 当前实现中的语义分叉与风险
+### 9.3 当前实现仍需关注的风险
 
-- **TUI 与 Web/headless 路径不一致**：TUI 直接使用 `RunCoordinator`，并实现 Plan prompt 与 plan-review lifecycle；Web/headless 走 `WorkspaceHost`，Plan 主要表现为审批策略阻止写操作。架构文档所称的统一 Host 路径与代码已经发生漂移。
-- **Plan 与权限耦合**：`plan` 同时承担“如何协作”和“哪些动作允许”的含义，未来如果要支持“只规划但允许特定探测”“批准计划后自动切执行”等语义，会越来越难扩展。
-- **`parallel_safe` 对 MCP 的边界不足**：本地工具会依据风险标注 sequential，但 MCP tool definition 没有同等的强制串行标注；在非 sequential 模式下，带副作用的 MCP 工具可能被同批并发调度。审批仍会生效，但并发安全语义不完整。
-- **命令权限不是 OS sandbox**：workspace/path/risk/approval policy 能降低误操作，但无法替代 Seatbelt、bubblewrap、container 等执行边界。
-- **计划完成靠提示约束**：没有 verifier 或 completion gate 核对计划状态、测试证据和用户验收条件。
+- **Plan 不是通用工作流语言**：完成门禁能阻止明显未完成状态，但尚不表达通用依赖图、owner 与领域验收谓词。
+- **Provider private part 的可移植性有限**：Driver 会保留原生 part 并标记 replay eligibility，但不同 Provider 之间不保证无损互换。
+- **Suspended job 的崩溃恢复有意保守**：优雅退出可取消并形成 partial outcome；硬崩溃后未持久化的远端 job 不猜测续跑，而进入 reconciliation required。
+- **本地 deferred 搜索需要持续测量**：它避免依赖 PydanticAI 私有 API，但仍需通过 prompt-cache、延迟和 schema 增长的生产门禁。
+- **OS sandbox 依赖平台 Adapter**：默认 `workspace_write` fail closed；Seatbelt/bubblewrap 不可用时不会降级为仅审批，但也会使执行能力不可用。
 
 ## 10. Lumen 与 Pi、Claude Code、Codex 的实现对比
 
 | 维度 | Lumen | Pi | Claude Code | OpenAI Codex |
 |---|---|---|---|---|
-| 核心 loop | Pydantic AI 统一 tool loop | 极简公开 TS tool loop | 官方行为为 gather → act → verify | 公开 Rust/Responses tool loop |
+| 核心 loop | `LumenAgentLoop` 单一权威 + PydanticAI 低层 Provider Adapter | 极简公开 TS tool loop | 官方行为为 gather → act → verify | 公开 Rust/Responses tool loop |
 | 输入规划 | 模型读取分区上下文；复杂度 heuristic 触发 `set_plan` | 模型 + prompt/extension；无原生 Plan | 模型动态规划；Plan 做只读探索与审批 | 模型动态规划；Plan collaboration preset |
 | Planner/Executor 分离 | 无；计划与执行同模型、同 loop | 无内建 | 未公开固定分离；可按阶段切模型 | 无独立 planner service 的公开证据 |
 | 计划 artifact | 结构化 plan steps，持久化并回注上下文 | 核心无；extension 自行实现 | 产品内 Plan 可审查，内部结构不公开 | 独立 plan item；与普通 checklist 工具区分 |
 | 上下文 | 明确 zone、trust、预算、memory/retrieval、receipts | JSONL 树 + 文本压缩，透明可 fork | tool-output 清理 + summary + memory | thread items + local/remote/opaque compaction |
 | 多 provider | 是 | 是，核心优势 | Anthropic 模型为中心，可经云平台部署 | OpenAI Responses 为中心 |
 | 多 agent | 可选、深度一、只读、隔离 context | 核心不内置 | subagent + 实验性 agent teams | parent/child agent threads |
-| 权限与 sandbox | 风险审批与 workspace policy；无 OS sandbox | 核心无审批、无 sandbox | permissions + OS sandbox | approvals + OS sandbox/cloud container |
+| 权限与 sandbox | 风险审批 + workspace confinement + Seatbelt/bubblewrap fail-closed sandbox | 核心无审批、无 sandbox | permissions + OS sandbox | approvals + OS sandbox/cloud container |
 | 工具扩展 | built-in/plugin/MCP/skills/hooks | TS extension 可替换几乎一切 | skills/hooks/MCP/plugins | skills/plugins/MCP/App Server |
 | 持久化/恢复 | append-only turn、plan、checkpoint、recovery receipt | 完整 JSONL message tree，分支能力强 | transcript/resume/rewind + memory | thread/event lifecycle，客户端协议最完整 |
 | 客户端一致性 | Runtime 可复用，但 TUI 与 Host 已有行为分叉 | CLI/print/JSON/RPC/SDK 共享极简 core | 产品统一性强，内部实现不可审计 | App Server 明确隔离 core 与多客户端 |

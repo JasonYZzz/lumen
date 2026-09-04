@@ -6,6 +6,7 @@ flag, and backwards compatibility with the single-model YAML form.
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 
 import pytest
@@ -70,6 +71,36 @@ async def test_select_model_rebuilds_runtime_and_switches_active(tmp_path: Path)
         assert manager.active_model_name() == "beta"
         assert manager.active_model_config().api_key == "k-beta"
         assert manager.agent_orchestrator is orchestrator
+
+
+async def test_select_model_keeps_old_runtime_published_until_candidate_is_ready(
+    tmp_path: Path,
+) -> None:
+    config = load_config(_multi_model_config(tmp_path))
+    manager = ResourceManager(config, workspace=tmp_path)
+    async with manager:
+        old_runtime = manager.runtime
+        original_build = manager._build_runtime  # type: ignore[reportPrivateUsage]
+        candidate_ready = asyncio.Event()
+        release = asyncio.Event()
+
+        async def delayed_build(*, for_name: str | None = None):  # type: ignore[no-untyped-def]
+            candidate = await original_build(for_name=for_name)
+            candidate_ready.set()
+            await release.wait()
+            return candidate
+
+        manager._build_runtime = delayed_build  # type: ignore[method-assign]
+        task = asyncio.create_task(manager.select_model("beta"))
+        await candidate_ready.wait()
+
+        assert manager.runtime is old_runtime
+        assert manager.active_model_name() == "alpha"
+
+        release.set()
+        await task
+        assert manager.runtime is not old_runtime
+        assert manager.active_model_name() == "beta"
 
 
 async def test_repeated_model_switches_keep_registrations_stable_and_quiesce_old_scope(
@@ -218,20 +249,5 @@ async def test_select_model_failure_preserves_old_model_and_runtime(tmp_path: Pa
 
         # The old model name is unchanged...
         assert manager.active_model_name() == original_name
-        # ...and the old runtime is still usable (restored, not None).
+        # The published runtime was never replaced by the failed candidate.
         assert manager.runtime is original_runtime
-
-
-async def test_select_model_failure_restores_old_runtime_not_none(tmp_path: Path) -> None:
-    """Even though the rebuild path detaches the old runtime before building, a
-    failed build must restore the previous runtime rather than leave None."""
-    from unittest.mock import AsyncMock
-
-    config = load_config(_multi_model_config(tmp_path))
-    manager = ResourceManager(config, workspace=tmp_path)
-    async with manager:
-        manager._build_runtime = AsyncMock(side_effect=RuntimeError("boom"))  # type: ignore[method-assign]
-        with pytest.raises(RuntimeError):
-            await manager.select_model("beta")
-        # The app must not be left in a half-built state with no runtime.
-        assert manager.runtime is not None

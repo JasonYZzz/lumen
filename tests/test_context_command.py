@@ -60,3 +60,27 @@ def test_format_context_empty_payload_uses_message() -> None:
     result = ContextControlResult(status="ok", message="no context prepared yet", payload={})
     text = LumenApp.format_context_result(result)
     assert text == "no context prepared yet"
+
+
+def test_format_context_renders_latest_run_diagnostic() -> None:
+    result = _result(
+        latest_run={
+            "status": "failed",
+            "request_count": 2,
+            "tool_call_count": 1,
+            "elapsed_seconds": 10.0,
+            "usage": {"input_tokens": 100, "output_tokens": 20, "cache_read_tokens": 0},
+            "bottlenecks": ["tool_time_dominant"],
+            "slow_tools": [{"name": "run_command", "elapsed_seconds": 6.0, "status": "ok"}],
+            "schema_changes": [{"step": 2, "changed": ["tools"]}],
+            "model_context_host_seconds_estimate": 4.0,
+        }
+    )
+
+    text = LumenApp.format_context_result(result)
+
+    assert "Latest run: status=failed  requests=2  tools=1  elapsed=10.00s" in text
+    assert "Signals: tool_time_dominant" in text
+    assert "Tool: run_command  6.00s" in text
+    assert "Request step 2 changed: tools" in text
+    assert "Non-tool time estimate: 4.00s" in text

@@ -12,7 +12,7 @@ import asyncio
 import hashlib
 import json
 import re
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from typing import Any, Literal, cast
@@ -21,6 +21,7 @@ from pydantic_ai.messages import (
     ModelMessage,
     ModelMessagesTypeAdapter,
     ModelRequest,
+    ModelResponse,
     SystemPromptPart,
     UserPromptPart,
 )
@@ -64,10 +65,14 @@ from lumen.context.types import (
     CompactionCheckpointV2,
     ContextBlock,
     ContextBudgetReport,
+    ContextZone,
     ExactLiteral,
     FileState,
+    ModelInputManifest,
+    ModelInputSource,
     ObservationState,
     ProviderRequestSnapshot,
+    ReplayEligibility,
     RollingContextState,
     TranscriptCursor,
 )
@@ -86,6 +91,27 @@ EventSink = Callable[[RunEvent], Awaitable[None]]
 #: only pass it through never reference :class:`ContextSummary` by name, which is
 #: the M1 acceptance criterion for ``runtime.py``.
 PreviousSummary = ContextSummary
+
+
+def _canonical_digest(value: object) -> str:
+    payload = json.dumps(
+        value,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    ).encode("utf-8")
+    return f"sha256:{hashlib.sha256(payload).hexdigest()}"
+
+
+def _safe_manifest_label(value: str, *, limit: int = 512) -> str:
+    """Keep ordinary source labels readable without persisting credential-like URIs."""
+
+    lowered = value.casefold()
+    sensitive_markers = ("://", "?", "token=", "key=", "secret=", "password=", "credential=")
+    if any(marker in lowered for marker in sensitive_markers):
+        return f"redacted:{_canonical_digest(value)}"
+    return value[:limit]
 
 
 def _message_id(message: ModelMessage, sequence: int) -> str:
@@ -295,7 +321,7 @@ class ContextEnvelope:
     """
 
     provider_history: tuple[ModelMessage, ...]
-    blocks: tuple[Any, ...] = ()
+    blocks: tuple[ContextBlock, ...] = ()
     budget: ContextBudgetReport | None = None
     checkpoint: Any | None = None
     compaction: CompactionRecord | None = None
@@ -307,6 +333,9 @@ class ContextEnvelope:
     canonical_history: tuple[ModelMessage, ...] = field(default=(), repr=False)
     request_snapshot: ProviderRequestSnapshot | None = None
     fingerprint: str = ""
+    #: A request-boundary checkpoint may already cover part of this run.
+    #: This cursor is derived from the checkpoint on Session replay.
+    covered_new_messages: int = 0
 
     @property
     def messages(self) -> tuple[ModelMessage, ...]:
@@ -768,6 +797,147 @@ class ContextEngine:
         self._pending_requests[request.session.id] = request
         return envelope
 
+    async def prepare_step(
+        self,
+        envelope: ContextEnvelope,
+        messages: Sequence[ModelMessage],
+        new_messages: Sequence[ModelMessage],
+        *,
+        session_id: str,
+        model_step: int,
+        instructions: str,
+        tool_schemas: Sequence[dict[str, Any]],
+        output_reserve_tokens: int,
+        task: TaskSnapshot,
+        emit: EventSink,
+        force: bool = False,
+    ) -> tuple[ContextEnvelope, list[ModelMessage]]:
+        """Compact completed steps inside a run, without publishing a checkpoint.
+
+        The final turn append persists all canonical messages once. Only then
+        may confirm_persisted publish the checkpoint. Multiple in-run summaries
+        roll into one checkpoint rooted in the last *durable* predecessor.
+        """
+        request = self._pending_requests.get(session_id)
+        if request is None or self._pending.get(session_id) != envelope:
+            raise ContextSequenceError("request step does not belong to the active context envelope")
+        current = list(messages)
+        snapshot = self.snapshot_request(
+            session_id=session_id, model_step=model_step, messages=current,
+            instructions=instructions, tool_schemas=tool_schemas,
+            output_reserve_tokens=output_reserve_tokens,
+        )
+        if not self.config.enabled or model_step <= 1 or (
+            not force and snapshot.total_tokens <= self._resolved_policy.soft_limit_tokens
+        ):
+            return envelope, current
+        thrash = self._thrash.setdefault(session_id, CompactionThrashState())
+        thrash.advance_turn()
+        if not force and (thrash.thrashed(self._policy) or thrash.cooling_down()):
+            return envelope, current
+        raw_prior = request.source_history or request.history
+        source = [*raw_prior, *new_messages]
+        durable_parent = request.previous_checkpoint or self._last_checkpoints.get(session_id)
+        source_start = durable_parent.source_end if durable_parent is not None else request.source_offset
+        previous = (
+            envelope.compaction.summary if envelope.compaction is not None
+            else _checkpoint_summary(durable_parent) or request.previous_summary
+        )
+        delta_start = (
+            envelope.checkpoint.source_end if envelope.checkpoint is not None else source_start
+        )
+        if delta_start >= len(source):
+            return envelope, current
+        delta = source[delta_start:]
+        # Reduction is a model projection only. The checkpoint digest below is
+        # calculated from raw canonical messages, never from a reduced view.
+        if self._artifacts is not None:
+            reduced = reduce_tool_outputs(delta, self._artifacts, keep_recent_full=0)
+            delta = reduced.messages
+            for receipt in reduced.receipts:
+                if receipt.artifact_ref is not None:
+                    self._artifacts.add_hold(receipt.artifact_ref, session_id)
+        await emit(ContextCompactionStarted(source_message_count=len(delta)))
+        try:
+            result = await self._manager.summarize(
+                delta, previous, SummaryTaskState(task.plan, task.diagnostics),
+            )
+            prefix = _summary_prefix(result.summary)
+            # Retain the actual user objective and a coherent suffix of full
+            # model/tool batches. A single user turn can contain many batches.
+            objective = next(
+                (m for m in new_messages if isinstance(m, ModelRequest)
+                 and any(isinstance(p, UserPromptPart) for p in m.parts)),
+                ModelRequest(parts=[UserPromptPart(content=request.prompt)]),
+            )
+            tail_source = list(new_messages)
+            if self._artifacts is not None:
+                tail_source = reduce_tool_outputs(tail_source, self._artifacts, keep_recent_full=0).messages
+            transient = [m for m in current if _transient_kind(m) is not None]
+            policy = [m for m in transient if _transient_kind(m) == "session-policy-context"]
+            data = [m for m in transient if _transient_kind(m) != "session-policy-context"]
+            active: list[ModelMessage] | None = None
+            provider: list[ModelMessage] = []
+            if tail_source == [objective]:
+                candidate_provider = [*policy, prefix, objective, *data]
+                if self._counter.count_messages(candidate_provider).tokens < snapshot.messages_tokens:
+                    active, provider = [prefix, objective], candidate_provider
+            for index, message in enumerate(tail_source):
+                if not isinstance(message, ModelResponse):
+                    continue
+                candidate = [prefix, objective, *tail_source[index:]]
+                if validate_active_history(candidate):
+                    continue
+                candidate_provider = [*policy, *candidate, *data]
+                candidate_snapshot = self.snapshot_request(
+                    session_id=session_id, model_step=model_step, messages=candidate_provider,
+                    instructions=instructions, tool_schemas=tool_schemas,
+                    output_reserve_tokens=output_reserve_tokens,
+                )
+                if candidate_snapshot.total_tokens < snapshot.total_tokens:
+                    active, provider = candidate, candidate_provider
+                if candidate_snapshot.total_tokens <= self._resolved_policy.target_tokens:
+                    break
+            if active is None:
+                raise ContextBudgetExceeded("Cannot compact without losing the latest tool batch")
+            usage = dict(envelope.compaction.usage) if envelope.compaction is not None else {}
+            for key, value in result.usage.items():
+                if isinstance(value, int | float):
+                    usage[key] = usage.get(key, 0) + value
+            record = CompactionRecord(
+                summary=result.summary, active_history=active,
+                source_message_count=len(source) - source_start, usage=usage,
+            )
+            checkpoint = self._build_checkpoint(
+                replace(request, task=task), source[source_start:], record,
+                previous_checkpoint=durable_parent, source_start=source_start, source_end=len(source),
+            )
+            record = replace(record, checkpoint=checkpoint)
+        except Exception as error:
+            thrash.record_failure(self._policy)
+            await emit(ContextCompactionFailed(message=str(error)))
+            return envelope, current
+        thrash.record_auto_compaction()
+        thrash.record_success()
+        compacted_snapshot = self.snapshot_request(
+            session_id=session_id, model_step=model_step, messages=provider,
+            instructions=instructions, tool_schemas=tool_schemas,
+            output_reserve_tokens=output_reserve_tokens,
+        )
+        updated = replace(
+            envelope, provider_history=tuple(provider), canonical_history=tuple(active),
+            checkpoint=checkpoint, compaction=record, covered_new_messages=len(new_messages),
+            request_snapshot=compacted_snapshot,
+            fingerprint=self._fingerprint(request, provider),
+        )
+        self._pending[session_id] = updated
+        self._last_compaction_reason[session_id] = "request-boundary"
+        await emit(ContextCompactionCompleted(
+            active_message_count=len(active),
+            summary_tokens_estimate=self._counter.count_messages(active).tokens,
+        ))
+        return updated, provider
+
     async def _summarize_delta(
         self,
         history: Sequence[ModelMessage],
@@ -984,7 +1154,9 @@ class ContextEngine:
                 )
             return transition
         transition = ContextTransition(
-            active_history=(*prepared.canonical_history, *commit.new_messages),
+            active_history=(
+                *prepared.canonical_history, *commit.new_messages[prepared.covered_new_messages:],
+            ),
         )
         self._committed[commit.envelope_fingerprint] = (messages_digest, transition)
         return transition
@@ -1371,8 +1543,8 @@ class ContextEngine:
     ) -> ProviderRequestSnapshot:
         """Count one provider-bound model step using the engine's token adapter."""
 
-        names = tuple(sorted(str(tool.get("name", "")) for tool in tool_schemas))
-        digest = hashlib.sha256("\0".join(names).encode("utf-8")).hexdigest()
+        names = tuple(str(tool.get("name", "")) for tool in tool_schemas)
+        digest = _canonical_digest(list(tool_schemas))
         instruction_tokens = self._assembler.counter.count_text(instructions).tokens
         message_tokens = self._assembler.counter.count_messages(messages).tokens
         tool_tokens = self._assembler.counter.count_tools(tool_schemas).tokens
@@ -1392,6 +1564,130 @@ class ContextEngine:
         )
         self._request_snapshots[session_id] = snapshot
         return snapshot
+
+    def build_input_manifest(
+        self,
+        envelope: ContextEnvelope,
+        snapshot: ProviderRequestSnapshot,
+        *,
+        messages: Sequence[ModelMessage],
+        instructions: str,
+        tool_schemas: Sequence[dict[str, Any]],
+        route: str,
+        settings: Mapping[str, Any] | None = None,
+    ) -> ModelInputManifest:
+        """Describe one actual provider request without copying source bodies.
+
+        Full history remains in SessionRepository and large/transient bodies
+        remain in ArtifactStore. The manifest records ordered references and
+        digests so later tooling can prove equality and explain why an old
+        request is or is not replayable.
+        """
+
+        sources: list[ModelInputSource] = []
+        reasons: list[str] = [
+            "provider_private_framing_not_captured",
+            "intermediate_loop_messages_require_trajectory_capture",
+        ]
+        durable_session_zones = {
+            ContextZone.HISTORY_SUMMARY,
+            ContextZone.RECENT_HISTORY,
+            ContextZone.CURRENT_INPUT,
+            ContextZone.TASK_STATE,
+            ContextZone.OUTPUT_RESERVE,
+        }
+        for order, block in enumerate(envelope.blocks[:128]):
+            structured = block.payload.structured or {}
+            safe_origin = _safe_manifest_label(block.source.origin)
+            raw_artifact_ref = structured.get("body_artifact_ref") or structured.get("artifact_ref")
+            artifact_ref = (
+                str(raw_artifact_ref)
+                if isinstance(raw_artifact_ref, str) and raw_artifact_ref.startswith("sha256:")
+                else None
+            )
+            if artifact_ref is not None:
+                reference = artifact_ref
+                replayable = True
+                reason = None
+            elif block.zone in durable_session_zones:
+                reference = f"session:{snapshot.session_id}:{block.id}"
+                replayable = True
+                reason = None
+            else:
+                reference = safe_origin
+                replayable = False
+                reason = f"source body has no durable reference: {block.zone.value}"
+                reasons.append(f"source_without_durable_reference:{block.zone.value}:{safe_origin}")
+            sources.append(
+                ModelInputSource(
+                    order=order,
+                    zone=block.zone,
+                    kind=block.source.kind,
+                    origin=safe_origin,
+                    reference=_safe_manifest_label(reference),
+                    revision=_safe_manifest_label(block.source.revision or "", limit=256) or None,
+                    content_digest=_canonical_digest(block.payload.model_dump(mode="json")),
+                    token_estimate=block.token_estimate,
+                    replayable=replayable,
+                    non_replayable_reason=reason,
+                )
+            )
+        if len(envelope.blocks) > len(sources):
+            reasons.append(f"context_sources_truncated:{len(envelope.blocks) - len(sources)}")
+
+        serialised_messages = ModelMessagesTypeAdapter.dump_python(list(messages), mode="json")
+        instructions_digest = _canonical_digest(instructions)
+        message_history_digest = _canonical_digest(serialised_messages)
+        tool_schema_digest = _canonical_digest(list(tool_schemas))
+        settings_digest = _canonical_digest(dict(settings or {}))
+        source_payload = [source.model_dump(mode="json") for source in sources]
+        context_sources_digest = _canonical_digest(source_payload)
+        stable_prefix_digest = _canonical_digest(
+            {
+                "instructions": instructions_digest,
+                "tools": tool_schema_digest,
+                "settings": settings_digest,
+                "context_sources": context_sources_digest,
+            }
+        )
+        request_fingerprint = _canonical_digest(
+            {
+                "route": route,
+                "stable_prefix": stable_prefix_digest,
+                "dynamic_tail": message_history_digest,
+                "output_reserve_tokens": snapshot.output_reserve_tokens,
+                "context_fingerprint": envelope.fingerprint,
+            }
+        )
+        provider, separator, model = route.partition(":")
+        if not separator:
+            provider, model = "unknown", route
+        bounded_reasons = tuple(dict.fromkeys(reason[:512] for reason in reasons))[:128]
+        return ModelInputManifest(
+            session_id=snapshot.session_id[:256],
+            step=snapshot.model_step,
+            route=route[:512],
+            provider=provider[:128],
+            model=model[:384],
+            context_fingerprint=envelope.fingerprint[:256],
+            message_count=len(messages),
+            tool_count=len(tool_schemas),
+            instructions_digest=instructions_digest,
+            message_history_digest=message_history_digest,
+            tool_schema_digest=tool_schema_digest,
+            settings_digest=settings_digest,
+            context_sources_digest=context_sources_digest,
+            stable_prefix_digest=stable_prefix_digest,
+            dynamic_tail_digest=message_history_digest,
+            request_fingerprint=request_fingerprint,
+            sources=tuple(sources),
+            replay_eligibility=(
+                ReplayEligibility.VERIFY_ONLY
+                if bounded_reasons
+                else ReplayEligibility.REPLAYABLE
+            ),
+            non_replayable_reasons=bounded_reasons,
+        )
 
     def ensure_request_fits(self, snapshot: ProviderRequestSnapshot) -> None:
         """Fail before provider I/O when a real model step crosses the hard limit."""
@@ -1442,11 +1738,12 @@ class ContextEngine:
         session_id: str,
         model_step: int,
     ) -> tuple[list[ModelMessage], ProviderRequestSnapshot]:
-        """Deterministically trim only old canonical history for a real step.
+        """Bound a real model step without mutating canonical history.
 
-        Transient policy/context-data messages and everything produced in the
-        current run stay untouched. Candidate cuts are restricted to complete
-        user-turn boundaries, which preserves tool-call/result pairing.
+        Large tool results, including results produced in the current run, are
+        first projected as content-addressed receipts. If more space is needed,
+        only old canonical history is trimmed at complete user-turn boundaries;
+        transient context and the live trajectory remain paired and ordered.
         """
 
         current = list(messages)
@@ -1460,6 +1757,28 @@ class ContextEngine:
         )
         if snapshot.total_tokens <= snapshot.hard_limit_tokens:
             return current, snapshot
+        # A single turn may contain many large tool results after prepare().
+        # Receipt-ize those bodies before trimming history so the per-step
+        # sliding window applies to the live Loop trajectory as well as old
+        # canonical history. Canonical new_messages remain untouched and are
+        # still committed in full; this is only a provider-bound projection.
+        if self._artifacts is not None:
+            reduced = reduce_tool_outputs(current, self._artifacts, keep_recent_full=0)
+            if reduced.reduced:
+                current = reduced.messages
+                for receipt in reduced.receipts:
+                    if receipt.artifact_ref is not None:
+                        self._artifacts.add_hold(receipt.artifact_ref, session_id)
+                snapshot = self.snapshot_request(
+                    session_id=session_id,
+                    model_step=model_step,
+                    messages=current,
+                    instructions=instructions,
+                    tool_schemas=tool_schemas,
+                    output_reserve_tokens=output_reserve_tokens,
+                )
+                if snapshot.total_tokens <= snapshot.hard_limit_tokens:
+                    return current, snapshot
         canonical_count = len(envelope.canonical_history)
         policy_count = 1 if current and _transient_kind(current[0]) == "session-policy-context" else 0
         canonical = current[policy_count : policy_count + canonical_count]
@@ -1488,6 +1807,22 @@ class ContextEngine:
             if candidate_snapshot.total_tokens <= candidate_snapshot.hard_limit_tokens:
                 return candidate, candidate_snapshot
         return current, snapshot
+
+    def next_output_reserve(self, current: int, *, observed_output_tokens: int = 0) -> int | None:
+        """Grow an implicit output reserve within the resolved capability.
+
+        This is used only after a provider reports a length stop. Explicit
+        ``settings.max_tokens`` remains a user-owned cap and is never widened
+        by this method's caller. Unknown profiles may grow conservatively up
+        to the hard request window; known profiles stop at their architectural
+        output maximum.
+        """
+
+        baseline = max(current, observed_output_tokens, 1)
+        architectural = self._resolved_policy.architectural_max_output_tokens
+        ceiling = architectural or max(1, self._thresholds.hard - 1)
+        candidate = min(max(baseline * 2, observed_output_tokens + 1_024), ceiling)
+        return candidate if candidate > current else None
 
     def _report(self, session_id: str | None) -> ContextControlResult:
         """Build the ``/context`` result from the last prepared envelope."""

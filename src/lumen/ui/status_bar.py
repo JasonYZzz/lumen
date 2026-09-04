@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING, cast
 
 from rich.text import Text
 from textual.app import App
+from textual.css.query import NoMatches
 from textual.widgets import Static
 
 from lumen.approval import ApprovalMode
@@ -47,7 +48,14 @@ class StatusBarMixin:
         topbar = f"◆ {product_label(self.config.agent.name)}  ·  {self.resources.workspace.name}"
         if mcp_segment:
             topbar += f"  ·  {mcp_segment}"
-        self.query_one("#topbar", Static).update(topbar)
+        try:
+            self.query_one("#topbar", Static).update(topbar)
+        except NoMatches:
+            # A cancelled run can finish its cleanup after Textual has already
+            # unmounted the screen. Chrome refresh is then obsolete and must
+            # not turn an otherwise clean application shutdown into a worker
+            # failure.
+            return
         self._refresh_welcome_panel()
 
     def _model_display(self: LumenApp) -> str:

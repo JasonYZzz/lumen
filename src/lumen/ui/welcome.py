@@ -11,61 +11,71 @@ from textual.widgets import Static
 
 from lumen.ui.themes import FALLBACK_COLORS, theme_color
 
-_WORDMARK_TEXT = "LUMEN"
+_WORDMARK_TEXT = "lumen"
+_MARK_GLYPH = (
+    "0111000",
+    "1111000",
+    "1111000",
+    "1111000",
+    "1100000",
+    "1101110",
+    "0111110",
+)
 _WORDMARK_GLYPHS = {
-    "L": (
-        "10000",
-        "10000",
-        "10000",
-        "10000",
-        "10000",
-        "10000",
-        "11111",
-    ),
-    "U": (
-        "10001",
-        "10001",
-        "10001",
-        "10001",
-        "10001",
-        "10001",
+    "l": (
+        "11000",
+        "01000",
+        "01000",
+        "01000",
+        "01000",
+        "01000",
         "01110",
     ),
-    "M": (
-        "10001",
-        "11011",
-        "10101",
-        "10101",
+    "u": (
+        "00000",
+        "00000",
         "10001",
         "10001",
         "10001",
+        "10011",
+        "01110",
     ),
-    "E": (
+    "m": (
+        "00000",
+        "00000",
+        "11010",
+        "10101",
+        "10101",
+        "10101",
+        "10101",
+    ),
+    "e": (
+        "00000",
+        "00000",
+        "01110",
+        "10001",
         "11111",
         "10000",
-        "10000",
+        "01111",
+    ),
+    "n": (
+        "00000",
+        "00000",
         "11110",
-        "10000",
-        "10000",
-        "11111",
-    ),
-    "N": (
         "10001",
-        "11001",
-        "11001",
-        "10101",
-        "10011",
-        "10011",
+        "10001",
+        "10001",
         "10001",
     ),
 }
 
 
 def _wordmark_rows() -> tuple[str, ...]:
-    """Compose the glyphs into a compact seven-pixel-high wordmark."""
+    """Compose the Lumen Fold mark and lowercase wordmark for terminals."""
 
     return tuple(
-        " ".join(_WORDMARK_GLYPHS[letter][row] for letter in _WORDMARK_TEXT)
+        f"{_MARK_GLYPH[row]}  "
+        + " ".join(_WORDMARK_GLYPHS[letter][row] for letter in _WORDMARK_TEXT)
         for row in range(7)
     )
 
@@ -73,7 +83,8 @@ def _wordmark_rows() -> tuple[str, ...]:
 def _render_wordmark(*, highlight: str, primary: str) -> Text:
     """Render square terminal pixels using paired upper/lower half blocks."""
 
-    rows = (*_wordmark_rows(), " " * 29)
+    wordmark_rows = _wordmark_rows()
+    rows = (*wordmark_rows, " " * len(wordmark_rows[0]))
     rendered = Text()
     for row in range(0, len(rows), 2):
         for upper, lower in zip(rows[row], rows[row + 1], strict=True):

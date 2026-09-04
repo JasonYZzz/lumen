@@ -18,12 +18,17 @@ const FOCUSABLE_SELECTOR = [
  *
  * 返回的 ref 需挂在浮层容器上，容器建议带 tabIndex={-1} 作为无控件时的聚焦兜底。
  */
-export function useModalFocus(onClose: () => void): RefObject<HTMLDivElement | null> {
+export function useModalFocus(
+  onClose: () => void,
+  enabled = true,
+  returnFocusRef?: RefObject<HTMLElement | null>,
+): RefObject<HTMLDivElement | null> {
   const containerRef = useRef<HTMLDivElement>(null)
   const onCloseRef = useRef(onClose)
   onCloseRef.current = onClose
 
   useEffect(() => {
+    if (!enabled) return
     const container = containerRef.current
     if (!container) return
     const trigger = document.activeElement instanceof HTMLElement ? document.activeElement : null
@@ -39,7 +44,7 @@ export function useModalFocus(onClose: () => void): RefObject<HTMLDivElement | n
     }
 
     const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
+      if (event.key === 'Escape' && !event.isComposing && event.keyCode !== 229) {
         event.preventDefault()
         event.stopPropagation()
         onCloseRef.current()
@@ -68,9 +73,11 @@ export function useModalFocus(onClose: () => void): RefObject<HTMLDivElement | n
     document.addEventListener('keydown', handleKeyDown, true)
     return () => {
       document.removeEventListener('keydown', handleKeyDown, true)
-      if (trigger && document.contains(trigger)) trigger.focus()
+      // A mobile drawer can disappear while handing focus to another dialog.
+      const returnTarget = returnFocusRef?.current ?? trigger
+      if (returnTarget && document.contains(returnTarget)) returnTarget.focus({ preventScroll: true })
     }
-  }, [])
+  }, [enabled, returnFocusRef])
 
   return containerRef
 }

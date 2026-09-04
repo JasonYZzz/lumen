@@ -462,8 +462,14 @@ def test_model_skill_tool_refuses_manual_only_skill(tmp_path: Path) -> None:
     )
     manager = ResourceManager(_config_with_skills(tmp_path), workspace=tmp_path)  # type: ignore[arg-type]
 
-    assert "load_skill" not in manager.registry.entries
-    assert "read_skill_resource" not in manager.registry.entries
+    # The Interface stays available for skills installed later in this process;
+    # invocation of this manual-only skill must still be rejected below.
+    assert "load_skill" in manager.registry.entries
+    assert "read_skill_resource" in manager.registry.entries
+    with pytest.raises(FileNotFoundError, match="model-invocable"):
+        manager.registry.entries["load_skill"].spec.function("manual")
+    with pytest.raises(FileNotFoundError, match="model-invocable"):
+        manager.registry.entries["read_skill_resource"].spec.function("manual", "SKILL.md")
 
 
 def test_model_skill_resource_refuses_manual_only_skill_when_reader_exists(tmp_path: Path) -> None:

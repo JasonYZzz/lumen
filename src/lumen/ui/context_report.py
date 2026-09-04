@@ -78,6 +78,36 @@ def format_context_result(result: ContextControlResult) -> str:
             f"actual={drift.get('actual_input_tokens', 0)}  "
             f"ratio={drift.get('drift_ratio', 0):.1%}" + ("  WARNING" if drift.get("warning") else "")
         )
+    latest_run = payload.get("latest_run", {})
+    if latest_run:
+        elapsed = latest_run.get("elapsed_seconds")
+        elapsed_text = f"{elapsed:.2f}s" if isinstance(elapsed, int | float) else "unknown"
+        usage = latest_run.get("usage", {})
+        lines.append(
+            "Latest run: "
+            f"status={latest_run.get('status', 'unknown')}  "
+            f"requests={latest_run.get('request_count', 0)}  "
+            f"tools={latest_run.get('tool_call_count', 0)}  "
+            f"elapsed={elapsed_text}  "
+            f"input={usage.get('input_tokens', 0)}  "
+            f"output={usage.get('output_tokens', 0)}  "
+            f"cache-read={usage.get('cache_read_tokens', 0)}"
+        )
+        bottlenecks = latest_run.get("bottlenecks", [])
+        if bottlenecks:
+            lines.append(f"  Signals: {', '.join(bottlenecks)}")
+        for tool in latest_run.get("slow_tools", [])[:3]:
+            lines.append(
+                f"  Tool: {tool['name']}  {tool['elapsed_seconds']:.2f}s  [{tool['status']}]"
+            )
+        for change in latest_run.get("schema_changes", [])[:3]:
+            lines.append(f"  Request step {change['step']} changed: {', '.join(change['changed'])}")
+        if latest_run.get("model_context_host_seconds_estimate") is not None:
+            lines.append(
+                "  Non-tool time estimate: "
+                f"{latest_run['model_context_host_seconds_estimate']:.2f}s "
+                "(model + context + host; parallel tool time may overlap)"
+            )
     legacy = payload.get("legacy_overrides", {})
     active_legacy = [name for name, enabled in legacy.items() if enabled]
     if active_legacy:

@@ -168,7 +168,7 @@ async def test_end_to_end_scenario_with_approvals(tmp_path: Path) -> None:
     )
     assert "'exit_code': 0" in run_finished.result or '"exit_code": 0' in run_finished.result
     assert run_finished.exit_code == 0
-    run_diagnostic = next(item for item in outcome.diagnostics if item["name"] == "run_command")
+    run_diagnostic = next(item for item in outcome.diagnostics if item.get("name") == "run_command")
     assert run_diagnostic["status"] == "success"
     assert run_diagnostic["exit_code"] == 0
     # Event order is semantic: plan created, progress reported, then plan updated.
@@ -230,6 +230,9 @@ async def test_denial_recovery_scenario(tmp_path: Path) -> None:
             elif state["phase"] == "report":
                 state["phase"] = "read"
                 yield _delta("read_file", {"path": "fallback.txt"}, "r2")
+            elif state["phase"] == "read":
+                state["phase"] = "done"
+                yield _delta("update_step", {"step_id": "go", "status": "completed"}, "finish-go")
             else:
                 yield "Recovered via fallback file."
 
@@ -266,7 +269,8 @@ async def test_denial_recovery_scenario(tmp_path: Path) -> None:
     assert denied_call.is_error is True
     assert denied_call.exit_code is None
     denied_diagnostic = next(
-        item for item in outcome.diagnostics if item["name"] == "run_command" and item["status"] == "denied"
+        item for item in outcome.diagnostics
+        if item.get("name") == "run_command" and item.get("status") == "denied"
     )
     assert denied_diagnostic["error_category"] == "denied"
     # The result text mentions the denial, never a real stdout/stderr payload.
