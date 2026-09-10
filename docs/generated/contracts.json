@@ -2494,7 +2494,12 @@
                 "install_skill",
                 "write_file",
                 "edit_file",
-                "run_command"
+                "run_command",
+                "git_status",
+                "git_diff",
+                "git_stage",
+                "git_commit",
+                "git_push"
               ],
               "type": "string"
             },
@@ -4917,6 +4922,7 @@
       "write",
       "execute",
       "external",
+      "confirm",
       "external_unknown"
     ]
   },

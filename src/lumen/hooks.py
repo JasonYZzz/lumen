@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import importlib
 import inspect
 import json
@@ -16,7 +15,9 @@ from fnmatch import fnmatchcase
 from pathlib import Path
 from typing import Any, Protocol, cast
 
-from lumen.config import HookConfig
+from lumen.config import HookConfig, SandboxConfig
+from lumen.sandbox import SandboxRunner
+from lumen.tools.capability import run_prepared_command
 
 
 class HookEvent(StrEnum):
@@ -87,30 +88,41 @@ def _decision_from(value: object) -> HookDecision:
 class CommandHookRunner:
     command: tuple[str, ...]
     timeout: float
+    sandbox: SandboxRunner | None = None
+    read_paths: tuple[Path, ...] = ()
 
     async def run(self, context: HookContext) -> HookDecision:
-        process = await asyncio.create_subprocess_exec(
-            *self.command,
-            cwd=context.workspace,
-            stdin=asyncio.subprocess.PIPE,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
         payload = json.dumps(context.to_dict(), ensure_ascii=False).encode()
+        sandbox = self.sandbox or SandboxRunner(context.workspace, SandboxConfig())
         try:
-            stdout, stderr = await asyncio.wait_for(process.communicate(payload), timeout=self.timeout)
-        except TimeoutError:
-            process.kill()
-            await process.wait()
-            return HookDecision(allow=False, reason=f"hook timed out after {self.timeout:g}s")
-        output = stdout.decode(errors="replace").strip()
-        error = stderr.decode(errors="replace").strip()
-        if process.returncode == 2:
-            return HookDecision(allow=False, reason=error or output or "hook denied operation")
-        if process.returncode != 0:
+            result = await run_prepared_command(
+                sandbox.prepare(
+                    self.command_as_list,
+                    cwd=context.workspace,
+                    read_paths=self.read_paths,
+                ),
+                argv=self.command_as_list,
+                resolved_cwd=context.workspace,
+                cwd=str(context.workspace),
+                timeout_seconds=self.timeout,
+                sandbox_config=sandbox.config,
+                stdin_data=payload,
+            )
+        except Exception as error:
             return HookDecision(
                 allow=False,
-                reason=error or output or f"hook exited with status {process.returncode}",
+                reason=f"command hook failed closed: {type(error).__name__}: {error}",
+            )
+        if result["timed_out"]:
+            return HookDecision(allow=False, reason=f"hook timed out after {self.timeout:g}s")
+        output = str(result["stdout"]).strip()
+        error = str(result["stderr"]).strip()
+        if result["exit_code"] == 2:
+            return HookDecision(allow=False, reason=error or output or "hook denied operation")
+        if result["exit_code"] != 0:
+            return HookDecision(
+                allow=False,
+                reason=error or output or f"hook exited with status {result['exit_code']}",
             )
         if not output:
             return HookDecision()
@@ -119,6 +131,10 @@ class CommandHookRunner:
         except json.JSONDecodeError:
             return HookDecision(reason=output)
         return _decision_from(parsed)
+
+    @property
+    def command_as_list(self) -> list[str]:
+        return list(self.command)
 
 
 @dataclass(frozen=True, slots=True)
@@ -157,11 +173,17 @@ class HookBus:
         *,
         workspace: Path,
         search_path: Path,
+        sandbox_config: SandboxConfig | None = None,
     ) -> HookBus:
         bus = cls(workspace=workspace.resolve())
         for config in configs:
             if config.command is not None:
-                runner: HookRunner = CommandHookRunner(tuple(config.command), config.timeout)
+                runner: HookRunner = CommandHookRunner(
+                    tuple(config.command),
+                    config.timeout,
+                    SandboxRunner(workspace, sandbox_config or SandboxConfig()),
+                    _command_read_paths(config.command),
+                )
             else:
                 assert config.module is not None
                 runner = PythonHookRunner(
@@ -289,6 +311,17 @@ def _load_python_hook(
     if not callable(function):
         raise TypeError(f"hook module {module_name!r} has no callable {factory!r}")
     return cast(Callable[[HookContext], object], function)
+
+
+def _command_read_paths(command: list[str]) -> tuple[Path, ...]:
+    """Expose only explicit absolute hook resources outside the workspace."""
+
+    paths: list[Path] = []
+    for raw in command:
+        candidate = Path(raw).expanduser()
+        if candidate.is_absolute() and candidate.exists():
+            paths.append(candidate.resolve())
+    return tuple(paths)
 
 
 __all__ = [

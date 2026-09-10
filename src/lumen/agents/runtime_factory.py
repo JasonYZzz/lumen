@@ -137,6 +137,13 @@ class NativeAgentRuntimeFactory(AgentRuntimeFactory):
             "spawn_child",
             "wait_children",
             "cancel_child",
+            # Child worktrees are finalized and committed by the single
+            # Host-owned import path. Giving child models independent index,
+            # commit, or remote-push authority would create a second lifecycle
+            # authority and could bypass the parent approval seam.
+            "git_stage",
+            "git_commit",
+            "git_push",
         }
         if profile.tools is not None:
             unknown = set(profile.tools) - candidates

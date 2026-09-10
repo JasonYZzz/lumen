@@ -1449,14 +1449,25 @@ class WorkspaceHost:
             else self._require_live_manager().snapshot(command.run_id).ref.session_id
         )
         pending.decision = command.approved
-        if command.approved and command.scope in {"session", "always"}:
+        if (
+            command.approved
+            and command.scope in {"session", "always"}
+            and not ApprovalPolicy.requires_fresh_confirmation(pending.request.risk)
+        ):
             actor = self._actor(owning_session_id)
             key = self._approval_scope_key(pending.request)
             actor.approval_keys.add(key)
             if command.scope == "always":
                 self._approval_rules.allow(key)
         action = "allowed" if command.approved else "denied"
-        source = {"session": "user_session", "always": "user_always"}.get(command.scope, "user")
+        effective_scope = (
+            "once"
+            if ApprovalPolicy.requires_fresh_confirmation(pending.request.risk)
+            else command.scope
+        )
+        source = {"session": "user_session", "always": "user_always"}.get(
+            effective_scope, "user"
+        )
         pending.future.set_result(
             ToolApproval(
                 command.approved,
@@ -1640,7 +1651,10 @@ class WorkspaceHost:
                 source="collaboration_policy",
                 message=(f"blocked in plan collaboration mode (tool={request.name}, risk={request.risk})"),
             )
-        if self._approval_scope_key(request) in actor.approval_keys:
+        if (
+            not ApprovalPolicy.requires_fresh_confirmation(request.risk)
+            and self._approval_scope_key(request) in actor.approval_keys
+        ):
             return ApprovalDecision(
                 approved=True,
                 requires_confirmation=False,

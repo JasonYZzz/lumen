@@ -36,6 +36,8 @@ class PermissionPolicy:
     def decide(self, name: str, risk: Risk) -> PermissionDecision:
         if name in self.always_deny:
             return PermissionDecision.DENY
+        if risk is Risk.CONFIRM:
+            return PermissionDecision.CONFIRM
         if name in self.always_allow or risk is Risk.READ:
             return PermissionDecision.ALLOW
         return PermissionDecision.CONFIRM

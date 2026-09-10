@@ -294,10 +294,21 @@ def test_capability_builtin_names_are_accepted(tmp_path: Path) -> None:
 version: 2
 agent: {model: {id: test}}
 tools:
-  builtins: [read_file, write_file, edit_file, run_command]
+  builtins:
+    - read_file
+    - write_file
+    - edit_file
+    - run_command
+    - git_status
+    - git_diff
+    - git_stage
+    - git_commit
+    - git_push
 """,
     )
-    assert config.tools.builtins[-3:] == ["write_file", "edit_file", "run_command"]
+    assert config.tools.builtins[-5:] == [
+        "git_status", "git_diff", "git_stage", "git_commit", "git_push",
+    ]
 
 
 # ---------------------------------------------------------------------------

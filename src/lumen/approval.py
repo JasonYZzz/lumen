@@ -37,32 +37,6 @@ class ApprovalPolicy:
 
     _AUTO_RISKS = frozenset({"read", "write", "execute", "external"})
     _EDIT_TOOLS = frozenset({"write_file", "edit_file"})
-    _READ_ONLY_COMMANDS = frozenset(
-        {
-            "cat",
-            "du",
-            "fd",
-            "file",
-            "find",
-            "grep",
-            "head",
-            "ls",
-            "pwd",
-            "rg",
-            "stat",
-            "tail",
-            "tree",
-            "wc",
-            "which",
-            "whereis",
-        }
-    )
-    _READ_ONLY_GIT_COMMANDS = frozenset(
-        {"blame", "describe", "diff", "grep", "log", "ls-files", "rev-parse", "shortlog", "show", "status"}
-    )
-    _FIND_MUTATING_FLAGS = frozenset(
-        {"-delete", "-exec", "-execdir", "-fprint", "-fprint0", "-ok", "-okdir"}
-    )
     _COMMON_FILESYSTEM_COMMANDS = frozenset({"cp", "mkdir", "mv", "touch"})
     _PROTECTED_ROOTS = frozenset({".claude", ".git", ".lumen"})
 
@@ -77,7 +51,11 @@ class ApprovalPolicy:
             )
         if request.risk == "read":
             return self._auto_decision(parsed, request)
-        if request.risk == "external_unknown" or self._targets_protected_path(request):
+        if (
+            request.risk == "external_unknown"
+            or self.requires_fresh_confirmation(request.risk)
+            or self._targets_protected_path(request)
+        ):
             return ApprovalDecision()
         if parsed is ApprovalMode.MANUAL:
             return ApprovalDecision()
@@ -91,25 +69,22 @@ class ApprovalPolicy:
             return self._auto_decision(parsed, request)
         return ApprovalDecision()
 
-    @classmethod
-    def _is_read_only_command(cls, request: ApprovalRequest) -> bool:
-        if request.origin != "builtin" or request.name != "run_command":
-            return False
-        argv = request.args.get("argv")
-        if not isinstance(argv, list) or not argv:
-            return False
-        items = cast(list[object], argv)
-        command = os.path.basename(str(items[0]))
-        args = [str(item) for item in items[1:]]
-        if command == "git":
-            return bool(args) and args[0] in cls._READ_ONLY_GIT_COMMANDS
-        if command == "find":
-            return not any(item in cls._FIND_MUTATING_FLAGS for item in args)
-        return command in cls._READ_ONLY_COMMANDS
+    @staticmethod
+    def requires_fresh_confirmation(risk: str) -> bool:
+        """Whether remembered approval scopes must not authorize this call."""
+
+        return risk == "confirm"
 
     @classmethod
     def is_read_only(cls, request: ApprovalRequest) -> bool:
-        return request.risk == "read" or cls._is_read_only_command(request)
+        """Return whether the capability contract itself declares a read.
+
+        Executable names are not security identities: a workspace program can
+        call itself ``rg`` or ``cat`` while mutating files. Plan mode therefore
+        trusts only the registered capability risk, never command-line syntax.
+        """
+
+        return request.risk == "read"
 
     @classmethod
     def _is_workspace_filesystem_command(cls, request: ApprovalRequest) -> bool:

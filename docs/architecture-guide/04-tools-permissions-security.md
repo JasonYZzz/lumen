@@ -38,13 +38,17 @@ flowchart LR
 
 | Risk | 含义 | 示例 |
 |---|---|---|
-| `read` | 读取类审批级别，不推导 EffectKind | `read_file`、显式声明 read 的 MCP 工具 |
-| `write` | 修改工作区 | `write_file`、`edit_file` |
+| `read` | 读取类审批级别，不推导 EffectKind | `read_file`、`git_status`、显式声明 read 的 MCP 工具 |
+| `write` | 修改工作区或本地版本状态 | `write_file`、`edit_file`、`git_stage` |
 | `execute` | 启动进程或执行代码 | `run_command`、Skill script |
 | `external` | 已明确分类的远端操作 | `web_fetch`、`web_search` |
+| `confirm` | 每次都必须由用户新确认的发布动作 | `git_commit`、`git_push` |
 | `external_unknown` | 未声明语义的远端能力 | 新发现且未分类的 MCP 工具 |
 
 `external_unknown` 是故意设置的安全断点：auto 模式也不能自动批准它。
+`git_commit` 与 `git_push` 同样始终要求本次显式确认；不能靠 auto、session rule 或
+对 `run_command` 的永久放行静默发布版本历史。`confirm` 仍只决定审批，不推导副作用；
+未显式声明 EffectKind 的 confirm 工具按 unknown 处理。
 
 ## 4.3 审批模式
 
@@ -65,6 +69,10 @@ flowchart TD
 
 同一模型响应产生多个待批工具时，runtime 可以通过 batch callback 聚合；应用层仍以每个 `call_id` 保存最终决定和审计信息。
 
+Plan 只信任 Capability Contract 自己声明的 `Risk=read`。不再根据 `rg`、`cat`、`git diff`
+等 argv basename 猜测只读性，因为工作区可执行文件可以伪装成同名程序。Git 检查通过
+结构化 `git_status` / `git_diff` 完成；通用 `run_command` 在 Plan 中一律拒绝。
+
 允许范围分三层：`once` 只放行当前调用，`session` 写入当前 `_SessionActor.approval_keys`，`always` 额外写入项目级 `ApprovalRuleStore`。永久规则保存在 `~/.lumen/state/approval-rules/<project-id>.json`，使用与 session 相同的有界 key（`origin:tool[:executable]`），不会回写可能含凭据和注释的 YAML 配置。
 
 ## 4.4 工作区约束
@@ -82,6 +90,16 @@ flowchart TD
 `run_command` 使用 argv 直接执行，不经过 shell；stdout/stderr 并发 drain，只保留有界头尾，同时记录总字节数。取消或超时时终止整个进程组。
 
 命令还通过 `SandboxRunner` 执行：默认 `workspace_write` 在 macOS 使用 Seatbelt、Linux 使用 bubblewrap，隔离 `HOME`/临时目录、关闭网络并按 allow-list 构造环境；adapter 不可用时拒绝执行。`run_command` receipt 只证明命令执行，不声称捕获命令产生的全部文件副作用。
+
+Git mutation 不通过通用命令放宽 `.git`。可选 builtin `git_status`、`git_diff`、`git_stage`、
+`git_commit`、`git_push` 由 Host-owned `GitWorkspace` 实现：stage 只接受显式普通文件相对路径或删除，
+通过不执行 clean/process filter 的 plumbing 更新 index，目录和符号链接安全失败；commit
+核对 HEAD 与暂存区 fingerprint；push 核对 HEAD、分支、remote 名与脱敏 URL fingerprint，
+只接受无内嵌密码的 HTTPS/SSH remote。所有 Git 进程禁用 repository hooks，仍在 workspace
+OS sandbox 内执行，并禁用 fsmonitor 与自动维护；push 额外禁用 credential helper、代理、HTTP 重定向及非 HTTPS/SSH protocol，
+SSH 只使用 batch mode、已知主机文件与现有 SSH agent；需认证的 HTTPS push 在引入 Host credential
+broker 前应使用 SSH agent。只有 push 获得该次调用的网络能力。commit/push 始终要求显式审批，
+外部 push 继续产生可恢复的 external-action receipt。
 
 `web_fetch` 与按配置注册的 `web_search` 属于 `Risk=external`、`EffectKind=observe`，当前默认
 exclusive。抓取会在 DNS 解析和每次重定向后拒绝 loopback、私网与链路本地地址；`fetch_max_bytes`
@@ -106,7 +124,10 @@ Hook 支持 command adapter 与 Python adapter，事件包括：
 - `stop`；
 - `notification`。
 
-多个匹配 hook 串行执行，首个 deny 短路。pre hook 可以修改参数，post hook 可以修改结果。command hook 通过 stdin 接收 JSON context，并受超时控制。
+多个匹配 hook 串行执行，首个 deny 短路。pre hook 可以修改参数，post hook 可以修改结果。
+command hook 通过 stdin 接收 JSON context，并复用项目的 `SandboxRunner`、环境清理、网络策略、
+有界输出、超时及进程树终止。Python hook 与 Python tool plugin 是操作者显式配置的进程内受信代码，
+不宣称受子进程 OS sandbox 约束。
 
 pre hook 修改后的参数先完成 schema validation/coercion 并被冻结，再进入审批和单调 `ToolGuard`，
 因此审批、guard、恢复与实际执行看到完全相同的参数；post hook 只能改写返回模型的 `model_output` 投影，不能修改 canonical output、客户端
@@ -121,7 +142,7 @@ pre-invoke Adapter 意外抛出，`CapabilityGateway` 仍会 fail closed。
 2. **路径 confinement**：文件工具能访问的目录；
 3. **OS sandbox**：进程实际能访问的系统资源和网络。
 
-Lumen 当前三项都实现，但保证不同：审批是意图授权，`Workspace` 是路径解析约束，Seatbelt/bubblewrap 是 OS 强制。显式 `sandbox.mode: disabled` 会移除第三层，因此只应在受信环境使用；角色、Skill、插件与 child Agent 都不能扩大父级 sandbox 权限。
+Lumen 当前三项都实现，但保证不同：审批是意图授权，`Workspace` 是路径解析约束，Seatbelt/bubblewrap 是 OS 强制。显式 `sandbox.mode: disabled` 会移除第三层，因此只应在受信环境使用；角色、Skill 与 child Agent 都不能扩大父级 sandbox 权限。Python plugin/hook 在加载前必须由操作者信任，因为它们与其他 Python import 一样运行在 Host 进程内。
 
 `sandbox.network` 约束 `run_command` / Skill 脚本等 SandboxRunner 子进程，不是整个 Host 的网络开关。
 已配置 MCP transport 与内置 web 工具使用各自 Interface、审批和访问约束。命令内 curl 的失败不能

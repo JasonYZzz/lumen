@@ -22,6 +22,27 @@ from lumen.sandbox import SandboxRunner
 from lumen.tools.capability import run_prepared_command
 
 
+def test_child_snapshot_excludes_host_owned_git_mutations(tmp_path: Path) -> None:
+    resources = manager(tmp_path)
+    factory = resources.agent_runtime_factory
+    git_metadata = {
+        name: {"origin": "builtin", "risk": risk, "effect": effect}
+        for name, risk, effect in (
+            ("git_status", "read", "observe"),
+            ("git_diff", "read", "observe"),
+            ("git_stage", "write", "mutation"),
+            ("git_commit", "confirm", "mutation"),
+            ("git_push", "confirm", "external_action"),
+        )
+    }
+    factory.parent_tool_metadata = lambda: git_metadata
+    factory.enabled_builtins = tuple(git_metadata)
+
+    snapshot = factory.snapshot(resources.agent_profiles["worker"], approval_mode="manual")
+
+    assert snapshot.tool_names == ("git_diff", "git_status")
+
+
 @pytest.mark.parametrize("resolved", [False, True])
 async def test_async_writable_recovery_holds_completion_and_preserves_user_resolution(
     tmp_path: Path, resolved: bool,

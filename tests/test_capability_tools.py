@@ -7,9 +7,11 @@ from typing import Any
 
 import pytest
 
+from lumen.config import SandboxConfig
 from lumen.context.artifacts import ArtifactStore
+from lumen.sandbox import SandboxRunner
 from lumen.sessions import SessionRepository
-from lumen.tools.capability import build_capability_specs
+from lumen.tools.capability import build_capability_specs, run_prepared_command
 from lumen.tools.workspace import WorkspaceViolation
 from lumen.work_products import EffectStatus, TaskWorkspace
 
@@ -221,6 +223,32 @@ async def test_run_command_bounded_output_does_not_buffer_everything(tmp_path: P
     assert result["stdout_total_bytes"] == 4 * 1024 * 1024
     # Kept output is bounded to roughly head + tail + suffix.
     assert len(result["stdout"].encode("utf-8")) <= 2 * 64 * 1024 + 400
+
+
+async def test_prepared_command_pumps_stdin_and_stdout_without_deadlock(tmp_path: Path) -> None:
+    sandbox = SandboxRunner(tmp_path, SandboxConfig(mode="disabled"))
+    argv = [
+        sys.executable,
+        "-c",
+        "import sys; sys.stdout.write('x' * 1000000); sys.stdout.flush(); "
+        "data=sys.stdin.buffer.read(); sys.stderr.write(str(len(data)))",
+    ]
+    payload = b"y" * 1_000_000
+
+    result = await run_prepared_command(
+        sandbox.prepare(argv, cwd=tmp_path),
+        argv=argv,
+        resolved_cwd=tmp_path,
+        cwd=".",
+        timeout_seconds=5,
+        sandbox_config=sandbox.config,
+        stdin_data=payload,
+    )
+
+    assert result["exit_code"] == 0
+    assert result["timed_out"] is False
+    assert result["stdout_truncated"] is True
+    assert result["stderr"] == str(len(payload))
 
 
 def test_build_capability_specs_has_expected_risks(tmp_path: Path) -> None:

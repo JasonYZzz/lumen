@@ -41,6 +41,8 @@ class SandboxRunner:
         cwd: str | Path,
         overrides: dict[str, str] | None = None,
         read_paths: tuple[Path, ...] = (),
+        writable_protected_paths: tuple[Path, ...] = (),
+        workspace_writable: bool = True,
     ) -> PreparedSandboxCommand:
         if not argv:
             raise ValueError("argv must not be empty")
@@ -65,9 +67,23 @@ class SandboxRunner:
                 return PreparedSandboxCommand(command, environment, temp_root)
             system = platform.system()
             if system == "Darwin":
-                wrapped = self._seatbelt(command, Path(cwd).resolve(), temp_root, read_paths)
+                wrapped = self._seatbelt(
+                    command,
+                    Path(cwd).resolve(),
+                    temp_root,
+                    read_paths,
+                    writable_protected_paths=writable_protected_paths,
+                    workspace_writable=workspace_writable,
+                )
             elif system == "Linux":
-                wrapped = self._bubblewrap(command, Path(cwd).resolve(), temp_root, read_paths)
+                wrapped = self._bubblewrap(
+                    command,
+                    Path(cwd).resolve(),
+                    temp_root,
+                    read_paths,
+                    writable_protected_paths=writable_protected_paths,
+                    workspace_writable=workspace_writable,
+                )
             else:
                 raise SandboxUnavailableError(
                     f"sandbox_unavailable: no sandbox adapter for {system or 'unknown platform'}"
@@ -115,12 +131,18 @@ class SandboxRunner:
             candidates.extend((Path(value), Path(value).resolve()))
         return _dedupe_existing(candidates)
 
-    def _write_roots(self, temp_root: Path) -> list[Path]:
+    def _write_roots(self, temp_root: Path, *, workspace_writable: bool) -> list[Path]:
         return _dedupe_existing(
             [
-                self.workspace,
                 temp_root,
-                *(Path(item).expanduser().resolve() for item in self.config.extra_write_paths),
+                *(
+                    [
+                        self.workspace,
+                        *(Path(item).expanduser().resolve() for item in self.config.extra_write_paths),
+                    ]
+                    if workspace_writable
+                    else []
+                ),
             ]
         )
 
@@ -130,6 +152,9 @@ class SandboxRunner:
         cwd: Path,
         temp_root: Path,
         read_paths: tuple[Path, ...],
+        *,
+        writable_protected_paths: tuple[Path, ...],
+        workspace_writable: bool,
     ) -> list[str]:
         adapter = Path("/usr/bin/sandbox-exec")
         if not adapter.is_file():
@@ -144,7 +169,8 @@ class SandboxRunner:
             # ``subpath`` rules below do not include their ancestor entry.
             '(allow file-read* (literal "/"))',
         ]
-        read_roots = _dedupe_existing([*self._read_roots(command, read_paths), *self._write_roots(temp_root)])
+        write_roots = self._write_roots(temp_root, workspace_writable=workspace_writable)
+        read_roots = _dedupe_existing([*self._read_roots(command, read_paths), *write_roots])
         clauses.extend(
             f'(allow file-read* (subpath "{_escape(path)}"))'
             for path in read_roots
@@ -165,11 +191,19 @@ class SandboxRunner:
         clauses.append('(allow file-write* (literal "/dev/null"))')
         clauses.extend(
             f'(allow file-write* (subpath "{_escape(path)}"))'
-            for path in self._write_roots(temp_root)
+            for path in write_roots
         )
+        writable_protected = {Path(os.path.abspath(path)) for path in writable_protected_paths}
         for protected in (self.workspace / ".git", self.workspace / ".lumen"):
-            if protected.exists():
-                clauses.append(f'(deny file-write* (subpath "{_escape(protected)}"))')
+            if protected in writable_protected:
+                clauses.append(f'(allow file-write* (subpath "{_escape(protected)}"))')
+                continue
+            # ``literal`` blocks creation of the root itself; ``subpath``
+            # protects descendants when it already exists. Keep both rules
+            # unconditional so an empty workspace cannot create control
+            # state during the command.
+            clauses.append(f'(deny file-write* (literal "{_escape(protected)}"))')
+            clauses.append(f'(deny file-write* (subpath "{_escape(protected)}"))')
         if self.config.network:
             clauses.append("(allow network*)")
         clauses.append(f'(allow file-read* (subpath "{_escape(cwd)}"))')
@@ -181,6 +215,9 @@ class SandboxRunner:
         cwd: Path,
         temp_root: Path,
         read_paths: tuple[Path, ...],
+        *,
+        writable_protected_paths: tuple[Path, ...],
+        workspace_writable: bool,
     ) -> list[str]:
         adapter_value = shutil.which("bwrap")
         if adapter_value is None:
@@ -192,10 +229,11 @@ class SandboxRunner:
         read_roots = self._read_roots(command, read_paths)
         for path in read_roots:
             args.extend(["--ro-bind", str(path), str(path)])
-        for path in self._write_roots(temp_root):
+        for path in self._write_roots(temp_root, workspace_writable=workspace_writable):
             args.extend(["--bind", str(path), str(path)])
+        writable_protected = {Path(os.path.abspath(path)) for path in writable_protected_paths}
         for protected in (self.workspace / ".git", self.workspace / ".lumen"):
-            if protected.exists():
+            if protected not in writable_protected and protected.exists():
                 args.extend(["--ro-bind", str(protected), str(protected)])
         args.extend(["--chdir", str(cwd), "--", *command])
         return args

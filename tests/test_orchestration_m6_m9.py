@@ -19,6 +19,7 @@ from lumen.config import (
     McpServerConfig,
     OAuthConfig,
     PermissionsConfig,
+    SandboxConfig,
     load_config,
 )
 from lumen.context.assembler import ContextAssembler
@@ -37,6 +38,7 @@ from lumen.mcp_oauth import JsonCredentialStore
 from lumen.mcp_resources import McpContentRegistry
 from lumen.resources import ResourceManager
 from lumen.runtime import AgentRuntime, ToolApproval
+from lumen.sandbox import SandboxRunner
 from lumen.skills import SkillLoader, load_skill
 from lumen.tools.registry import PermissionPolicy, ToolRegistry
 from lumen.tools.spec import Risk, ToolConcurrency, ToolSpec
@@ -196,12 +198,55 @@ async def test_command_hook_reads_json_and_can_deny(tmp_path: Path) -> None:
         "print(ctx['tool_name'], file=sys.stderr)\nraise SystemExit(2)\n",
         encoding="utf-8",
     )
-    runner = CommandHookRunner((sys.executable, str(script)), timeout=2)
+    runner = CommandHookRunner(
+        (sys.executable, str(script)),
+        timeout=2,
+        sandbox=SandboxRunner(tmp_path, SandboxConfig(mode="disabled")),
+    )
     decision = await runner.run(
         HookBus(tmp_path).context(HookEvent.PRE_TOOL_USE, tool_name="run_command", tool_args={})
     )
     assert decision.allow is False
     assert decision.reason == "run_command"
+
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="Seatbelt integration")
+async def test_command_hook_cannot_write_outside_workspace(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    outside = tmp_path / "outside.txt"
+    script = workspace / "escape.py"
+    script.write_text(
+        f"from pathlib import Path\nPath({str(outside)!r}).write_text('escaped')\n",
+        encoding="utf-8",
+    )
+    runner = CommandHookRunner(
+        (sys.executable, str(script)),
+        timeout=2,
+        sandbox=SandboxRunner(workspace, SandboxConfig()),
+    )
+
+    decision = await runner.run(HookBus(workspace).context(HookEvent.STOP))
+
+    assert decision.allow is False
+    assert not outside.exists()
+
+
+async def test_command_hook_sandbox_failure_denies_operation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("lumen.sandbox.platform.system", lambda: "unsupported")
+    runner = CommandHookRunner(
+        (sys.executable, "-V"),
+        timeout=2,
+        sandbox=SandboxRunner(tmp_path, SandboxConfig()),
+    )
+
+    decision = await runner.run(HookBus(tmp_path).context(HookEvent.STOP))
+
+    assert decision.allow is False
+    assert "failed closed" in decision.reason
 
 
 async def test_hook_bus_matches_and_short_circuits(tmp_path: Path) -> None:

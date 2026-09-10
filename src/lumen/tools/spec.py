@@ -18,6 +18,10 @@ class Risk(StrEnum):
     WRITE = "write"
     EXECUTE = "execute"
     EXTERNAL = "external"
+    #: A sensitive local or external publication that requires a fresh user
+    #: decision for every invocation. ``always_allow`` and remembered session
+    #: rules cannot weaken it.
+    CONFIRM = "confirm"
     #: Undeclared remote (MCP) tool. Distinct from ``EXTERNAL`` because the
     #: operator never explicitly marked this tool safe — the legacy blanket
     #: ``external`` risk used to auto-approve unknown MCP tools like

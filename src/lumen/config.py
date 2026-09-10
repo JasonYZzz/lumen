@@ -332,6 +332,11 @@ class ToolsConfig(StrictModel):
             "write_file",
             "edit_file",
             "run_command",
+            "git_status",
+            "git_diff",
+            "git_stage",
+            "git_commit",
+            "git_push",
         ]
     ] = Field(default_factory=lambda: ["read_file", "list_directory", "search_text", "web_fetch"])
     plugins: list[PluginConfig] = Field(default_factory=list[PluginConfig])

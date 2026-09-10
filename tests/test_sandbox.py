@@ -8,7 +8,7 @@ import pytest
 
 from lumen.config import SandboxConfig
 from lumen.sandbox import SandboxRunner, SandboxUnavailableError
-from lumen.tools.capability import build_capability_specs
+from lumen.tools.capability import build_capability_specs, run_prepared_command
 
 
 def test_unresolvable_executable_cleans_temporary_home(
@@ -87,6 +87,55 @@ async def test_seatbelt_keeps_private_files_and_journal_protected(tmp_path: Path
         assert result["exit_code"] != 0
         assert "PermissionError" in result["stderr"]
     assert journal.read_text() == "original"
+
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="Seatbelt integration")
+@pytest.mark.parametrize("name", [".git", ".lumen"])
+async def test_seatbelt_blocks_creation_of_missing_control_roots(tmp_path: Path, name: str) -> None:
+    command = next(
+        spec for spec in build_capability_specs(
+            tmp_path, max_timeout=5, sandbox_config=SandboxConfig(),
+        ) if spec.name == "run_command"
+    )
+
+    result = await command.function(["/bin/mkdir", name])
+
+    assert result["exit_code"] != 0
+    assert not (tmp_path / name).exists()
+
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="Seatbelt integration")
+async def test_seatbelt_protected_write_exception_is_path_specific(tmp_path: Path) -> None:
+    git_dir = tmp_path / ".git"
+    lumen_dir = tmp_path / ".lumen"
+    git_dir.mkdir()
+    lumen_dir.mkdir()
+    # Exercise the same narrow preparation exception used by GitWorkspace.
+    sandbox = SandboxRunner(tmp_path, SandboxConfig())
+    argv = [
+        sys.executable,
+        "-c",
+        "from pathlib import Path; Path('.git/allowed').write_text('ok'); "
+        "Path('.lumen/denied').write_text('bad')",
+    ]
+    prepared = sandbox.prepare(
+        argv,
+        cwd=tmp_path,
+        writable_protected_paths=(git_dir,),
+    )
+
+    result = await run_prepared_command(
+        prepared,
+        argv=argv,
+        resolved_cwd=tmp_path,
+        cwd=".",
+        timeout_seconds=5,
+        sandbox_config=sandbox.config,
+    )
+
+    assert result["exit_code"] != 0
+    assert (git_dir / "allowed").read_text() == "ok"
+    assert not (lumen_dir / "denied").exists()
 
 
 @pytest.mark.skipif(sys.platform != "darwin", reason="Seatbelt policy")

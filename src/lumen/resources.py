@@ -152,6 +152,7 @@ class ResourceManager:
             config.hooks,
             workspace=self.workspace,
             search_path=config.config_path.parent,
+            sandbox_config=config.sandbox,
         )
         # Skill discovery is dynamic request context; it is intentionally not
         # folded into the stable provider instructions.

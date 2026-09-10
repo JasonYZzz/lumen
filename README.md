@@ -45,7 +45,9 @@ flowchart LR
 - stdio 与 Streamable HTTP MCP；工具统一使用 `<server>_<tool>` 名称，通过 `search_tools` 的有界目录、关键词搜索或分页浏览发现后加载完整 schema，`/mcp` 查看连接状态。只有明确声明 `tool_effects: observe` 的调用在断线后自动重连重试一次；其他调用返回 `mcp_outcome_unknown`，要求先核实远端结果。
 - 内置只读工具 `read_file`、`list_directory`、`search_text`，严格限制在 `--cwd` 工作区内；
   `search_text.path` 可传文件或目录，传文件时只搜索该文件。
-- 可选启用的工作区能力工具 `write_file`、`edit_file`、`run_command`，默认需要审批。
+- 可选启用的工作区能力工具 `write_file`、`edit_file`、`run_command`；结构化 Git 工具
+  `git_status`、`git_diff`、`git_stage`、`git_commit`、`git_push` 在不解除整个沙箱的情况下
+  完成版本交付，其中 commit/push 始终需要显式审批。
 - 计划与公开进度：模型在动手前调用 `set_plan`，过程中通过 `report_progress` 输出简短、公开的进度说明。
 - **Agent Skills**：扫描 `.lumen/skills/` 和 `~/.lumen/skills/` 发现 `SKILL.md` 技能包，模型自主按需加载或用户手动 `/skill:<name>` 触发；精确正文以内容寻址 artifact 固定在当前 session，resume 恢复同一 revision。
 - **显式并发契约**：默认 `parallel_safe`；显式 `sequential` 逐个执行。原生 Loop 中 `parallel_safe` 和 `parallel` 都只重叠 Gateway 判定为 `ToolConcurrency.PARALLEL_SAFE` 的调用，未声明并发能力时串行。工具完成立即显示，模型结果仍按调用顺序回填。Risk 只决定审批；同轮审批聚合展示。
@@ -83,6 +85,16 @@ flowchart LR
 - `write_file(path, content, overwrite=False)`：UTF-8 原子写入；默认拒绝覆盖，需显式 `overwrite=True`。
 - `edit_file(path, find, replace)`：要求 `find` 在文件中精确出现一次，否则失败。
 - `run_command(argv, cwd=".", timeout=None, env=None)`：以 `argv` 数组直接 `exec`，**不经过 shell**；超时或取消时终止整个进程组；stdout/stderr 并发 drain,各自只保留头尾各 64 KiB(中间丢弃但计入总字节数),所以 100 MB 的输出也不会撑爆内存,同时开头和结尾(通常是真正的报错/堆栈)都保留可见。
+- `git_status()` / `git_diff(staged=False, paths=None)`：Plan 可用的结构化只读 Git Interface；
+  禁用 repository hook、external diff 和 textconv，remote URL 脱敏并返回 fingerprint。
+- `git_stage(paths, expected_head)`：仅暂存明确列出的普通文件相对路径或删除；使用不经过
+  clean/process filter 的 Git plumbing 更新 index，目录、符号链接或 HEAD 变化时安全失败。
+- `git_commit(message, expected_head, expected_index_fingerprint)`：只提交已经审查的暂存区；
+  HEAD 或 index fingerprint 变化时安全失败，始终要求显式审批。
+- `git_push(remote, branch, expected_head, expected_remote_url, expected_remote_fingerprint)`：只推送指定 SHA 到已配置、
+  已核对 fingerprint 的 HTTPS/SSH remote；禁用 repository hook、fsmonitor、credential helper、代理、
+  重定向、自动维护与其他 protocol，SSH 仅使用已有 agent 和 known_hosts。需认证的 HTTPS push
+  当前不调用系统 credential helper，应使用 SSH agent。只有该调用获得网络能力，始终要求显式审批。
 - `web_fetch(url, start_char=1, max_chars=20000)`：读取网页、API、JSON 或 RSS/XML 的默认工具，不写工作区。HTML 转为保留链接的 plain text，结构化文本原样返回，支持按 `next_start_char` 翻页；请求携带明确的 Accept/User-Agent，对 408/425/429/5xx 和传输故障最多尝试 3 次并遵守数值型 `Retry-After`。响应按流式 2 MiB 上限停止读取。SSRF 防护：DNS 解析后拒绝 loopback/私网/链路本地地址，重定向逐跳重新校验。`Risk=external`（默认需审批），`EffectKind=observe`；当前未声明并发策略，按 exclusive 执行。
 - `web_search(query)`：需在 `tools.web.search` 配置 provider（`tavily` 或 `brave`）与 `api_key_env` 后才会注册；返回 `title — url — snippet` 行。
 - `download_file(url, path, overwrite=False, sha256=None)`：仅用于把已知原始 URL 的完整 UTF-8 文件保存到工作区；读取网页、API 或 RSS 应使用 `web_fetch`。它不经模型转写或 HTML 提取，仅返回路径、字节数和 SHA-256；与 `web_fetch` 使用相同的请求标识和瞬时故障重试，并继续流式限制下载大小、拒绝二进制、HTML、哈希不符和路径逃逸，最后原子发布并通过 TaskWorkspace journal 验证。`Risk=external`、`EffectKind=mutation`，默认需审批，Plan 模式不允许执行；需加入 `tools.builtins` 显式启用。
@@ -101,6 +113,11 @@ tools:
     - write_file
     - edit_file
     - run_command
+    - git_status
+    - git_diff
+    - git_stage
+    - git_commit
+    - git_push
   web:
     fetch_timeout_seconds: 20
     fetch_max_bytes: 2097152
@@ -147,7 +164,9 @@ tools:
 - **`manual`（默认）** —— 读取直接放行；文件修改、命令和外部动作显示确认列表。
 - **`accept_edits`** —— 自动批准工作区内置 `write_file` / `edit_file` 以及路径不逃逸工作区的 `mkdir` / `touch` / `mv` / `cp`；其余命令、插件与 MCP 写操作仍需确认。
 - **`collaboration: plan`** —— 自动放行读取和严格白名单内的只读检查命令；写入、变更命令与外部操作直接阻止。非空且全 pending 的计划进入 revision review；批准记录持久化后才以新 turn 执行。
-- **`auto`** —— 自动批准已明确分类为 `read` / `write` / `execute` / `external` 的操作。未声明风险的远端能力归类为 `external_unknown`，始终需要确认。
+- **`auto`** —— 自动批准已明确分类为 `read` / `write` / `execute` / `external` 的操作。
+  `confirm`（例如 commit/push）与未声明远端能力的 `external_unknown` 始终需要本次确认，
+  `always_allow` 和已记住的 session/project rule 也不能放宽。
 
 `Shift+Tab` 按 `manual → accept_edits → plan → auto` 循环，切到 `auto` 立即生效，不弹确认框或成功提示。模式切换不会追溯批准已经显示的 pending 请求。MCP 工具默认 risk=`external_unknown`；只有显式声明风险后才可能在 auto 下自动放行。
 
@@ -1038,8 +1057,9 @@ Web 的“查看并处理”可按单条操作记录人工确认依据，沿用 
 ## Hooks
 
 `hooks` 可绑定 `user_prompt_submit`、`pre_tool_use`、`post_tool_use`、`stop` 与
-`notification`。Command hook 从 stdin 接收 JSON，不启用 shell；Python hook 指向
-`module` + `factory`。完整 context、退出码和 decision 语义见 `docs/hooks/README.md`。
+`notification`。Command hook 从 stdin 接收 JSON，不启用 shell，并复用项目的 OS sandbox、
+网络策略、环境清理、输出限制和进程树终止；Python hook 指向 `module` + `factory`，属于操作者
+信任的进程内代码。完整 context、退出码和 decision 语义见 `docs/hooks/README.md`。
 
 ```yaml
 hooks:

@@ -56,12 +56,18 @@ def test_registry_rejects_duplicate_names(tmp_path: Path) -> None:
 
 
 def test_permission_policy_applies_deny_allow_and_risk_order() -> None:
-    policy = PermissionPolicy(PermissionsConfig(always_allow=["write_note"], always_deny=["blocked"]))
+    policy = PermissionPolicy(
+        PermissionsConfig(
+            always_allow=["write_note", "publish"],
+            always_deny=["blocked"],
+        )
+    )
 
     assert policy.decide("blocked", Risk.READ) is PermissionDecision.DENY
     assert policy.decide("write_note", Risk.WRITE) is PermissionDecision.ALLOW
     assert policy.decide("read_file", Risk.READ) is PermissionDecision.ALLOW
     assert policy.decide("run_task", Risk.EXECUTE) is PermissionDecision.CONFIRM
+    assert policy.decide("publish", Risk.CONFIRM) is PermissionDecision.CONFIRM
 
 
 def test_local_tools_are_hidden_or_marked_for_approval(tmp_path: Path) -> None:
@@ -110,6 +116,7 @@ def test_tool_concurrency_is_explicit_and_can_classify_arguments() -> None:
     )
 
     assert ToolSpec(sample_tool, risk=Risk.READ).concurrency_for({}) is ToolConcurrency.EXCLUSIVE
+    assert ToolSpec(sample_tool, risk=Risk.CONFIRM).effect is EffectKind.UNKNOWN
     assert spec.concurrency_for({"value": "read:a"}) is ToolConcurrency.PARALLEL_SAFE
     assert spec.concurrency_for({"value": "write:a"}) is ToolConcurrency.EXCLUSIVE
 

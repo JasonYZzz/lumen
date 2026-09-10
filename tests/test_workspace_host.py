@@ -1360,6 +1360,57 @@ async def test_workspace_host_remembers_bounded_approval_for_the_session(
     assert executions == ["note-1", "note-2"]
 
 
+async def test_workspace_host_never_remembers_fresh_confirmation_risk(
+    tmp_path: Path,
+) -> None:
+    model_step = 0
+    executions: list[str] = []
+
+    def publish(value: str) -> str:
+        executions.append(value)
+        return value
+
+    async def stream(_messages: list[ModelMessage], _info: AgentInfo):  # type: ignore[no-untyped-def]
+        nonlocal model_step
+        model_step += 1
+        if model_step <= 2:
+            yield {
+                0: DeltaToolCall(
+                    "publish",
+                    f'{{"value":"release-{model_step}"}}',
+                    tool_call_id=f"publish-{model_step}",
+                )
+            }
+        else:
+            yield "done"
+
+    runtime = AgentRuntime(
+        model=FunctionModel(stream_function=stream),
+        tools=[Tool(publish, sequential=True, requires_approval=True)],
+        toolsets=[],
+        instructions="help",
+        limits=LimitsConfig(),
+        tool_metadata={"publish": {"origin": "builtin", "risk": "confirm"}},
+    )
+    host = WorkspaceHost(LocalResources(tmp_path, runtime))  # type: ignore[arg-type]
+    await host.open()
+    try:
+        session = await host.dispatch(CreateSession())
+        started = await host.dispatch(StartRun(session.session_id, "publish twice", "fresh"))
+        pending_calls: list[str] = []
+        async for event in host.subscribe(started.run_id):
+            if event.type == "approval.pending":
+                pending_calls.append(str(event.data["call_id"]))
+                await host.dispatch(
+                    DecideApproval(started.run_id, str(event.data["call_id"]), True, "always")
+                )
+    finally:
+        await host.close()
+
+    assert pending_calls == ["publish-1", "publish-2"]
+    assert executions == ["release-1", "release-2"]
+
+
 async def test_workspace_host_persists_always_rules_across_hosts(tmp_path: Path) -> None:
     """scope="always" survives host restarts via the project rule store."""
 

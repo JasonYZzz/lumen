@@ -71,7 +71,14 @@ Lumen 是通用、可配置的 Agent framework。模型 provider 是可替换实
 - 未声明的 MCP/插件副作用默认 `unknown`；未知外部动作不能在恢复时自动重放。
 - 文件访问必须经过 workspace 路径解析，拒绝 `..`、绝对路径逃逸和符号链接逃逸。
 - `run_command` 只能声明 execution receipt，不能声称完整捕获任意命令产生的文件副作用。
-- Sandbox 与审批正交。`workspace_write` 必须 fail closed；角色、Skill、插件或子 Agent不能扩大父级权限。
+- Plan 模式只信任 Capability Contract 的 `Risk=read`；不得按 `rg`、`cat`、`git diff` 等 argv
+  basename 猜测命令只读。Git 检查使用结构化 `git_status` / `git_diff`。
+- Git stage/commit/push 由根 Host 的结构化 Interface 持有；stage 不执行 repository content filter，
+  commit/push 使用 `Risk=confirm`，
+  每次都要新审批，不能被 auto、session/project rule 或 child Agent 放宽。
+- Sandbox 与审批正交。`workspace_write` 必须 fail closed；角色、Skill 或子 Agent 不能扩大父级权限。
+- command Hook 必须复用项目 SandboxRunner 并在启动/沙箱失败时拒绝；Python Hook/Plugin 是操作者
+  明确信任的 Host 进程内代码，不得描述为受子进程 OS sandbox 保护。
 - 不把 secret、API key、个人数据或完整凭据写入日志、Session、测试 fixture、diff 或 Artifact 摘要。
 
 ### TaskWorkspace

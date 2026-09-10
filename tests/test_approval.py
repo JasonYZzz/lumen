@@ -45,10 +45,18 @@ def test_approval_policy_classifies_plan_reads_and_accept_edits_boundaries() -> 
     local_mkdir = _request("run_command", "execute", args={"argv": ["mkdir", "outputs"]})
     escaping_mkdir = _request("run_command", "execute", args={"argv": ["mkdir", "../outside"]})
 
-    assert policy.is_read_only(inspect)
+    assert not policy.is_read_only(inspect)
     assert not policy.is_read_only(mutate)
+    assert policy.is_read_only(_request("git_diff", "read"))
     assert policy.decide(local_mkdir, ApprovalMode.ACCEPT_EDITS).approved
     assert policy.decide(escaping_mkdir, ApprovalMode.ACCEPT_EDITS).requires_confirmation
+
+
+def test_commit_and_push_always_require_explicit_confirmation() -> None:
+    policy = ApprovalPolicy()
+
+    assert policy.decide(_request("git_commit", "confirm"), ApprovalMode.AUTO).requires_confirmation
+    assert policy.decide(_request("git_push", "confirm"), ApprovalMode.AUTO).requires_confirmation
 
 
 def test_auto_keeps_protected_configuration_edits_approval_gated() -> None:

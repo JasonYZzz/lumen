@@ -52,6 +52,7 @@ class ApprovalControllerMixin(MessagePump):
 
         if (
             self._collaboration_mode is not CollaborationMode.PLAN
+            and not ApprovalPolicy.requires_fresh_confirmation(request.risk)
             and self._approval_scope_key(request) in self._session_approval_keys
         ):
             return ToolApproval(
@@ -90,6 +91,7 @@ class ApprovalControllerMixin(MessagePump):
         for request in requests:
             if (
                 self._collaboration_mode is not CollaborationMode.PLAN
+                and not ApprovalPolicy.requires_fresh_confirmation(request.risk)
                 and self._approval_scope_key(request) in self._session_approval_keys
             ):
                 results[request.call_id] = ToolApproval(
@@ -199,17 +201,29 @@ class ApprovalControllerMixin(MessagePump):
         panel.resolve(event.call_id)
         if future is None or future.done():
             return
-        if event.scope != "once" and request is not None and request.call_id == event.call_id:
+        if (
+            event.scope != "once"
+            and request is not None
+            and request.call_id == event.call_id
+            and not ApprovalPolicy.requires_fresh_confirmation(request.risk)
+        ):
             # Session-scoped convenience for this UI; the host journal records
             # the same decision and owns persistent "always" rule storage.
             self._session_approval_keys.add(self._approval_scope_key(request))
         action = "allowed" if event.approved else "denied"
-        source = {"session": "user_session", "always": "user_always"}.get(event.scope, "user")
+        effective_scope = (
+            "once"
+            if request is not None and ApprovalPolicy.requires_fresh_confirmation(request.risk)
+            else event.scope
+        )
+        source = {"session": "user_session", "always": "user_always"}.get(
+            effective_scope, "user"
+        )
         message = (
             f"The user {action} this tool call (mode={self._approval_mode.value}, decision_source={source})."
         )
         future.set_result(
-            ToolApproval(approved=event.approved, message=message, remember_scope=event.scope)
+            ToolApproval(approved=event.approved, message=message, remember_scope=effective_scope)
         )
         if panel.active_request is None:
             self.query_one("#prompt", PromptEditor).focus()

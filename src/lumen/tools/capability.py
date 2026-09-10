@@ -250,11 +250,13 @@ async def run_prepared_command(
     cwd: str,
     timeout_seconds: float,
     sandbox_config: SandboxConfig,
+    stdin_data: bytes | None = None,
 ) -> dict[str, Any]:
     """Run an already-authorized command with bounded output and process-tree cleanup."""
     start = time.monotonic()
     spawn = asyncio.create_task(asyncio.create_subprocess_exec(
-        *prepared.argv, cwd=str(resolved_cwd), stdin=asyncio.subprocess.DEVNULL,
+        *prepared.argv, cwd=str(resolved_cwd),
+        stdin=(asyncio.subprocess.PIPE if stdin_data is not None else asyncio.subprocess.DEVNULL),
         stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
         env=prepared.env, start_new_session=True,
     ))
@@ -279,7 +281,12 @@ async def run_prepared_command(
     try:
         try:
             await asyncio.wait_for(
-                _drain_streams(process, stdout_collector, stderr_collector),
+                _communicate(
+                    process,
+                    stdout_collector,
+                    stderr_collector,
+                    stdin_data=stdin_data,
+                ),
                 timeout=timeout_seconds,
             )
         except TimeoutError:
@@ -364,6 +371,40 @@ async def _drain_streams(
     neither pipe stalls the process.
     """
     await asyncio.gather(
+        _drain_stream(process.stdout, stdout_collector),
+        _drain_stream(process.stderr, stderr_collector),
+        process.wait(),
+    )
+
+
+async def _write_stdin(stream: asyncio.StreamWriter | None, data: bytes | None) -> None:
+    if stream is None:
+        return
+    try:
+        if data is not None:
+            stream.write(data)
+            await stream.drain()
+    except (BrokenPipeError, ConnectionResetError):
+        # A hook/command may intentionally exit without consuming the complete
+        # payload. Its exit status remains authoritative.
+        pass
+    finally:
+        stream.close()
+        try:
+            await stream.wait_closed()
+        except (BrokenPipeError, ConnectionResetError):
+            pass
+
+
+async def _communicate(
+    process: asyncio.subprocess.Process,
+    stdout_collector: BoundedCollector,
+    stderr_collector: BoundedCollector,
+    *,
+    stdin_data: bytes | None,
+) -> None:
+    await asyncio.gather(
+        _write_stdin(process.stdin, stdin_data),
         _drain_stream(process.stdout, stdout_collector),
         _drain_stream(process.stderr, stderr_collector),
         process.wait(),

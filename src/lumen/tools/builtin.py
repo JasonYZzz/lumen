@@ -15,6 +15,7 @@ from pydantic import Field
 from lumen.config import SandboxConfig
 from lumen.constants import IGNORED_DIRS
 from lumen.tools.capability import build_capability_specs
+from lumen.tools.git import build_git_specs
 from lumen.tools.spec import Risk, ToolConcurrency, ToolSpec
 from lumen.tools.workspace import Workspace, WorkspaceViolation
 
@@ -291,5 +292,10 @@ def build_builtin_specs(
             max_timeout=max_timeout,
             sandbox_config=sandbox_config,
             task_workspace=task_workspace,
+        ),
+        *build_git_specs(
+            root,
+            max_timeout=max_timeout,
+            sandbox_config=sandbox_config,
         ),
     ]

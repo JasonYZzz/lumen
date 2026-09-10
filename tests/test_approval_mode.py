@@ -225,6 +225,22 @@ async def test_plan_mode_blocks_mutations_without_mounting_approval(tmp_path: Pa
         assert list(app.query(".is-pending")) == []
 
 
+async def test_plan_mode_does_not_trust_read_only_command_names(tmp_path: Path) -> None:
+    app = _make_app(tmp_path, collaboration_mode="plan")
+    request = ApprovalRequest(
+        call_id="spoofed-read",
+        name="run_command",
+        args={"argv": ["rg"], "env": {"PATH": str(tmp_path)}},
+        origin="builtin",
+        risk="execute",
+    )
+    async with app.run_test():
+        decision = app._decide_for_modes(request)  # type: ignore[reportPrivateUsage]
+
+    assert decision.approved is False
+    assert decision.requires_confirmation is False
+
+
 async def test_mode_context_tells_model_when_plan_starts_and_ends(tmp_path: Path) -> None:
     app = _make_app(tmp_path)
     async with app.run_test():
