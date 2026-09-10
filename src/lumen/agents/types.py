@@ -4,11 +4,12 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from enum import StrEnum
-from typing import Any, Literal
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from lumen.plan import EvidenceReceipt
+from lumen.reasoning import ReasoningLevel, ReasoningSelection
 from lumen.work_products import EffectReceipt
 
 
@@ -72,7 +73,7 @@ class AgentProfile(BaseModel):
     workspace_mode: WorkspaceMode = WorkspaceMode.READ_ONLY
     tools: tuple[str, ...] | None = None
     model: str | None = None
-    reasoning_effort: Literal["minimal", "low", "medium", "high", "xhigh"] | None = None
+    reasoning_effort: ReasoningLevel | None = None
     source: str = "builtin"
     file_path: str | None = None
     revision: str = ""
@@ -96,7 +97,8 @@ class AgentConfigSnapshot(BaseModel):
 
     model_name: str
     model_id: str
-    reasoning_effort: Literal["minimal", "low", "medium", "high", "xhigh"] | None = None
+    reasoning_effort: ReasoningLevel | None = None
+    reasoning: ReasoningSelection | None = None
     tool_names: tuple[str, ...] = ()
     tool_policies: tuple[AgentToolPolicy, ...] = ()
     approval_mode: str = "manual"

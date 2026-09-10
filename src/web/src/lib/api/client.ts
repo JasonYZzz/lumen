@@ -18,6 +18,7 @@ import type {
   LiveStartResponse,
   McpPromptItem,
   ModelConfigurationInput,
+  ReasoningSelection,
   QueueMode,
   RunStartedResponse,
   SessionSnapshot,
@@ -79,6 +80,9 @@ export const lumenApi = {
   bootstrap: () => requestJson<Bootstrap>('/api/v1/bootstrap'),
   capabilities: () => requestJson<CapabilityInventory>('/api/v1/capabilities'),
   configuration: () => requestJson<ConfigurationSnapshot>('/api/v1/configuration'),
+  inspectReasoning: (definition: ModelConfigurationInput) => requestJson<{ reasoning: ReasoningSelection }>(
+    '/api/v1/configuration/reasoning', { method: 'POST', body: JSON.stringify(definition) },
+  ),
   upsertModelConfiguration: (name: string, input: ModelConfigurationInput) =>
     requestJson<ConfigurationSnapshot & { status: string }>(
       `/api/v1/configuration/models/${encodeURIComponent(name)}`,
@@ -88,6 +92,11 @@ export const lumenApi = {
     requestJson<ConfigurationSnapshot & { status: string }>(
       `/api/v1/configuration/models/${encodeURIComponent(name)}`,
       { method: 'DELETE', body: JSON.stringify({ expectedRevision }) },
+    ),
+  setMcpServerEnabled: (name: string, expectedRevision: string, enabled: boolean) =>
+    requestJson<ConfigurationSnapshot & { status: string }>(
+      `/api/v1/configuration/mcp/${encodeURIComponent(name)}`,
+      { method: 'PATCH', body: JSON.stringify({ expectedRevision, enabled }) },
     ),
   listSessions: async (includeArchived = false) =>
     (await requestJson<{ sessions: SessionSummary[] }>(
@@ -136,10 +145,11 @@ export const lumenApi = {
     input: string,
     clientRequestId: string,
     attachments: AttachmentRef[] = [],
+    regenerateFromTurn?: number,
   ) =>
     requestJson<RunStartedResponse>(`/api/v1/sessions/${sessionId}/runs`, {
       method: 'POST',
-      body: JSON.stringify({ input, clientRequestId, attachments }),
+      body: JSON.stringify({ input, clientRequestId, attachments, regenerateFromTurn }),
     }),
   retryRun: (sessionId: string, clientRequestId: string) =>
     requestJson<RunStartedResponse>(`/api/v1/sessions/${sessionId}/retry`, {
@@ -206,6 +216,7 @@ export const lumenApi = {
       approvalMode?: ApprovalMode
       collaborationMode?: CollaborationMode
       transcriptDensity?: 'normal' | 'verbose'
+      reasoningEffort?: import('./types').ReasoningLevel
     },
   ) => requestJson<Record<string, unknown>>(`/api/v1/sessions/${sessionId}/settings`, {
     method: 'PATCH',
@@ -237,6 +248,17 @@ export const lumenApi = {
         `/api/v1/sessions/${sessionId}/context/sources`,
       )
     ).items,
+  instructions: () => requestJson<{
+    status: string
+    mode: string
+    preset: string | null
+    version: string
+    characters: number
+    runtime_context_characters: number
+    active_model: string
+    model_id: string
+    sources: Array<{ origin: string; role: string; revision: string; characters: number }>
+  }>('/api/v1/instructions'),
   mcpPrompts: async () =>
     (await requestJson<{ items: McpPromptItem[] }>('/api/v1/mcp/prompts')).items,
   hooks: async () =>
@@ -251,10 +273,18 @@ export const lumenApi = {
       `/api/v1/sessions/${sessionId}/controls`,
       { method: 'POST', body: JSON.stringify({ type: 'memory', action, payload }) },
     ),
-  invokeSkill: (sessionId: string, name: string, args: string, clientRequestId: string) =>
+  invokeSkill: (
+    sessionId: string,
+    name: string,
+    args: string,
+    clientRequestId: string,
+    regenerateFromTurn?: number,
+  ) =>
     requestJson<RunStartedResponse>(`/api/v1/sessions/${sessionId}/controls`, {
       method: 'POST',
-      body: JSON.stringify({ type: 'invoke_skill', name, arguments: args, clientRequestId }),
+      body: JSON.stringify({
+        type: 'invoke_skill', name, arguments: args, clientRequestId, regenerateFromTurn,
+      }),
     }),
   invokePrompt: (
     sessionId: string,
@@ -262,6 +292,7 @@ export const lumenApi = {
     args: Record<string, string>,
     displayInput: string,
     clientRequestId: string,
+    regenerateFromTurn?: number,
   ) =>
     requestJson<RunStartedResponse>(`/api/v1/sessions/${sessionId}/controls`, {
       method: 'POST',
@@ -271,6 +302,7 @@ export const lumenApi = {
         arguments: displayInput,
         payload: { arguments: args },
         clientRequestId,
+        regenerateFromTurn,
       }),
     }),
   setContextSource: (

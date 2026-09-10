@@ -4,7 +4,6 @@ import hashlib
 import json
 import os
 import re
-from collections import deque
 from collections.abc import Sequence
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
@@ -35,7 +34,7 @@ from lumen.live.types import LiveSessionState, SessionLiveState
 from lumen.plan import PlanState
 from lumen.work_products import EffectReceipt, SessionWorkState
 
-SCHEMA_VERSION = 9
+SCHEMA_VERSION = 11
 SUPPORTED_SCHEMA_VERSIONS = tuple(range(1, SCHEMA_VERSION + 1))
 SCHEMA_UPGRADE_TARGETS = tuple(range(5, SCHEMA_VERSION + 1))
 SESSION_RECORD_TYPES = (
@@ -45,6 +44,7 @@ SESSION_RECORD_TYPES = (
     "agent_thread",
     "context_state",
     "effect",
+    "history_rewind",
     "live_session",
     "plan_state",
     "schema_upgrade",
@@ -123,8 +123,10 @@ class SessionData:
 
     ``history`` reflects what the model should see: it includes the
     compaction summary prefix plus the recent complete turns produced since the
-    most recent compaction. ``full_history`` is the append-only record of every
-    raw completed turn and is what gets persisted across compactions.
+    most recent compaction. ``full_history`` is the raw message history on the
+    active conversation lineage and is what gets persisted across compactions.
+    Superseded lineages remain in the append-only JSONL journal but never enter
+    either projection.
     """
     history: list[ModelMessage]
     full_history: list[ModelMessage]
@@ -304,6 +306,30 @@ class SessionRepository:
             self.append_agent_message(created.id, message)
         return created
 
+    def rewind(self, session_id: str, *, before_turn: int) -> None:
+        """Select an earlier conversation prefix without changing Session identity.
+
+        The journal remains append-only: replay treats records written between
+        this boundary and the marker as an abandoned lineage. Workspace effects
+        are deliberately not rolled back.
+        """
+
+        path = self._path(session_id)
+        if not path.is_file():
+            raise FileNotFoundError(f"session not found: {session_id}")
+        active = self.load(session_id)
+        if before_turn < 0 or before_turn >= len(active.turns):
+            raise IndexError(f"turn index out of range: {before_turn}")
+        self._ensure_schema(path, 11)
+        self._append(
+            path,
+            {
+                "type": "history_rewind",
+                "before_turn": before_turn,
+                "created_at": self._now(),
+            },
+        )
+
     def append_turn(
         self,
         session_id: str,
@@ -416,13 +442,15 @@ class SessionRepository:
         path = self._path(session_id)
         if not path.is_file():
             raise FileNotFoundError(f"session not found: {session_id}")
-        self._ensure_schema(path, 6)
+        self._ensure_schema(path, 10 if state.reasoning else 6)
         self._append(
             path,
             {
                 "type": "session_settings",
                 "created_at": self._now(),
-                "state": state.model_dump(mode="json"),
+                "state": state.model_dump(
+                    mode="json", exclude={"reasoning"} if not state.reasoning else set(),
+                ),
             },
         )
 
@@ -482,7 +510,7 @@ class SessionRepository:
             raise FileNotFoundError(f"session not found: {session_id}")
         if thread.ref.parent_session_id != session_id:
             raise ValueError("agent thread does not belong to session")
-        self._ensure_schema(path, 8)
+        self._ensure_schema(path, 10)
         self._append(
             path,
             {
@@ -631,62 +659,51 @@ class SessionRepository:
         episodes: list[tuple[int, dict[str, str]]] = []
         full_history: list[ModelMessage] = []
         parent: Any = None
-        with path.open(encoding="utf-8") as file:
-            for line_number, line in enumerate(file, 1):
-                try:
-                    raw_record: Any = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                if not isinstance(raw_record, dict):
-                    continue
-                record = cast(dict[str, Any], raw_record)
-                if record.get("type") != "turn":
-                    continue
-                try:
-                    turn = _parse_turn(record, line_number=line_number)
-                except SessionCorruptError:
-                    continue
-                if turn.status not in {"completed", "waiting_for_user"}:
-                    continue
-                compaction = turn.compaction
-                if compaction is not None:
-                    checkpoint = _load_checkpoint(compaction)
-                    summary = _load_summary(compaction)
-                    raw_checkpoint: Any = compaction.get("checkpoint")
-                    is_v2 = (
-                        isinstance(raw_checkpoint, dict)
-                        and cast(dict[str, Any], raw_checkpoint).get("schema_version") == 2
+        # Read the active lineage projection instead of scanning every raw
+        # turn. Abandoned answers and their compaction summaries remain
+        # auditable in JSONL but are not retrieval candidates.
+        for turn_index, turn in enumerate(self.load(session_id).turns):
+            if turn.status not in {"completed", "waiting_for_user"}:
+                continue
+            compaction = turn.compaction
+            if compaction is not None:
+                checkpoint = _load_checkpoint(compaction)
+                summary = _load_summary(compaction)
+                raw_checkpoint: Any = compaction.get("checkpoint")
+                is_v2 = (
+                    isinstance(raw_checkpoint, dict)
+                    and cast(dict[str, Any], raw_checkpoint).get("schema_version") == 2
+                )
+                if checkpoint is not None and not is_v2:
+                    checkpoint = _map_v1_checkpoint(checkpoint, full_history, parent)
+                if is_v2 and checkpoint is not None:
+                    summary = _summary_from_v2_checkpoint(checkpoint)
+                if (
+                    checkpoint is not None
+                    and summary is not None
+                    and (
+                        not is_v2
+                        or _validate_v2_checkpoint(
+                            checkpoint,
+                            full_history,
+                            parent,
+                        )
                     )
-                    if checkpoint is not None and not is_v2:
-                        checkpoint = _map_v1_checkpoint(checkpoint, full_history, parent)
-                    if is_v2 and checkpoint is not None:
-                        summary = _summary_from_v2_checkpoint(checkpoint)
-                    if (
-                        checkpoint is not None
-                        and summary is not None
-                        and (
-                            not is_v2
-                            or _validate_v2_checkpoint(
-                                checkpoint,
-                                full_history,
-                                parent,
-                            )
+                ):
+                    checkpoint_id = str(checkpoint.checkpoint_id)
+                    episodes.append(
+                        (
+                            turn_index,
+                            {
+                                "server": "session-checkpoints",
+                                "uri": checkpoint_id,
+                                "revision": str(checkpoint.source_digest),
+                                "body": summary.model_dump_json(),
+                            },
                         )
-                    ):
-                        checkpoint_id = str(checkpoint.checkpoint_id)
-                        episodes.append(
-                            (
-                                line_number,
-                                {
-                                    "server": "session-checkpoints",
-                                    "uri": checkpoint_id,
-                                    "revision": str(checkpoint.source_digest),
-                                    "body": summary.model_dump_json(),
-                                },
-                            )
-                        )
-                        parent = checkpoint
-                full_history.extend(turn.messages)
+                    )
+                    parent = checkpoint
+            full_history.extend(turn.messages)
         # Latest rolling state is injected through HISTORY_SUMMARY; only older
         # validated checkpoints are eligible as immutable episodes.
         candidates: list[tuple[int, int, dict[str, str]]] = []
@@ -917,6 +934,8 @@ class SessionRepository:
                     )
                 try:
                     settings = SessionSettingsState.model_validate(record.get("state"))
+                    if settings.reasoning and effective_schema < 10:
+                        raise ValueError("reasoning snapshots require schema v10")
                 except ValueError as error:
                     raise SessionCorruptError(f"invalid session_settings at line {line_number}") from error
                 continue
@@ -929,6 +948,46 @@ class SessionRepository:
                     latest_plan = PlanState.model_validate(record.get("state"))
                 except ValueError as error:
                     raise SessionCorruptError(f"invalid plan_state at line {line_number}") from error
+                continue
+            if record.get("type") == "history_rewind":
+                if effective_schema < 11:
+                    raise SessionCorruptError(
+                        f"history_rewind is not valid for schema v{effective_schema} "
+                        f"at line {line_number}"
+                    )
+                before_turn = record.get("before_turn")
+                if (
+                    isinstance(before_turn, bool)
+                    or not isinstance(before_turn, int)
+                    or not 0 <= before_turn < len(turns)
+                ):
+                    raise SessionCorruptError(f"invalid history_rewind at line {line_number}")
+                turns = turns[:before_turn]
+                running_turn_positions = {
+                    turn.interaction_id: index
+                    for index, turn in enumerate(turns)
+                    if turn.interaction_id is not None and turn.status == "running"
+                }
+                (
+                    active_history,
+                    full_history,
+                    latest_compaction_summary,
+                    latest_compaction_checkpoint,
+                    compacted_prefix_length,
+                    compacted_source_end,
+                ) = _project_turn_history(turns)
+                latest_plan = turns[-1].plan if turns else PlanState()
+                settings = settings.model_copy(
+                    update={
+                        "plan_review_status": PlanReviewStatus.NONE,
+                        "reviewed_revision": None,
+                        "review_client_request_id": None,
+                        "execution_run_id": None,
+                    }
+                )
+                context_state = context_state.model_copy(
+                    update={"active_resources": (), "pending_clarification": None}
+                )
                 continue
             turn = _parse_turn(record, line_number=line_number)
             messages = turn.messages
@@ -1033,119 +1092,16 @@ class SessionRepository:
 
         if limit < 1:
             raise ValueError("turn page limit must be positive")
-        path = self._path(session_id)
-        if not path.is_file():
-            raise FileNotFoundError(f"session not found: {session_id}")
-
-        selected: deque[tuple[dict[str, Any], int, int]] = deque(maxlen=limit)
-        turn_count = 0
-        running_turn_ordinals: dict[str, int] = {}
-        with path.open(encoding="utf-8") as file:
-            header_line = file.readline()
-            if not header_line:
-                raise SessionCorruptError("missing session header")
-            header = _parse_json_record(header_line, line_number=1, path=path)
-            if header.get("type") != "session":
-                raise SessionCorruptError("missing session header")
-            schema_version = header.get("schema_version")
-            if schema_version not in SUPPORTED_SCHEMA_VERSIONS:
-                raise SessionCorruptError(f"unsupported session schema: {schema_version}")
-
-            effective_schema = int(schema_version)
-
-            for line_number, line in enumerate(file, 2):
-                record = _parse_json_record(line, line_number=line_number, path=path)
-                if record.get("type") == "schema_upgrade":
-                    from_version = int(record.get("from_version", 0))
-                    to_version = int(record.get("to_version", 0))
-                    if (
-                        from_version != effective_schema
-                        or to_version not in SCHEMA_UPGRADE_TARGETS
-                        or to_version <= effective_schema
-                    ):
-                        raise SessionCorruptError(f"invalid schema_upgrade at line {line_number}")
-                    effective_schema = to_version
-                    continue
-                if record.get("type") == "live_session":
-                    if effective_schema < 9:
-                        raise SessionCorruptError(
-                            f"live_session is not valid for schema v{effective_schema} at line {line_number}"
-                        )
-                    continue
-                if record.get("type") in {"work_state", "effect"}:
-                    if effective_schema < 7:
-                        raise SessionCorruptError(
-                            f"{record.get('type')} is not valid for schema v{effective_schema} "
-                            f"at line {line_number}"
-                        )
-                    continue
-                if record.get("type") in {
-                    "agent_thread",
-                    "agent_event",
-                    "agent_message",
-                    "agent_result",
-                }:
-                    if effective_schema < 8:
-                        raise SessionCorruptError(
-                            f"{record.get('type')} is not valid for schema "
-                            f"v{effective_schema} at line {line_number}"
-                        )
-                    continue
-                if record.get("type") == "context_state":
-                    if effective_schema < 5:
-                        raise SessionCorruptError(
-                            f"context_state is not valid for schema v{effective_schema} at line {line_number}"
-                        )
-                    continue
-                if record.get("type") == "session_settings":
-                    if effective_schema < 6:
-                        raise SessionCorruptError(
-                            "session_settings is not valid for schema "
-                            f"v{effective_schema} at line {line_number}"
-                        )
-                    continue
-                if record.get("type") == "session_catalog":
-                    if effective_schema < 9:
-                        raise SessionCorruptError(
-                            "session_catalog is not valid for schema "
-                            f"v{effective_schema} at line {line_number}"
-                        )
-                    continue
-                if record.get("type") == "plan_state":
-                    if effective_schema < 6:
-                        raise SessionCorruptError(
-                            f"plan_state is not valid for schema v{effective_schema} at line {line_number}"
-                        )
-                    continue
-                if record.get("type") != "turn":
-                    raise SessionCorruptError(f"unknown record type at line {line_number}")
-                interaction_id = record.get("interaction_id")
-                status = record.get("status")
-                pending_ordinal = (
-                    running_turn_ordinals.pop(str(interaction_id), None)
-                    if interaction_id is not None and status != "running"
-                    else None
-                )
-                if pending_ordinal is None:
-                    ordinal = turn_count
-                    turn_count += 1
-                    if interaction_id is not None and status == "running":
-                        running_turn_ordinals[str(interaction_id)] = ordinal
-                    if before is None or ordinal < before:
-                        selected.append((record, line_number, ordinal))
-                    continue
-
-                for index, (_, _, selected_ordinal) in enumerate(selected):
-                    if selected_ordinal == pending_ordinal:
-                        selected[index] = (record, line_number, pending_ordinal)
-                        break
-
+        # Pagination is a view of the same active-lineage projection used by
+        # model context. Keeping one projection authority prevents abandoned
+        # branches from reappearing only in the UI after resume.
+        turns = self.load(session_id).turns
+        turn_count = len(turns)
         end = turn_count if before is None else before
         if not 0 <= end <= turn_count:
             raise ValueError(f"invalid turn page cursor: {before}")
         start = max(0, end - limit)
-        turns = [_parse_turn(record, line_number=line) for record, line, _ in selected]
-        return TurnPage(turns=turns, next_before=start if start > 0 else None)
+        return TurnPage(turns=turns[start:end], next_before=start if start > 0 else None)
 
     def list(self) -> list[SessionMetadata]:
         sessions: list[SessionMetadata] = []
@@ -1251,6 +1207,74 @@ def _parse_turn(record: dict[str, Any], *, line_number: int) -> TurnRecord:
         )
     except (KeyError, TypeError, ValueError) as error:
         raise SessionCorruptError(f"invalid turn at line {line_number}") from error
+
+
+def _project_turn_history(
+    turns: Sequence[TurnRecord],
+) -> tuple[list[ModelMessage], list[ModelMessage], Any, Any, int, int]:
+    """Rebuild the provider and compaction projections for one active lineage."""
+
+    active_history: list[ModelMessage] = []
+    full_history: list[ModelMessage] = []
+    latest_summary: Any = None
+    latest_checkpoint: Any = None
+    compacted_prefix_length = 0
+    compacted_source_end = 0
+    for turn in turns:
+        messages = turn.messages
+        completed_steps = bool(messages) and any(
+            item.get("kind") == "completed_model_steps"
+            and item.get("message_count") == len(messages)
+            for item in turn.diagnostics
+        ) and not validate_active_history(messages)
+        if turn.status not in {"completed", "waiting_for_user"} and not (
+            turn.status in {"failed", "cancelled"} and completed_steps
+        ):
+            continue
+        covered_messages = 0
+        if turn.compaction is not None:
+            candidate = _load_checkpoint(turn.compaction)
+            raw_checkpoint: Any = turn.compaction.get("checkpoint")
+            is_v2_record = (
+                isinstance(raw_checkpoint, dict)
+                and cast(dict[str, Any], raw_checkpoint).get("schema_version") == 2
+            )
+            if candidate is not None and not is_v2_record:
+                candidate = _map_v1_checkpoint(candidate, full_history, latest_checkpoint)
+            summary = (
+                _summary_from_v2_checkpoint(candidate)
+                if is_v2_record and candidate is not None
+                else _load_summary(turn.compaction)
+            )
+            valid = not is_v2_record or (
+                candidate is not None
+                and len(full_history) <= candidate.source_end <= len(full_history) + len(messages)
+                and _validate_v2_checkpoint(
+                    candidate,
+                    [*full_history, *messages][:candidate.source_end],
+                    latest_checkpoint,
+                )
+            )
+            if valid:
+                if is_v2_record and candidate is not None:
+                    covered_messages = candidate.source_end - len(full_history)
+                active_history = _load_active_prefix(turn.compaction)
+                compacted_prefix_length = len(active_history)
+                latest_summary = summary
+                latest_checkpoint = candidate
+                compacted_source_end = (
+                    candidate.source_end if candidate is not None else len(full_history)
+                )
+        full_history.extend(messages)
+        active_history.extend(messages[covered_messages:])
+    return (
+        active_history,
+        full_history,
+        latest_summary,
+        latest_checkpoint,
+        compacted_prefix_length,
+        compacted_source_end,
+    )
 
 
 def _load_active_prefix(compaction_raw: dict[str, Any]) -> list[ModelMessage]:

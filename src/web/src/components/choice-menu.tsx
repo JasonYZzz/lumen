@@ -9,6 +9,7 @@ import { useAnchoredPopover } from './use-anchored-popover'
 export interface ChoiceOption<T extends string> {
   value: T
   label: string
+  compactLabel?: string
   description?: string
 }
 
@@ -144,7 +145,7 @@ export function ChoiceMenu<T extends string>({
         }}
       >
         {icon && <span className="choice-menu-icon" aria-hidden="true">{icon}</span>}
-        <span className="choice-menu-value">{selected?.label ?? (value || '未配置')}</span>
+        <span className="choice-menu-value">{selected?.compactLabel ?? selected?.label ?? (value || '未配置')}</span>
         <CaretDown className="choice-menu-caret" size={12} weight="bold" aria-hidden="true" />
       </button>
       {open && createPortal(

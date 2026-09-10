@@ -31,7 +31,7 @@ export function UserMessage({ item, editDisabled, onEdit }: {
     requestAnimationFrame(() => editButton.current?.focus({ preventScroll: true }))
   }
   const save = async () => {
-    if (!onEdit || editDisabled || savingRef.current || !draft.trim() || draft.trim() === item.text.trim()) return
+    if (!onEdit || editDisabled || savingRef.current || !draft.trim()) return
     savingRef.current = true
     setSaving(true)
     setError('')
@@ -54,11 +54,11 @@ export function UserMessage({ item, editDisabled, onEdit }: {
           if (event.key === 'Escape') { event.preventDefault(); close() }
           if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) { event.preventDefault(); void save() }
         }} />
-      <p className="message-edit-hint">从这里重新生成，原对话保留。已执行的文件和外部操作不会回滚。{item.attachments?.length ? '原消息附件将保留。' : ''}</p>
+      <p className="message-edit-hint">从这里在当前对话重新生成；可以不修改直接发送。后续旧回答不再进入上下文，已执行的文件和外部操作不会回滚。{item.attachments?.length ? '原消息附件将保留。' : ''}</p>
       {error && <p className="message-edit-error" role="alert">{error}</p>}
       <div className="message-edit-actions">
         <button type="button" className="quiet" disabled={saving} onClick={close}>取消</button>
-        <button type="button" disabled={saving || Boolean(editDisabled) || !draft.trim() || draft.trim() === item.text.trim()}
+        <button type="button" disabled={saving || Boolean(editDisabled) || !draft.trim()}
           onClick={() => void save()}>{saving && <CircleNotch size={15} className="spin" aria-hidden="true" />}{saving ? '正在重新生成…' : '发送并重新生成'}</button>
       </div>
       {editDisabled && <p className="message-edit-hint" role="status">{editDisabled}</p>}

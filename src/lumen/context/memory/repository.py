@@ -40,6 +40,8 @@ class MemoryRepository(Protocol):
 
     def forget(self, record_id: str) -> bool: ...
 
+    def expire(self, record_id: str) -> bool: ...
+
     def get(self, record_id: str) -> MemoryRecord | None: ...
 
     def list(
@@ -151,6 +153,17 @@ class InMemoryMemoryRepository:
             if record is None:
                 return False
             self._records[record_id] = record.model_copy(update={"status": MemoryStatus.FORGOTTEN})
+            return True
+
+    def expire(self, record_id: str) -> bool:
+        with self._lock:
+            record = self._records.get(record_id)
+            if record is None or record.status is MemoryStatus.FORGOTTEN:
+                return False
+            now = _now()
+            self._records[record_id] = record.model_copy(
+                update={"status": MemoryStatus.EXPIRED, "valid_until": now, "updated_at": now}
+            )
             return True
 
     def get(self, record_id: str) -> MemoryRecord | None:
@@ -325,6 +338,27 @@ class SQLiteMemoryRepository:
             self._db().execute(
                 "UPDATE memory SET record_json=?, status=? WHERE id=?",
                 (forgotten.model_dump_json(), MemoryStatus.FORGOTTEN.value, record_id),
+            )
+            self._db().commit()
+            return True
+
+    def expire(self, record_id: str) -> bool:
+        with self._lock:
+            record = self.get(record_id)
+            if record is None or record.status is MemoryStatus.FORGOTTEN:
+                return False
+            now = _now()
+            expired = record.model_copy(
+                update={"status": MemoryStatus.EXPIRED, "valid_until": now, "updated_at": now}
+            )
+            self._db().execute(
+                "UPDATE memory SET record_json=?, status=?, valid_until=? WHERE id=?",
+                (
+                    expired.model_dump_json(),
+                    MemoryStatus.EXPIRED.value,
+                    now.isoformat(),
+                    record_id,
+                ),
             )
             self._db().commit()
             return True

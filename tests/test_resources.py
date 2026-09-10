@@ -96,8 +96,8 @@ mcp_servers:
         assert descriptor.parameters == ({} if schema_style == "missing" else parameters)
         assert descriptor.requires_approval is False
         assert manager.runtime is not None
-        assert '"calc": "ok"' in manager.runtime.instructions
-        assert "MCP startup connection status" in manager.runtime.instructions
+        assert "calc=ok" in manager.runtime.current_runtime_context
+        assert "MCP 连接状态" in manager.runtime.current_runtime_context
         # Both the model catalog and the executable capability must use the same schema.
         documents = [
             document
@@ -134,9 +134,9 @@ sessions:
 
     async with manager:
         assert manager.runtime is not None
-        assert "framework: Lumen" in manager.runtime.instructions
-        assert f"active_model_name: {manager.active_model_name()}" in manager.runtime.instructions
-        assert "active_model_id: test" in manager.runtime.instructions
+        assert "你是 Lumen" in manager.runtime.instructions
+        assert f"当前模型名称: {manager.active_model_name()}" in manager.runtime.current_runtime_context
+        assert "当前模型 ID: test" in manager.runtime.current_runtime_context
         assert set(manager.tool_metadata) >= {"read_file", "search_text"}
         assert CONTROL_TOOL_NAMES.issubset(manager.tool_metadata)
         for name in CONTROL_TOOL_NAMES:
@@ -203,7 +203,9 @@ async def test_resource_manager_appends_custom_instructions(tmp_path: Path) -> N
         """
 version: 2
 agent:
-  instructions_file: instructions.md
+  prompt:
+    mode: append
+    append_file: instructions.md
   model:
     id: test
 tools:
@@ -214,7 +216,7 @@ tools:
     manager = ResourceManager(load_config(config_path), workspace=tmp_path)
 
     assert "Always answer briefly." in manager.instructions
-    assert "Do not reveal private chain-of-thought" in manager.instructions
+    assert "不要输出私有思维链" in manager.instructions
     # Control instructions are appended by default.
     assert "set_plan" in manager.instructions
     assert "report_progress" in manager.instructions
@@ -236,9 +238,9 @@ sessions: {directory: sessions}
 
     manager = ResourceManager(load_config(config_path), workspace=tmp_path)
 
-    assert "You are Lumen" in manager.instructions
-    assert "Do not claim to be Claude" in manager.instructions
-    assert "generated report" in manager.instructions
+    assert "你是 Lumen" in manager.instructions
+    assert "可替换的推理 Provider" in manager.instructions
+    assert "outputs/" in manager.instructions
 
 
 async def test_resource_manager_loads_plugin_relative_to_config(tmp_path: Path) -> None:
@@ -323,6 +325,37 @@ mcp_servers:
         assert manager.mcp_status["flaky"] == "error"
         assert any("flaky" in warning for warning in manager.warnings)
         assert manager.summary()["mcp_status"] == {"flaky": "error"}
+
+
+async def test_disabled_mcp_server_never_builds_or_opens_a_connection(tmp_path: Path) -> None:
+    config_path = tmp_path / "agent.yaml"
+    config_path.write_text(
+        """
+version: 2
+agent: {model: {id: test}}
+tools: {builtins: []}
+mcp_servers:
+  exa:
+    transport: streamable_http
+    url: https://mcp.exa.ai/mcp
+mcp:
+  enabled: {exa: false}
+""",
+        encoding="utf-8",
+    )
+    manager = ResourceManager(load_config(config_path), workspace=tmp_path)
+
+    assert manager.mcp_bundles == []
+    assert manager.mcp_status == {"exa": "disabled"}
+    summary = manager.mcp_summary()
+    assert len(summary) == 1
+    assert summary[0]["name"] == "exa"
+    assert summary[0]["status"] == "disabled"
+    assert summary[0]["enabled"] is False
+    assert summary[0]["tools"] == 0
+    assert summary[0]["effect_contracts_missing"] == []
+    async with manager:
+        assert manager.mcp_status == {"exa": "disabled"}
 
 
 async def test_resource_manager_summary_lists_control_tools(tmp_path: Path) -> None:

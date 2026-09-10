@@ -65,8 +65,8 @@ class SkillInstaller:
             scopes.append("user")
         return ToolSpec(
             self.install_skill,
-            description=(self.install_skill.__doc__ or "") + "\nAvailable installation scopes in this run: "
-            + ", ".join(scopes) + ". Honor an explicit user/global scope; do not silently change it.",
+            description=(self.install_skill.__doc__ or "") + "\n本轮可用安装范围: "
+            + ", ".join(scopes) + "。遵循用户明确指定的 user/global 范围, 不得静默更改。",
             risk=Risk.EXTERNAL,
             effect_kind=EffectKind.MUTATION,
             timeout=120,
@@ -81,21 +81,16 @@ class SkillInstaller:
         scope: Literal["project", "user"] = "project",
         overwrite: bool = False,
     ) -> dict[str, Any]:
-        """Install a complete Skill from a GitHub URL, owner/repo, or workspace directory.
+        """从 GitHub URL、owner/repo 或工作区目录安装完整 Skill。
 
-        Prefer this tool for skill installation; it handles discovery, raw
-        binary/text transfer, validation, atomic directory publication and
-        immediate catalog refresh. It never executes downloaded scripts.
-        GitHub repository roots use the actual default branch. tree/blob/raw
-        URLs and explicit path/ref are supported; use ref for slash-containing
-        branch names. If several skills match, returns selection_required and
-        candidates without writing: call again with an exact candidate path.
-        Project scope installs under .lumen/skills; user scope requires parent
-        permissions permitting ~/.lumen/skills. Existing identical content is
-        a no-op. Only set overwrite=True for an explicit update/replace request;
-        locally modified managed installations are never silently overwritten.
-        Private repositories use the operator's GH_TOKEN/GITHUB_TOKEN, never
-        credentials in tool arguments. Installed skills are loadable immediately.
+        安装 Skill 时优先使用此工具。它负责发现、二进制/文本传输、校验、目录原子发布和
+        即时目录刷新, 且不会执行下载的脚本。GitHub 仓库根路径使用真实默认分支;
+        支持 tree/blob/raw URL 以及显式 path/ref。分支名含斜杠时使用 ref。
+        如果匹配到多个 Skill, 返回 selection_required 和候选项且不写入; 使用精确候选路径
+        再次调用。project 范围安装到 .lumen/skills; user 范围要求父权限允许
+        ~/.lumen/skills。内容完全相同时不执行操作。只有用户明确要求更新或替换时才设置
+        overwrite=True; 不得静默覆盖本地已修改的托管安装。私有仓库使用操作者环境中的
+        GH_TOKEN/GITHUB_TOKEN, 不在工具参数中接收凭据。安装后可立即加载 Skill。
         """
         if not self.task_workspace.enabled:
             raise ValueError("skill installation requires TaskWorkspace verification to be enabled")
@@ -106,10 +101,9 @@ class SkillInstaller:
                 "status": "scope_unavailable",
                 "requested_scope": "user",
                 "available_scopes": ["project"] if self.project_trusted else [],
-                "message": "Global Skill installation is not enabled. No files were written. "
-                "The operator can enable agent.user_skill_install_enabled without disabling the command "
-                "sandbox. If the user requested global scope, do not silently install into the project. "
-                "Ask at most one concise question if choosing a different scope is necessary.",
+                "message": "全局 Skill 安装未启用, 未写入任何文件。操作者可以启用 "
+                "agent.user_skill_install_enabled, 无需关闭命令 Sandbox。若用户要求全局范围, "
+                "不得静默改为安装到项目; 如必须选择其他范围, 最多提出一个简洁问题。",
             }
         if name is not None and (len(name) > 64 or not _NAME.fullmatch(name)):
             raise ValueError("name must be a lowercase kebab-case skill directory name")

@@ -14,6 +14,8 @@ vi.mock('../lib/api/client', () => ({
     updateSessionSettings: vi.fn(), updateWorkspaceSettings: vi.fn(), startRun: vi.fn(),
     forkSession: vi.fn(), renameSession: vi.fn(), cancelRun: vi.fn(), invokeSkill: vi.fn(), invokePrompt: vi.fn(),
     configuration: vi.fn(), capabilities: vi.fn(), upsertModelConfiguration: vi.fn(), deleteModelConfiguration: vi.fn(),
+    setMcpServerEnabled: vi.fn(),
+    inspectReasoning: vi.fn(),
     listAgents: vi.fn(), waiveVerification: vi.fn(), reviewPlan: vi.fn(),
   },
 }))
@@ -93,6 +95,10 @@ beforeEach(() => {
   })
   vi.mocked(lumenApi.session).mockImplementation(async (id) => ({ ...snapshots.get(id)! }))
   vi.mocked(lumenApi.listAgents).mockResolvedValue([])
+  vi.mocked(lumenApi.inspectReasoning).mockResolvedValue({ reasoning: {
+    requested: null, effective: null, source: 'provider_default', mapping: 'provider_default',
+    parameters: {}, supported_levels: ['provider_default'], capability_status: 'unknown', level_map: {},
+  } })
   vi.mocked(lumenApi.updateSessionSettings).mockImplementation(async (id, settings) => {
     Object.assign(snapshots.get(id)!, settings)
     return { status: 'updated' }
@@ -162,7 +168,8 @@ describe('plan mode review and ordinary progress', () => {
     source.activeRunId = 'next-run'
     await mount()
     expect(document.querySelector('[aria-label="查看任务进度"]')).toBeNull()
-    expect(container.textContent).toContain('正在处理')
+    expect(container.textContent).not.toContain('正在处理')
+    expect(container.querySelector('.turn-live-placeholder .thinking-orb')).not.toBeNull()
   })
 
   it('approves the exact revision once and attaches the accepted run', async () => {
@@ -250,6 +257,7 @@ describe('settings editing', () => {
     configuration = {
       revision: 'r1', targetPath: '/test/.lumen/agent.web.yaml', editable: true, editReason: null,
       exclusive: false, sources: [], warnings: [], defaultModel: 'model-a',
+      mcpServers: [{ name: 'exa', enabled: true, source: null }],
       models: ['model-a', 'model-b'].map((name) => ({
         name, id: `openai:${name}`, api: 'responses', baseUrl: null, apiKeyEnv: null,
         settings: {}, context: {}, inputModalities: ['text'], isDefault: name === 'model-a',
@@ -313,6 +321,95 @@ describe('settings editing', () => {
     expect(document.querySelector<HTMLInputElement>('input[placeholder="例如 openai:qwen3"]')?.disabled).toBe(true)
     expect(document.querySelector('[role="switch"]')?.hasAttribute('disabled')).toBe(true)
     expect(lumenApi.upsertModelConfiguration).not.toHaveBeenCalled()
+  })
+
+  it('preserves a proxy capability profile through preview and save', async () => {
+    configuration.models[0].reasoningProfile = 'openai-gpt56-sol'
+    await mount()
+    await click(button('打开系统设置'))
+    expect(document.querySelector<HTMLInputElement>('input[aria-label="代理能力 Profile"]')?.value)
+      .toBe('openai-gpt56-sol')
+    expect(lumenApi.inspectReasoning).toHaveBeenLastCalledWith(expect.objectContaining({
+      reasoningProfile: 'openai-gpt56-sol',
+    }))
+    await editModelId('openai:gpt-5.6')
+    vi.mocked(lumenApi.upsertModelConfiguration).mockResolvedValue({
+      ...configuration, status: 'saved', revision: 'r2', restartRequired: true,
+    })
+    await act(async () => { document.querySelector('.model-form')!.dispatchEvent(
+      new Event('submit', { bubbles: true, cancelable: true }),
+    ) })
+    expect(lumenApi.upsertModelConfiguration).toHaveBeenLastCalledWith('model-a', expect.objectContaining({
+      reasoningProfile: 'openai-gpt56-sol', id: 'openai:gpt-5.6',
+    }))
+  })
+
+  it('saves provider-native search independently from external MCP activation', async () => {
+    vi.mocked(lumenApi.capabilities).mockResolvedValue({
+      tools: [], skills: [], agent_profiles: [],
+      mcp_servers: [{ name: 'exa', status: 'ok', enabled: true }],
+    })
+    await mount()
+    await click(button('打开系统设置'))
+    const nativeSearch = document.querySelector<HTMLSelectElement>('select[aria-label="模型内建联网"]')!
+    await act(async () => {
+      nativeSearch.value = 'disabled'
+      nativeSearch.dispatchEvent(new Event('change', { bubbles: true }))
+    })
+    vi.mocked(lumenApi.upsertModelConfiguration).mockResolvedValue({
+      ...configuration, status: 'saved', revision: 'r2', restartRequired: true,
+      models: configuration.models.map((model) => ({
+        ...model,
+        nativeWebSearch: { mode: 'disabled', search_context_size: 'medium' },
+        nativeWebSearchEnabled: false,
+      })),
+    })
+    await act(async () => { document.querySelector('.model-form')!.dispatchEvent(
+      new Event('submit', { bubbles: true, cancelable: true }),
+    ) })
+    expect(lumenApi.upsertModelConfiguration).toHaveBeenLastCalledWith(
+      'model-a',
+      expect.objectContaining({ nativeWebSearch: { mode: 'disabled', search_context_size: 'medium' } }),
+    )
+
+    const disabledConfiguration = {
+      ...configuration,
+      revision: 'r2',
+      mcpServers: [{ name: 'exa', enabled: false, source: null }],
+      restartRequired: true,
+    }
+    vi.mocked(lumenApi.setMcpServerEnabled).mockResolvedValue({
+      ...disabledConfiguration,
+      status: 'saved',
+    })
+    await click(button('扩展能力'))
+    const exa = document.querySelector<HTMLInputElement>('input[aria-label="exa MCP"]')!
+    expect(exa.checked).toBe(true)
+    await click(exa)
+    expect(lumenApi.setMcpServerEnabled).toHaveBeenCalledWith('exa', 'r2', false)
+    expect(document.querySelector<HTMLInputElement>('input[aria-label="exa MCP"]')?.checked).toBe(false)
+  })
+
+  it('uses backend capability choices in settings and ignores a stale preview after editing the model', async () => {
+    let finishOld: ((value: Awaited<ReturnType<typeof lumenApi.inspectReasoning>>) => void) | undefined
+    vi.mocked(lumenApi.inspectReasoning).mockImplementationOnce(() => new Promise((resolve) => { finishOld = resolve }))
+    vi.mocked(lumenApi.inspectReasoning).mockResolvedValue({ reasoning: {
+      requested: null, effective: null, source: 'provider_default', mapping: 'provider_default', parameters: {},
+      supported_levels: ['provider_default', 'low', 'high', 'max'], capability_status: 'supported',
+      level_map: { low: 'low', high: 'high', max: 'max' },
+    } })
+    await mount()
+    await click(button('打开系统设置'))
+    expect(document.querySelector<HTMLSelectElement>('select[aria-label="默认推理强度"]')?.disabled).toBe(true)
+    await editModelId('openai:k3')
+    const select = document.querySelector<HTMLSelectElement>('select[aria-label="默认推理强度"]')!
+    expect(Array.from(select.options).map((option) => option.value)).toEqual(['', 'provider_default', 'low', 'high', 'max'])
+    await act(async () => { finishOld?.({ reasoning: {
+      requested: null, effective: null, source: 'provider_default', mapping: 'provider_default', parameters: {},
+      supported_levels: ['provider_default', 'off'], capability_status: 'supported',
+    } }) })
+    expect(Array.from(select.options).map((option) => option.value)).not.toContain('off')
+    expect(lumenApi.inspectReasoning).toHaveBeenLastCalledWith(expect.objectContaining({ id: 'openai:k3' }))
   })
 })
 
@@ -386,6 +483,142 @@ describe('asynchronous conversation titles', () => {
 })
 
 describe('sidebar navigation', () => {
+  function qwenReasoning(): NonNullable<Bootstrap['reasoning']> {
+    return { requested: null, effective: null, source: 'provider_default', mapping: 'provider_default',
+      supported_levels: ['provider_default', 'off', 'low', 'medium', 'high', 'xhigh', 'max'],
+      parameters: {}, capability_status: 'supported', provider_default_level: 'xhigh',
+      level_map: { off: 'off', low: 'low', medium: 'medium', high: 'xhigh', xhigh: 'xhigh', max: 'xhigh' } }
+  }
+
+  function kimiReasoning(): NonNullable<Bootstrap['reasoning']> {
+    return { requested: null, effective: null, source: 'provider_default', mapping: 'provider_default',
+      supported_levels: ['provider_default', 'low', 'medium', 'high', 'xhigh', 'max'],
+      parameters: {}, capability_status: 'supported', provider_default_level: 'high',
+      level_map: { low: 'low', medium: 'high', high: 'high', xhigh: 'max', max: 'max' } }
+  }
+
+  it('clears old Session thinking on the new-task page and switches native choices with the model', async () => {
+    workspace.reasoning = qwenReasoning()
+    const old = snapshot('old')
+    old.reasoning = { ...qwenReasoning(), requested: 'low', effective: 'low', source: 'session' }
+    snapshots.set('old', old)
+    window.history.replaceState({}, '', '/?session=old')
+    await mount()
+    expect(button('推理强度：low')).toBeDefined()
+    await click(button('新建任务'))
+    await click(button('推理强度：跟随供应商默认（xhigh）'))
+    expect(Array.from(document.querySelectorAll('[role="option"] strong'), (item) => item.textContent))
+      .toEqual(['跟随供应商默认（xhigh）', 'off', 'low', 'medium', 'xhigh'])
+    await click(button('推理强度：跟随供应商默认（xhigh）'))
+    vi.mocked(lumenApi.updateWorkspaceSettings).mockImplementation(async ({ model }) => {
+      workspace.activeModel = model!
+      workspace.reasoning = kimiReasoning()
+      return { status: 'updated' }
+    })
+    await choose('模型：model-a', 'model-b')
+    expect(button('推理强度：跟随供应商默认（high）').textContent).toContain('默认 · high')
+    await click(button('推理强度：跟随供应商默认（high）'))
+    expect(Array.from(document.querySelectorAll('[role="option"] strong'), (item) => item.textContent))
+      .toEqual(['跟随供应商默认（high）', 'low', 'high', 'max'])
+    expect(document.body.textContent).toContain('model-b · 用于下一轮对话')
+    expect(document.body.textContent).toContain('不发送推理参数')
+  })
+
+  it('refreshes the active Session choices after switching models', async () => {
+    workspace.reasoning = qwenReasoning()
+    const current = snapshot('current')
+    current.reasoning = qwenReasoning()
+    snapshots.set('current', current)
+    window.history.replaceState({}, '', '/?session=current')
+    await mount()
+    vi.mocked(lumenApi.updateWorkspaceSettings).mockImplementation(async ({ model }) => {
+      workspace.activeModel = model!
+      workspace.reasoning = kimiReasoning()
+      current.reasoning = { ...kimiReasoning(), requested: 'max', effective: 'max', source: 'session' }
+      return { status: 'updated' }
+    })
+    await choose('模型：model-a', 'model-b')
+    expect(button('推理强度：max')).toBeDefined()
+    await click(button('推理强度：max'))
+    expect(Array.from(document.querySelectorAll('[role="option"] strong'), (item) => item.textContent))
+      .toEqual(['跟随供应商默认（high）', 'low', 'high', 'max'])
+  })
+
+  it('ignores a delayed model-switch Session response after returning to a new task', async () => {
+    workspace.reasoning = qwenReasoning()
+    const old = snapshot('old')
+    old.reasoning = qwenReasoning()
+    snapshots.set('old', old)
+    window.history.replaceState({}, '', '/?session=old')
+    await mount()
+    let finish: (value: SessionSnapshot) => void = () => { throw new Error('request not started') }
+    vi.mocked(lumenApi.session).mockReturnValueOnce(new Promise((resolve) => { finish = resolve }))
+    vi.mocked(lumenApi.updateWorkspaceSettings).mockImplementation(async ({ model }) => {
+      workspace.activeModel = model!
+      workspace.reasoning = kimiReasoning()
+      return { status: 'updated' }
+    })
+    await choose('模型：model-a', 'model-b')
+    await click(button('新建任务'))
+    await act(async () => { finish(old) })
+    expect(button('推理强度：跟随供应商默认（high）')).toBeDefined()
+  })
+
+  it.each([
+    ['unknown', '推理控制未配置'], ['unsupported', '不支持调节'],
+  ] as const)('disables a single default choice for %s capability', async (status, label) => {
+    workspace.reasoning = { requested: null, effective: null, source: 'provider_default', mapping: 'provider_default',
+      supported_levels: ['provider_default'], parameters: {}, capability_status: status }
+    await mount()
+    expect(button(`推理强度：${label}`).disabled).toBe(true)
+  })
+
+  it('displays the effective provider alias in the thinking selector', async () => {
+    workspace.reasoning = { requested: 'medium', effective: 'high', source: 'model', mapping: 'native',
+      supported_levels: ['provider_default', 'low', 'medium', 'high'], parameters: {},
+      capability_status: 'supported', level_map: { low: 'low', medium: 'high', high: 'high' } }
+    await mount()
+    expect(button('推理强度：medium → high')).toBeDefined()
+  })
+
+  it('keeps a deployment alias selectable when its native target was excluded by configuration', async () => {
+    workspace.reasoning = { ...kimiReasoning(), supported_levels: ['provider_default', 'medium'],
+      level_map: { medium: 'high' } }
+    await mount()
+    await click(button('推理强度：跟随供应商默认（high）'))
+    expect(Array.from(document.querySelectorAll('[role="option"] strong'), (item) => item.textContent))
+      .toEqual(['跟随供应商默认（high）', 'medium → high'])
+  })
+
+  it('uses Session thinking choices and saves through the shared settings API without losing the draft', async () => {
+    workspace.reasoning = { requested: 'medium', effective: 'medium', source: 'model', mapping: 'native',
+      supported_levels: ['provider_default', 'low', 'medium', 'high'], parameters: {} }
+    const session = snapshot('discussion')
+    session.reasoning = { ...workspace.reasoning, requested: 'high', effective: 'high', source: 'session' }
+    snapshots.set('discussion', session)
+    window.history.replaceState({}, '', '/?session=discussion')
+    vi.mocked(lumenApi.updateSessionSettings).mockImplementation(async (id, settings) => {
+      const current = snapshots.get(id)!
+      current.reasoning = { ...workspace.reasoning!, requested: settings.reasoningEffort!,
+        effective: settings.reasoningEffort!, source: 'session' }
+      return { status: 'updated' }
+    })
+    await mount()
+    await type('保留草稿')
+    await choose('推理强度：high', 'low')
+    expect(lumenApi.updateSessionSettings).toHaveBeenCalledWith('discussion', { reasoningEffort: 'low' })
+    expect(button('推理强度：low')).toBeDefined()
+    expect(container.querySelector('textarea')?.value).toBe('保留草稿')
+  })
+
+  it('disables thinking changes during a run and reports unverified legacy settings honestly', async () => {
+    workspace.activeRunId = 'running'
+    workspace.reasoning = { requested: null, effective: null, source: 'legacy_settings', mapping: 'unverified',
+      supported_levels: ['provider_default', 'low'], parameters: {} }
+    await mount()
+    expect(button('推理强度：原始配置（未校验）').disabled).toBe(true)
+  })
+
   it('filters configured models, ignores IME confirmation, and switches without losing the draft', async () => {
     await mount()
     await type('保留模型切换前的草稿')
@@ -478,7 +711,7 @@ describe('sidebar navigation', () => {
 })
 
 describe('session approval mode interactions', () => {
-  it('copies user text, preserves edit drafts on failure, then starts a replacement branch once', async () => {
+  it('copies user text, allows unchanged regeneration, and keeps the current session', async () => {
     const source = snapshot('source')
     source.timeline = [
       { id: 'u0', kind: 'user', text: '前文', turn_index: 0, interaction_id: 'run-old' },
@@ -489,43 +722,41 @@ describe('session approval mode interactions', () => {
       { id: 'a1', kind: 'assistant', text: '应被替换的回答' },
     ]
     snapshots.set('source', source)
-    const branch = snapshot('branch')
-    branch.timeline = source.timeline.slice(0, 2)
-    snapshots.set('branch', branch)
     window.history.replaceState({}, '', '/?session=source')
     const writeText = vi.fn().mockResolvedValue(undefined)
     Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } })
-    vi.mocked(lumenApi.forkSession).mockResolvedValue({ sessionId: 'branch' })
     vi.mocked(lumenApi.startRun).mockRejectedValueOnce(new Error('网络断开，请重试'))
-      .mockResolvedValue({ runId: 'replacement-run', sessionId: 'branch', status: 'running' })
+      .mockImplementationOnce(async () => {
+        source.timeline = [
+          ...source.timeline.slice(0, 2),
+          { id: 'u-new', kind: 'user', text: '需要修改', turn_index: 1, interaction_id: 'replacement-run' },
+        ]
+        return { runId: 'replacement-run', sessionId: 'source', status: 'running' }
+      })
     await mount()
     await type('保留输入框草稿')
     const actions = container.querySelectorAll('.user-message-actions')
     await click(actions[1].querySelector<HTMLButtonElement>('[aria-label="复制消息"]')!)
     expect(writeText).toHaveBeenCalledWith('需要修改')
     await click(actions[1].querySelector<HTMLButtonElement>('[aria-label="编辑消息"]')!)
-    expect(button('发送并重新生成').disabled).toBe(true)
-    await type('新的问题')
+    expect(button('发送并重新生成').disabled).toBe(false)
     await click(button('发送并重新生成'))
     expect(container.textContent).toContain('网络断开，请重试')
-    expect(container.querySelector<HTMLTextAreaElement>('textarea[aria-label="编辑消息"]')?.value).toBe('新的问题')
+    expect(container.querySelector<HTMLTextAreaElement>('textarea[aria-label="编辑消息"]')?.value).toBe('需要修改')
     expect(container.textContent).toContain('应被替换的回答')
     await click(button('发送并重新生成'))
-    expect(lumenApi.forkSession).toHaveBeenCalledTimes(1)
+    expect(lumenApi.forkSession).not.toHaveBeenCalled()
     expect(lumenApi.renameSession).not.toHaveBeenCalled()
-    expect(lumenApi.forkSession).toHaveBeenCalledWith('source', 1, {
-      includeTurn: false, clientRequestId: expect.any(String),
-    })
     const calls = vi.mocked(lumenApi.startRun).mock.calls
     expect(calls[0]).toEqual(calls[1])
-    expect(calls[1]).toEqual(['branch', '新的问题', expect.any(String), [
+    expect(calls[1]).toEqual(['source', '需要修改', expect.any(String), [
       { artifactRef: 'sha256:image', kind: 'image', mediaType: 'image/png', filename: 'ref.png', byteSize: 12 },
-    ]])
-    expect(window.location.search).toBe('?session=branch')
+    ], 1])
+    expect(window.location.search).toBe('?session=source')
     expect(container.textContent).toContain('前文回答')
     expect(container.textContent).not.toContain('应被替换的回答')
     expect(container.querySelector<HTMLTextAreaElement>('textarea')?.value).toBe('保留输入框草稿')
-    expect(source.timeline).toHaveLength(4)
+    expect(source.timeline).toHaveLength(3)
   })
 
   it('keeps the run active on stop failure and prevents duplicate cancellation while pending', async () => {
@@ -581,7 +812,7 @@ describe('session approval mode interactions', () => {
     expect(lumenApi.updateSessionSettings).not.toHaveBeenCalled()
     await click(button('确认开启'))
     expect(button('审批模式：自动执行')).toBeDefined()
-    expect(document.querySelector('.auto-confirm')).toBeNull()
+    expect(document.querySelector('.auto-confirm-dialog')).toBeNull()
     await choose('工作方式：直接执行', '先规划')
     await choose('模型：model-a', 'model-b') // Refreshes bootstrap, whose defaults stay manual/default.
     expect(button('审批模式：自动执行')).toBeDefined()
@@ -599,6 +830,8 @@ describe('session approval mode interactions', () => {
   it('allows cancellation and prevents duplicate submissions while confirmation is pending', async () => {
     await mount()
     await choose('审批模式：每次确认', '自动执行')
+    expect(document.querySelector('.auto-confirm-dialog.session-management-dialog')).not.toBeNull()
+    expect(document.querySelector('.auto-confirm-overlay[role="dialog"][aria-modal="true"]')).not.toBeNull()
     await click(button('取消'))
     expect(lumenApi.updateSessionSettings).not.toHaveBeenCalled()
     expect(button('审批模式：每次确认')).toBeDefined()
@@ -621,7 +854,7 @@ describe('session approval mode interactions', () => {
     vi.mocked(lumenApi.updateSessionSettings).mockRejectedValueOnce(new Error('连接失败，请重试'))
     await click(button('确认开启'))
     expect(button('审批模式：每次确认')).toBeDefined()
-    expect(document.querySelector('.auto-confirm [role="alert"]')?.textContent).toBe('连接失败，请重试')
+    expect(document.querySelector('.auto-confirm-error[role="alert"]')?.textContent).toContain('连接失败，请重试')
     expect(button('确认开启').disabled).toBe(false)
     await click(button('确认开启'))
     expect(button('审批模式：自动执行')).toBeDefined()
@@ -631,7 +864,7 @@ describe('session approval mode interactions', () => {
     await mount()
     await choose('审批模式：每次确认', '自动执行')
     await click(button('新建任务'))
-    expect(document.querySelector('.auto-confirm')).toBeNull()
+    expect(document.querySelector('.auto-confirm-dialog')).toBeNull()
     expect(lumenApi.updateSessionSettings).not.toHaveBeenCalled()
     expect(button('审批模式：每次确认')).toBeDefined()
   })
@@ -656,7 +889,7 @@ describe('session approval mode interactions', () => {
     await click(button('新建任务'))
     await act(async () => { finish({ status: 'updated' }) })
     expect(button('审批模式：每次确认')).toBeDefined()
-    expect(document.querySelector('.auto-confirm')).toBeNull()
+    expect(document.querySelector('.auto-confirm-dialog')).toBeNull()
   })
 
   it('disables approval changes while a run is active', async () => {

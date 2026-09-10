@@ -8,6 +8,25 @@ export type CollaborationMode = NonNullable<
 >
 export type QueueMode = components['schemas']['QueueInputBody']['mode']
 export type ApprovalScope = 'once' | 'session' | 'always'
+export type ReasoningLevel = NonNullable<components['schemas']['SessionSettingsBody']['reasoningEffort']>
+
+export interface ReasoningSelection {
+  requested: ReasoningLevel | null
+  effective: ReasoningLevel | null
+  source: string
+  mapping: string
+  supported_levels: ReasoningLevel[]
+  parameters: Record<string, unknown>
+  capability_status?: 'supported' | 'unsupported' | 'unknown'
+  capability_source?: string
+  catalog_revision?: string | null
+  provider?: string | null
+  capability_documents?: string[]
+  capability_reviewed_on?: string | null
+  capability_note?: string
+  provider_default_level?: ReasoningLevel | null
+  level_map?: Partial<Record<ReasoningLevel, ReasoningLevel>>
+}
 
 export interface AttachmentRef {
   artifactRef: string
@@ -39,6 +58,7 @@ export interface CheckpointRecord {
 }
 
 export interface Bootstrap {
+  reasoning?: ReasoningSelection
   agent: string
   workspace: string
   activeModel: string
@@ -56,6 +76,9 @@ export interface Bootstrap {
 }
 
 export interface ConfiguredModel {
+  reasoningProfile?: string | null
+  reasoningEffort?: ReasoningLevel | null
+  reasoningLevels?: ReasoningLevel[] | null
   name: string
   id: string
   api: 'chat' | 'responses' | 'openai-completions' | 'openai-responses' | 'chat-completions' | null
@@ -64,10 +87,21 @@ export interface ConfiguredModel {
   settings: Record<string, unknown>
   context: Record<string, unknown>
   inputModalities: Array<'text' | 'image'>
+  nativeWebSearch?: {
+    mode?: 'auto' | 'enabled' | 'disabled'
+    search_context_size?: 'low' | 'medium' | 'high'
+  }
+  nativeWebSearchEnabled?: boolean
   isDefault: boolean
   source: { scope: string; path: string } | null
   authKind: 'environment' | 'inline' | 'none'
   authAvailable: boolean
+}
+
+export interface ConfiguredMcpServer {
+  name: string
+  enabled: boolean
+  source: { scope: string; path: string } | null
 }
 
 export interface ConfigurationSnapshot {
@@ -80,6 +114,7 @@ export interface ConfigurationSnapshot {
   warnings: string[]
   defaultModel: string
   models: ConfiguredModel[]
+  mcpServers?: ConfiguredMcpServer[]
   restartRequired?: boolean
 }
 
@@ -91,6 +126,9 @@ export interface CapabilityInventory {
 }
 
 export interface ModelConfigurationInput {
+  reasoningProfile?: string | null
+  reasoningEffort?: ReasoningLevel | null
+  reasoningLevels?: ReasoningLevel[] | null
   expectedRevision: string
   id: string
   api?: ConfiguredModel['api']
@@ -99,6 +137,7 @@ export interface ModelConfigurationInput {
   settings?: Record<string, unknown>
   context?: Record<string, unknown>
   inputModalities?: Array<'text' | 'image'>
+  nativeWebSearch?: ConfiguredModel['nativeWebSearch']
   setDefault?: boolean
 }
 
@@ -207,6 +246,7 @@ export interface TimelineEntry {
 }
 
 export interface SessionSnapshot {
+  reasoning?: ReasoningSelection
   sessionId: string
   modelId: string
   createdAt: string

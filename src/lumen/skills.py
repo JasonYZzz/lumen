@@ -452,11 +452,11 @@ def format_skills_for_prompt(skills: list[Skill]) -> str:
     if not visible:
         return ""
     lines = [
-        "The following skills provide specialized instructions for specific tasks.",
-        "Use the load_skill tool with the skill name when the task matches its description.",
+        "以下 Skill 为特定任务提供专门指令。",
+        "任务与说明匹配时, 使用 load_skill 并传入 Skill 名称。",
         (
-            "When a loaded skill references a relative file, use read_skill_resource "
-            "with the skill name and relative path; do not use read_file for skill resources."
+            "已加载 Skill 引用相对文件时, 使用 read_skill_resource 并传入 Skill 名称和相对路径; "
+            "不要用 read_file 读取 Skill 资源。"
         ),
         "",
         "<available_skills>",

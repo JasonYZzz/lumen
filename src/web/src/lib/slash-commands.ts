@@ -10,6 +10,7 @@ export interface SlashCommand {
 
 export const baseSlashCommands: SlashCommand[] = [
   { value: '/model', label: '模型', description: '选择下一轮使用的模型', keywords: '模型 model' },
+  { value: '/thinking', label: '推理强度', description: '选择此任务下一轮的推理档位', keywords: 'reasoning effort' },
   { value: '/tasks', label: '计划记录', description: '在运行记录中查看计划历史', keywords: 'plan 计划 步骤' },
   { value: '/mode', label: '审批模式', description: '选择工具操作的确认方式', keywords: 'approval' },
   { value: '/copy', label: '复制回答', description: '将最新回复复制到剪贴板' },
@@ -28,6 +29,7 @@ export const baseSlashCommands: SlashCommand[] = [
   },
   { value: '/context', description: '查看上下文', keywords: 'tokens' },
   { value: '/context sources', description: '查看当前会话上下文来源' },
+  { value: '/instructions', description: '查看稳定 prompt、动态上下文与来源' },
   { value: '/compact ', description: '压缩上下文', keywords: 'focus' },
   { value: '/memory ', description: '管理记忆', keywords: 'remember forget list' },
   { value: '/tools', label: '工具', description: '查看当前可用能力' },

@@ -18,6 +18,7 @@ from lumen.agent_loop import (
     LoopLimits,
     LoopProtocolError,
     LoopProviderFailure,
+    LoopRequestObserved,
     LoopRequestTimeout,
     LoopRetryScheduled,
     LoopStallObserved,
@@ -215,6 +216,12 @@ async def test_lumen_agent_loop_completes_text_thinking_and_usage_in_order() -> 
     assert outcome.usage.cache_read_tokens == 5
     assert outcome.request_count == 1
     assert loop.state is LoopState.COMPLETED
+    observation = next(e for e in events if isinstance(e, LoopRequestObserved))
+    assert observation.thinking_characters == len("considering")
+    assert observation.text_characters == len("hello world")
+    assert observation.first_thinking_seconds is not None
+    assert observation.first_text_seconds is not None
+    assert observation.first_thinking_seconds <= observation.first_text_seconds <= observation.elapsed_seconds
     assert [event.sequence for event in events] == list(range(len(events)))
     assert [transition.current for transition in outcome.transitions] == [
         LoopState.REQUESTING_MODEL,
@@ -953,6 +960,113 @@ async def test_cancellation_publishes_receipts_for_parallel_calls_that_already_f
     ]
     assert finished == ["fast-1"]
     assert loop.state is LoopState.RECONCILIATION_REQUIRED
+
+
+@pytest.mark.parametrize("parallel", [True, False])
+async def test_tool_completion_is_visible_before_the_next_result_and_history_stays_ordered(
+    tmp_path: Path, parallel: bool,
+) -> None:
+    fast_visible = asyncio.Event()
+    events: list[LoopEvent] = []
+
+    async def fast() -> str:
+        return "fast"
+
+    async def slow() -> str:
+        # This cannot finish until the consumer has seen the fast result.
+        # A scheduler that waits for the entire batch deadlocks here.
+        await asyncio.wait_for(fast_visible.wait(), timeout=0.5)
+        return "slow"
+
+    gateway = _gateway(tmp_path, *(
+        ToolSpec(function, risk=Risk.READ, concurrency=lambda _: ToolConcurrency.PARALLEL_SAFE)
+        for function in (fast, slow)
+    ))
+    names = ("slow", "fast") if parallel else ("fast", "slow")
+    calls: list[tuple[str, str, dict[str, Any]]] = [(name, name, {}) for name in names]
+    driver: ReplayModelDriver[dict[str, Any]] = ReplayModelDriver([
+        _tool_recording(1, *calls), _recording(2, "done"),
+    ])
+
+    async def emit(event: LoopEvent) -> None:
+        await asyncio.sleep(0)  # Deliberately asynchronous event consumer.
+        events.append(event)
+        if isinstance(event, LoopToolResultRecorded) and event.call_id == "fast":
+            fast_visible.set()
+
+    def continuation(step: LoopToolContinuation[dict[str, Any]]) -> ModelDriverRequest[dict[str, Any]]:
+        assert [result.output for result in step.results] == list(names)
+        assert all(result.succeeded for result in step.results)
+        return _request(2)
+
+    outcome = await LumenAgentLoop(
+        driver, capability_gateway=gateway, limits=LoopLimits(parallel_tool_calls=parallel),
+    ).run(_request(1), emit=emit, continue_after_tools=continuation, execution_id="early-results")
+    results = [e for e in events if isinstance(e, LoopToolResultRecorded)]
+    assert [e.name for e in results] == ["fast", "slow"]
+    assert [e.order for e in results] == ([1, 0] if parallel else [0, 1])
+    assert [e.sequence for e in events] == list(range(len(events)))
+    assert all(e.execution_seconds is not None and e.elapsed_seconds >= e.execution_seconds for e in results)
+    assert outcome.tool_call_count == 2
+
+
+async def test_cancellation_finishes_inflight_result_publication_once(tmp_path: Path) -> None:
+    publishing = asyncio.Event()
+    release = asyncio.Event()
+    calls: list[str] = []
+    events: list[LoopEvent] = []
+
+    async def inspect(label: str) -> str:
+        calls.append(label)
+        return label
+
+    gateway = _gateway(tmp_path, ToolSpec(inspect, risk=Risk.READ))
+    driver: ReplayModelDriver[dict[str, Any]] = ReplayModelDriver([
+        _tool_recording(1, ("first", "inspect", {"label": "first"}),
+                        ("second", "inspect", {"label": "second"})),
+    ])
+
+    async def emit(event: LoopEvent) -> None:
+        events.append(event)
+        if isinstance(event, LoopToolResultRecorded):
+            publishing.set()
+            await release.wait()
+
+    loop = LumenAgentLoop(driver, capability_gateway=gateway)
+    task = asyncio.create_task(loop.run(
+        _request(1), emit=emit, continue_after_tools=lambda _: _request(2), execution_id="cancel-publication",
+    ))
+    await asyncio.wait_for(publishing.wait(), 1)
+    task.cancel()
+    await asyncio.sleep(0)
+    release.set()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert calls == ["first"]
+    assert [e.call_id for e in events if isinstance(e, LoopToolResultRecorded)] == ["first"]
+    assert [e.sequence for e in events] == list(range(len(events)))
+    assert loop.state is LoopState.RECONCILIATION_REQUIRED
+
+
+async def test_request_observations_distinguish_retry_and_success_without_storing_text() -> None:
+    driver = _FlakyDriver(fail_after_text=True)
+    events: list[LoopEvent] = []
+
+    async def emit(event: LoopEvent) -> None:
+        events.append(event)
+
+    await LumenAgentLoop[dict[str, Any]](
+        driver, limits=LoopLimits(model_retry_delay_seconds=0),
+    ).run(_request(1), emit=emit)
+    observations = [e for e in events if isinstance(e, LoopRequestObserved)]
+    assert len(observations) == 2
+    assert [e.request_index for e in observations] == [1, 1]
+    assert [e.model_attempts for e in observations] == [1, 2]
+    assert observations[0].error_category is not None
+    assert observations[1].stop_reason is ModelStopReason.END_TURN
+    assert all(e.first_text_seconds is not None and e.text_characters > 0 for e in observations)
+    assert all(e.first_thinking_seconds is None for e in observations)
+    assert all("content" not in e.model_dump() for e in observations)
 
 
 class _BlockingDriver(_StreamDriverMixin):

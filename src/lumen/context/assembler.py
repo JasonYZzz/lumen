@@ -30,6 +30,7 @@ from lumen.context.budget import (
     TokenCounter,
     raise_if_fixed_context_exceeds_window,
 )
+from lumen.context.instructions import InstructionSource
 from lumen.context.legacy import ContextBudgetExceeded
 from lumen.context.types import (
     ContextBlock,
@@ -51,6 +52,7 @@ from lumen.context.types import (
 ZONE_CAP_RATIOS: dict[ContextZone, float | None] = {
     ContextZone.SYSTEM: None,
     ContextZone.POLICY: None,
+    ContextZone.RUNTIME_CONTEXT: 0.04,
     ContextZone.CURRENT_INPUT: None,
     ContextZone.OUTPUT_RESERVE: None,
     ContextZone.MEMORY_INDEX: 0.04,
@@ -68,6 +70,7 @@ ZONE_CAP_RATIOS: dict[ContextZone, float | None] = {
 _ZONE_ORDER: tuple[tuple[ContextZone, RetentionPolicy, TrustLevel], ...] = (
     (ContextZone.SYSTEM, RetentionPolicy.PINNED, TrustLevel.SYSTEM),
     (ContextZone.POLICY, RetentionPolicy.REINJECT, TrustLevel.POLICY),
+    (ContextZone.RUNTIME_CONTEXT, RetentionPolicy.EPHEMERAL, TrustLevel.SYSTEM),
     (ContextZone.MEMORY_INDEX, RetentionPolicy.REINJECT, TrustLevel.DURABLE),
     (ContextZone.CAPABILITY_CATALOG, RetentionPolicy.REINJECT, TrustLevel.SYSTEM),
     (ContextZone.TASK_STATE, RetentionPolicy.REINJECT, TrustLevel.SYSTEM),
@@ -133,6 +136,8 @@ class ContextAssembler:
         *,
         instructions: str,
         policy: str = "",
+        instruction_sources: Sequence[InstructionSource] = (),
+        runtime_context: str = "",
         prompt: str,
         tool_schemas: Sequence[dict[str, Any]],
         history: Sequence[ModelMessage],
@@ -154,8 +159,12 @@ class ContextAssembler:
             else max(min(self.max_output_tokens, int(self.window_tokens * 0.05)), 1)
         )
         builder = _BlockBuilder(self.counter, ZoneCaps.for_window(self.window_tokens))
-        builder.add_system(instructions)
-        builder.add_policy(policy)
+        if instruction_sources:
+            builder.add_instruction_sources(instruction_sources)
+        else:
+            builder.add_system(instructions)
+            builder.add_policy(policy)
+        builder.add_runtime_context(runtime_context)
         builder.add_current_input(prompt)
         builder.add_memory(memory_index, recalled_memory)
         contextual_schemas = _contextual_tool_documents(tool_schemas, history)
@@ -247,6 +256,7 @@ class _BlockBuilder:
             in {
                 ContextZone.SYSTEM,
                 ContextZone.POLICY,
+                ContextZone.RUNTIME_CONTEXT,
                 ContextZone.MEMORY_INDEX,
                 ContextZone.RECALLED_MEMORY,
                 ContextZone.CAPABILITY_CATALOG,
@@ -284,6 +294,33 @@ class _BlockBuilder:
             )
         )
 
+    def add_instruction_sources(self, sources: Sequence[InstructionSource]) -> None:
+        """Track each stable prompt source while preserving provider order."""
+
+        for index, source in enumerate(sources):
+            zone = ContextZone.SYSTEM if source.role == "system" else ContextZone.POLICY
+            kind = SourceKind.SYSTEM if source.role == "system" else SourceKind.POLICY
+            retention = (
+                RetentionPolicy.PINNED
+                if source.role == "system"
+                else RetentionPolicy.REINJECT
+            )
+            trust = TrustLevel.SYSTEM if source.role == "system" else TrustLevel.POLICY
+            self.add(
+                self._block(
+                    f"stable-instruction:{index}",
+                    zone,
+                    kind,
+                    source.origin,
+                    source.revision,
+                    ContextPayload(text=source.text),
+                    self.counter.count_text(source.text).tokens,
+                    100,
+                    retention,
+                    trust,
+                )
+            )
+
     def add_policy(self, policy: str) -> None:
         if not policy:
             return
@@ -299,6 +336,25 @@ class _BlockBuilder:
                 100,
                 RetentionPolicy.REINJECT,
                 TrustLevel.POLICY,
+            )
+        )
+
+    def add_runtime_context(self, runtime_context: str) -> None:
+        if not runtime_context:
+            return
+        fitted = self._fit_text(runtime_context, self.caps.caps[ContextZone.RUNTIME_CONTEXT])
+        self.add(
+            self._block(
+                "runtime-context",
+                ContextZone.RUNTIME_CONTEXT,
+                SourceKind.RUNTIME,
+                "runtime:request-context",
+                self._revision(fitted),
+                ContextPayload(text=fitted),
+                self.counter.count_text(fitted).tokens,
+                96,
+                RetentionPolicy.EPHEMERAL,
+                TrustLevel.SYSTEM,
             )
         )
 
@@ -662,7 +718,7 @@ def _is_history_summary(message: ModelMessage) -> bool:
         return False
     for part in message.parts:
         content = str(getattr(part, "content", ""))
-        if content.startswith("Prior conversation summary:") or content.startswith(
+        if content.startswith(("Prior conversation summary:", "先前对话摘要:")) or content.startswith(
             '<history-summary version="1"'
         ):
             return True

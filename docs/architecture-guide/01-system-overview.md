@@ -63,7 +63,7 @@ flowchart TB
 - **多 Agent 和 Work Product 各有唯一权威。** `AgentOrchestrator` 拥有线程、证据、送达与导入状态；
   `TaskWorkspace` 拥有 mutation journal、验证、回滚和恢复。`AgentRuntimeFactory` 只创建权限收窄的
   child runtime，不复制生命周期状态。
-- **持久事实与可重建投影分离。** Session v9 JSONL、ArtifactStore 和 Memory repository 保存事实或大正文；
+- **持久事实与可重建投影分离。** Session v10 JSONL、ArtifactStore 和 Memory repository 保存事实或大正文；
   Timeline、UI reducer、capability report、OpenAPI 和 contract catalog 都是可重建的只读投影。
 - **完成是跨 Module 的联合门禁。** Plan evidence、TaskWorkspace verification 或 AgentOrchestrator 的
   unresolved state 任一未满足时，文字与严格 Realtime 路径都不能声明完成。

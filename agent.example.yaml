@@ -2,7 +2,10 @@ version: 2
 
 agent:
   name: lumen
-  instructions_file: prompts/system.md
+  prompt:
+    mode: append
+    preset: lumen
+    append_file: prompts/system.md
   # Multi-model form: pick the active model with `default_model` (or via the
   # CLI flag `--model <name>` / TUI command `/model <name>`). Each entry is a
   # ModelSettingsConfig: id uses the `<provider>:<model>` convention, and the
@@ -14,6 +17,9 @@ agent:
       api_key_env: DEEPSEEK_API_KEY
       base_url: https://api.deepseek.com
       api: responses            # 默认路径；DeepSeek Responses 是无状态的部分兼容实现
+      native_web_search:
+        mode: auto              # 精确 Provider Catalog 路由默认开启；Kimi/Qwen 也可按各自协议匹配
+        search_context_size: medium
       context:
         # Exact ID from src/lumen/context/profiles.py. The profile supplies
         # window_tokens=1000000 and max_output_tokens=384000.
@@ -33,6 +39,7 @@ agent:
       context:
         profile: glm-5.2        # 部署端输出上限可用 max_output_tokens 显式覆盖
     kimi-k3:
+      # 可选 reasoning_effort: low/high/max；medium→high，xhigh→max，不提供 off。
       id: openai:k3
       api_key_env: KIMI_API_KEY
       base_url: https://api.kimi.com/coding/v1
@@ -45,9 +52,14 @@ agent:
       id: openai:gpt-5.6
       api_key_env: OPENAI_API_KEY
       api: responses
+      reasoning_effort: medium  # 类型化选择；CLI --thinking / TUI、Web /thinking 可按 Session 覆盖
+      # Custom proxies can explicitly declare a reviewed contract (exact ID/API must match):
+      # reasoning_profile: openai-gpt56-sol
+      # Full supported matrix: docs/generated/provider-reasoning.md
       context:
         profile: openai-gpt-5.6
     qwen3.8-max:
+      # 可选 reasoning_effort: off/low/medium/xhigh；high、max 均映射 xhigh。
       id: anthropic:qwen3.8-max
       api_key_env: DASHSCOPE_API_KEY
       base_url: https://YOUR_WORKSPACE.cn-beijing.maas.aliyuncs.com/apps/anthropic
@@ -55,6 +67,7 @@ agent:
         profile: alibaba-qwen3.8
       settings:
         max_tokens: 65536       # 架构上限 131072；按延迟/成本需要调整
+        # 原始 thinking 参数保持兼容；建议使用模型级 reasoning_effort，不能同时设置两者。
     omlx-qwen3.8-27b-4bit:
       # oMLX uses the model ID returned by GET /v1/models, not the Hugging Face repo path.
       id: openai:Qwen3.8-27B-4bit
@@ -91,7 +104,7 @@ agent:
     model_retry_max_delay_seconds: 60
     skill_script_timeout_seconds: 30
     # sequential | parallel_safe | parallel; native Loop overlaps only calls
-    # explicitly declared PARALLEL_SAFE, independently of approval risk.
+    # explicitly declared PARALLEL_SAFE, independently of approval risk. Default: parallel_safe.
     parallel_tool_calls: parallel_safe
   # Builtins are packaged but opt-in so existing catalogs stay unchanged.
   builtin_skills_enabled: true
@@ -110,6 +123,7 @@ tools:
     - edit_file
     - run_command
   web:
+    # Per-attempt timeout. Static fetch/download retries transient 408/425/429/5xx failures 3 times.
     fetch_timeout_seconds: 20
     fetch_max_bytes: 2097152
     # web_search is only registered when a provider + API key env are set.
@@ -266,6 +280,11 @@ mcp_servers:
   #   tool_effects:
   #     search_code: observe
   #   required: false
+
+# 独立的连接策略；Web 设置中的 MCP 开关只写这里，不复制 URL 或凭据。
+mcp:
+  enabled:
+    exa: true
 
 # Hooks run without a shell. Context is JSON on stdin; exit 0 allows, exit 2
 # denies, and JSON stdout can modify args/result/prompt. See docs/hooks/README.md.

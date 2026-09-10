@@ -190,6 +190,35 @@ def test_manager_remember_is_idempotent_by_content() -> None:
     assert r1.id == r2.id  # same scope+content -> same id
 
 
+def test_manager_expires_only_memories_supported_by_abandoned_session_suffix() -> None:
+    repo = InMemoryMemoryRepository()
+    late = _record(id="late", content="stale answer").model_copy(update={
+        "source_kind": MemorySource.INFERRED,
+        "source_session_ids": ("session-a",),
+        "source_event_ids": ("turn:3:user",),
+    })
+    early = _record(id="early", content="retained answer").model_copy(update={
+        "source_kind": MemorySource.INFERRED,
+        "source_session_ids": ("session-a",),
+        "source_event_ids": ("turn:1:user",),
+    })
+    explicit = _record(id="explicit", content="explicit preference").model_copy(update={
+        "source_session_ids": ("session-a",),
+        "source_event_ids": ("turn:3:user",),
+    })
+    for record in (late, early, explicit):
+        repo.remember(record)
+    manager = MemoryManager(repo, project_id="project-a")
+
+    assert manager.retract_session_suffix("session-a", active_turn_count=1) == 1
+    assert (stored_late := repo.get("late")) is not None
+    assert (stored_early := repo.get("early")) is not None
+    assert (stored_explicit := repo.get("explicit")) is not None
+    assert stored_late.status is MemoryStatus.EXPIRED
+    assert stored_early.status is MemoryStatus.ACTIVE
+    assert stored_explicit.status is MemoryStatus.ACTIVE
+
+
 def test_manager_forget_by_substring_tombstones_matches() -> None:
     mgr = MemoryManager(InMemoryMemoryRepository())
     mgr.remember("always run uv run pytest", scope=MemoryScope.PROJECT)

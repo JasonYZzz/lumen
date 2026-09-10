@@ -75,6 +75,16 @@ class LocalResources:
     def capabilities_report(self) -> dict[str, object]:
         return {"tools": [], "skills": [], "mcp_servers": [], "agent_profiles": []}
 
+    def instructions_report(self) -> dict[str, object]:
+        return {
+            "mode": "preset",
+            "preset": "lumen",
+            "version": "test",
+            "digest": "sha256:test",
+            "characters": 4,
+            "sources": [],
+        }
+
     def summary(self) -> dict[str, object]:
         return {"agent": "test-agent", "model": "test-model"}
 

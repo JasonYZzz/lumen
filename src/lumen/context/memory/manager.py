@@ -134,6 +134,34 @@ class MemoryManager:
             self.rebuild_projection()
         return count
 
+    def retract_session_suffix(self, session_id: str, *, active_turn_count: int) -> int:
+        """Expire auto-learned facts supported only by an abandoned turn suffix."""
+
+        pending = self._idle_tasks.pop(session_id, None)
+        if pending is not None:
+            pending.cancel()
+        self._work_queue.cancel_pending(session_id)
+        count = 0
+        for record in self._repo.list(include_forgotten=True, project_id=self.project_id):
+            if (
+                record.source_kind is MemorySource.EXPLICIT
+                or record.source_session_ids != (session_id,)
+                or not record.source_event_ids
+            ):
+                continue
+            turn_numbers: list[int] = []
+            for event_id in record.source_event_ids:
+                parts = event_id.split(":", 2)
+                if len(parts) < 3 or parts[0] != "turn" or not parts[1].isdigit():
+                    turn_numbers = []
+                    break
+                turn_numbers.append(int(parts[1]))
+            if turn_numbers and all(number > active_turn_count for number in turn_numbers):
+                count += int(self._repo.expire(record.id))
+        if count:
+            self.rebuild_projection()
+        return count
+
     def export_edit(self, target: str) -> tuple[str, Path | None]:
         """Export one visible record as a private, validated Markdown draft."""
 
@@ -393,7 +421,7 @@ class MemoryManager:
         for kind, kind_records in by_kind.items():
             self._atomic_write(
                 topics_dir / f"{kind.value}.md",
-                render_topic(kind_records, title=f"Memory: {kind.value}"),
+                render_topic(kind_records, title=f"记忆: {kind.value}"),
             )
         expected_topics = {f"{kind.value}.md" for kind in by_kind}
         for kind in MemoryKind:

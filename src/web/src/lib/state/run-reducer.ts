@@ -477,10 +477,10 @@ export function runReducer(state: RunState, action: RunAction): RunState {
   }
   if (event.type.startsWith('context.compaction.')) {
     const text = event.type.endsWith('started')
-      ? 'Compacting context…'
+      ? '正在压缩上下文……'
       : event.type.endsWith('failed')
-        ? `Context compaction failed: ${string(data.message)}`
-        : `Context compacted: ${String(data.active_message_count ?? 0)} active messages.`
+        ? `上下文压缩失败: ${string(data.message)}`
+        : `上下文已压缩: 保留 ${String(data.active_message_count ?? 0)} 条活动消息。`
     return {
       ...state,
       timeline: [

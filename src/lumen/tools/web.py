@@ -8,6 +8,9 @@ hosts are reachable, redirects are re-validated per hop, and responses are
 size-capped before parsing.
 """
 
+# Model-facing Chinese prose is kept as authored for readability.
+# ruff: noqa: RUF001
+
 from __future__ import annotations
 
 import asyncio
@@ -16,12 +19,13 @@ import ipaddress
 import json
 import os
 import socket
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from html.parser import HTMLParser
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
-from urllib.parse import urlparse
+from urllib.parse import urljoin, urlparse
 
 import httpx
 
@@ -37,6 +41,18 @@ MAX_RESPONSE_BYTES = 2 * 1024 * 1024
 MAX_REDIRECTS = 3
 DEFAULT_TIMEOUT_SECONDS = 20.0
 DEFAULT_PAGE_CHARS = 20_000
+DEFAULT_RETRY_ATTEMPTS = 3
+DEFAULT_RETRY_BACKOFF_SECONDS = 0.5
+MAX_RETRY_DELAY_SECONDS = 10.0
+
+_RETRYABLE_STATUS_CODES = frozenset({408, 425, 429, 500, 502, 503, 504})
+_REQUEST_HEADERS = {
+    "Accept": (
+        "text/html,application/xhtml+xml,application/json,application/xml,text/plain;q=0.9,*/*;q=0.1"
+    ),
+    "Accept-Encoding": "gzip, deflate",
+    "User-Agent": "Mozilla/5.0 (compatible; Lumen-Agent/1.0; web-fetch)",
+}
 
 _BLOCK_TAGS = frozenset(
     {"p", "div", "br", "li", "tr", "section", "article", "h1", "h2", "h3", "h4", "h5", "h6"}
@@ -47,20 +63,33 @@ _SKIP_TAGS = frozenset({"script", "style", "noscript", "template"})
 class _TextExtractor(HTMLParser):
     """Convert HTML to readable plain text without third-party dependencies."""
 
-    def __init__(self) -> None:
+    def __init__(self, base_url: str) -> None:
         super().__init__(convert_charrefs=True)
+        self._base_url = base_url
         self._chunks: list[str] = []
         self._skip_depth = 0
+        self._links: list[tuple[str, int]] = []
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         if tag in _SKIP_TAGS:
             self._skip_depth += 1
         elif tag in _BLOCK_TAGS:
             self._chunks.append("\n")
+        if tag == "a" and not self._skip_depth:
+            href = next((value for name, value in attrs if name == "href" and value), None)
+            if href:
+                target = urljoin(self._base_url, href)
+                if urlparse(target).scheme in {"http", "https"}:
+                    self._links.append((target, len(self._chunks)))
 
     def handle_endtag(self, tag: str) -> None:
         if tag in _SKIP_TAGS and self._skip_depth:
             self._skip_depth -= 1
+        elif tag == "a" and self._links and not self._skip_depth:
+            target, start = self._links.pop()
+            label = "".join(self._chunks[start:]).strip()
+            if label and target not in label:
+                self._chunks.append(f" ({target})")
 
     def handle_data(self, data: str) -> None:
         if not self._skip_depth and data.strip():
@@ -98,7 +127,7 @@ def is_public_host(host: str) -> bool:
 def validate_public_url(raw: str, host_guard: Callable[[str], bool]) -> httpx.URL:
     parsed = urlparse(raw)
     if parsed.scheme not in {"http", "https"}:
-        raise ValueError(f"web_fetch only supports http/https URLs: {raw}")
+        raise ValueError(f"web tools only support http/https URLs: {raw}")
     host = parsed.hostname
     if not host or not host_guard(host):
         raise ValueError(f"refusing to fetch a non-public host: {raw}")
@@ -113,6 +142,60 @@ class _FetchResult:
     truncated: bool
 
 
+def _retry_delay(error: httpx.HTTPError, attempt: int, backoff: float) -> float:
+    if isinstance(error, httpx.HTTPStatusError):
+        retry_after = error.response.headers.get("retry-after", "").strip()
+        try:
+            return min(max(float(retry_after), 0.0), MAX_RETRY_DELAY_SECONDS)
+        except ValueError:
+            pass
+    return min(backoff * (2**attempt), MAX_RETRY_DELAY_SECONDS)
+
+
+def _retryable(error: httpx.HTTPError) -> bool:
+    return isinstance(error, httpx.TransportError) or (
+        isinstance(error, httpx.HTTPStatusError)
+        and error.response.status_code in _RETRYABLE_STATUS_CODES
+    )
+
+
+def _retry_exhausted(tool: str, url: str, attempts: int, error: httpx.HTTPError) -> RuntimeError:
+    if isinstance(error, httpx.HTTPStatusError):
+        response = error.response
+        detail = f"upstream returned {response.status_code} {response.reason_phrase}"
+    else:
+        detail = f"network transport failed: {error}"
+    return RuntimeError(f"{tool} failed after {attempts} attempts for {url}: {detail}")
+
+
+def _tool_timeout(timeout: float, attempts: int, backoff: float) -> float:
+    return timeout * attempts + sum(
+        min(backoff * (2**attempt), MAX_RETRY_DELAY_SECONDS) for attempt in range(attempts - 1)
+    )
+
+
+def _bounded_response(response: httpx.Response, max_bytes: int) -> tuple[bytes, bool]:
+    body = bytearray()
+    truncated = False
+    for chunk in response.iter_bytes(chunk_size=64 * 1024):
+        available = max_bytes - len(body)
+        if len(chunk) > available:
+            body.extend(chunk[:available])
+            truncated = True
+            break
+        body.extend(chunk)
+    return bytes(body), truncated
+
+
+def _is_text_content_type(content_type: str) -> bool:
+    return content_type.startswith("text/") or content_type in {
+        "application/json",
+        "application/xml",
+        "application/yaml",
+        "application/x-yaml",
+    } or content_type.endswith(("+json", "+xml"))
+
+
 def _fetch(
     url: str,
     *,
@@ -120,41 +203,53 @@ def _fetch(
     max_bytes: int,
     transport: httpx.BaseTransport | None,
     host_guard: Callable[[str], bool],
+    retry_attempts: int,
+    retry_backoff_seconds: float,
 ) -> _FetchResult:
-    current = validate_public_url(url, host_guard)
-    with httpx.Client(timeout=timeout, follow_redirects=False, transport=transport) as client:
-        for _ in range(MAX_REDIRECTS + 1):
-            response = client.get(current)
-            if response.is_redirect:
-                location = response.headers.get("location")
-                if not location:
-                    raise ValueError(f"redirect without location header from {current}")
-                # Resolve relative redirects, then re-run the full public-host
-                # check: a redirect is a fresh attack surface for SSRF.
-                current = validate_public_url(str(current.join(location)), host_guard)
-                continue
-            response.raise_for_status()
-            bounded = response.content[:max_bytes] if len(response.content) > max_bytes else response.content
-            truncated = len(bounded) < len(response.content)
-            content_type = response.headers.get("content-type", "").split(";", 1)[0].strip().lower()
-            if content_type in {"text/html", "application/xhtml+xml"}:
-                extractor = _TextExtractor()
-                extractor.feed(bounded.decode("utf-8", errors="replace"))
-                return _FetchResult(extractor.text(), content_type, str(current), truncated)
-            if content_type.startswith("text/") or content_type in {
-                "application/json",
-                "application/xml",
-                "text/xml",
-                "application/yaml",
-                "application/x-yaml",
-            }:
-                body = bounded.decode("utf-8", errors="replace")
-                return _FetchResult(body, content_type, str(current), truncated)
-            raise ValueError(
-                f"unsupported content type for web_fetch: {content_type or 'unknown'} "
-                "(only HTML, plain text, JSON, XML and YAML are supported)"
-            )
-    raise ValueError(f"too many redirects (>{MAX_REDIRECTS}) starting from {url}")
+    with httpx.Client(
+        timeout=timeout,
+        follow_redirects=False,
+        transport=transport,
+        headers=_REQUEST_HEADERS,
+    ) as client:
+        for attempt in range(retry_attempts):
+            current = validate_public_url(url, host_guard)
+            try:
+                for _ in range(MAX_REDIRECTS + 1):
+                    with client.stream("GET", current) as response:
+                        if response.is_redirect:
+                            location = response.headers.get("location")
+                            if not location:
+                                raise ValueError(f"redirect without location header from {current}")
+                            # A redirect is a fresh SSRF attack surface.
+                            current = validate_public_url(str(current.join(location)), host_guard)
+                            continue
+                        response.raise_for_status()
+                        bounded, truncated = _bounded_response(response, max_bytes)
+                        content_type = (
+                            response.headers.get("content-type", "").split(";", 1)[0].strip().lower()
+                        )
+                        if content_type in {"text/html", "application/xhtml+xml"}:
+                            extractor = _TextExtractor(str(current))
+                            extractor.feed(bounded.decode("utf-8", errors="replace"))
+                            return _FetchResult(
+                                extractor.text(), content_type, str(current), truncated
+                            )
+                        if _is_text_content_type(content_type):
+                            body = bounded.decode("utf-8", errors="replace")
+                            return _FetchResult(body, content_type, str(current), truncated)
+                        raise ValueError(
+                            f"unsupported content type for web_fetch: {content_type or 'unknown'} "
+                            "(only HTML, plain text, JSON, XML and YAML are supported)"
+                        )
+                raise ValueError(f"too many redirects (>{MAX_REDIRECTS}) starting from {url}")
+            except httpx.HTTPError as error:
+                if not _retryable(error):
+                    raise
+                if attempt + 1 >= retry_attempts:
+                    raise _retry_exhausted("web_fetch", url, retry_attempts, error) from error
+                time.sleep(_retry_delay(error, attempt, retry_backoff_seconds))
+    raise RuntimeError("web_fetch exhausted retries without a result")
 
 
 def build_web_fetch_spec(
@@ -163,6 +258,8 @@ def build_web_fetch_spec(
     max_bytes: int = MAX_RESPONSE_BYTES,
     transport: httpx.BaseTransport | None = None,
     host_guard: Callable[[str], bool] = is_public_host,
+    retry_attempts: int = DEFAULT_RETRY_ATTEMPTS,
+    retry_backoff_seconds: float = DEFAULT_RETRY_BACKOFF_SECONDS,
 ) -> ToolSpec:
     """Build the ``web_fetch`` tool spec.
 
@@ -170,6 +267,9 @@ def build_web_fetch_spec(
     callers rely on the default httpx transport and the DNS-based public-host
     check.
     """
+
+    if retry_attempts < 1 or retry_backoff_seconds < 0:
+        raise ValueError("retry_attempts must be positive and retry_backoff_seconds cannot be negative")
 
     def web_fetch(url: str, start_char: int = 1, max_chars: int = DEFAULT_PAGE_CHARS) -> dict[str, Any]:
         """Fetch one bounded page of a public http(s) URL as readable text.
@@ -185,7 +285,13 @@ def build_web_fetch_spec(
         if start_char < 1 or max_chars < 1:
             raise ValueError("start_char and max_chars must be positive")
         fetched = _fetch(
-            url, timeout=timeout, max_bytes=max_bytes, transport=transport, host_guard=host_guard
+            url,
+            timeout=timeout,
+            max_bytes=max_bytes,
+            transport=transport,
+            host_guard=host_guard,
+            retry_attempts=retry_attempts,
+            retry_backoff_seconds=retry_backoff_seconds,
         )
         page = fetched.content[start_char - 1 : start_char - 1 + max_chars]
         has_more = start_char - 1 + max_chars < len(fetched.content)
@@ -204,9 +310,14 @@ def build_web_fetch_spec(
 
     return ToolSpec(
         web_fetch,
+        description=(
+            "读取网页、API、JSON 或 RSS/XML 内容时优先使用本工具；它不会写入工作区。分页读取"
+            "公开 HTTP(S) URL，HTML 转为带链接的可读文本，JSON/XML/YAML 和纯文本保持原文。"
+            "临时网络错误会自动重试；若 has_more=true，请用 next_start_char 继续读取。"
+        ),
         risk=Risk.EXTERNAL,
         effect_kind=EffectKind.OBSERVE,
-        timeout=timeout,
+        timeout=_tool_timeout(timeout, retry_attempts, retry_backoff_seconds),
     )
 
 
@@ -218,6 +329,8 @@ def build_download_file_spec(
     max_bytes: int = MAX_RESPONSE_BYTES,
     transport: httpx.AsyncBaseTransport | None = None,
     host_guard: Callable[[str], bool] = is_public_host,
+    retry_attempts: int = DEFAULT_RETRY_ATTEMPTS,
+    retry_backoff_seconds: float = DEFAULT_RETRY_BACKOFF_SECONDS,
 ) -> ToolSpec:
     """Transfer source text without sending its body through model output.
 
@@ -225,13 +338,17 @@ def build_download_file_spec(
     networking. Local publication uses TaskWorkspace's existing journal.
     """
     workspace = Workspace(root)
+    if retry_attempts < 1 or retry_backoff_seconds < 0:
+        raise ValueError("retry_attempts must be positive and retry_backoff_seconds cannot be negative")
+    total_timeout = _tool_timeout(timeout, retry_attempts, retry_backoff_seconds)
 
     async def download_file(
         url: str, path: str, overwrite: bool = False, sha256: str | None = None,
     ) -> dict[str, Any]:
         """Download a public URL's exact UTF-8 source bytes to a workspace file.
 
-        Prefer this over web_fetch plus write_file for exact text resources.
+        Use this only when the resource must be saved exactly. Use web_fetch
+        to read webpages, APIs, JSON or RSS/XML without creating a file.
         For complete skill installation use install_skill instead.
         Use raw.githubusercontent.com URLs, not GitHub
         HTML views. Never transcribe large files or base64 through the model.
@@ -248,34 +365,67 @@ def build_download_file_spec(
         if sha256 is not None:
             if len(sha256) != 64 or any(char not in "0123456789abcdefABCDEF" for char in sha256):
                 raise ValueError("sha256 must contain exactly 64 hexadecimal characters")
-        body = bytearray()
-        async with asyncio.timeout(timeout):
-            current = await asyncio.to_thread(validate_public_url, url, host_guard)
+        encoded: bytes | None = None
+        async with asyncio.timeout(total_timeout):
             async with httpx.AsyncClient(
-                timeout=timeout, follow_redirects=False, transport=transport,
+                timeout=timeout,
+                follow_redirects=False,
+                transport=transport,
+                headers=_REQUEST_HEADERS,
             ) as client:
-                for _ in range(MAX_REDIRECTS + 1):
-                    async with client.stream("GET", current) as response:
-                        if response.is_redirect:
-                            location = response.headers.get("location")
-                            if not location:
-                                raise ValueError(f"redirect without location header from {current}")
-                            current = await asyncio.to_thread(
-                                validate_public_url, str(current.join(location)), host_guard,
+                for attempt in range(retry_attempts):
+                    current = await asyncio.to_thread(validate_public_url, url, host_guard)
+                    body = bytearray()
+                    try:
+                        for _ in range(MAX_REDIRECTS + 1):
+                            async with client.stream("GET", current) as response:
+                                if response.is_redirect:
+                                    location = response.headers.get("location")
+                                    if not location:
+                                        raise ValueError(
+                                            f"redirect without location header from {current}"
+                                        )
+                                    current = await asyncio.to_thread(
+                                        validate_public_url,
+                                        str(current.join(location)),
+                                        host_guard,
+                                    )
+                                    continue
+                                response.raise_for_status()
+                                content_type = (
+                                    response.headers.get("content-type", "")
+                                    .split(";", 1)[0]
+                                    .lower()
+                                )
+                                if content_type in {"text/html", "application/xhtml+xml"}:
+                                    raise ValueError(
+                                        "download_file requires a raw source URL, not an HTML page"
+                                    )
+                                async for chunk in response.aiter_bytes(chunk_size=64 * 1024):
+                                    if len(body) + len(chunk) > max_bytes:
+                                        raise ValueError(
+                                            f"download exceeds {max_bytes} bytes; no file was written"
+                                        )
+                                    body.extend(chunk)
+                                encoded = bytes(body)
+                                break
+                        else:
+                            raise ValueError(
+                                f"too many redirects (>{MAX_REDIRECTS}) starting from {url}"
                             )
-                            continue
-                        response.raise_for_status()
-                        content_type = response.headers.get("content-type", "").split(";", 1)[0].lower()
-                        if content_type in {"text/html", "application/xhtml+xml"}:
-                            raise ValueError("download_file requires a raw source URL, not an HTML page")
-                        async for chunk in response.aiter_bytes(chunk_size=64 * 1024):
-                            if len(body) + len(chunk) > max_bytes:
-                                raise ValueError(f"download exceeds {max_bytes} bytes; no file was written")
-                            body.extend(chunk)
                         break
-                else:
-                    raise ValueError(f"too many redirects (>{MAX_REDIRECTS}) starting from {url}")
-        encoded = bytes(body)
+                    except httpx.HTTPError as error:
+                        if not _retryable(error):
+                            raise
+                        if attempt + 1 >= retry_attempts:
+                            raise _retry_exhausted(
+                                "download_file", url, retry_attempts, error
+                            ) from error
+                        await asyncio.sleep(
+                            _retry_delay(error, attempt, retry_backoff_seconds)
+                        )
+        if encoded is None:
+            raise RuntimeError("download_file exhausted retries without a result")
         digest = hashlib.sha256(encoded).hexdigest()
         if sha256 is not None and digest != sha256.lower():
             raise ValueError("download SHA-256 mismatch; no file was written")
@@ -308,7 +458,18 @@ def build_download_file_spec(
             await publication
             raise
 
-    return ToolSpec(download_file, risk=Risk.EXTERNAL, effect_kind=EffectKind.MUTATION, timeout=timeout)
+    return ToolSpec(
+        download_file,
+        description=(
+            "仅当用户需要把已知原始 URL 的完整 UTF-8 文件保存到工作区时使用。不要用它阅读"
+            "网页、API、JSON 或 RSS/XML；这些任务应使用 web_fetch。HTML 页面和二进制文件会被"
+            "拒绝；临时网络错误会自动重试。已有文件只有 overwrite=true 时才覆盖，可用 sha256 "
+            "校验内容。结果只返回路径、字节数和 SHA-256。"
+        ),
+        risk=Risk.EXTERNAL,
+        effect_kind=EffectKind.MUTATION,
+        timeout=total_timeout,
+    )
 
 
 def _format_result(item: dict[str, Any], keys: tuple[str, str, str]) -> str:
@@ -372,6 +533,7 @@ def build_web_search_spec(
 
     return ToolSpec(
         web_search,
+        description="搜索互联网，并按“标题 — URL — 摘要”返回最相关的结果。",
         risk=Risk.EXTERNAL,
         effect_kind=EffectKind.OBSERVE,
         timeout=timeout,

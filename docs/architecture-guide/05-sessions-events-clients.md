@@ -58,22 +58,26 @@ terminal 已随 turn append 并 `fsync` 后才交给 EventJournal。若 terminal
 
 会话文件是 append-only JSONL：
 
-- 第一条记录保存 session metadata 和创建时 schema；当前新会话写 v9；
+- 第一条记录保存 session metadata 和创建时 schema；当前新会话写 v11；
 - 后续每条 turn 保存 user input、状态、messages、timeline events、approval、usage、plan、diagnostics 与 compaction；
 - 每个 terminal turn 还保存有界 `request_receipts[]`：实际 provider/model route、step、instructions/messages/tools token、完整有序 tool schema digest、context fingerprint、output reserve、hard limit 和 estimated 标记；内嵌 `ModelInputManifest` 还保存 source refs/digests、stable prefix、dynamic tail、request fingerprint 与 replay eligibility，但不复制 secret、instructions、完整 messages/schema 或大正文；
 - context、settings、plan、Work Product/effect、Agent Thread/event/message/result 与 Live call 都使用独立类型化 record 追加，不挤入可变聚合对象；
 - 标题和归档状态由最新的 `session_catalog` record 投影；首次删除 tombstone 是终态，后到的旧目录快照不能撤销删除；不改写或物理移除 journal；
-- v1–v8 文件加载时不重写。首次写入 v5–v9 对应的新事实前追加 `schema_upgrade`，读取时按 marker 链得到的有效 schema 校验后续 record；
+- `history_rewind` 在同一 Session 内选择目标 user turn 之前的活动 lineage；被放弃的 turn、工具结果和 compaction summary 仍留在 JSONL 供审计，但不再进入时间线、模型 history、checkpoint retrieval 或自动记忆；
+- v1–v10 文件加载时不重写。首次写入 v5–v11 对应的新事实前追加 `schema_upgrade`，读取时按 marker 链得到的有效 schema 校验后续 record；
 - `load` 对不完整/非法 JSON 行明确报 `SessionCorruptError`，避免把损坏文件静默解释为合法状态；
 - active prefix、rolling summary 和 checkpoint 可从 turn 中恢复；V2 checkpoint 必须通过 parent/range/cursor/digest/full-history 校验，V1 只读兼容并映射为绝对 transcript 边界；
 - checkpoint 状态只在 append + `fsync` 成功后发布到运行中内存；
 - 分页读取用于长时间线，不要求一次挂载全部 UI widget。
 
-`SessionRepository.load` 始终以 JSONL 字节为权威，通过内容 digest 命中可删除的 read projection cache。缓存只保存 materialized read model；digest 不一致或调用 `clear_projection_cache()` 时从 JSONL 冷算。删除缓存不会丢数据，也不会改写 v1–v9 文件。
+`SessionRepository.load` 始终以 JSONL 字节为权威，通过内容 digest 命中可删除的 read projection cache。缓存只保存 materialized read model；digest 不一致或调用 `clear_projection_cache()` 时从 JSONL 冷算。删除缓存不会丢数据，也不会改写 v1–v11 文件。
 
-编辑用户消息复用 `ForkSessionAtTurn(include_turn=False)`：对话上下文只保留目标之前的前缀，
-已发生的工作区副作用不回滚。Host 在进程锁内检查待核实的外部结果，失败时不创建分支；
-普通 StartRun 同样在建立 running 记录前检查。Session schema 仍为 v9，原始 journal 不改写。
+Web 编辑用户消息通过 `StartRun.regenerate_from_turn` 在一次 Host 受理中先追加 `history_rewind`，
+再为替换输入追加 running turn；Session ID、标题和当前窗口保持不变。相同文本也允许重新生成。
+ContextEngine 同步丢弃旧 lineage 的 checkpoint、后台压缩与 commit 幂等缓存；Session resource snapshot
+和仅由被放弃后缀支持的自动记忆会失效，避免旧网页内容或旧答案回流。已发生的工作区副作用不回滚。
+独立 checkpoint 分支仍复用 `ForkSessionAtTurn`，两种 Interface 不再混用。Host 在进程锁内检查待核实的
+外部结果，失败时不追加 rewind；普通 StartRun 同样在建立 running 记录前检查。
 
 失败/取消不再必然丢弃全部模型历史。Runtime 只把已完成模型/工具批次附在
 `PartialRunOutcome.completed_messages`，Coordinator 追加成功后更新内存历史。Session load 要求
@@ -138,7 +142,7 @@ Web Adapter 将每个用户 turn 的 timeline 投影为两层：assistant 最终
 
 普通模式的 `PlanProgress` 仅在当前 run 活动且当前 turn 有计划时，投影 composer 上方居中摘要与非模态清单，复用 `planPresentation` 和 `PlanPanel`，不创建第二套步骤状态。terminal 后移除胶囊，新 turn 未更新计划时不显示旧进度；旧 `PlanDrawer` 与页头入口已删除。Plan Mode 的 `PlanProposal` 在正文展示待审方案，`PlanReview` 在 composer 上方提供确认或修改入口；Host 的 revision 审核契约仍是唯一授权来源。审核请求通过同步引用防止重复发送，并检查当前 Session 与请求身份后才更新 UI、订阅运行；导航会使旧请求的客户端结果失效，不取消已经接受的 Host 工作。意见在请求失败时保留，在 Session 或方案 revision 改变时清空。
 
-文档预览由 Web `DocumentProvider` 拥有临时 UI 状态，文件卡片只投影本轮成功的明确文件写入；链接本身不证明文件存在。用户点击后，经认证的 `/api/v1/files/content` 调用 `WorkspaceHost.read_document`，在线程中执行有界文件读取。逐段使用目录 descriptor 与 `O_NOFOLLOW` 拒绝符号链接竞态，拒绝隐藏/父级路径与特殊文件；响应固定为 attachment/octet-stream、no-store，不在应用源直接执行 HTML。Web 使用独立 sandbox iframe 和 CSP 渲染静态 HTML，关闭时 abort 请求并释放 Blob URL。该 Interface 读取当前工作区，不创建 Session record 或第二套产物索引；历史快照仍由 TaskWorkspace/ArtifactStore 管理。
+文档预览由 Web `DocumentProvider` 拥有临时 UI 状态，文件卡片只投影本轮成功的明确文件写入；链接本身不证明文件存在。用户点击后，经认证的 `/api/v1/files/content` 调用 `WorkspaceHost.read_document`，在线程中执行有界文件读取。逐段使用目录 descriptor 与 `O_NOFOLLOW` 拒绝符号链接竞态，拒绝隐藏/父级路径与特殊文件；响应固定为 attachment/octet-stream、no-store，不在应用源直接执行 HTML。Web 使用独立 sandbox iframe 和 CSP 渲染 HTML/Word 静态内容；Word 与 Excel 解析器只在打开对应文件时按需加载，Excel、CSV 和 TSV 只投影有界的只读单元格文本，不执行公式或宏。浏览器 PDF 使用隔离的 Blob URL；关闭预览时 abort 请求并释放 URL。该 Interface 读取当前工作区，不创建 Session record 或第二套产物索引；历史快照仍由 TaskWorkspace/ArtifactStore 管理。
 
 模型文本中的 think/thinking 分隔符通过 `projectThinkingMarkup` 读取投影；主对话与运行记录标准视图复用同一 Interface，后者先投影再搜索和复制。原生 thinking 的通道归属优先于文本闭合标签；原生通道及用户轮次隔离 Markdown 状态，避免未闭合代码段影响后续正文。详细运行记录、工具结果、代码与转义示例保留原文。该处理不改变 Provider history、签名或 TextRetracted 的字符偏移，不能被用作内容脱敏或安全过滤器。
 

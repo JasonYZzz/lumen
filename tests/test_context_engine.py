@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Sequence
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -45,8 +46,9 @@ from lumen.context import (
 )
 from lumen.context.assembler import ContextAssembler
 from lumen.context.budget import DeterministicTokenCounter
+from lumen.context.instructions import InstructionSource
 from lumen.events import RunEvent
-from lumen.plan import PlanState
+from lumen.plan import AcceptanceCriterion, EvidenceKind, EvidenceReceipt, PlanState, PlanStep
 from lumen.sessions import SessionRepository
 
 _EMPTY_SUMMARY_JSON = (
@@ -94,6 +96,24 @@ def _request(history: Sequence[ModelMessage], *, session_id: str = "s1") -> Cont
 
 async def _no_emit(_event: RunEvent) -> None:
     return None
+
+
+async def test_restored_plan_exposes_linkable_evidence_in_provider_context() -> None:
+    plan = PlanState(revision=1, steps=[PlanStep(
+        id="verify", title="Verify report", acceptance_criteria=[
+            AcceptanceCriterion(id="sections", description="Required sections present"),
+        ], evidence_ids=["receipt-1"],
+    )], evidence=[EvidenceReceipt(
+        id="receipt-1", kind=EvidenceKind.TOOL, source_id="call-1", passed=True,
+        summary="Report sections validated", criterion_ids=["sections"],
+    )])
+    request = replace(_request([]), task=TaskSnapshot(plan=plan))
+    envelope = await _engine(soft_token_limit=100_000).prepare(request, _no_emit)
+    visible = str(envelope.provider_history)
+    assert "receipt-1" in visible
+    assert "sections" in visible
+    assert "Report sections validated" in visible
+    assert not envelope.canonical_history  # projection is transient, not a second journal
 
 
 async def test_in_run_compaction_rolls_up_and_reloads_without_duplicate_messages(tmp_path: Path) -> None:
@@ -334,6 +354,34 @@ async def test_repeated_commit_rejects_different_messages() -> None:
         )
 
 
+async def test_history_rewind_resets_same_prompt_commit_identity() -> None:
+    engine = _engine(soft_token_limit=1_000_000)
+    request = _request([ModelRequest(parts=[UserPromptPart(content="q")])])
+    first_envelope = await engine.prepare(request, _no_emit)
+    await engine.commit(
+        ContextCommit(
+            session=request.session,
+            envelope_fingerprint=first_envelope.fingerprint,
+            new_messages=(ModelResponse(parts=[TextPart(content="old answer")]),),
+        ),
+        _no_emit,
+    )
+
+    engine.reset_session_projection(request.session.id)
+    second_envelope = await engine.prepare(request, _no_emit)
+    assert second_envelope.fingerprint == first_envelope.fingerprint
+    transition = await engine.commit(
+        ContextCommit(
+            session=request.session,
+            envelope_fingerprint=second_envelope.fingerprint,
+            new_messages=(ModelResponse(parts=[TextPart(content="new answer")]),),
+        ),
+        _no_emit,
+    )
+
+    assert "new answer" in str(transition.active_history[-1])
+
+
 async def test_disabled_context_never_calls_summarizer() -> None:
     engine = ContextEngine(
         ContextConfig(
@@ -545,6 +593,26 @@ async def test_model_input_manifest_is_bounded_deterministic_and_schema_sensitiv
         task=base.task,
         runtime=RuntimeContextSnapshot(
             instructions="be helpful",
+            system_instructions="be helpful",
+            policy_instructions="follow policy",
+            instruction_sources=(
+                InstructionSource(
+                    origin="builtin:lumen",
+                    role="system",
+                    text="be helpful",
+                    revision="sha256:" + "c" * 64,
+                ),
+                InstructionSource(
+                    origin="runtime:control-policy",
+                    role="policy",
+                    text="follow policy",
+                    revision="sha256:" + "d" * 64,
+                ),
+            ),
+            runtime_context="当前模型 ID: test",
+            prompt_mode="preset",
+            prompt_preset="lumen",
+            prompt_version="test-v1",
             active_skill_documents=(
                 {
                     "name": "review",
@@ -582,6 +650,9 @@ async def test_model_input_manifest_is_bounded_deterministic_and_schema_sensitiv
         instructions=request.runtime.instructions,
         tool_schemas=[tool_v1],
         route="acme:test",
+        prompt_mode=request.runtime.prompt_mode,
+        prompt_preset=request.runtime.prompt_preset,
+        prompt_version=request.runtime.prompt_version,
     )
     repeated = engine.build_input_manifest(
         envelope,
@@ -590,6 +661,9 @@ async def test_model_input_manifest_is_bounded_deterministic_and_schema_sensitiv
         instructions=request.runtime.instructions,
         tool_schemas=[tool_v1],
         route="acme:test",
+        prompt_mode=request.runtime.prompt_mode,
+        prompt_preset=request.runtime.prompt_preset,
+        prompt_version=request.runtime.prompt_version,
     )
     tool_v2 = {
         **tool_v1,
@@ -610,6 +684,9 @@ async def test_model_input_manifest_is_bounded_deterministic_and_schema_sensitiv
         instructions=request.runtime.instructions,
         tool_schemas=[tool_v2],
         route="acme:test",
+        prompt_mode=request.runtime.prompt_mode,
+        prompt_preset=request.runtime.prompt_preset,
+        prompt_version=request.runtime.prompt_version,
     )
 
     assert first == repeated
@@ -617,6 +694,17 @@ async def test_model_input_manifest_is_bounded_deterministic_and_schema_sensitiv
     assert first.tool_schema_digest != changed.tool_schema_digest
     assert snapshot.visible_tool_digest != changed_snapshot.visible_tool_digest
     assert first.replay_eligibility is ReplayEligibility.VERIFY_ONLY
+    assert (first.prompt_mode, first.prompt_preset, first.prompt_version) == (
+        "preset",
+        "lumen",
+        "test-v1",
+    )
+    assert any(source.zone is ContextZone.RUNTIME_CONTEXT for source in first.sources)
+    assert [source.origin for source in first.sources[:2]] == [
+        "builtin:lumen",
+        "runtime:control-policy",
+    ]
+    assert first.sources[0].revision == "sha256:" + "c" * 64
     skill_source = next(source for source in first.sources if source.zone is ContextZone.ACTIVE_SKILLS)
     assert skill_source.reference == artifact_ref
     assert skill_source.replayable is True

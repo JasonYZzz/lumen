@@ -272,7 +272,7 @@ def test_format_skills_for_prompt_structure() -> None:
     assert "<name>commit</name>" in result
     assert "<description>Write commit messages.</description>" in result
     assert "/skills/commit/SKILL.md" in result
-    assert "Use the load_skill tool with the skill name" in result
+    assert "使用 load_skill 并传入 Skill 名称" in result
     assert "Use the read_file tool" not in result
 
 

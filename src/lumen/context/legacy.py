@@ -646,12 +646,10 @@ class ContextManager:
         )
         diagnostic_lines = "\n".join(json.dumps(item) for item in diagnostics) or "(none)"
         base = (
-            "Summarize the prior conversation into the structured schema. "
-            "Capture only what is needed to continue: goals, constraints, what is "
-            "already completed, the current plan, important files, key facts, "
-            "approval and failure history, and outstanding work. Do not include "
-            "private chain-of-thought or detailed reasoning; keep entries short.\n\n"
-            f"Current plan:\n{plan_lines}\n\nDiagnostics:\n{diagnostic_lines}\n"
+            "把先前对话概括为指定的结构化 schema。只保留继续任务所需的信息: "
+            "目标、约束、已完成工作、当前计划、重要文件、关键事实、审批和失败记录, 以及待办工作。"
+            "不要包含私有思维链或详细推理; 每项保持简短。\n\n"
+            f"当前计划:\n{plan_lines}\n\n诊断:\n{diagnostic_lines}\n"
         )
         if previous_summary is not None:
             # Iterative update: pass the prior summary so the model PRESERVES
@@ -662,13 +660,11 @@ class ContextManager:
             prior_json = previous_summary.model_dump_json(indent=2)
             return (
                 base + "\n<previous-summary>\n" + prior_json + "\n</previous-summary>\n\n"
-                "This is an UPDATE. PRESERVE all existing entries from the previous "
-                "summary unless contradicted by the new conversation. ADD new progress, "
-                "decisions, and context. Move completed items from outstanding/current "
-                "into completed. Never drop a prior constraint, approval, file, exact "
-                "literal, or fact by omission. If the new conversation explicitly revokes "
-                "or replaces one, add a state_changes entry with its exact prior text, "
-                "action, replacement when superseding, and a short evidence-based reason."
+                "这是一次更新。除非新对话明确冲突, 必须保留 previous-summary 中的所有已有条目。"
+                "加入新的进展、决定和上下文, 并把已完成项目从 outstanding/current 移到 completed。"
+                "不得因遗漏而丢失已有约束、审批、文件、精确字面值或事实。"
+                "新对话明确撤销或替换内容时, 添加 state_changes 条目, 包含准确的先前文本、action、"
+                "替代内容和简短的证据理由。"
             )
         return base
 
@@ -747,16 +743,16 @@ class ContextManager:
 
     @staticmethod
     def _format_summary(summary: ContextSummary) -> str:
-        lines = ["Prior conversation summary:"]
+        lines = ["先前对话摘要:"]
         for label, items in (
-            ("Goals", summary.goals),
-            ("Constraints", summary.constraints),
-            ("Completed", summary.completed),
-            ("Current plan", summary.current_plan),
-            ("Important files", summary.important_files),
-            ("Key facts", summary.key_facts),
-            ("Failures and approvals", summary.failures_and_approvals),
-            ("Outstanding", summary.outstanding),
+            ("目标", summary.goals),
+            ("约束", summary.constraints),
+            ("已完成", summary.completed),
+            ("当前计划", summary.current_plan),
+            ("重要文件", summary.important_files),
+            ("关键事实", summary.key_facts),
+            ("失败与审批", summary.failures_and_approvals),
+            ("待处理", summary.outstanding),
         ):
             if items:
                 lines.append(f"{label}:")

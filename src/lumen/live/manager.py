@@ -703,8 +703,8 @@ class LiveSessionManager:
                     "type": "function",
                     "name": "complete_live_turn",
                     "description": (
-                        "Request permission to speak the final answer after all work and verification "
-                        "are complete. The answer is not spoken until Lumen's completion gate passes."
+                        "完成全部工作和验证后, 请求播报最终答案。"
+                        "只有通过 Lumen 的完成门禁后才会播报。"
                     ),
                     "parameters": {
                         "type": "object",
@@ -744,15 +744,14 @@ class LiveSessionManager:
         documents = list(self._context_documents(session_id))[-self.config.max_context_items :]
         context = json.dumps(documents, ensure_ascii=False, default=str)
         strict = (
-            "Final answers are controlled by Lumen's completion policy. Use the completion protocol "
-            "declared by the active realtime Provider and never bypass it."
+            "最终答案受 Lumen 完成策略控制。使用当前实时 Provider 声明的完成协议, 不得绕过。"
             if self.config.strict_completion
-            else "Use tools when they improve correctness and report failures honestly."
+            else "工具能提高正确性时使用工具, 并如实报告失败。"
         )
         return (
-            "You are Lumen in a realtime voice conversation. Reply naturally in the user's language. "
-            "Keep spoken responses concise. Tool execution, approvals, and project state are controlled "
-            f"by Lumen. {strict}\n\nCanonical session context:\n{context}"
+            "你是实时语音对话中的 Lumen。使用用户的语言自然回答, 并保持口语回复简洁。"
+            "工具执行、审批和项目状态由 Lumen 控制。"
+            f"{strict}\n\n规范 Session 上下文:\n{context}"
         )
 
     def _requires_approval(self, name: str) -> bool:

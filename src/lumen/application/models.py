@@ -5,6 +5,7 @@ from datetime import UTC, datetime
 from typing import Any, Literal, TypeAlias
 
 from lumen.attachments import AttachmentRef
+from lumen.reasoning import ReasoningLevel, ReasoningSelection
 from lumen.timeline import TimelineItem
 
 
@@ -24,12 +25,31 @@ class GetConfiguration:
 
 
 @dataclass(frozen=True, slots=True)
+class GetInstructions:
+    type: Literal["get_instructions"] = "get_instructions"
+
+
+@dataclass(frozen=True, slots=True)
+class InspectReasoning:
+    definition: dict[str, Any]
+    type: Literal["inspect_reasoning"] = "inspect_reasoning"
+
+
+@dataclass(frozen=True, slots=True)
 class UpsertModelConfiguration:
     expected_revision: str
     name: str
     definition: dict[str, Any]
     set_default: bool = False
     type: Literal["upsert_model_configuration"] = "upsert_model_configuration"
+
+
+@dataclass(frozen=True, slots=True)
+class SetMcpServerEnabled:
+    expected_revision: str
+    name: str
+    enabled: bool
+    type: Literal["set_mcp_server_enabled"] = "set_mcp_server_enabled"
 
 
 @dataclass(frozen=True, slots=True)
@@ -72,6 +92,7 @@ class StartRun:
     client_request_id: str
     model_prompt: str | None = None
     attachments: tuple[AttachmentRef | dict[str, Any], ...] = ()
+    regenerate_from_turn: int | None = None
     type: Literal["start_run"] = "start_run"
 
 
@@ -269,6 +290,13 @@ class SelectModel:
 
 
 @dataclass(frozen=True, slots=True)
+class SelectReasoning:
+    session_id: str
+    effort: ReasoningLevel
+    type: Literal["select_reasoning"] = "select_reasoning"
+
+
+@dataclass(frozen=True, slots=True)
 class RetryRun:
     session_id: str
     client_request_id: str
@@ -281,6 +309,7 @@ class InvokeSkill:
     name: str
     arguments: str
     client_request_id: str
+    regenerate_from_turn: int | None = None
     type: Literal["invoke_skill"] = "invoke_skill"
 
 
@@ -291,6 +320,7 @@ class InvokePrompt:
     arguments: dict[str, str]
     display_input: str
     client_request_id: str
+    regenerate_from_turn: int | None = None
     type: Literal["invoke_prompt"] = "invoke_prompt"
 
 
@@ -359,7 +389,10 @@ WorkspaceCommand: TypeAlias = (
     CreateSession
     | GetBootstrap
     | GetConfiguration
+    | GetInstructions
+    | InspectReasoning
     | UpsertModelConfiguration
+    | SetMcpServerEnabled
     | DeleteModelConfiguration
     | ListSessions
     | RenameSession
@@ -394,6 +427,7 @@ WorkspaceCommand: TypeAlias = (
     | RejectChildImport
     | CloseChildRun
     | SelectModel
+    | SelectReasoning
     | RetryRun
     | InvokeSkill
     | InvokePrompt
@@ -452,6 +486,7 @@ class WorkspaceBootstrap:
     warnings: list[str]
     active_run_id: str | None
     live_enabled: bool = False
+    reasoning: ReasoningSelection = field(default_factory=ReasoningSelection)
 
 
 @dataclass(frozen=True, slots=True)
@@ -510,6 +545,7 @@ class SessionSnapshot:
     agents: list[dict[str, Any]] = field(default_factory=list[dict[str, Any]])
     agent_usage: dict[str, Any] = field(default_factory=dict[str, Any])
     live_sessions: list[dict[str, Any]] = field(default_factory=list[dict[str, Any]])
+    reasoning: ReasoningSelection = field(default_factory=ReasoningSelection)
 
 
 class WorkspaceHostError(RuntimeError):

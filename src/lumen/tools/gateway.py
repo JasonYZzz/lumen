@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import time
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
@@ -88,6 +89,8 @@ class CapabilityResult(BaseModel):
     error: str | None = None
     effect_receipt_id: str | None = None
     idempotency_key: str
+    # None means no executor ran (denial, validation failure or replay).
+    execution_seconds: float | None = Field(default=None, ge=0)
 
     @property
     def succeeded(self) -> bool:
@@ -456,8 +459,10 @@ class CapabilityGateway:
         prior = self._results.get(key)
         if prior is not None:
             if prior.status in {CapabilityStatus.SUCCEEDED, CapabilityStatus.REPLAYED}:
-                return prior.model_copy(update={"status": CapabilityStatus.REPLAYED})
-            return prior
+                return prior.model_copy(update={
+                    "status": CapabilityStatus.REPLAYED, "execution_seconds": None,
+                })
+            return prior.model_copy(update={"execution_seconds": None})
 
         if prepared.denial_message is not None:
             return self._store(
@@ -557,6 +562,7 @@ class CapabilityGateway:
             )
 
         receipt_id: str | None = None
+        execution_seconds: float | None = None
         try:
             contract = (
                 capability.entry.spec.output_contract
@@ -580,23 +586,31 @@ class CapabilityGateway:
                 EffectKind.UNKNOWN, EffectKind.EXTERNAL_ACTION, EffectKind.MUTATION,
             }:
                 receipt_id = self._record_effect(capability, invocation.name, None, "prepared")
-            if isinstance(capability, _LocalCapability):
-                context = cast(RunContext[None], None)
-                pending = capability.tool.function_schema.call(invocation.arguments, context)
-            else:
-                pending = capability.execute(invocation.arguments)
-            raw_result = await asyncio.wait_for(
-                pending,
-                timeout=capability.descriptor.timeout_seconds,
-            )
+            execution_started = time.monotonic()
+            try:
+                if isinstance(capability, _LocalCapability):
+                    context = cast(RunContext[None], None)
+                    pending = capability.tool.function_schema.call(invocation.arguments, context)
+                else:
+                    pending = capability.execute(invocation.arguments)
+                raw_result = await asyncio.wait_for(
+                    pending,
+                    timeout=capability.descriptor.timeout_seconds,
+                )
+            finally:
+                execution_seconds = time.monotonic() - execution_started
             canonical = contract.validate(raw_result)
         except asyncio.CancelledError as error:
-            self._finish_failure(key, invocation, capability, error, receipt_id=receipt_id)
+            self._finish_failure(
+                key, invocation, capability, error, receipt_id=receipt_id,
+                execution_seconds=execution_seconds,
+            )
             raise
-        except (ValidationError, ValueError, TypeError, TimeoutError) as error:
-            return self._finish_failure(key, invocation, capability, error, receipt_id=receipt_id)
         except Exception as error:  # provider-facing calls must receive a typed failure
-            return self._finish_failure(key, invocation, capability, error, receipt_id=receipt_id)
+            return self._finish_failure(
+                key, invocation, capability, error, receipt_id=receipt_id,
+                execution_seconds=execution_seconds,
+            )
 
         return await self._finish_success(
             key,
@@ -608,6 +622,7 @@ class CapabilityGateway:
             record_effect=True,
             record_recovery=True,
             receipt_id=receipt_id,
+            execution_seconds=execution_seconds,
         )
 
     async def _finish_success(
@@ -622,6 +637,7 @@ class CapabilityGateway:
         record_effect: bool,
         record_recovery: bool,
         receipt_id: str | None = None,
+        execution_seconds: float | None = None,
     ) -> CapabilityResult:
         model_output = contract.model_text(canonical)
         # Client presentation is a fallible projection, never part of the
@@ -660,6 +676,7 @@ class CapabilityGateway:
             result_view=result_view.model_dump(mode="json"),
             effect_receipt_id=receipt_id,
             idempotency_key=key,
+            execution_seconds=execution_seconds,
         )
         if self._after_invoke is not None:
             try:
@@ -678,6 +695,7 @@ class CapabilityGateway:
         error: BaseException,
         *,
         receipt_id: str | None = None,
+        execution_seconds: float | None = None,
     ) -> CapabilityResult:
         message = f"{type(error).__name__}: {error}"
         receipt_id = self._record_effect(
@@ -705,6 +723,7 @@ class CapabilityGateway:
                 result_view=result_view.model_dump(mode="json"),
                 effect_receipt_id=receipt_id,
                 idempotency_key=key,
+                execution_seconds=execution_seconds,
             ),
         )
 

@@ -28,7 +28,7 @@ def render_memory_index(records: Iterable[MemoryRecord]) -> str:
     the context window when re-injected.
     """
 
-    lines = ["# Memory index", ""]
+    lines = ["# 记忆索引", ""]
     by_scope: dict[MemoryScope, list[MemoryRecord]] = {
         MemoryScope.USER: [],
         MemoryScope.PROJECT: [],
@@ -81,7 +81,7 @@ def _cap(text: str) -> str:
         return text
     truncated = text.encode("utf-8")[:MAX_INDEX_BYTES].decode("utf-8", errors="ignore")
     lines = truncated.splitlines()[:MAX_INDEX_LINES]
-    return "\n".join(lines) + "\n\n(memory index truncated to fit the cap)\n"
+    return "\n".join(lines) + "\n\n(记忆索引已截断以符合容量上限)\n"
 
 
 __all__ = [

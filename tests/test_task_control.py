@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import pytest
+from pydantic import TypeAdapter
 
 from lumen.events import (
     PlanCreated,
@@ -17,7 +18,14 @@ from lumen.plan import (
     PlanStepInput,
     StepStatus,
 )
-from lumen.task_control import TaskController
+from lumen.task_control import ModelStringList, TaskController
+
+
+def test_model_string_list_normalizes_provider_encoded_array() -> None:
+    adapter: TypeAdapter[list[str]] = TypeAdapter(ModelStringList)
+
+    assert adapter.validate_python('["first", "second"]') == ["first", "second"]
+    assert adapter.json_schema()["type"] == "array"
 
 
 async def test_controller_creates_and_updates_one_active_step() -> None:
@@ -42,7 +50,7 @@ async def test_controller_rejects_completed_to_pending() -> None:
     await controller.set_plan([PlanStepInput(id="one", title="One")])
     await controller.update_step("one", StepStatus.IN_PROGRESS)
     await controller.update_step("one", StepStatus.COMPLETED)
-    with pytest.raises(ValueError, match="finished step"):
+    with pytest.raises(ValueError, match="已结束的步骤"):
         await controller.update_step("one", StepStatus.PENDING)
 
 
@@ -51,15 +59,32 @@ async def test_progress_is_public_and_bounded() -> None:
     controller = TaskController()
     controller.start(PlanState(), events.append)
     result = await controller.report_progress("Found the config entry.", "Inspect tests")
-    assert result == "Progress reported."
+    assert result == "进度已报告。"
     assert events == [ProgressReported("Found the config entry.", "Inspect tests")]
 
 
 async def test_report_progress_rejects_empty_summary() -> None:
     controller = TaskController()
     controller.start(PlanState(), lambda _event: None)
-    with pytest.raises(ValueError, match="empty"):
+    with pytest.raises(ValueError, match="不能为空"):
         await controller.report_progress("   ")
+
+
+async def test_missing_evidence_error_exposes_real_receipts_without_waiving_criteria() -> None:
+    controller = TaskController()
+    controller.start(PlanState(), lambda _: None)
+    await controller.set_plan([PlanStepInput(id="verify", title="Verify", acceptance_criteria=[
+        AcceptanceCriterion(id="check", description="Validated result"),
+    ])])
+    controller.record_evidence(EvidenceReceipt(
+        id="real-receipt", kind=EvidenceKind.TOOL, source_id="call", summary="Check passed", passed=True,
+    ))
+    with pytest.raises(ValueError, match="real-receipt") as error:
+        await controller.update_step("verify", StepStatus.COMPLETED)
+    assert "link_evidence" in str(error.value)
+    assert controller.snapshot().steps[0].status is StepStatus.PENDING
+    await controller.link_evidence("verify", "real-receipt", ["check"])
+    await controller.update_step("verify", StepStatus.COMPLETED)
 
 
 async def test_report_progress_rejects_oversize_summary() -> None:
@@ -152,7 +177,7 @@ async def test_update_step_rejects_unknown_id() -> None:
     controller = TaskController()
     controller.start(PlanState(), lambda _event: None)
     await controller.set_plan([PlanStepInput(id="known", title="Known")])
-    with pytest.raises(ValueError, match="unknown step"):
+    with pytest.raises(ValueError, match="未知步骤"):
         await controller.update_step("missing", StepStatus.IN_PROGRESS)
 
 
@@ -201,10 +226,10 @@ async def test_dependencies_and_passing_evidence_gate_completion() -> None:
         ],
         goal="Ship safely",
     )
-    with pytest.raises(ValueError, match="incomplete dependencies"):
+    with pytest.raises(ValueError, match="未完成的依赖"):
         await controller.update_step("ship", StepStatus.IN_PROGRESS)
     await controller.update_step("build", StepStatus.IN_PROGRESS)
-    with pytest.raises(ValueError, match="no passing evidence"):
+    with pytest.raises(ValueError, match="没有关联通过的证据"):
         await controller.update_step("build", StepStatus.COMPLETED)
     controller.record_evidence(
         EvidenceReceipt(

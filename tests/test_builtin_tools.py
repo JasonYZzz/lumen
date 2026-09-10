@@ -78,7 +78,7 @@ def test_read_file_rejects_a_single_line_larger_than_budget(tmp_path: Path) -> N
     (tmp_path / "minified.json").write_text("x" * (MAX_OUTPUT_BYTES + 1), encoding="utf-8")
     read_file = get_function(tmp_path, "read_file")
 
-    with pytest.raises(ValueError, match=r"line 1 exceeds.*search_text"):
+    with pytest.raises(ValueError, match=r"第 1 行超过.*search_text"):
         read_file("minified.json")
 
 
@@ -87,9 +87,9 @@ def test_read_file_rejects_binary_and_invalid_utf8(tmp_path: Path) -> None:
     (tmp_path / "invalid.txt").write_bytes(b"valid prefix\xffinvalid")
     read_file = get_function(tmp_path, "read_file")
 
-    with pytest.raises(ValueError, match="binary file"):
+    with pytest.raises(ValueError, match="二进制文件"):
         read_file("binary.bin")
-    with pytest.raises(ValueError, match="not valid UTF-8"):
+    with pytest.raises(ValueError, match="不是有效的 UTF-8"):
         read_file("invalid.txt")
 
 
@@ -142,7 +142,16 @@ def test_search_text_limits_results(tmp_path: Path) -> None:
     result = search_text("needle", path=".", max_results=1)
 
     assert result.startswith("a.txt:1:needle one")
-    assert "[results truncated at 1 matches]" in result
+    assert "[结果已在 1 条匹配处截断]" in result
+
+
+def test_search_text_accepts_an_exact_file_path(tmp_path: Path) -> None:
+    (tmp_path / "loop.py").write_text("async def run():\n    pass\n", encoding="utf-8")
+    search_text = get_function(tmp_path, "search_text")
+
+    result = search_text(r"async def (run|step)", path="loop.py")
+
+    assert result == "loop.py:1:async def run():"
 
 
 def test_search_text_skips_symlinks_that_escape_the_workspace(tmp_path: Path) -> None:

@@ -5,6 +5,9 @@ Plan definitions and execution state intentionally use separate counters:
 ``state_version`` changes for progress, ownership, and evidence updates.
 """
 
+# Model-facing Chinese prose is kept as authored for readability.
+# ruff: noqa: RUF001
+
 from __future__ import annotations
 
 from datetime import UTC, datetime
@@ -57,7 +60,11 @@ class PlanStepInput(BaseModel):
     title: str = Field(min_length=1, max_length=200)
     depends_on: list[str] = Field(default_factory=list[str])
     acceptance_criteria: list[AcceptanceCriterion] = Field(
-        default_factory=list[AcceptanceCriterion]
+        default_factory=list[AcceptanceCriterion],
+        description=(
+            "由具体工具结果验证的可选要求。普通进度步骤和仅作推理准备的步骤（例如确定提纲）"
+            "应留空。每项验收标准都必须在步骤完成前关联一条通过的执行回执。"
+        ),
     )
 
 

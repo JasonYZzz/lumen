@@ -82,6 +82,15 @@ sequenceDiagram
 
 ## 2.4 Runtime 内的一轮模型响应
 
+实质多阶段工作使用一份简短执行计划；单次修改、单条命令和普通问答不强制先规划。
+计划的验收条件只用于能由执行结果验证的要求。Runtime 为工具结果记录真实 receipt，
+有验收条件时在模型 observation 中附带 `plan_evidence`，供 `link_evidence` 使用；
+没有已关联的通过证据仍不能完成相应步骤。准备 outline 等纯思考步骤不要求虚构工具证据。
+已知参数的建计划、步骤更新与工作调用可在同一响应中有序执行；取得真实 receipt 后，
+关联证据、完成本步骤及开始下一步骤也可合批。就绪的工作调用前可直接给出简短文字，
+不必先独立调用 report_progress。不能合批引用尚未返回的结果或猜测证据 ID。
+Web 的“已完成 N / M”只是此状态的只读投影，不推断进度，也不决定 Run 完成。
+
 `AgentRuntime` 对上保持 `run(...) -> RunOutcome` Interface，内部只委托唯一的
 `LumenAgentLoop`。Loop 通过低层 `PydanticAIModelDriver` 读取完整 provider stream，并只经
 `CapabilityGateway` 执行工具。主模型—工具路径不再构造或调用 PydanticAI `Agent` graph；Session、
@@ -111,6 +120,13 @@ stateDiagram-v2
 
 Provider 原生 reasoning/thinking 使用独立的 `ThinkingDelta`。它不进入推测式文本 buffer，因此不会在出现工具调用时被回撤，也不会拼入最终回答；Timeline 只把连续增量合并成可折叠的展示块。
 
+Responses 的 `reasoning_text` 在 SDK 中可能保存在 `ThinkingPart.provider_details.raw_content`；
+Driver 将其中的文本增量也投影为 `ThinkingDelta`，保留原始字段用于工具结果回传和 Session 恢复，
+不展示 signature 或其他不透明元数据。普通 thinking/summary 通道继续传递。
+`LoopToolCallStreaming` 在模型开始生成工具参数时投影为准备进度；此时不发出
+`ToolCallStarted`，不计工具执行次数，也不执行半截参数。完整响应与参数校验通过后
+才进入原有工具调度、审批和结果路径；取消或失败不会把准备提示当成执行证据。
+
 `TaskController.set_plan` 修订同一目标时保留 ID、定义与依赖均未变化的步骤状态、备注和 evidence；
 定义或前置步骤变化时重置受影响步骤，新目标则建立新计划。结构变更仍使审批 revision 失效。
 进度通过 `update_step` 逐项更新并立即发布 `PlanUpdated`，不得依赖客户端猜测完成状态。
@@ -122,11 +138,30 @@ Provider 原生 reasoning/thinking 使用独立的 `ThinkingDelta`。它不进�
 
 - `request_count` 可选限制单次 run 的逻辑模型请求数；transport 重试独立记录 `model_attempts`；
 - `tool_calls` 可选限制交付到工具执行的调用数，在整个批次执行前检查；
-- `parallel_tool_calls` 决定 runtime 是否启用并行调度；每个 invocation 仍由 `ToolConcurrency.EXCLUSIVE/PARALLEL_SAFE` 做最终分类，未声明时安全回退为 exclusive；
+- `parallel_tool_calls` 默认 `parallel_safe`，显式 `sequential` 继续有效；每个 invocation 仍由 `ToolConcurrency.EXCLUSIVE/PARALLEL_SAFE` 做最终分类，未声明时安全回退为 exclusive；
 - ContextEngine.prepare_step 在同一 run 的完成步骤之间执行滚动压缩；最新 checkpoint 覆盖当前 turn 的消息前缀，持久化后才发布，Session 重载按 source_end 跳过已覆盖前缀而保留完整 raw history；
 - transient Provider 错误默认最多重试 5 次，指数退避、抖动与 Retry-After 由 Loop 统一处理。撤回当前候选文字后重试同一请求，完整工具批次只执行一次；Provider 内置工具活动禁止自动重放。OpenAI/Anthropic SDK retries 为零；
 - Provider context overflow 触发一次强制压缩，只有消息投影发生变化才重试；
 - 失败/取消 turn 的 completed_model_steps 标记仅携带完整模型/工具批次，Coordinator 追加成功后发布，Session resume 恢复这些批次及原有 effect receipts。
+
+工具执行结果按完成顺序发出 `LoopToolResultRecorded` / `ToolCallFinished`，不等待慢工具；
+`order` 保留原 Provider 调用位置，模型 continuation 始终按原调用顺序组装。
+兼容 Runtime constructor 的 PydanticAI Tool 只有 metadata 明确声明
+`concurrency=parallel_safe` 且未设置 sequential 时才能并发，不能将 SDK 默认值当成声明。
+Loop 使用单个事件消费者，避免异步 sink 交错分配事件序号和写入证据。
+取消时先完成已经开始的结果发布，取消并收拢剩余执行任务，已完成回执不重复发布。
+工具前文字在执行前归类为 commentary，避免完成事件先于工具前说明。
+验收 receipt 的 sequence 按完成事件递增并接续已有 evidence，保证同批“写入后验证”
+可以通过，而“先验证再写入”仍被完成门禁拒绝。
+
+Session diagnostics 增加以下运行事实，不把思考正文或任意 Provider settings 写入诊断：
+
+- `model_request_prepared`：每步请求准备耗时（包含该步压缩、适配和冻结），输出预留及白名单思考配置；不包含此前初始 Context prepare。空 `configured_thinking` 只表示没有捕获到显式白名单设置，不能推断 off 或完整 HTTP 参数。
+- `request_observed`：每个物理模型尝试的流式墙钟耗时、首个 Driver 事件/thinking/text/tool call 延迟、文字字符数、工具名、stop reason 和错误类别。`control_only` 标记仅含计划/进度控制调用的批次；取消/重试也保留已观察事实。首事件不是原始 HTTP 首字节，墙钟包含消费者处理。
+- 工具诊断：`preparation_seconds` 为本调用准备时间；`approval_seconds` 是共享批次审批阶段，不能逐工具求和；`queue_seconds` 为批次就绪至本调用开始；`elapsed_seconds` 为本次 Gateway invocation 耗时，排除批次审批/排队与 UI 发布；`execution_seconds` 只量执行器（含其超时/取消收拢），排除校验、Hook、审批、Effect 和展示。未执行或 replay 为 null。
+
+公开 ToolCallStarted 继续表示完整调用已准备、可能尚在审批/排队；ToolCallFinished 的
+elapsed_seconds 使用上述 invocation 耗时。现有 RunEvent/OpenAPI 形状和旧 Session 读取保持兼容。
 
 ## 2.6 终止路径
 

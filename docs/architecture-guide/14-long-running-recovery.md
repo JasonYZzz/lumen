@@ -37,7 +37,7 @@ tool_calls=100 并建议调大次数。它混淆了不同限制：即使模型�
 也含工具记录，消费者不能假定每项都有 `name` 或 `status`。
 
 保留 tool_timeout_seconds=60、output_limit_retries=3 等独立约束。旧配置中的有限值仍生效，
-不会自动改写配置或升级为无限；旧 delegation 配置继续经过兼容 Adapter。Session v9、配置 v2 不变。
+不会自动改写配置或升级为无限；旧 delegation 配置继续经过兼容 Adapter。此次恢复改造保持 Session v9、配置 v2；后续推理选择引入 Session v10（见第 7 章）。
 
 ## 14.3 滑动等待与安全重试
 

@@ -19,6 +19,7 @@ lumen --resume <session-id>
 | `--cwd <path>` | — | 暴露给文件工具、命令和 stdio MCP 的工作区，默认 `.` |
 | `--resume <id>` | — | 恢复一个持久化 session |
 | `--model <name>` | `-m` | 选择 `agent.models` 中配置的逻辑模型名 |
+| `--thinking <level>` | — | 为当前 Session 选择推理强度；适用于 TUI 与 headless |
 | `--check-config` | — | 校验配置、信任和工具发现后退出，不调用模型 |
 | `--dump-effective-config` | — | 输出脱敏后的最终配置、来源和字段 provenance 后退出 |
 | `--version` | `-V` | 输出版本号后退出 |
@@ -41,6 +42,7 @@ lumen -p "继续" --resume <session-id>
 ```bash
 lumen web --cwd .
 lumen web --cwd . --model <name> --resume <session-id>
+lumen web --cwd . --thinking medium
 lumen web --background
 lumen web --status
 lumen web --stop
@@ -58,6 +60,26 @@ lumen web --stop
 Web 右上角设置入口始终可见。模型配置写入 `<workspace>/.lumen/agent.web.yaml` 受管覆盖层，
 不会重写已有 User/Project/Local 文件；只接受密钥环境变量名，保存后需重启 Web 才会生效。
 活动 Run、显式 `--config` 模式、并发版本冲突或未受管的同名文件会阻止写入。
+
+TUI 与 Web 的 `/thinking` 打开推理档位选择；`/thinking low` 直接选择。
+Web 输入框旁也提供当前档位入口，保留未发送草稿。可用档位来自所选模型能力，
+`provider_default` 与 `off` 含义不同；不支持关闭的模型会拒绝 off。
+运行中可查看，不能修改；选择通过 Host 按 Session、模型持久化，下次 Run 生效。
+CLI `--thinking` 可覆盖恢复 Session 的旧选择；省略则恢复原选择或模型配置。
+启动覆盖只属于启动模型；显式切换模型后清除该启动覆盖，已保存的各模型 Session 选择保留。
+未知部署可在模型配置声明 `reasoning_levels: [low, medium, high]`，声明前须确认部署支持。
+旧 settings 推理配置标记为未校验；不能把 Provider 默认显示为已知实际强度。
+官方 DeepSeek V4、Kimi Coding K3 和百炼 Anthropic Qwen 3.8 已内置能力映射，无需手工声明档位。
+选择器优先显示模型的实际档位，当前保存的兼容别名仍用 `medium → high` 等标签显示。
+`provider_default` 保持不指定强度；Web 显示“跟随供应商默认（high）”等有官方依据的缺省值，
+工具栏简写为“默认 · high”。这是文档默认值，不是请求中显式传入或实际观测到的强度。
+同系列模型可以拥有相同档位；跨模型切换会刷新菜单，新任务不会继承上个任务的推理选择。
+DeepSeek V4 实际强度为 low/high/max，Qwen 3.8 为 low/medium/xhigh；K3 不提供 off，
+避免关闭思考时被 Coding 路由切换到另一个模型。未知或不支持调节时禁用单一默认选项并说明原因。
+Web 设置页根据当前编辑的模型 ID、协议和地址查询 Host 能力，避免固定显示所有通用档位。
+能力来源采用[Provider 目录](generated/provider-reasoning.md)。自定义代理可在模型配置或 Web 设置
+使用 `reasoning_profile`（Web 字段 `reasoningProfile`）引用经过核对的规则；模型 ID 和协议须一致。
+SDK 的名称推断不再决定档位；更新目录的流程见[维护约定](architecture-guide/15-provider-catalog.md)。
 从旧的单模型形式首次添加模型时，受管层会保留原模型和原默认选择；若原模型使用内联密钥，
 必须先把它改为环境变量引用，避免凭据进入 Web 管理的复制路径。
 
@@ -114,6 +136,7 @@ lumen mcp reset [--name <name>] --cwd . [--config PATH]
 | Session | `/tasks` | 展开或收起最近的计划步骤 | 可用 |
 | Model | `/status` | 查看 workspace、session、模式、沙箱和 UI 状态 | 可用 |
 | Context | `/context [--json\|sources\|capabilities]` | 查看预算、活动来源或统一能力清单 | 可用 |
+| Context | `/instructions [--json]` | 查看 prompt mode、版本、稳定/动态大小与来源摘要 | 可用 |
 | Context | `/compact [focus]` | 请求强制压缩，可附 focus | 可用 |
 | Context | `/clarification cancel` | 取消待回答澄清 | 可用 |
 | MCP | `/mcp` | 查看 MCP 连接、工具数和 deferred 状态 | 可用 |
@@ -156,7 +179,7 @@ lumen mcp reset [--name <name>] --cwd . [--config PATH]
 
 ## 3. Web slash 命令支持矩阵
 
-Web 通过 FastAPI application host 执行命令；本地显示类命令不会伪造 Agent run。`/context sources`、`/context capabilities`、`/prompts`、`/hooks` 使用只读 Interface，Web 的同一能力投影位于 `GET /api/v1/capabilities`；`/prompt` 在后端渲染模板后启动 run，`/copy` 使用浏览器剪贴板。
+Web 通过 FastAPI application host 执行命令；本地显示类命令不会伪造 Agent run。`/context sources`、`/context capabilities`、`/instructions`、`/prompts`、`/hooks` 使用只读 Interface；prompt 诊断投影位于 `GET /api/v1/instructions`，能力投影位于 `GET /api/v1/capabilities`；`/prompt` 在后端渲染模板后启动 run，`/copy` 使用浏览器剪贴板。
 
 | 能力 | Web 命令 | 备注 |
 |---|---|---|
@@ -164,7 +187,7 @@ Web 通过 FastAPI application host 执行命令；本地显示类命令不会�
 | Agent/审计 | `/agents`、`/transcript` | 打开 Agent 协调面板或结构化 transcript；具体 Agent 动作由面板/API 执行 |
 | 模型/审批 | `/model [name]`、`/mode [mode]`、`/plan <task>` | `auto` 仍需显式确认；`/plan` 以 Plan collaboration mode 启动任务 |
 | 计划 | `/tasks` | 打开最新计划侧栏；完成与跳过分开计数；此入口不批准执行 |
-| Context | `/context`、`/context sources`、`/context capabilities`、`/compact [focus]`、`/clarification cancel` | sources/capabilities 不依赖 context engine 报告可用性 |
+| Context | `/context`、`/context sources`、`/context capabilities`、`/instructions`、`/compact [focus]`、`/clarification cancel` | `/instructions` 不回显 prompt 正文 |
 | Memory | `/memory [action]` | 支持常用 list/remember/forget/use/learn/incognito 操作 |
 | MCP | `/mcp`、`/resource [refresh\|unload] <ref>`、`/prompts`、`/prompt <ref> [key=value ...]` | `/prompt` 支持单/双引号参数值 |
 | Skill | `/skills`、`/skill:<name> [args]`、`/skill unload <name>` | 动态 Skill 也进入补全 |
@@ -192,13 +215,13 @@ Plan Mode 探索时显示“正在探索并规划”。方案提交审核后，�
 
 Web 对话滚动条位于页面右缘，正文保持居中阅读宽度。长对话在宽屏右侧显示消息位置标记；悬停或聚焦预览消息，点击跳转，方向键及 Home / End 可逐条定位。回看历史时暂停跟随输出，点击“回到底部”恢复跟随；窄屏保留原生滚动。
 
-未命名对话接受输入后先显示“新对话”，Host 在后台用当前模型生成短标题，正文立即开始输出。标题完成后侧栏、页面标题和浏览器标题自动更新，不重载消息或清空草稿。生成失败或超时会回退到脱敏后的输入摘要；手动命名（包括命名为“新对话”）始终优先。编辑消息创建的分支也使用此流程。标题请求不调用工具，不作为对话 turn；待生成状态记录在 Session，重启后可恢复。TUI / headless 通过相同 Host 使用同一目录标题。
+未命名对话接受输入后先显示“新对话”，Host 在后台用当前模型生成短标题，正文立即开始输出。标题完成后侧栏、页面标题和浏览器标题自动更新，不重载消息或清空草稿。生成失败或超时会回退到脱敏后的输入摘要；手动命名（包括命名为“新对话”）始终优先。标题请求不调用工具，不作为对话 turn；待生成状态记录在 Session，重启后可恢复。TUI / headless 通过相同 Host 使用同一目录标题。
 
 模型将 `<think>` / `<thinking>` 混在普通文本中时，Web 会把其中正文归入处理过程，移除控制标签；单独的关闭标签也会被识别。流式未完成标签不会闪现在正文，历史回放使用同一投影。原生 thinking 段不会因为闭合标签变成最终回答，其 Markdown 状态不会污染下一文本通道或用户轮次。代码块、行内代码和转义示例保留原文，Session 与 provider 消息不改写；回复复制及 `/copy` 使用已投影的回答。运行记录的标准视图也使用这份投影进行显示、搜索和复制，详细视图保留原始协议记录；工具输出不会被当作模型思考处理。
 
 运行时，输入框右侧以圆形方块按钮停止生成；停止请求处理中显示等待状态，失败后保留运行和重试入口。空草稿不显示无效的发送按钮；输入补充内容或添加附件后，显示发送队列按钮及“立即补充 / 完成后继续”。
 
-用户消息下方提供复制与编辑，鼠标悬停、键盘聚焦或触屏时可见。编辑区支持取消、`Esc` 返回、`Ctrl/Cmd+Enter` 发送，以及失败后保留草稿重试。发送后，从被编辑消息**之前**创建新 Session 分支，再使用新消息生成后续回答；原对话及 journal 保留，新分支以编辑后的问题命名，并提供“查看原对话”。普通消息保留原附件，Skill/Prompt 调用沿用对应 Host Interface；旧方案的审核授权不会沿用到替换消息。已发生的工作区与外部副作用不会回滚。活动运行期间先停止或等待结束后再编辑。
+用户消息下方提供复制与编辑，鼠标悬停、键盘聚焦或触屏时可见。编辑区支持取消、`Esc` 返回、`Ctrl/Cmd+Enter` 发送、不修改文本直接重新生成，以及失败后保留草稿重试。发送后，Host 在**当前 Session** 追加活动历史回退 marker，并从被编辑消息之前的前缀重新运行；Session ID、标题、当前窗口和主输入框草稿不变。被替换消息及后续回答、工具 transcript、旧压缩摘要、Session resource snapshot 与仅由该后缀支持的自动记忆不会进入新模型上下文，但原始 journal 仍保留审计证据。普通消息保留原附件，Skill/Prompt 调用沿用对应 Host Interface；旧方案的审核授权不会沿用到替换消息。已发生的工作区与外部副作用不会回滚。活动运行期间先停止或等待结束后再编辑。检查点的“分支”操作仍会显式创建新 Session。
 
 存在待核实的外部操作时，Host 在启动或创建编辑分支前拒绝受理，保留原对话和编辑草稿。
 Web 显示“查看并处理”：逐条检查结果，填写核实依据后记录人工确认；请求失败会保留输入。
@@ -213,7 +236,7 @@ effect ID 写进产物。MCP 工具缺少 effect 声明则在执行前返回 `ef
 
 输入区的“先规划”与“每次确认”等审批选项是两个独立设置。兼容命令 `/mode plan` 设置 collaboration mode，`/mode manual`、`/mode accept_edits` 同时回到 Default；直接点击审批选择器只修改审批策略。计划清单是只读投影，真正执行仍通过带 revision 的方案确认与原有工具审批 Interface。
 
-Web 回复中的工作区文档链接与内联文件路径可点击预览；本轮成功的 `write_file` / `edit_file` 还会生成去重文件卡片。预览通过 Host 读取当前文件，支持 Markdown 阅读/源码切换、HTML 隔离静态预览、纯文本、常见图片和浏览器 PDF 预览，并提供下载。HTML 禁止脚本、外部资源和跳转；SVG 按源码显示。Office 文件及超过 1 MiB 的文本只提供下载，单文件读取上限 20 MiB；不支持路径逃逸、隐藏路径、符号链接或特殊文件。删除、移动和超限等读取失败可重试。此入口展示工作区当前内容，不声称是历史快照；原有产物写入路径规则不变。
+Web 回复中的工作区文档链接与内联文件路径可点击预览；本轮成功的 `write_file` / `edit_file` 还会生成去重文件卡片。预览通过 Host 读取当前文件，支持 Markdown 阅读/源码切换、HTML 隔离静态预览、纯文本、常见图片、浏览器 PDF、Word（`.docx`）静态阅读，以及 Excel（`.xlsx`）、CSV 和 TSV 只读表格，并提供下载。表格支持工作表切换；为保证浏览器流畅度，每个工作表最多显示前 500 行、50 列，工作簿最多显示前 20 个工作表，原文件不受影响。HTML 预览会在资源与大小上限内安全内联工作区相对 CSS、图片和字体；HTML 与 Word 预览仍禁止脚本、远程资源和跳转，SVG 按源码显示。PowerPoint、旧式 Office 格式、转换失败的 Office 文件及超过 1 MiB 的文本保留原文件下载，单文件读取上限 20 MiB；不支持路径逃逸、隐藏路径、符号链接或特殊文件。删除、移动和超限等读取失败可重试。此入口展示工作区当前内容，不声称是历史快照；原有产物写入路径规则不变。
 
 ## 4. 快捷键与发现入口
 

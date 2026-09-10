@@ -6,6 +6,9 @@ without going through a shell. All three are workspace-scoped and the model is
 gated by the standard permission system before any of them can execute.
 """
 
+# Model-facing Chinese prose is kept as authored for readability.
+# ruff: noqa: RUF001, RUF002
+
 from __future__ import annotations
 
 import asyncio
@@ -18,7 +21,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from lumen.config import SandboxConfig
-from lumen.sandbox import SandboxRunner
+from lumen.sandbox import PreparedSandboxCommand, SandboxRunner
 from lumen.tools.spec import EffectKind, Risk, ToolSpec
 from lumen.tools.workspace import Workspace
 
@@ -181,13 +184,10 @@ def build_capability_specs(
         timeout: float | None = None,  # noqa: ASYNC109  # tool-arg, not a task wait
         env: dict[str, str] | None = None,
     ) -> dict[str, Any]:
-        """Run ``argv`` (no shell) bounded to ``max_timeout`` seconds.
+        """在 max_timeout 秒上限内直接运行 argv，不经过 shell。
 
-        The child runs in its own process group so timeouts and cancellations
-        can reap any descendants too. stdout and stderr are drained
-        concurrently by :class:`BoundedCollector` so only a fixed head+tail of
-        each stream is kept in memory — a runaway command writing 100 MB
-        cannot exhaust the run.
+        子进程在独立进程组中运行，超时或取消时会一并清理后代进程。stdout 和 stderr 会并发
+        读取，每个流只在内存中保留固定大小的头尾内容，避免超大输出耗尽运行时内存。
         """
 
         if not argv:
@@ -199,101 +199,139 @@ def build_capability_specs(
         if effective_timeout <= 0:
             raise ValueError("timeout must be positive")
 
-        prepared = sandbox.prepare(argv, cwd=resolved_cwd, overrides=env)
-        start = time.monotonic()
-        try:
-            process = await asyncio.create_subprocess_exec(
-                *prepared.argv,
-                cwd=str(resolved_cwd),
-                stdin=asyncio.subprocess.DEVNULL,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-                env=prepared.env,
-                start_new_session=True,
-            )
-        except BaseException:
-            prepared.cleanup()
-            raise
-
-        stdout_collector = BoundedCollector()
-        stderr_collector = BoundedCollector()
-        timed_out = False
-        cancelled = False
-        try:
-            try:
-                await asyncio.wait_for(
-                    _drain_streams(process, stdout_collector, stderr_collector),
-                    timeout=effective_timeout,
-                )
-            except TimeoutError:
-                timed_out = True
-                await _terminate_process_group(process)
-                # Drain whatever remains after terminating so the pipes close
-                # and the child can be reaped; the collectors stay bounded.
-                await _drain_streams(process, stdout_collector, stderr_collector)
-            exit_code = process.returncode
-        except asyncio.CancelledError:
-            cancelled = True
-            await _terminate_process_group(process)
-            try:
-                await _drain_streams(process, stdout_collector, stderr_collector)
-            except Exception:
-                pass
-            raise
-        finally:
-            # Always reap the child so we don't leak zombies even on cancellation.
-            if process.returncode is None:
-                try:
-                    await _terminate_process_group(process)
-                    await process.wait()
-                except Exception:
-                    pass
-            prepared.cleanup()
-            if cancelled and process.returncode is None:
-                try:
-                    await process.wait()
-                except Exception:
-                    pass
-
-        elapsed = time.monotonic() - start
-        return {
-            "argv": list(argv),
-            "cwd": str(Path(cwd)),
-            "exit_code": exit_code,
-            "stdout": stdout_collector.render(),
-            "stderr": stderr_collector.render(),
-            "stdout_total_bytes": stdout_collector.total_bytes,
-            "stderr_total_bytes": stderr_collector.total_bytes,
-            "elapsed_seconds": round(elapsed, 3),
-            "timed_out": timed_out,
-            "stdout_truncated": stdout_collector.truncated,
-            "stderr_truncated": stderr_collector.truncated,
-            "sandbox": {
-                "mode": sandbox.config.mode,
-                "network_allowed": sandbox.config.mode == "disabled" or sandbox.config.network,
-                "scope": "this command only; MCP and web tools have separate permissions",
-            },
-        }
+        return await run_prepared_command(
+            sandbox.prepare(argv, cwd=resolved_cwd, overrides=env),
+            argv=argv, resolved_cwd=resolved_cwd, cwd=cwd,
+            timeout_seconds=effective_timeout, sandbox_config=sandbox.config,
+        )
 
     return [
-        ToolSpec(write_file, risk=Risk.WRITE, effect_kind=EffectKind.MUTATION),
-        ToolSpec(edit_file, risk=Risk.WRITE, effect_kind=EffectKind.MUTATION),
+        ToolSpec(
+            write_file,
+            description=(
+                "把 UTF-8 文本写入工作区内的相对路径。缺失的父目录会自动创建；已有文件默认拒绝"
+                "覆盖，只有 overwrite=true 时才替换。用户未指定交付路径时，报告或导出写入 outputs/。"
+            ),
+            risk=Risk.WRITE,
+            effect_kind=EffectKind.MUTATION,
+        ),
+        ToolSpec(
+            edit_file,
+            description=(
+                "在工作区文件中把唯一一次精确匹配的 find 替换为 replace。匹配为零或多于一次时"
+                "安全失败；应先读取或搜索文件以取得唯一、稳定的上下文片段。"
+            ),
+            risk=Risk.WRITE,
+            effect_kind=EffectKind.MUTATION,
+        ),
         ToolSpec(
             run_command,
             description=(
                 (run_command.__doc__ or "")
-                + f"\nExecution policy: sandbox.mode={sandbox.config.mode}; "
-                + f"command network_allowed={sandbox.config.mode == 'disabled' or sandbox.config.network}. "
-                + "This policy applies to this subprocess, not separately configured MCP/web tools. "
-                + "After failure, inspect stderr and exit_code; do not infer global network availability. "
-                + f"Known Python interpreter: {sys.executable}. "
-                + "Use load_skill/read_skill_resource for discovered skills outside the workspace."
+                + f"\n执行策略: sandbox.mode={sandbox.config.mode}; "
+                + f"命令允许联网={sandbox.config.mode == 'disabled' or sandbox.config.network}。"
+                + "此策略只适用于本子进程，不适用于单独配置的 MCP/Web 工具。命令失败后检查 "
+                + "stderr 和 exit_code，不要据此推断全局网络可用性。"
+                + f"已知 Python 解释器: {sys.executable}。"
+                + "工作区外已发现的 Skill 请使用 load_skill/read_skill_resource。"
             ),
             risk=Risk.EXECUTE,
             effect_kind=EffectKind.EXECUTION,
             timeout=max_timeout,
         ),
     ]
+
+
+async def run_prepared_command(
+    prepared: PreparedSandboxCommand,
+    *,
+    argv: list[str],
+    resolved_cwd: Path,
+    cwd: str,
+    timeout_seconds: float,
+    sandbox_config: SandboxConfig,
+) -> dict[str, Any]:
+    """Run an already-authorized command with bounded output and process-tree cleanup."""
+    start = time.monotonic()
+    spawn = asyncio.create_task(asyncio.create_subprocess_exec(
+        *prepared.argv, cwd=str(resolved_cwd), stdin=asyncio.subprocess.DEVNULL,
+        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+        env=prepared.env, start_new_session=True,
+    ))
+    try:
+        process = await asyncio.shield(spawn)
+    except asyncio.CancelledError:
+        try:
+            process = await spawn
+            await _terminate_process_group(process)
+            await _drain_streams(process, BoundedCollector(), BoundedCollector())
+        finally:
+            prepared.cleanup()
+        raise
+    except BaseException:
+        prepared.cleanup()
+        raise
+
+    stdout_collector = BoundedCollector()
+    stderr_collector = BoundedCollector()
+    timed_out = False
+    cancelled = False
+    try:
+        try:
+            await asyncio.wait_for(
+                _drain_streams(process, stdout_collector, stderr_collector),
+                timeout=timeout_seconds,
+            )
+        except TimeoutError:
+            timed_out = True
+            await _terminate_process_group(process)
+            # Drain whatever remains after terminating so the pipes close
+            # and the child can be reaped; the collectors stay bounded.
+            await _drain_streams(process, stdout_collector, stderr_collector)
+        exit_code = process.returncode
+    except asyncio.CancelledError:
+        cancelled = True
+        await _terminate_process_group(process)
+        try:
+            await _drain_streams(process, stdout_collector, stderr_collector)
+        except Exception:
+            pass
+        raise
+    finally:
+        # Always reap the child so we don't leak zombies even on cancellation.
+        if process.returncode is None:
+            try:
+                await _terminate_process_group(process)
+                await process.wait()
+            except Exception:
+                pass
+        prepared.cleanup()
+        if cancelled and process.returncode is None:
+            try:
+                await process.wait()
+            except Exception:
+                pass
+
+    elapsed = time.monotonic() - start
+    return {
+        "argv": list(argv),
+        "cwd": str(Path(cwd)),
+        "exit_code": exit_code,
+        "stdout": stdout_collector.render(),
+        "stderr": stderr_collector.render(),
+        "stdout_total_bytes": stdout_collector.total_bytes,
+        "stderr_total_bytes": stderr_collector.total_bytes,
+        "elapsed_seconds": round(elapsed, 3),
+        "timed_out": timed_out,
+        "stdout_truncated": stdout_collector.truncated,
+        "stderr_truncated": stderr_collector.truncated,
+        "sandbox": {
+            "mode": sandbox_config.mode,
+            "network_allowed": sandbox_config.mode == "disabled" or sandbox_config.network,
+            "scope": "this command only; MCP and web tools have separate permissions",
+        },
+    }
+
 
 
 async def _drain_stream(stream: asyncio.StreamReader | None, collector: BoundedCollector) -> None:
@@ -334,16 +372,10 @@ async def _drain_streams(
 
 async def _terminate_process_group(process: asyncio.subprocess.Process) -> None:
     """Best-effort SIGTERM of the process group, then SIGKILL if still alive."""
-
-    if process.returncode is not None:
-        return
-    try:
-        pgid = os.getpgid(process.pid)
-    except ProcessLookupError:
-        return
+    # start_new_session makes the original PID the group ID. A leader may
+    # already have exited while descendants still hold stdout/stderr open.
+    pgid = process.pid
     for signal_name in ("SIGTERM", "SIGKILL"):
-        if process.returncode is not None:
-            return
         sig = getattr(signal, signal_name)
         try:
             os.killpg(pgid, sig)
@@ -358,7 +390,6 @@ async def _terminate_process_group(process: asyncio.subprocess.Process) -> None:
         if signal_name == "SIGTERM":
             try:
                 await asyncio.wait_for(process.wait(), timeout=0.2)
-                return
             except TimeoutError:
                 continue
 

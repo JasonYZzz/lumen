@@ -41,7 +41,6 @@ export function PlanProgress({ plan, running, stopping = false }: {
       window.removeEventListener('focusin', focusOutside)
     }
   }, [open])
-  const currentIndex = plan.steps.findIndex((step) => step.id === view.current?.id)
   const label = stopping ? '正在停止…' : view.status === '受阻' || view.settled || plan.lifecycle === 'cancelled'
     ? view.status : view.current?.title ?? view.status
   return <div className="plan-progress">
@@ -49,7 +48,7 @@ export function PlanProgress({ plan, running, stopping = false }: {
       aria-expanded={open} aria-controls={open ? id : undefined} aria-haspopup="dialog" onClick={() => setOpen(!open)}>
       {running && !view.settled && view.status !== '受阻'
         ? <CircleNotch size={16} className="spin" aria-hidden="true" /> : <ListChecks size={16} aria-hidden="true" />}
-      <span className="plan-progress-count">{currentIndex >= 0 && !view.settled ? `步骤 ${currentIndex + 1} / ${plan.steps.length}` : `${view.completed} / ${plan.steps.length}`}</span>
+      <span className="plan-progress-count">已完成 {view.completed} / {plan.steps.length}</span>
       <span className="plan-progress-title">{label}</span>
       <CaretDown size={14} className={open ? 'is-expanded' : ''} aria-hidden="true" />
     </button>

@@ -271,7 +271,7 @@ async def test_runtime_hooks_deny_tool_without_executing(tmp_path: Path) -> None
 
     outcome = await runtime.run("go", [], emit, approve)
     assert executed is False
-    assert "ToolDenied: policy" in outcome.output
+    assert "工具被拒绝: policy" in outcome.output
 
 
 def test_skill_scripts_are_confined_and_filtered(tmp_path: Path) -> None:

@@ -28,6 +28,7 @@ from lumen.branding import FRAMEWORK_NAME, FRAMEWORK_SLUG
 from lumen.config import AppConfig, ConfigLoadError
 from lumen.config_resolver import ConfigResolution, ConfigResolver, ConfigScope
 from lumen.headless import run_headless
+from lumen.reasoning import ReasoningLevel
 from lumen.resources import ResourceManager
 from lumen.trust import McpApprovalStore, TrustStore, git_common_directory
 from lumen.ui.app import LumenApp
@@ -67,6 +68,7 @@ agent:
   model:
     id: openai:gpt-5
     api_key_env: OPENAI_API_KEY
+    reasoning_effort: medium
 tools:
   builtins:
     - read_file
@@ -300,6 +302,12 @@ def _apply_mcp_approvals(
     warnings = list(config.config_warnings)
     diagnostics: list[dict[str, str]] = []
     for name, server in config.mcp_servers.items():
+        if not config.mcp.enabled.get(name, True):
+            accepted[name] = server.model_copy(update={"approval_status": "disabled"})
+            diagnostics.append(
+                {"name": name, "scope": server.source_scope, "approval": "disabled"}
+            )
+            continue
         if server.source_scope not in {ConfigScope.LEGACY.value, ConfigScope.PROJECT.value}:
             accepted[name] = server.model_copy(update={"approval_status": "automatic"})
             diagnostics.append({"name": name, "scope": server.source_scope, "approval": "automatic"})
@@ -418,6 +426,9 @@ def main(
             help="Logical model name to select at startup (must be a key under agent.models).",
         ),
     ] = None,
+    thinking: Annotated[
+        ReasoningLevel | None, typer.Option("--thinking", help="Reasoning effort for this Session."),
+    ] = None,
     check_config: Annotated[
         bool,
         typer.Option("--check-config", help="Validate configuration and discover approved tools, then exit."),
@@ -501,6 +512,8 @@ def main(
                 manager.set_startup_model(model)
             except KeyError as error:
                 raise ConfigLoadError(str(error)) from error
+        if thinking is not None:
+            manager.set_startup_reasoning(thinking)
         if check_config:
             summary = asyncio.run(_check_resources(manager))
             typer.echo("Configuration OK")
@@ -532,6 +545,7 @@ def web(
     cwd: Annotated[Path, typer.Option("--cwd", help="Workspace exposed to Lumen tools.")] = Path("."),
     config_path: Annotated[Path | None, typer.Option("--config", "-c")] = None,
     model: Annotated[str | None, typer.Option("--model", "-m")] = None,
+    thinking: Annotated[ReasoningLevel | None, typer.Option("--thinking")] = None,
     resume: Annotated[str | None, typer.Option("--resume")] = None,
     host: Annotated[str, typer.Option("--host")] = "127.0.0.1",
     port: Annotated[int, typer.Option("--port", min=1, max=65535)] = 8765,
@@ -572,6 +586,8 @@ def web(
         if model is not None:
             manager.set_startup_model(model)
 
+        if thinking is not None:
+            manager.set_startup_reasoning(thinking)
         static_dir = Path(__file__).resolve().parent / "api" / "static"
         source_export = Path(__file__).resolve().parents[1] / "web" / "out"
         if not static_dir.joinpath("index.html").is_file() and source_export.joinpath("index.html").is_file():

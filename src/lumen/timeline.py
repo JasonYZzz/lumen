@@ -314,11 +314,11 @@ class TimelineStore:
                 pending_approval=False,
             )
         elif isinstance(event, ContextCompactionStarted):
-            item = self._new(TimelineKind.COMPACTION, text="Compacting context…")
+            item = self._new(TimelineKind.COMPACTION, text="正在压缩上下文……")
         elif isinstance(event, ContextCompactionCompleted):
             item = self._new(
                 TimelineKind.COMPACTION,
-                text=f"Context compacted: {event.active_message_count} active messages.",
+                text=f"上下文已压缩: 保留 {event.active_message_count} 条活动消息。",
             )
         elif isinstance(event, ContextCompactionFailed):
             item = self._new(TimelineKind.ERROR, text=event.message, is_error=True)

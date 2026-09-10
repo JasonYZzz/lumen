@@ -48,6 +48,13 @@ class ModelStopReason(StrEnum):
     UNKNOWN = "unknown"
 
 
+class ModelNativeTool(_DriverContract):
+    """Provider-executed tool included in the frozen request evidence."""
+
+    kind: Literal["web_search"]
+    search_context_size: Literal["low", "medium", "high"] = "medium"
+
+
 class _SequencedEvent(_DriverContract):
     sequence: int = Field(ge=0)
 
@@ -141,6 +148,7 @@ class ModelDriverRequest(Generic[MessageT]):
     instructions: str
     tools: tuple[Mapping[str, Any], ...]
     input_manifest: ModelInputManifest
+    native_tools: tuple[ModelNativeTool, ...] = ()
     settings: Mapping[str, Any] = field(default_factory=lambda: MappingProxyType({}))
     #: Execution controls, not model settings or prompt contents.
     stream_idle_timeout_seconds: float = 300.0
@@ -152,7 +160,7 @@ class ModelDriverRequest(Generic[MessageT]):
             raise ValueError("model driver route must match its input manifest")
         if len(self.messages) != self.input_manifest.message_count:
             raise ValueError("model driver message count must match its input manifest")
-        if len(self.tools) != self.input_manifest.tool_count:
+        if len(self.tools) + len(self.native_tools) != self.input_manifest.tool_count:
             raise ValueError("model driver tool count must match its input manifest")
         object.__setattr__(self, "tools", tuple(_freeze(tool) for tool in self.tools))
         object.__setattr__(self, "settings", _freeze(self.settings))
@@ -299,6 +307,7 @@ __all__ = [
     "ModelDriver",
     "ModelDriverRequest",
     "ModelDriverStream",
+    "ModelNativeTool",
     "ModelProviderError",
     "ModelResponseCompleted",
     "ModelResponseStarted",

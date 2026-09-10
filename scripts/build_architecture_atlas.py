@@ -23,6 +23,7 @@ ROOT_DOCUMENTS = (
     REPOSITORY_ROOT / "docs" / "README.md",
     REPOSITORY_ROOT / "docs" / "commands.md",
     REPOSITORY_ROOT / "docs" / "generated" / "contracts.json",
+    REPOSITORY_ROOT / "docs" / "generated" / "provider-reasoning.md",
     REPOSITORY_ROOT / "pyproject.toml",
 )
 CURRENT_DOCUMENT_ROOTS = (

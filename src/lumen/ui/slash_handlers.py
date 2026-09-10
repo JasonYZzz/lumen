@@ -25,6 +25,7 @@ from lumen.application import (
     CancelClarification,
     ContextControl,
     GetBootstrap,
+    GetInstructions,
     InvokePrompt,
     InvokeSkill,
     ListContextSources,
@@ -32,10 +33,13 @@ from lumen.application import (
     ListMcpPrompts,
     ListMcpResources,
     SelectModel,
+    SelectReasoning,
     SetContextSource,
 )
 from lumen.collaboration import CollaborationMode
 from lumen.context import ContextControlResult
+from lumen.reasoning import ReasoningLevel
+from lumen.ui.choice_picker import ChoicePickerScreen
 from lumen.ui.command_gate import (
     CommandPolicy,
     classify_command,
@@ -132,7 +136,7 @@ class SlashHandlersMixin:
         # /skill:* are refused (they start a new run); /exit cancels first.
         if self._run_is_active():
             policy = classify_command(line)
-            if command == "/model":
+            if command in {"/model", "/thinking"}:
                 policy = classify_model_command(parts)
             if policy is CommandPolicy.BLOCK:
                 await self._append_system(
@@ -342,6 +346,53 @@ class SlashHandlersMixin:
         self._refresh_topbar()
         self.query_one("#status", Static).update(self._status("Ready"))
         await self._append_system(f"Switched to {target} ({self.resources.active_model_config().id}).")
+
+    async def _cmd_thinking(self: LumenApp, parts: list[str], raw: str) -> None:
+        if self.session is None:
+            return
+        try:
+            if len(parts) == 1:
+                snapshot = await self.workspace_host.snapshot(self.session.id)
+                selection = snapshot.reasoning
+                if len(selection.supported_levels) < 2:
+                    await self._append_system(
+                        "This model does not support reasoning control."
+                        if selection.capability_status == "unsupported" else
+                        "Reasoning control is not configured for this model and API route. "
+                        "Provider defaults are preserved; declare verified reasoning_levels "
+                        "to enable selection."
+                    )
+                    return
+
+                def chosen(value: str | None) -> None:
+                    if value is not None:
+                        self.run_worker(self._cmd_thinking(["/thinking", value], ""))
+
+                self.push_screen(ChoicePickerScreen(
+                    [(level.value, level.value.replace("_", " ") + (
+                        f" ({selection.provider_default_level.value})"
+                        if level is ReasoningLevel.PROVIDER_DEFAULT and selection.provider_default_level else
+                        f" → {selection.level_map[level].value}"
+                        if level in selection.level_map and selection.level_map[level] != level else ""
+                    )) for level in selection.supported_levels if level not in selection.level_map
+                     or selection.level_map[level] == level or level == selection.requested
+                     or selection.level_map[level] not in selection.supported_levels],
+                    selection.requested or ReasoningLevel.PROVIDER_DEFAULT,
+                    title="Thinking effort",
+                    hint="Provider default sends no effort; a documented default is shown in parentheses.",
+                    read_only=bool(snapshot.active_run_id),
+                ), chosen)
+                return
+            if len(parts) != 2:
+                raise ValueError("Usage: /thinking [provider_default|off|minimal|low|medium|high|xhigh|max]")
+            result = await self.workspace_host.dispatch(
+                SelectReasoning(self.session.id, ReasoningLevel(parts[1])),
+            )
+            effective = result.data["reasoning"]["effective"]
+            label = f"{parts[1]} → {effective}" if effective and effective != parts[1] else parts[1]
+            await self._append_system(f"Thinking: {label}. Applies to the next run in this Session.")
+        except (ValueError, RuntimeError) as error:
+            await self._append_system(str(error))
 
     async def _cmd_mode(self: LumenApp, parts: list[str], raw: str) -> None:
         """``/mode [manual|accept_edits|plan|auto]`` — show or switch the approval mode."""
@@ -644,6 +695,30 @@ class SlashHandlersMixin:
         """``/context [--json|sources|capabilities]`` — render context diagnostics."""
 
         await self._render_context(parts)
+
+    async def _cmd_instructions(self: LumenApp, parts: list[str], raw: str) -> None:
+        """``/instructions [--json]`` — inspect prompt mode and provenance."""
+
+        response = await self.workspace_host.dispatch(GetInstructions())
+        data = cast(dict[str, Any], cast(Any, response).data)
+        if "--json" in parts[1:]:
+            await self._append_system(json.dumps(data, ensure_ascii=False, indent=2))
+            return
+        sources = cast(list[dict[str, Any]], data.get("sources", []))
+        lines = [
+            f"模式: {data.get('mode')}  preset: {data.get('preset') or '-'}  版本: {data.get('version')}",
+            (
+                f"稳定指令: {data.get('characters', 0)} 字符  "
+                f"动态上下文: {data.get('runtime_context_characters', 0)} 字符"
+            ),
+            f"模型: {data.get('active_model')} ({data.get('model_id')})",
+            "来源:",
+        ]
+        lines.extend(
+            f"- {row.get('role')} · {row.get('origin')} · {row.get('revision')}"
+            for row in sources
+        )
+        await self._append_system("\n".join(lines))
 
     async def _cmd_compact(self: LumenApp, parts: list[str], raw: str) -> None:
         """``/compact [focus]`` — force a compaction."""

@@ -14,6 +14,7 @@ from lumen.application.models import CommandResult, WorkspaceCommand
 from lumen.config import AppConfig
 from lumen.context import ModelInputManifest, ProviderRequestReceipt
 from lumen.events import RunEvent
+from lumen.provider_catalog import CATALOG_REVISION, RULES
 from lumen.sessions import SCHEMA_VERSION, SESSION_RECORD_TYPES, SUPPORTED_SCHEMA_VERSIONS
 from lumen.tools.presentation import ToolCallView, ToolResultView
 from lumen.tools.spec import EffectKind, Risk, ToolConcurrency
@@ -28,6 +29,12 @@ def build_contract_catalog() -> dict[str, Any]:
     return {
         "catalog_version": CATALOG_VERSION,
         "app_config": AppConfig.model_json_schema(),
+        "provider_catalog": {
+            "revision": CATALOG_REVISION,
+            "authority": "lumen.provider_catalog",
+            "profiles": [rule.key for rule in RULES],
+            "generated_matrix": "docs/generated/provider-reasoning.md",
+        },
         "workspace_commands": TypeAdapter(WorkspaceCommand).json_schema(),
         "workspace_results": TypeAdapter(CommandResult).json_schema(),
         "run_events": TypeAdapter(RunEvent).json_schema(),
@@ -139,7 +146,9 @@ def build_contract_catalog() -> dict[str, Any]:
             {
                 "owner": "LumenAgentLoop",
                 "name": "tool_results_preserve_provider_call_order",
-                "enforced_by": "ordered invocation batches and LoopToolResultRecorded order",
+                "enforced_by": (
+                    "provider-ordered tool continuation; completion-ordered events retain call order"
+                ),
             },
             {
                 "owner": "CapabilityGateway",

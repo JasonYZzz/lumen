@@ -1090,6 +1090,66 @@ async def test_edit_and_start_preserve_source_until_external_results_are_resolve
         await host.close()
 
 
+@pytest.mark.parametrize("mode", ["default", "plan"])
+async def test_regenerate_reuses_session_identity_and_excludes_abandoned_suffix(
+    tmp_path: Path, mode: Literal["default", "plan"],
+) -> None:
+    received: list[list[str]] = []
+
+    async def stream(messages: list[ModelMessage], _info: AgentInfo):  # type: ignore[no-untyped-def]
+        received.append([
+            part.content for message in messages if isinstance(message, ModelRequest)
+            for part in message.parts if isinstance(part, UserPromptPart) and isinstance(part.content, str)
+        ])
+        if mode == "plan" and not any(
+            isinstance(part, ToolReturnPart) for part in messages[-1].parts
+        ):
+            yield {0: DeltaToolCall(
+                "set_plan",
+                '{"goal":"Regenerate","steps":[{"id":"one","title":"Answer"}]}',
+                tool_call_id=f"plan-{len(received)}",
+            )}
+            return
+        yield "fresh answer"
+
+    resources = LocalResources(tmp_path, AgentRuntime(
+        model=FunctionModel(stream_function=stream), tools=[], toolsets=[], instructions="help",
+        limits=LimitsConfig(), tool_metadata={},
+    ))
+    host = WorkspaceHost(resources)  # type: ignore[arg-type]
+    await host.open()
+    try:
+        session = await host.dispatch(CreateSession())
+        await host.dispatch(SetCollaborationMode(session.session_id, mode))
+        for index, prompt in enumerate(["prefix", "same prompt", "stale follow-up"]):
+            started = await host.dispatch(StartRun(session.session_id, prompt, f"old-{index}"))
+            assert [event async for event in host.subscribe(started.run_id)][-1].type == "run.completed"
+        await host.dispatch(RenameSession(session.session_id, "Stable title"))
+
+        started = await host.dispatch(StartRun(
+            session.session_id,
+            "same prompt",
+            "regenerate-same-text",
+            regenerate_from_turn=1,
+        ))
+        assert started.session_id == session.session_id
+        assert [event async for event in host.subscribe(started.run_id)][-1].type == "run.completed"
+
+        loaded = resources.session_repository.load(session.session_id)
+        resources.session_repository.clear_projection_cache()
+        cold = resources.session_repository.load(session.session_id)
+        assert loaded.catalog.title == cold.catalog.title == "Stable title"
+        assert [turn.user_input for turn in cold.turns] == ["prefix", "same prompt"]
+        assert [prompt.rsplit("\n\n", 1)[-1] for prompt in received[-1]] == [
+            "prefix",
+            "same prompt",
+        ]
+        assert all("stale follow-up" not in str(message) for message in cold.full_history)
+        assert len(list(resources.session_repository.directory.glob("*.jsonl"))) == 1
+    finally:
+        await host.close()
+
+
 async def test_host_creates_scoped_user_waiver_receipt(tmp_path: Path) -> None:
     resources = LocalResources(tmp_path, _runtime())
     host = WorkspaceHost(resources)  # type: ignore[arg-type]

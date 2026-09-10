@@ -45,6 +45,8 @@ from pydantic_ai.messages import (
 from pydantic_ai.models import Model, ModelRequestParameters, infer_model
 from pydantic_ai.models.anthropic import AnthropicModel
 from pydantic_ai.models.openai import OpenAIChatModel, OpenAIResponsesModel
+from pydantic_ai.native_tools import WebSearchTool
+from pydantic_ai.profiles.openai import OPENAI_REASONING_EFFORT_MAP
 from pydantic_ai.settings import ModelSettings
 from pydantic_ai.tools import ToolDefinition
 
@@ -279,7 +281,10 @@ class PydanticAIModelDriver:
     def response_thinking(self, response: ModelMessage) -> str:
         if not isinstance(response, ModelResponse):
             return ""
-        return "".join(part.content for part in response.parts if isinstance(part, ThinkingPart))
+        return "".join(
+            _raw_thinking_content(part) + part.content
+            for part in response.parts if isinstance(part, ThinkingPart)
+        )
 
     @asynccontextmanager
     async def open_stream(
@@ -288,10 +293,32 @@ class PydanticAIModelDriver:
     ) -> AsyncGenerator[ModelDriverStream[ModelMessage], None]:
         parameters = ModelRequestParameters(
             function_tools=[_tool_definition(document) for document in request.tools],
+            native_tools=[
+                WebSearchTool(search_context_size=tool.search_context_size)
+                for tool in request.native_tools
+                if tool.kind == "web_search"
+            ],
             allow_text_output=True,
             instruction_parts=([] if not request.instructions else [InstructionPart(request.instructions)]),
         )
         settings = cast(ModelSettings, _plain_json(request.settings))
+        # The SDK omits Anthropic thinking when the unified setting is False.
+        # An omitted field enables thinking on some compatible providers. Keep
+        # the caller's explicit off choice distinct from upstream defaults.
+        if isinstance(self._model, AnthropicModel) and settings.get("thinking") is False:
+            if "anthropic_thinking" not in settings:
+                cast(dict[str, Any], settings)["anthropic_thinking"] = {"type": "disabled"}
+        # OpenAI-compatible Responses models outside the SDK's known profiles
+        # otherwise silently lose an explicit unified thinking choice. Preserve
+        # omission as upstream default and keep native settings authoritative.
+        if (
+            isinstance(self._model, OpenAIResponsesModel)
+            and not self._model.profile.get("supports_thinking", False)
+            and not self._model.profile.get("thinking_always_enabled", False)
+            and (thinking := settings.get("thinking")) is not None
+            and "openai_reasoning_effort" not in settings
+        ):
+            cast(dict[str, Any], settings)["openai_reasoning_effort"] = OPENAI_REASONING_EFFORT_MAP[thinking]
         if self.manages_stream_idle_timeout:
             settings["timeout"] = httpx.Timeout(
                 request.stream_idle_timeout_seconds,
@@ -335,7 +362,8 @@ class PydanticAIModelDriver:
                     ModelProviderError(
                         sequence=1,
                         category=_error_category(error),
-                        message=str(error),
+                        message=(str(error).strip()
+                                 or f"Provider failed ({type(error).__name__}) without details."),
                         retryable=_retryable(error),
                         retry_after_seconds=_retry_after(error),
                     ),
@@ -392,6 +420,8 @@ class _PydanticDriverStream:
                 )
             sequence += 1
             completed_calls: set[str] = set()
+            started_tool_calls: set[str] = set()
+            thinking_parts: dict[int, ThinkingPart] = {}
             async for event in self._streamed:
                     usage = self._streamed.usage
                     counters = (
@@ -413,28 +443,45 @@ class _PydanticDriverStream:
                         if isinstance(part, TextPart) and part.content:
                             yield ModelTextDelta(sequence=sequence, content=part.content)
                             sequence += 1
-                        elif isinstance(part, ThinkingPart) and part.content:
-                            yield ModelThinkingDelta(sequence=sequence, content=part.content)
-                            sequence += 1
+                        elif isinstance(part, ThinkingPart):
+                            thinking_parts[event.index] = part
+                            thinking_text = _raw_thinking_content(part) + part.content
+                            if thinking_text:
+                                yield ModelThinkingDelta(sequence=sequence, content=thinking_text)
+                                sequence += 1
                         elif isinstance(part, ToolCallPart):
                             has_tool_calls = True
-                            yield ModelToolCallStarted(
-                                sequence=sequence,
-                                call_id=part.tool_call_id,
-                                name=part.tool_name,
-                            )
-                            sequence += 1
+                            if part.tool_call_id not in started_tool_calls:
+                                yield ModelToolCallStarted(
+                                    sequence=sequence,
+                                    call_id=part.tool_call_id,
+                                    name=part.tool_name,
+                                )
+                                sequence += 1
+                                started_tool_calls.add(part.tool_call_id)
                     elif isinstance(event, PartDeltaEvent):
                         delta = event.delta
                         if isinstance(delta, TextPartDelta) and delta.content_delta:
                             yield ModelTextDelta(sequence=sequence, content=delta.content_delta)
                             sequence += 1
-                        elif isinstance(delta, ThinkingPartDelta) and delta.content_delta:
-                            yield ModelThinkingDelta(
-                                sequence=sequence,
-                                content=delta.content_delta,
+                        elif isinstance(delta, ThinkingPartDelta):
+                            previous = thinking_parts[event.index]
+                            updated = delta.apply(previous)
+                            thinking_parts[event.index] = updated
+                            previous_raw = _raw_thinking_content(previous)
+                            updated_raw = _raw_thinking_content(updated)
+                            # Responses providers can stream reasoning_text into SDK
+                            # raw_content instead of content_delta. Project only its
+                            # new text; leave canonical provider details untouched for
+                            # subsequent tool-result requests and Session replay.
+                            raw_delta = (
+                                updated_raw[len(previous_raw):]
+                                if updated_raw.startswith(previous_raw) else ""
                             )
-                            sequence += 1
+                            thinking_text = raw_delta + (delta.content_delta or "")
+                            if thinking_text:
+                                yield ModelThinkingDelta(sequence=sequence, content=thinking_text)
+                                sequence += 1
                         elif isinstance(delta, ToolCallPartDelta) and delta.args_delta:
                             arguments_delta = (
                                 delta.args_delta
@@ -442,7 +489,12 @@ class _PydanticDriverStream:
                                 else json.dumps(delta.args_delta, ensure_ascii=False, sort_keys=True)
                             )
                             call_id = delta.tool_call_id
-                            if call_id:
+                            # Native server tools can project a ToolCallPartDelta even
+                            # though their start is a NativeToolCallPart. Do not leak
+                            # that delta into Lumen's client-executed function stream.
+                            # If a compatible SDK omits a local PartStartEvent, the
+                            # PartEndEvent below synthesizes the complete ordered pair.
+                            if call_id and call_id in started_tool_calls:
                                 yield ModelToolArgumentsDelta(
                                     sequence=sequence,
                                     call_id=call_id,
@@ -455,6 +507,15 @@ class _PydanticDriverStream:
                     ):
                         part = event.part
                         if part.tool_call_id not in completed_calls:
+                            if part.tool_call_id not in started_tool_calls:
+                                has_tool_calls = True
+                                yield ModelToolCallStarted(
+                                    sequence=sequence,
+                                    call_id=part.tool_call_id,
+                                    name=part.tool_name,
+                                )
+                                sequence += 1
+                                started_tool_calls.add(part.tool_call_id)
                             yield ModelToolCallCompleted(
                                 sequence=sequence,
                                 call_id=part.tool_call_id,
@@ -518,11 +579,19 @@ class _PydanticDriverStream:
             yield ModelProviderError(
                 sequence=sequence,
                 category=_error_category(error),
-                message=str(error),
+                message=str(error).strip() or f"Provider failed ({type(error).__name__}) without details.",
                 retryable=_retryable(error),
                 retry_after_seconds=_retry_after(error),
                 replay_safe=replay_safe,
             )
+
+
+def _raw_thinking_content(part: ThinkingPart) -> str:
+    """Read the SDK's Responses reasoning text, never signatures or opaque metadata."""
+    raw: object = (part.provider_details or {}).get("raw_content")
+    if not isinstance(raw, list):
+        return ""
+    return "".join(item for item in cast(list[object], raw) if isinstance(item, str))
 
 
 __all__ = ["PydanticAIModelDriver"]

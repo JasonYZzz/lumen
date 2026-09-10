@@ -36,17 +36,34 @@ export function turnPresentation(
   clarificationAnswered = false,
 ): TurnPresentation {
   response = projectThinkingMarkup(response, streaming)
-  // Earlier assistant segments followed by more tool work are progress,
-  // while the answer stays on the reading surface. Never rewrite the journal.
+  // A turn owns one final reading answer. Providers may stream status narration as
+  // assistant text before a tool, between native server-side tools, or before more
+  // thinking. Keep those earlier segments in the process disclosure without
+  // rewriting the append-only journal.
   const lastTool = response.findLastIndex((item) => (
     item.kind === 'tool' || item.status === 'waiting_for_user'
   ))
+  const lastAssistant = response.findLastIndex((item) => item.kind === 'assistant')
+  const lastActivity = response.findLastIndex((item) => ACTIVITY_KINDS.has(item.kind))
+  const explicitCommentary = new Set(response
+    .filter((item) => item.kind === 'commentary')
+    .map((item) => item.text.replace(/\s+/g, ' ').trim())
+    .filter(Boolean))
   const activity: TimelineEntry[] = []
   const foreground: TimelineEntry[] = []
   response.forEach((item, index) => {
     // Plans are live controls, not historical conversation cards. The transcript retains them.
     if (item.kind === 'plan') return
-    if (item.kind === 'assistant' && index < lastTool) activity.push({ ...item, kind: 'commentary' })
+    const assistantIsProcess = item.kind === 'assistant'
+      && index < Math.max(lastTool, lastAssistant, lastActivity)
+    if (assistantIsProcess) {
+      const normalized = item.text.replace(/\s+/g, ' ').trim()
+      // The native loop can first emit candidate text, then retract and re-emit the
+      // exact same text as CommentaryDelta. Show that status once in the UI.
+      if (!normalized || !explicitCommentary.has(normalized)) {
+        activity.push({ ...item, kind: 'commentary' })
+      }
+    }
     else if (ACTIVITY_KINDS.has(item.kind)) activity.push(item)
     else foreground.push(item)
   })
@@ -79,7 +96,7 @@ export function activityTitle(presentation: TurnPresentation, active: boolean) {
   if (!active && presentation.terminalStatus === 'waiting_for_user') return '等待补充信息'
   if (!active && presentation.terminalStatus === 'clarification_answered') return '已收到补充信息'
   if (presentation.skillName) return `${active ? '正在运行' : '已运行'} Skill · ${presentation.skillName}`
-  return active ? '正在处理' : '已完成处理'
+  return active ? '正在思考' : '已完成处理'
 }
 
 export function activityMeta(presentation: TurnPresentation) {

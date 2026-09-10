@@ -4,6 +4,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from lumen.reasoning import ReasoningLevel
+
 
 class WebModel(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
@@ -21,6 +23,7 @@ class StartRunBody(WebModel):
     input: str = Field(min_length=1)
     client_request_id: str = Field(alias="clientRequestId", min_length=1, max_length=200)
     attachments: list[AttachmentBody] = Field(default_factory=list[AttachmentBody], max_length=8)
+    regenerate_from_turn: int | None = Field(default=None, alias="regenerateFromTurn", ge=0)
 
 
 class RetryRunBody(WebModel):
@@ -65,11 +68,22 @@ class ModelConfigurationBody(WebModel):
         pattern=r"^[A-Za-z_][A-Za-z0-9_]*$",
     )
     settings: dict[str, Any] = Field(default_factory=dict[str, Any])
+    reasoning_effort: ReasoningLevel | None = Field(default=None, alias="reasoningEffort")
+    reasoning_levels: list[ReasoningLevel] | None = Field(default=None, alias="reasoningLevels")
+    reasoning_profile: str | None = Field(default=None, alias="reasoningProfile", max_length=100)
     context: dict[str, Any] = Field(default_factory=dict[str, Any])
     input_modalities: list[Literal["text", "image"]] = Field(
         default_factory=lambda: ["text"], alias="inputModalities"
     )
+    native_web_search: dict[str, Any] = Field(
+        default_factory=dict[str, Any], alias="nativeWebSearch"
+    )
     set_default: bool = Field(default=False, alias="setDefault")
+
+
+class McpServerConfigurationBody(WebModel):
+    expected_revision: str = Field(alias="expectedRevision", min_length=8, max_length=100)
+    enabled: bool
 
 
 class ConfigurationRevisionBody(WebModel):
@@ -77,6 +91,7 @@ class ConfigurationRevisionBody(WebModel):
 
 
 class SessionSettingsBody(WebModel):
+    reasoning_effort: ReasoningLevel | None = Field(default=None, alias="reasoningEffort")
     approval_mode: Literal["manual", "accept_edits", "auto"] | None = Field(
         default=None, alias="approvalMode"
     )
@@ -140,3 +155,4 @@ class ControlBody(WebModel):
     action: str | None = None
     payload: dict[str, Any] = Field(default_factory=dict[str, Any])
     client_request_id: str | None = Field(default=None, alias="clientRequestId", min_length=1, max_length=200)
+    regenerate_from_turn: int | None = Field(default=None, alias="regenerateFromTurn", ge=0)

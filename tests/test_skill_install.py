@@ -349,7 +349,8 @@ async def test_model_install_then_load_in_one_run(tmp_path: Path, monkeypatch: p
             }
             return
         if calls == 2:
-            assert "sample-skill" in (info.instructions or "")
+            assert "sample-skill" in str(messages)
+            assert "sample-skill" not in (info.instructions or "")
             yield {
                 0: DeltaToolCall(name="load_skill", json_args='{"name":"sample-skill"}', tool_call_id="load")
             }

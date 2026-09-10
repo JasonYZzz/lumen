@@ -287,8 +287,8 @@
     <g transform="translate(90 1100)">
       <rect width="410" height="115" class="node-authority"/>
       <text x="18" y="24" class="mono-copper">规范事实日志</text>
-      <text x="18" y="52" class="node-title">SessionRepository · 模式 v9</text>
-      <text x="18" y="75" class="mono">只追加 JSONL · 落盘同步 · 加载 v1–v8</text>
+      <text x="18" y="52" class="node-title">SessionRepository · 模式 v10</text>
+      <text x="18" y="75" class="mono">只追加 JSONL · 落盘同步 · 加载 v1–v10</text>
       <text x="18" y="94" class="mono">轮次 · 上下文 · 工作 · Agent · 实时记录</text>
     </g>
     <g transform="translate(535 1100)">

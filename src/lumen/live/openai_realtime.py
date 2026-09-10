@@ -93,8 +93,8 @@ class _OpenAIConnection:
                     "response": {
                         "tool_choice": "none",
                         "instructions": (
-                            "Speak the approved answer faithfully. Do not claim additional work, "
-                            "invoke tools, or add facts. Approved answer:\n" + command.answer
+                            "忠实播报已批准的答案。不要声称执行了额外工作, 不要调用工具或添加事实。"
+                            "已批准答案:\n" + command.answer
                         ),
                     },
                 }

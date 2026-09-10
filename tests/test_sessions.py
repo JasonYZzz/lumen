@@ -72,7 +72,7 @@ def test_session_round_trip_preserves_model_messages(tmp_path: Path) -> None:
     assert loaded.full_history == loaded.history
     assert loaded.turns[0].user_input == "hello"
     assert loaded.plan == PlanState()
-    assert SCHEMA_VERSION == 9
+    assert SCHEMA_VERSION == 11
 
 
 @pytest.mark.parametrize("turn_index", [0, 1, 2])
@@ -98,6 +98,99 @@ def test_message_edit_fork_keeps_only_prefix_without_rewriting_source(
     assert branch.settings.collaboration_mode is CollaborationMode.PLAN
     assert branch.settings.plan_review_status is PlanReviewStatus.NONE
     assert source.path.read_bytes() == before
+
+
+def test_message_regeneration_rewinds_active_lineage_in_same_append_only_session(
+    tmp_path: Path,
+) -> None:
+    repository = SessionRepository(tmp_path)
+    session = repository.create(agent_name="test", model_id="test")
+    repository.append_session_catalog(session.id, SessionCatalogState(title="Existing title"))
+    for index in range(3):
+        repository.append_turn(
+            session.id,
+            user_input=f"question-{index}",
+            approvals=[],
+            usage={},
+            status="completed",
+            messages=[
+                ModelRequest(parts=[UserPromptPart(content=f"question-{index}")]),
+                ModelResponse(parts=[TextPart(content=f"stale-answer-{index}")]),
+            ],
+        )
+    repository.append_session_settings(
+        session.id,
+        SessionSettingsState(
+            collaboration_mode=CollaborationMode.PLAN,
+            plan_review_status=PlanReviewStatus.REVIEW_PENDING,
+        ),
+    )
+    before = session.path.read_bytes()
+
+    repository.rewind(session.id, before_turn=1)
+    repository.append_turn(
+        session.id,
+        user_input="question-1",
+        approvals=[],
+        usage={},
+        status="completed",
+        messages=[
+            ModelRequest(parts=[UserPromptPart(content="question-1")]),
+            ModelResponse(parts=[TextPart(content="fresh-answer")]),
+        ],
+    )
+    repository.clear_projection_cache()
+    loaded = repository.load(session.id)
+
+    assert loaded.metadata.id == session.id
+    assert loaded.catalog.title == "Existing title"
+    assert [turn.user_input for turn in loaded.turns] == ["question-0", "question-1"]
+    final_message = loaded.turns[-1].messages[-1]
+    assert isinstance(final_message, ModelResponse)
+    assert isinstance(final_message.parts[0], TextPart)
+    assert final_message.parts[0].content == "fresh-answer"
+    assert all("stale-answer-1" not in str(message) for message in loaded.full_history)
+    assert all("stale-answer-2" not in str(message) for message in loaded.full_history)
+    assert loaded.settings.collaboration_mode is CollaborationMode.PLAN
+    assert loaded.settings.plan_review_status is PlanReviewStatus.NONE
+    assert [turn.user_input for turn in repository.load_turn_page(session.id, limit=20).turns] == [
+        "question-0",
+        "question-1",
+    ]
+    after = session.path.read_bytes()
+    assert after.startswith(before)
+    assert b'"type":"history_rewind"' in after[len(before):]
+    assert b"stale-answer-2" in after
+
+
+def test_v10_session_appends_rewind_upgrade_without_rewriting_header(tmp_path: Path) -> None:
+    repository = SessionRepository(tmp_path)
+    session = repository.create(agent_name="test", model_id="test")
+    original = session.path.read_text(encoding="utf-8").replace(
+        '"schema_version":11', '"schema_version":10'
+    )
+    session.path.write_text(original, encoding="utf-8")
+    repository.append_turn(
+        session.id,
+        user_input="old",
+        messages=[],
+        approvals=[],
+        usage={},
+        status="completed",
+    )
+
+    repository.rewind(session.id, before_turn=0)
+
+    records = [json.loads(line) for line in session.path.read_text().splitlines()]
+    assert records[0]["schema_version"] == 10
+    assert records[-2] == {
+        "type": "schema_upgrade",
+        "from_version": 10,
+        "to_version": 11,
+        "created_at": records[-2]["created_at"],
+    }
+    assert records[-1]["type"] == "history_rewind"
+    assert repository.load(session.id).turns == []
 
 
 def test_session_turn_normalizes_decimal_values_before_jsonl_append(tmp_path: Path) -> None:
@@ -410,7 +503,7 @@ def test_session_fork_preserves_v7_work_state(tmp_path: Path) -> None:
 def test_historical_v6_session_upgrades_append_only_for_work_state(tmp_path: Path) -> None:
     repository = SessionRepository(tmp_path)
     session = repository.create(agent_name="test-agent", model_id="test")
-    original = session.path.read_text(encoding="utf-8").replace('"schema_version":9', '"schema_version":6')
+    original = session.path.read_text(encoding="utf-8").replace('"schema_version":11', '"schema_version":6')
     session.path.write_text(original, encoding="utf-8")
 
     assert repository.load(session.id).work_state == SessionWorkState()
@@ -428,7 +521,7 @@ def test_historical_session_appends_v5_v6_upgrade_chain_without_rewriting_header
 ) -> None:
     repository = SessionRepository(tmp_path)
     session = repository.create(agent_name="test-agent", model_id="test")
-    original = session.path.read_text(encoding="utf-8").replace('"schema_version":9', '"schema_version":1')
+    original = session.path.read_text(encoding="utf-8").replace('"schema_version":11', '"schema_version":1')
     session.path.write_text(original, encoding="utf-8")
 
     context_state = SessionContextState()
@@ -863,7 +956,7 @@ def test_session_rejects_unknown_schema_version(tmp_path: Path) -> None:
         json.dumps(
             {
                 "type": "session",
-                "schema_version": 10,
+                "schema_version": SCHEMA_VERSION + 1,
                 "id": session_id,
                 "agent_name": "x",
                 "model_id": "test",

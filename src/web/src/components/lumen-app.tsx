@@ -50,6 +50,8 @@ import type {
   ConfiguredModel,
   EventEnvelope,
   QueueMode,
+  ReasoningLevel,
+  ReasoningSelection,
   SessionSummary,
   SessionSnapshot,
   TimelineEntry,
@@ -73,6 +75,7 @@ import { PlanProgress, PlanProposal, PlanReview } from './plan-panel'
 import { DocumentProvider, DocumentResults } from './document-preview'
 import { SessionActionsMenu } from './session-actions-menu'
 import { SessionSearchDialog } from './session-search-dialog'
+import { ThinkingOrb } from './thinking-orb'
 import { EMPTY_WORKSPACE_PROMPT } from '@/lib/copy'
 import { projectThinkingMarkup } from '@/lib/thinking-markup'
 import {
@@ -97,6 +100,24 @@ const approvalChoices: Array<ChoiceOption<ApprovalMode>> = [
   { value: 'accept_edits', label: '自动改文件', description: '文件修改自动允许，其他动作仍按规则确认。' },
   { value: 'auto', label: '自动执行', description: '在权限与 Sandbox 约束内持续执行。' },
 ]
+
+function reasoningOptions(selection?: ReasoningSelection | null, requested = selection?.requested) {
+  return (selection?.supported_levels ?? ['provider_default'] as ReasoningLevel[])
+    .filter((level) => !selection?.level_map?.[level] || selection.level_map[level] === level
+      || !selection.supported_levels.includes(selection.level_map[level])
+      || level === requested)
+    .map((level) => ({
+      value: level,
+      compactLabel: level === 'provider_default'
+        ? selection?.provider_default_level ? `默认 · ${selection.provider_default_level}` : '供应商默认'
+        : undefined,
+      label: level === 'provider_default'
+        ? selection?.provider_default_level
+          ? `跟随供应商默认（${selection.provider_default_level}）` : '跟随供应商默认'
+        : selection?.level_map?.[level] && selection.level_map[level] !== level
+          ? `${level} → ${selection.level_map[level]}` : level,
+    }))
+}
 
 export function LumenApp() {
   const [bootstrap, setBootstrap] = useState<Bootstrap | null>(null)
@@ -174,6 +195,8 @@ export function LumenApp() {
   const [transcriptOpen, setTranscriptOpen] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [modelMenuOpen, setModelMenuOpen] = useState(false)
+  const [thinkingMenuOpen, setThinkingMenuOpen] = useState(false)
+  const [reasoning, setReasoning] = useState<ReasoningSelection | null>(null)
   const [modeMenuOpen, setModeMenuOpen] = useState(false)
   const [modelChanging, setModelChanging] = useState(false)
   const modelChangeRef = useRef(false)
@@ -185,10 +208,9 @@ export function LumenApp() {
   const stoppingRef = useRef<string | null>(null)
   const editingRef = useRef(false)
   const [messageEditing, setMessageEditing] = useState(false)
-  const [editedFrom, setEditedFrom] = useState<{ sourceId: string; branchId: string } | null>(null)
   const selectedSessionRef = useRef<string | null>(null)
   const editRequestRef = useRef<{
-    key: string; forkRequestId: string; runRequestId: string; branchId?: string
+    key: string; runRequestId: string
   } | null>(null)
   const closeStreamRef = useRef<(() => void) | null>(null)
   const timelineRef = useRef<HTMLElement>(null)
@@ -252,6 +274,7 @@ export function LumenApp() {
   )
 
   const applySessionSnapshot = useCallback((snapshot: SessionSnapshot) => {
+    setReasoning(snapshot.reasoning ?? null)
     selectedSessionRef.current = snapshot.sessionId
     setSessionId(snapshot.sessionId)
     dispatch({ type: 'snapshot', snapshot })
@@ -470,13 +493,41 @@ export function LumenApp() {
     setSettingsNotice('')
     try {
       await lumenApi.updateWorkspaceSettings({ model })
+      setReasoning(null)
       await refreshChrome()
+      const target = selectedSessionRef.current
+      if (target) {
+        const snapshot = await lumenApi.session(target)
+        if (selectedSessionRef.current === target) setReasoning(snapshot.reasoning ?? null)
+      }
       setSettingsNotice(`已切换到 ${model}，用于下一轮对话。`)
     } finally {
       modelChangeRef.current = false
       setModelChanging(false)
     }
   }, [bootstrap, refreshChrome, run.runId])
+
+  const selectThinking = useCallback(async (level: string) => {
+    if (level === 'configured') return
+    if (modelChangeRef.current || bootstrap?.activeRunId || run.runId) {
+      throw new Error('请等待运行结束后再切换推理强度。')
+    }
+    const available = (sessionId ? reasoning : null)?.supported_levels
+      ?? bootstrap?.reasoning?.supported_levels ?? ['provider_default']
+    if (!available.includes(level as ReasoningLevel)) throw new Error(`当前模型不支持此推理档位：${level}`)
+    modelChangeRef.current = true
+    setModelChanging(true)
+    try {
+      const target = sessionId ?? await createSession()
+      await lumenApi.updateSessionSettings(target, { reasoningEffort: level as ReasoningLevel })
+      const snapshot = await lumenApi.session(target)
+      if (selectedSessionRef.current === target) setReasoning(snapshot.reasoning ?? null)
+      setSettingsNotice(`推理强度已设为 ${level}，用于此任务的下一轮对话。`)
+    } finally {
+      modelChangeRef.current = false
+      setModelChanging(false)
+    }
+  }, [bootstrap, reasoning, run.runId, sessionId, createSession])
 
   const handleSlashCommand = useCallback(
     async (command: string): Promise<boolean> => {
@@ -546,6 +597,12 @@ export function LumenApp() {
         } else {
           await selectModel(argument)
         }
+        setInput('')
+        return true
+      }
+      if (name === '/thinking') {
+        if (!argument) setThinkingMenuOpen(true)
+        else await selectThinking(argument)
         setInput('')
         return true
       }
@@ -646,6 +703,24 @@ export function LumenApp() {
           const result = await lumenApi.context(sessionId)
           dispatch({ type: 'local-message', message: formatControlResult(result) })
         }
+        setInput('')
+        return true
+      }
+      if (name === '/instructions') {
+        const result = await lumenApi.instructions()
+        const sources = result.sources.map((source) => (
+          `- ${source.role} · ${source.origin} · ${source.revision}`
+        )).join('\n')
+        dispatch({
+          type: 'local-message',
+          message: [
+            `模式：${result.mode}  preset：${result.preset ?? '-'}  版本：${result.version}`,
+            `稳定指令：${result.characters} 字符  动态上下文：${result.runtime_context_characters} 字符`,
+            `模型：${result.active_model} (${result.model_id})`,
+            '来源：',
+            sources || '- 无',
+          ].join('\n'),
+        })
         setInput('')
         return true
       }
@@ -760,6 +835,7 @@ export function LumenApp() {
       run.timeline,
       sessionId,
       selectModel,
+      selectThinking,
       setApprovalMode,
       setCollaborationMode,
       updateSessionSettings,
@@ -770,7 +846,7 @@ export function LumenApp() {
     const draft = input
     try {
       await handleSlashCommand(command)
-      if (preserveDraft && ['/model', '/mode', '/tasks', '/copy', '/checkpoints', '/skills', '/tools'].includes(command)) {
+      if (preserveDraft && ['/model', '/thinking', '/mode', '/tasks', '/copy', '/checkpoints', '/skills', '/tools'].includes(command)) {
         setInput(draft)
       }
     } catch (error) {
@@ -878,30 +954,29 @@ export function LumenApp() {
       }
       const key = JSON.stringify([sourceId, recorded.turn_index, text])
       if (editRequestRef.current?.key !== key) editRequestRef.current = {
-        key, forkRequestId: requestId(), runRequestId: requestId(),
+        key, runRequestId: requestId(),
       }
       const intent = editRequestRef.current
-      if (!intent.branchId) {
-        const branch = await lumenApi.forkSession(sourceId, recorded.turn_index, {
-          includeTurn: false, clientRequestId: intent.forkRequestId,
-        })
-        intent.branchId = branch.sessionId
-      }
-      const branch = await lumenApi.session(intent.branchId)
       if (selectedSessionRef.current !== sourceId) throw new Error('已切换任务，未在此处启动重新生成。')
       const started = skill
-        ? await lumenApi.invokeSkill(intent.branchId, skill[1], skill[2] ?? '', intent.runRequestId)
+        ? await lumenApi.invokeSkill(
+          sourceId, skill[1], skill[2] ?? '', intent.runRequestId, recorded.turn_index,
+        )
         : prompt
-          ? await lumenApi.invokePrompt(intent.branchId, prompt.reference, prompt.arguments, text, intent.runRequestId)
-          : await lumenApi.startRun(intent.branchId, text, intent.runRequestId, original?.attachments ?? [])
+          ? await lumenApi.invokePrompt(
+            sourceId, prompt.reference, prompt.arguments, text, intent.runRequestId,
+            recorded.turn_index,
+          )
+          : await lumenApi.startRun(
+            sourceId, text, intent.runRequestId, original?.attachments ?? [], recorded.turn_index,
+          )
       if (selectedSessionRef.current === sourceId) {
         closeStreamRef.current?.()
-        applySessionSnapshot(branch)
+        applySessionSnapshot(await lumenApi.session(sourceId))
         dispatch({ type: 'run-registered', runId: started.runId })
         stickToLatestRef.current = true
         attachRun(started.runId)
-        setSettingsNotice('已从编辑后的消息继续。原对话保留在任务列表中。')
-        setEditedFrom({ sourceId, branchId: intent.branchId })
+        setSettingsNotice('已在当前对话中从该消息重新生成；后续旧回答不会进入模型上下文。')
       }
       editRequestRef.current = null
       void refreshChrome()
@@ -979,6 +1054,8 @@ export function LumenApp() {
     closeStreamRef.current?.()
     closeStreamRef.current = null
     setSessionId(null)
+    setReasoning(null)
+    setThinkingMenuOpen(false)
     selectedSessionRef.current = null
     setSessionMenu(null)
     dispatch({ type: 'reset' })
@@ -1089,8 +1166,34 @@ export function LumenApp() {
               ? '等待回答'
             : '就绪'
   const slashCommands = useMemo(() => buildSlashCommands(bootstrap), [bootstrap])
+  const thinkingSelection = (sessionId ? reasoning : null) ?? bootstrap?.reasoning
+  const thinkingAvailable = (thinkingSelection?.supported_levels.length ?? 0) > 1
+  const thinkingUnavailable = thinkingSelection?.capability_status === 'unsupported'
+    ? '不支持调节' : '推理控制未配置'
   const composerSettings = (
     <div className="composer-settings">
+      <ChoiceMenu
+        label="推理强度"
+        open={thinkingMenuOpen}
+        onOpenChange={setThinkingMenuOpen}
+        value={thinkingSelection?.requested
+          ?? (thinkingSelection?.mapping === 'unverified' ? 'configured' : 'provider_default')}
+        disabled={!bootstrap || workspaceBusy || modelChanging || !thinkingAvailable}
+        description={thinkingSelection?.mapping === 'unverified'
+          ? '当前沿用原始配置，无法确认有效档位。选择档位将使用已校验的设置。'
+          : `${bootstrap?.activeModel ?? ''} · 用于下一轮对话。跟随供应商默认时不发送推理参数；`
+            + (thinkingSelection?.provider_default_level
+              ? `官方文档默认 ${thinkingSelection.provider_default_level}。`
+              : '此路由的默认档位尚未确认。')}
+        options={[
+          ...(thinkingSelection?.mapping === 'unverified'
+            ? [{ value: 'configured', label: '原始配置（未校验）' }] : []),
+          ...reasoningOptions(thinkingSelection).map((option) => option.value === 'provider_default'
+            && !thinkingAvailable ? { ...option, label: thinkingUnavailable, compactLabel: thinkingUnavailable }
+              : option),
+        ]}
+        onChange={selectThinking}
+      />
       <ChoiceMenu
         className="is-model"
         label="模型"
@@ -1367,14 +1470,12 @@ export function LumenApp() {
         )}
 
         {confirmAuto && (
-          <div className="auto-confirm" role="alert">
-            <ShieldCheck size={19} />
-            <div><strong>开启 auto 模式？</strong><span>已分类的写入、执行和外部工具将不再逐次确认。</span>
-              {autoError && <span className="auto-confirm-error" role="alert">{autoError}</span>}
-            </div>
-            <button type="button" disabled={approvalChanging || workspaceBusy || loading} onClick={() => void approveAuto()}>{approvalChanging ? '正在切换…' : '确认开启'}</button>
-            <button type="button" className="quiet" disabled={approvalChanging} onClick={() => setConfirmAuto(null)}>取消</button>
-          </div>
+          <AutoModeDialog
+            busy={approvalChanging || workspaceBusy || loading}
+            error={autoError}
+            onClose={() => setConfirmAuto(null)}
+            onConfirm={() => void approveAuto()}
+          />
         )}
 
         <div className={`conversation-stage ${isLanding ? 'is-landing' : ''}`}>
@@ -1472,12 +1573,6 @@ export function LumenApp() {
                 />}
                 {run.runId && !awaitingPlanReview && collaborationMode === 'default' && hasCurrentPlan && <PlanProgress
                   key={sessionId} plan={run.plan!} running={Boolean(run.runId)} stopping={stopping} />}
-                {run.runId && (awaitingPlanReview || collaborationMode === 'plan' || !hasCurrentPlan) && (
-                  <div className="run-live-status" role="status">
-                    <CircleNotch size={14} className="spin" />
-                    <span><strong>{stopping ? '正在停止…' : collaborationMode === 'plan' ? '正在探索并规划' : '正在处理'}</strong></span>
-                  </div>
-                )}
                 {run.queuedInputs.length > 0 && (
                   <div className="queued-inputs">
                     {run.queuedInputs.map((item) => <span key={item.id}>{queueModeLabel(item.mode)} · {item.text}</span>)}
@@ -1509,10 +1604,8 @@ export function LumenApp() {
                     />
                   )}
                 />
-                {(settingsNotice || editedFrom?.branchId === sessionId) && <div className="composer-context-notice">
+                {settingsNotice && <div className="composer-context-notice">
                   {settingsNotice && <p className="composer-notice" role="status">{settingsNotice}</p>}
-                  {editedFrom?.branchId === sessionId && <button type="button" className="edit-source-link quiet"
-                    onClick={() => void openSession(editedFrom.sourceId)}>查看原对话</button>}
                 </div>}
                 </footer>
               )}
@@ -1532,6 +1625,9 @@ export function LumenApp() {
 type SettingsSection = 'overview' | 'models' | 'extensions' | 'agents'
 
 interface ModelDraft {
+  reasoningProfile: string
+  reasoningEffort: ReasoningLevel | null
+  reasoningLevels: ReasoningLevel[] | null
   originalName: string | null
   name: string
   id: string
@@ -1541,11 +1637,15 @@ interface ModelDraft {
   setDefault: boolean
   settings: Record<string, unknown>
   context: Record<string, unknown>
+  nativeWebSearch: NonNullable<ConfiguredModel['nativeWebSearch']>
   authKind: ConfiguredModel['authKind']
 }
 
 function modelDraft(model: ConfiguredModel): ModelDraft {
   return {
+    reasoningProfile: model.reasoningProfile ?? '',
+    reasoningEffort: model.reasoningEffort ?? null,
+    reasoningLevels: model.reasoningLevels ?? null,
     originalName: model.name,
     name: model.name,
     id: model.id,
@@ -1555,12 +1655,19 @@ function modelDraft(model: ConfiguredModel): ModelDraft {
     setDefault: model.isDefault,
     settings: { ...model.settings },
     context: { ...model.context },
+    nativeWebSearch: {
+      mode: model.nativeWebSearch?.mode ?? 'auto',
+      search_context_size: model.nativeWebSearch?.search_context_size ?? 'medium',
+    },
     authKind: model.authKind,
   }
 }
 
 function emptyModelDraft(): ModelDraft {
   return {
+    reasoningProfile: '',
+    reasoningEffort: null,
+    reasoningLevels: null,
     originalName: null,
     name: '',
     id: '',
@@ -1570,6 +1677,7 @@ function emptyModelDraft(): ModelDraft {
     setDefault: false,
     settings: {},
     context: {},
+    nativeWebSearch: { mode: 'auto', search_context_size: 'medium' },
     authKind: 'none',
   }
 }
@@ -1584,8 +1692,12 @@ function modelDraftChanged(draft: ModelDraft | null, configuration: Configuratio
       || draft.baseUrl.trim()
       || draft.apiKeyEnv.trim()
       || draft.setDefault
+      || draft.reasoningEffort
+      || draft.reasoningProfile
       || Object.keys(draft.settings).some((key) => draft.settings[key] !== undefined)
-      || Object.keys(draft.context).some((key) => draft.context[key] !== undefined),
+      || Object.keys(draft.context).some((key) => draft.context[key] !== undefined)
+      || draft.nativeWebSearch.mode !== 'auto'
+      || draft.nativeWebSearch.search_context_size !== 'medium',
     )
   }
   const original = configuration?.models.find((model) => model.name === draft.originalName)
@@ -1599,6 +1711,12 @@ function modelDraftChanged(draft: ModelDraft | null, configuration: Configuratio
     || draft.setDefault !== original.isDefault
     || JSON.stringify(draft.settings) !== JSON.stringify(original.settings)
     || JSON.stringify(draft.context) !== JSON.stringify(original.context)
+    || JSON.stringify(draft.nativeWebSearch) !== JSON.stringify({
+      mode: original.nativeWebSearch?.mode ?? 'auto',
+      search_context_size: original.nativeWebSearch?.search_context_size ?? 'medium',
+    })
+    || draft.reasoningEffort !== (original.reasoningEffort ?? null)
+    || draft.reasoningProfile !== (original.reasoningProfile ?? '')
   )
 }
 
@@ -1624,6 +1742,27 @@ function SettingsDialog({
   const [pathCopied, setPathCopied] = useState(false)
   const [capabilityError, setCapabilityError] = useState('')
   const [capabilityLoading, setCapabilityLoading] = useState(true)
+  const [mcpBusy, setMcpBusy] = useState<string | null>(null)
+  const [mcpError, setMcpError] = useState('')
+  const [draftReasoning, setDraftReasoning] = useState<{ key: string; value: ReasoningSelection } | null>(null)
+  const [reasoningError, setReasoningError] = useState('')
+  const reasoningQuery = draft && configuration ? JSON.stringify({
+    expectedRevision: configuration.revision, id: draft.id, api: draft.api || null,
+    baseUrl: draft.baseUrl || null, reasoningLevels: draft.reasoningLevels, settings: draft.settings,
+    reasoningProfile: draft.reasoningProfile.trim() || null,
+  }) : ''
+  const availableReasoning = draftReasoning?.key === reasoningQuery ? draftReasoning.value : null
+  useEffect(() => {
+    let current = true
+    setReasoningError('')
+    if (!reasoningQuery) return
+    void lumenApi.inspectReasoning(JSON.parse(reasoningQuery)).then((result) => {
+      if (current) setDraftReasoning({ key: reasoningQuery, value: result.reasoning })
+    }).catch(() => {
+      if (current) setReasoningError('无法确认此配置的推理能力，请检查模型 ID、协议和地址。')
+    })
+    return () => { current = false }
+  }, [reasoningQuery])
   const settingsContentRef = useRef<HTMLDivElement>(null)
   const closeNoticeRef = useRef<HTMLDivElement>(null)
 
@@ -1687,7 +1826,11 @@ function SettingsDialog({
         baseUrl: draft.baseUrl.trim() || null,
         apiKeyEnv: draft.apiKeyEnv.trim() || null,
         settings: draft.settings,
+        reasoningEffort: draft.reasoningEffort,
+        reasoningLevels: draft.reasoningLevels,
+        reasoningProfile: draft.reasoningProfile.trim() || null,
         context: draft.context,
+        nativeWebSearch: draft.nativeWebSearch,
         setDefault: draft.setDefault,
       })
       setConfiguration(result)
@@ -1721,6 +1864,21 @@ function SettingsDialog({
       setError(removeError instanceof Error ? removeError.message : '删除模型失败')
     } finally {
       setBusy(false)
+    }
+  }
+
+  const setMcpEnabled = async (name: string, enabled: boolean) => {
+    if (!configuration) return
+    setMcpBusy(name)
+    setMcpError('')
+    try {
+      const result = await lumenApi.setMcpServerEnabled(name, configuration.revision, enabled)
+      setConfiguration(result)
+      setRestartRequired(Boolean(result.restartRequired))
+    } catch (saveError) {
+      setMcpError(saveError instanceof Error ? saveError.message : '保存 MCP 配置失败')
+    } finally {
+      setMcpBusy(null)
     }
   }
 
@@ -1884,9 +2042,58 @@ function SettingsDialog({
                     <form className="model-form" onSubmit={(event) => { event.preventDefault(); void save() }}>
                       {error && <div className="settings-inline-error" role="alert"><span>{error}</span><button type="button" onClick={() => void load()}>重新读取</button></div>}
                       <div className="model-form-grid">
+                        <label className="model-form-wide"><span>代理能力 Profile（可选）</span>
+                          <input aria-label="代理能力 Profile" value={draft.reasoningProfile}
+                            disabled={busy || !editable} placeholder="留空自动匹配；例如 openai-gpt56-sol"
+                            onChange={(event) => setDraft({ ...draft, reasoningProfile: event.target.value })} />
+                          <small>自定义代理可引用已核对的目录规则；模型 ID 和 API 协议必须与规则一致。</small>
+                        </label>
+                        <label><span>默认推理强度</span><select aria-label="默认推理强度"
+                          value={draft.reasoningEffort ?? ''}
+                          disabled={busy || !editable || !availableReasoning}
+                          onChange={(event) => setDraft({ ...draft,
+                            reasoningEffort: (event.target.value || null) as ReasoningLevel | null })}>
+                          <option value="">沿用原始配置</option>
+                          {draft.reasoningEffort && !availableReasoning?.supported_levels.includes(draft.reasoningEffort)
+                            && <option value={draft.reasoningEffort}>{draft.reasoningEffort}（待校验）</option>}
+                          {availableReasoning && reasoningOptions(availableReasoning, draft.reasoningEffort)
+                            .map((option) => <option key={option.value} value={option.value}>
+                              {option.label}
+                            </option>)}
+                        </select><small>{reasoningError || (!availableReasoning ? '正在确认可用档位…'
+                          : availableReasoning.capability_status === 'unknown' ? '此模型和协议的推理控制未配置。'
+                            : availableReasoning.capability_status === 'unsupported' ? '此模型不支持调节推理强度。'
+                              : `能力来源：${availableReasoning.capability_source ?? '未提供'}。箭头表示实际映射强度。`)}</small>
+                          {availableReasoning?.capability_reviewed_on && <small>
+                            核对日期：{availableReasoning.capability_reviewed_on} · 目录：{availableReasoning.catalog_revision}
+                          </small>}
+                        </label>
                         <label><span>配置名称</span><input value={draft.name} disabled={draft.originalName !== null || busy || !editable} onChange={(event) => setDraft({ ...draft, name: event.target.value })} placeholder="例如 local-qwen" /></label>
                         <label><span>模型 ID</span><input value={draft.id} disabled={busy || !editable} onChange={(event) => setDraft({ ...draft, id: event.target.value })} placeholder="例如 openai:qwen3" /></label>
                         <label><span>API 协议</span><select value={draft.api} disabled={busy || !editable} onChange={(event) => setDraft({ ...draft, api: event.target.value as ModelDraft['api'] })}><option value="">自动选择（默认 Responses）</option><option value="responses">Responses API</option><option value="chat">Chat Completions</option><option value="openai-responses">OpenAI Responses 兼容</option><option value="openai-completions">OpenAI Completions 兼容</option><option value="chat-completions">Chat Completions 兼容别名</option></select></label>
+                        <label><span>模型内建联网</span><select aria-label="模型内建联网"
+                          value={draft.nativeWebSearch.mode ?? 'auto'} disabled={busy || !editable}
+                          onChange={(event) => setDraft({ ...draft, nativeWebSearch: {
+                            ...draft.nativeWebSearch,
+                            mode: event.target.value as 'auto' | 'enabled' | 'disabled',
+                          } })}>
+                          <option value="auto">自动识别</option>
+                          <option value="enabled">始终开启</option>
+                          <option value="disabled">关闭</option>
+                        </select><small>{draft.nativeWebSearch.mode === 'enabled'
+                          ? '每次请求声明由模型提供方执行的 web_search；OpenAI 兼容模型需使用 Responses。'
+                          : draft.nativeWebSearch.mode === 'disabled'
+                            ? '不向此模型声明内建联网工具。外部 MCP 开关不受影响。'
+                            : '已核对的 DeepSeek V4 Responses 默认开启；未知端点保持关闭，可显式开启。'}</small></label>
+                        <label><span>搜索上下文</span><select aria-label="模型搜索上下文"
+                          value={draft.nativeWebSearch.search_context_size ?? 'medium'}
+                          disabled={busy || !editable || draft.nativeWebSearch.mode === 'disabled'}
+                          onChange={(event) => setDraft({ ...draft, nativeWebSearch: {
+                            ...draft.nativeWebSearch,
+                            search_context_size: event.target.value as 'low' | 'medium' | 'high',
+                          } })}>
+                          <option value="low">精简</option><option value="medium">标准</option><option value="high">深入</option>
+                        </select><small>提供方可忽略此提示；DeepSeek 当前固定由服务端决定搜索上下文。</small></label>
                         <label><span>API 地址</span><input value={draft.baseUrl} disabled={busy || !editable} onChange={(event) => setDraft({ ...draft, baseUrl: event.target.value })} placeholder="提供方默认或 http://127.0.0.1:11434/v1" /></label>
                         <label className="model-form-wide"><span>API 密钥环境变量</span><input value={draft.apiKeyEnv} disabled={busy || !editable} onChange={(event) => setDraft({ ...draft, apiKeyEnv: event.target.value })} placeholder="例如 OPENAI_API_KEY；本地模型可留空" /><small>Web 不读取、显示或保存密钥明文。</small></label>
                         <label><span>最大输出 Token</span><input type="number" min="1" value={String(draft.settings.max_tokens ?? '')} disabled={busy || !editable} onChange={(event) => setDraft({ ...draft, settings: { ...draft.settings, max_tokens: event.target.value ? Number(event.target.value) : undefined } })} placeholder="提供方默认" /></label>
@@ -1932,9 +2139,15 @@ function SettingsDialog({
             ) : section === 'extensions' ? (
               <CapabilitySettings
                 capabilities={capabilities}
+                configuration={configuration}
                 loading={capabilityLoading}
                 error={capabilityError}
+                mutationError={mcpError}
+                editable={editable}
+                busy={mcpBusy}
+                restartRequired={restartRequired || Boolean(configuration?.restartRequired)}
                 onRetry={() => void loadCapabilities()}
+                onMcpEnabled={(name, enabled) => void setMcpEnabled(name, enabled)}
               />
             ) : (
               <AgentProfileSettings
@@ -1984,21 +2197,40 @@ function SettingsOverview({
 
 function CapabilitySettings({
   capabilities,
+  configuration,
   loading,
   error,
+  mutationError,
+  editable,
+  busy,
+  restartRequired,
   onRetry,
+  onMcpEnabled,
 }: {
   capabilities: CapabilityInventory | null
+  configuration: ConfigurationSnapshot | null
   loading: boolean
   error: string
+  mutationError: string
+  editable: boolean
+  busy: string | null
+  restartRequired: boolean
   onRetry: () => void
+  onMcpEnabled: (name: string, enabled: boolean) => void
 }) {
+  const runtimeMcp = new Map(
+    (capabilities?.mcp_servers ?? []).map((item) => [String(item.name), item]),
+  )
+  const configuredMcp = configuration?.mcpServers ?? []
   const groups = [
     { title: 'Skills', items: capabilities?.skills ?? [], key: 'name' },
-    { title: 'MCP Servers', items: capabilities?.mcp_servers ?? [], key: 'name' },
     { title: '工具', items: capabilities?.tools ?? [], key: 'name' },
   ]
-  return <div className="capability-settings"><div className="settings-section-heading"><div><h2>扩展能力</h2><p>来自当前运行时的只读清单；配置编辑将在后续版本开放。</p></div></div>{loading ? <div className="settings-loading"><CircleNotch size={18} className="spin" /> 正在读取运行能力</div> : error ? <div className="settings-error" role="alert"><WarningCircle size={18} /><span>{error}</span><button type="button" onClick={onRetry}>重试</button></div> : groups.map((group) => <section key={group.title}><h3>{group.title} <small>{group.items.length}</small></h3>{group.items.length ? group.items.map((item, index) => <div className="capability-row" key={`${String(item[group.key] ?? index)}`}><span><strong>{String(item.name ?? item.reference ?? `item-${index + 1}`)}</strong><small>{String(item.description ?? item.origin ?? '')}</small></span><em>{String(item.status ?? '已载入')}</em></div>) : <p>当前没有 {group.title}。</p>}</section>)}</div>
+  return <div className="capability-settings"><div className="settings-section-heading"><div><h2>扩展能力</h2><p>模型内建联网在模型页配置；这里控制 Exa 等外部 MCP 连接。</p></div></div>{restartRequired && <div className="settings-notice is-success" role="status"><CheckCircle size={17} weight="fill" /><span><strong>扩展配置已保存</strong>重启 Lumen Web 后应用 MCP 连接变化。</span></div>}{mutationError && <div className="settings-inline-error" role="alert"><span>{mutationError}</span></div>}{loading ? <div className="settings-loading"><CircleNotch size={18} className="spin" /> 正在读取运行能力</div> : error ? <div className="settings-error" role="alert"><WarningCircle size={18} /><span>{error}</span><button type="button" onClick={onRetry}>重试</button></div> : <><section className="mcp-settings-list"><h3>MCP Servers <small>{configuredMcp.length}</small></h3>{configuredMcp.length ? configuredMcp.map((server) => {
+    const runtime = runtimeMcp.get(server.name)
+    const status = String(runtime?.status ?? (server.enabled ? '等待重启' : 'disabled'))
+    return <div className="capability-row capability-toggle" key={server.name}><span><strong>{server.name}</strong><small>{server.enabled ? `配置为启用 · 当前状态：${status}` : '配置为停用 · 不连接、不加载工具与内容'}</small></span><label className="settings-checkbox"><span className="sr-only">{server.enabled ? `停用 ${server.name}` : `启用 ${server.name}`}</span><input type="checkbox" role="switch" aria-label={`${server.name} MCP`} checked={server.enabled} disabled={!editable || busy !== null} onChange={(event) => onMcpEnabled(server.name, event.target.checked)} /></label></div>
+  }) : <p>当前没有 MCP Server。</p>}</section>{groups.map((group) => <section key={group.title}><h3>{group.title} <small>{group.items.length}</small></h3>{group.items.length ? group.items.map((item, index) => <div className="capability-row" key={`${String(item[group.key] ?? index)}`}><span><strong>{String(item.name ?? item.reference ?? `item-${index + 1}`)}</strong><small>{String(item.description ?? item.origin ?? '')}</small></span><em>{String(item.status ?? '已载入')}</em></div>) : <p>当前没有 {group.title}。</p>}</section>)}</>}</div>
 }
 
 function AgentProfileSettings({
@@ -2089,6 +2321,49 @@ function SessionManagementDialog({
           </button>
         </footer>
       </form>
+    </div>
+  )
+}
+
+function AutoModeDialog({ busy, error, onClose, onConfirm }: {
+  busy: boolean
+  error: string
+  onClose: () => void
+  onConfirm: () => void
+}) {
+  const dialogRef = useModalFocus(busy ? () => undefined : onClose)
+  return (
+    <div
+      ref={dialogRef}
+      className="runtime-overlay auto-confirm-overlay"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="auto-confirm-title"
+      tabIndex={-1}
+    >
+      <section className="session-management-dialog auto-confirm-dialog">
+        <header>
+          <div>
+            <strong id="auto-confirm-title">开启自动执行？</strong>
+            <span>审批模式</span>
+          </div>
+          <button type="button" aria-label="关闭" disabled={busy} onClick={onClose}>
+            <X size={16} aria-hidden="true" />
+          </button>
+        </header>
+        <div className="auto-confirm-content">
+          <ShieldCheck size={20} aria-hidden="true" />
+          <div>
+            <strong>减少逐次确认</strong>
+            <p>已分类的写入、执行和外部工具将自动运行，仍然遵守当前权限与 Sandbox 限制。</p>
+          </div>
+        </div>
+        {error && <div className="auto-confirm-error" role="alert"><WarningCircle size={16} aria-hidden="true" />{error}</div>}
+        <footer>
+          <button type="button" className="quiet" disabled={busy} onClick={onClose}>取消</button>
+          <button type="button" disabled={busy} onClick={onConfirm}>{busy ? '正在切换…' : '确认开启'}</button>
+        </footer>
+      </section>
     </div>
   )
 }
@@ -2401,10 +2676,11 @@ export function ConversationTurn({
   onApproval: (callId: string, approved: boolean, scope?: 'once' | 'session' | 'always') => void
 }) {
   const presentation = turnPresentation(turn.response, turn.user?.text, active, clarificationAnswered)
+  const liveToolId = currentLiveToolId(presentation, active)
   return (
     <section className="conversation-turn" data-turn-id={turn.id}>
       {turn.user && <UserMessage item={turn.user} onEdit={onEdit} editDisabled={editDisabled} />}
-      {turn.response.length > 0 && (
+      {(turn.response.length > 0 || active) && (
         <div className="assistant-turn" aria-label="Lumen 回答">
           <header className="assistant-identity">
             <span className="assistant-mark">
@@ -2428,11 +2704,28 @@ export function ConversationTurn({
               <ClarificationPrompt key={clarification.id} question={clarification}
                 onAnswer={onAnswer} disabled={answerDisabled} />
             )}
+            {active && !presentation.requiresAttention && !liveToolId
+              && presentation.activity.length === 0 && <LiveThinkingIndicator />}
             {!active && <DocumentResults entries={turn.response} />}
           </div>
         </div>
       )}
     </section>
+  )
+}
+
+function currentLiveToolId(presentation: TurnPresentation, active: boolean) {
+  if (!active || presentation.requiresAttention) return null
+  return presentation.activity.findLast((item) => item.kind === 'tool'
+    && ['running', 'approved'].includes(item.status ?? ''))?.id ?? null
+}
+
+function LiveThinkingIndicator() {
+  return (
+    <div className="turn-live-placeholder" role="status" aria-label="Lumen 正在思考">
+      <ThinkingOrb />
+      <strong>正在思考</strong>
+    </div>
   )
 }
 
@@ -2456,6 +2749,11 @@ function TurnActivity({
   const summaryRef = useRef<HTMLButtonElement>(null)
   const contentRef = useRef<HTMLDivElement>(null)
   const duration = !active ? activityDuration(elapsedSeconds) : null
+  const liveActivityId = currentLiveToolId(presentation, active)
+    ?? (active && !presentation.requiresAttention
+      && ['commentary', 'thinking', 'progress'].includes(presentation.activity.at(-1)?.kind ?? '')
+      ? presentation.activity.at(-1)?.id ?? null
+      : null)
 
   useEffect(() => {
     if (!shouldExpand && contentRef.current?.contains(document.activeElement)) {
@@ -2478,14 +2776,15 @@ function TurnActivity({
         title={`${activityMeta(presentation)}${duration ? '；耗时包括本轮模型、工具执行及等待' : ''}`}
         onClick={() => setExpanded((value) => !value)}
       >
-        <span className="turn-activity-heading">
+        <span className={`turn-activity-heading ${active ? 'is-live' : ''}`}>
+          {active && <ThinkingOrb />}
           <strong>{activityTitle(presentation, active)}{duration ? ` · ${duration}` : ''}</strong>
         </span>
         <CaretDown size={15} className={expanded ? 'is-expanded' : ''} aria-hidden="true" />
       </button>
       <div className="turn-activity-list" id={contentId} ref={contentRef} hidden={!expanded}>
         {presentation.activity.map((item) => (
-          <TimelineRow key={item.id} item={item} onApproval={onApproval} process active={active} />
+          <TimelineRow key={item.id} item={item} onApproval={onApproval} process live={item.id === liveActivityId} />
         ))}
       </div>
     </section>
@@ -2496,11 +2795,11 @@ function TimelineRow({
   item,
   onApproval,
   process = false,
-  active = false,
+  live = false,
 }: {
   item: TimelineEntry
   process?: boolean
-  active?: boolean
+  live?: boolean
   onApproval: (callId: string, approved: boolean, scope?: 'once' | 'session' | 'always') => void
 }) {
   const [expanded, setExpanded] = useState(false)
@@ -2523,7 +2822,7 @@ function TimelineRow({
       && !item.isError
       && !item.pendingApproval
     return (
-      <article className={`web-tool-card ${compact ? 'is-compact' : ''} ${item.isError ? 'is-error' : ''} ${item.pendingApproval ? 'is-pending' : ''}`}>
+      <article className={`web-tool-card ${compact ? 'is-compact' : ''} ${live ? 'is-live' : ''} ${item.isError ? 'is-error' : ''} ${item.pendingApproval ? 'is-pending' : ''}`}>
         <button
           className="tool-summary"
           type="button"
@@ -2533,7 +2832,7 @@ function TimelineRow({
           title={process ? toolActivityLabel(item) : undefined}
           onClick={() => setExpanded((value) => !value)}
         >
-          <span className={`tool-glyph ${active && item.status === 'running' ? 'is-running' : ''}`} aria-hidden="true"><ToolGlyph item={item} /></span>
+          <span className={`tool-glyph ${live ? 'is-running' : ''}`} aria-hidden="true"><ToolGlyph item={item} /></span>
           <span>
             <span className="tool-title-line">
               <strong>{process ? toolActivityLabel(item) : String(item.callView?.title ?? item.toolName ?? '')}</strong>
@@ -2583,7 +2882,7 @@ function TimelineRow({
   const isProcessText = process && ['progress', 'thinking', 'commentary'].includes(item.kind)
   const label = isProcessText ? '' : timelineNoteLabel(item.kind)
   return (
-    <article className={`timeline-note is-${item.kind} ${isProcessText ? 'process-text' : ''}`}>
+    <article className={`timeline-note is-${item.kind} ${isProcessText ? 'process-text' : ''} ${live ? 'is-live' : ''}`}>
       <div>
         {label && <strong>{label}</strong>}
         {item.kind === 'progress' || item.kind === 'thinking' || item.kind === 'commentary'
@@ -2654,6 +2953,7 @@ Model:
 Context:
   /context                          — 查看上下文预算
   /context sources                  — 查看当前会话上下文来源
+  /instructions                     — 查看 prompt 模式、动态上下文与来源
   /compact [focus]                  — 压缩上下文
   /clarification cancel             — 取消待回答澄清
 MCP:

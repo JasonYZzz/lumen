@@ -149,21 +149,21 @@ def _fallback_call(
     if _is_web_tool(lowered, origin):
         values = _call_values(
             ToolFamily.WEB,
-            "Searching the web",
-            "Searched the web",
+            "正在搜索网络",
+            "已搜索网络",
             _compact_query(str(args.get("query", ""))),
             groupable=True,
             group_key="web",
-            singular="search",
-            plural="searches",
+            singular="次搜索",
+            plural="次搜索",
         )
     elif origin.startswith("mcp:"):
         service_key = origin.split(":", 1)[1].strip() or "external tool"
         service = _service_label(service_key)
         values = _call_values(
             ToolFamily.MCP,
-            f"Calling {service}",
-            f"Called {service}",
+            f"正在调用 {service}",
+            f"已调用 {service}",
             _tool_label(name),
             groupable=risk == "read",
             group_key=f"mcp:{service_key.casefold()}",
@@ -171,24 +171,24 @@ def _fallback_call(
     elif name == "read_file":
         values = _call_values(
             ToolFamily.READ,
-            "Reading",
-            "Read",
+            "正在读取",
+            "已读取",
             _workspace_label(path),
             groupable=True,
             group_key="local-inspection",
-            singular="file",
-            plural="files",
+            singular="个文件",
+            plural="个文件",
         )
     elif name == "list_directory":
         values = _call_values(
             ToolFamily.LIST,
-            "Inspecting directory",
-            "Inspected directory",
+            "正在查看目录",
+            "已查看目录",
             _workspace_label(path),
             groupable=True,
             group_key="local-inspection",
-            singular="directory",
-            plural="directories",
+            singular="个目录",
+            plural="个目录",
         )
     elif name == "search_text":
         query = _compact_query(str(args.get("query", "")))
@@ -196,16 +196,18 @@ def _fallback_call(
         detail = f"“{query}” in {target}" if query else target
         values = _call_values(
             ToolFamily.SEARCH,
-            "Searching",
-            "Searched",
+            "正在搜索",
+            "已搜索",
             detail,
             groupable=True,
             group_key="local-search",
-            singular="pattern",
-            plural="patterns",
+            singular="个模式",
+            plural="个模式",
         )
     elif name in {"write_file", "edit_file"}:
-        active, completed = ("Writing", "Wrote") if name == "write_file" else ("Editing", "Edited")
+        active, completed = (
+            ("正在写入", "已写入") if name == "write_file" else ("正在编辑", "已编辑")
+        )
         values = _call_values(ToolFamily.EDIT, active, completed, path, tone="mode-edit")
     elif name == "run_command":
         argv = args.get("argv")
@@ -214,28 +216,28 @@ def _fallback_call(
             if isinstance(argv, list)
             else None
         )
-        values = _call_values(ToolFamily.COMMAND, "Running command", "Ran command", detail)
+        values = _call_values(ToolFamily.COMMAND, "正在运行命令", "已运行命令", detail)
     elif name in {"load_skill", "read_skill_resource"}:
         detail = str(args.get("name", "")).strip() or None
         if name == "read_skill_resource":
             resource = str(args.get("path", "")).strip()
             detail = "/".join(item for item in (detail, resource) if item) or None
         active, completed = (
-            ("Loading skill", "Loaded skill")
+            ("正在加载 Skill", "已加载 Skill")
             if name == "load_skill"
-            else ("Reading skill resource", "Read skill resource")
+            else ("正在读取 Skill 资源", "已读取 Skill 资源")
         )
         values = _call_values(ToolFamily.SKILL, active, completed, detail)
     elif name in {"set_plan", "update_step", "report_progress"}:
         labels = {
-            "set_plan": ("Planning", "Planned"),
-            "update_step": ("Updating tasks", "Updated tasks"),
-            "report_progress": ("Reviewing progress", "Reviewed progress"),
+            "set_plan": ("正在规划", "已规划"),
+            "update_step": ("正在更新任务", "已更新任务"),
+            "report_progress": ("正在检查进度", "已检查进度"),
         }
         active, completed = labels[name]
         values = _call_values(ToolFamily.PLAN, active, completed, None, tone="mode-plan")
     else:
-        values = _call_values(ToolFamily.OTHER, "Using tool", "Used tool", _tool_label(name))
+        values = _call_values(ToolFamily.OTHER, "正在使用工具", "已使用工具", _tool_label(name))
     return ToolCallView(tool_name=name, title=str(values["active_verb"]), **values)
 
 
@@ -261,11 +263,12 @@ def _fallback_result(name: str, result: str, *, is_error: bool) -> ToolResultVie
     compact = " ".join(result.split())
     preview = compact if len(compact) <= 240 else compact[:239].rstrip() + "…"
     status: Literal["success", "error"] = "error" if is_error else "success"
+    status_label = "失败" if is_error else "成功"
     return ToolResultView(
         tool_name=name,
         status=status,
-        title=f"{_tool_label(name)} {status}",
-        summary=preview or status,
+        title=f"{_tool_label(name)} {status_label}",
+        summary=preview or status_label,
         preview=preview,
         full_text=full_text,
         tone="error" if is_error else "tool",
@@ -289,7 +292,7 @@ def _tool_label(value: str) -> str:
 
 
 def _workspace_label(path: str | None) -> str:
-    return "workspace" if not path or path == "." else _one_line(path, 54)
+    return "工作区" if not path or path == "." else _one_line(path, 54)
 
 
 def _compact_query(value: str) -> str:

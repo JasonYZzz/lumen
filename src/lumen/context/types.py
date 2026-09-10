@@ -60,6 +60,7 @@ class ContextZone(StrEnum):
 
     SYSTEM = "system"
     POLICY = "policy"
+    RUNTIME_CONTEXT = "runtime_context"
     MEMORY_INDEX = "memory_index"
     CAPABILITY_CATALOG = "capability_catalog"
     TASK_STATE = "task_state"
@@ -100,6 +101,7 @@ class SourceKind(StrEnum):
 
     SYSTEM = "system"
     POLICY = "policy"
+    RUNTIME = "runtime"
     MEMORY = "memory"
     CAPABILITY = "capability"
     TASK = "task"
@@ -303,6 +305,11 @@ class ModelInputManifest(_Contract):
     route: str = Field(max_length=512)
     provider: str = Field(max_length=128)
     model: str = Field(max_length=384)
+    # Defaults keep older Session receipts loadable without rewriting their
+    # append-only records.
+    prompt_mode: str = Field(default="legacy", max_length=32)
+    prompt_preset: str | None = Field(default=None, max_length=128)
+    prompt_version: str = Field(default="legacy", max_length=128)
     context_fingerprint: str = Field(max_length=256)
     message_count: int = Field(ge=0)
     tool_count: int = Field(ge=0)

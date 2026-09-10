@@ -13,7 +13,7 @@ from lumen.api import create_web_app
 from lumen.application import WorkspaceHost
 from lumen.attachments import AttachmentStore
 from lumen.completion import CompletionGate
-from lumen.config import LimitsConfig, LiveConfig, PermissionsConfig
+from lumen.config import LimitsConfig, LiveConfig, ModelSettingsConfig, PermissionsConfig
 from lumen.configuration import ConfigurationConflictError
 from lumen.context import ArtifactStore
 from lumen.live.manager import LiveSessionManager
@@ -51,9 +51,17 @@ class ApiAgentOrchestrator:
 
 
 class ApiConfigurationSnapshot:
-    def __init__(self, revision: str, models: list[dict[str, object]]) -> None:
+    def __init__(
+        self,
+        revision: str,
+        models: list[dict[str, object]],
+        mcp_servers: list[dict[str, object]] | None = None,
+    ) -> None:
         self.revision = revision
         self.models = models
+        self.mcp_servers = mcp_servers or [
+            {"name": "exa", "enabled": True, "source": {"scope": "project", "path": "agent.yaml"}}
+        ]
 
     def as_dict(self) -> dict[str, object]:
         return {
@@ -66,6 +74,7 @@ class ApiConfigurationSnapshot:
             "warnings": [],
             "default_model": str(self.models[0]["name"]),
             "models": self.models,
+            "mcp_servers": self.mcp_servers,
         }
 
 
@@ -133,6 +142,25 @@ class ApiConfiguration:
         self.snapshot = ApiConfigurationSnapshot(
             "sha256:deleted",
             [item for item in self.snapshot.models if item["name"] != name],
+        )
+        return self.snapshot
+
+    def set_mcp_server_enabled(
+        self,
+        *,
+        expected_revision: str,
+        name: str,
+        enabled: bool,
+    ) -> ApiConfigurationSnapshot:
+        if expected_revision != self.snapshot.revision:
+            raise ConfigurationConflictError("configuration changed")
+        self.snapshot = ApiConfigurationSnapshot(
+            "sha256:mcp-updated",
+            self.snapshot.models,
+            [
+                {**server, "enabled": enabled} if server["name"] == name else server
+                for server in self.snapshot.mcp_servers
+            ],
         )
         return self.snapshot
 
@@ -238,6 +266,26 @@ class ApiResources:
             "agent_profiles": [],
         }
 
+    def instructions_report(self) -> dict[str, object]:
+        return {
+            "mode": "preset",
+            "preset": "lumen",
+            "version": "test-v1",
+            "digest": "sha256:test",
+            "characters": 42,
+            "runtime_context_characters": 12,
+            "active_model": "test",
+            "model_id": "test-model",
+            "sources": [
+                {
+                    "origin": "builtin:lumen",
+                    "role": "system",
+                    "revision": "sha256:source",
+                    "characters": 42,
+                }
+            ],
+        }
+
     def summary(self) -> dict[str, object]:
         return {
             "agent": "api-agent",
@@ -335,6 +383,71 @@ def test_session_modes_are_persisted_separately_from_workspace_defaults(tmp_path
         assert other["collaborationMode"] == "default"
 
 
+def test_reasoning_api_validates_persists_and_reports_effective_parameters(tmp_path: Path) -> None:
+    resources = ApiResources(tmp_path)
+    resources.active_model_config = lambda: ModelSettingsConfig(  # type: ignore[assignment]
+        id="openai:gpt-6-astra", reasoning_effort="medium",  # type: ignore[arg-type]
+    )
+    host = WorkspaceHost(resources)  # type: ignore[arg-type]
+    app = create_web_app(host, launch_token="launch-secret", api_only=True)
+    with TestClient(app, base_url="http://testserver") as client:
+        client.get("/auth/exchange", params={"token": "launch-secret"})
+        headers = {"Origin": "http://testserver"}
+        session_id = client.post("/api/v1/sessions", headers=headers).json()["sessionId"]
+        assert client.get("/api/v1/bootstrap").json()["reasoning"]["effective"] == "medium"
+        endpoint = f"/api/v1/sessions/{session_id}/settings"
+        response = client.patch(endpoint, headers=headers, json={"reasoningEffort": "low"})
+        assert response.status_code == 200
+        selected = client.get(f"/api/v1/sessions/{session_id}").json()["reasoning"]
+        assert selected["effective"] == "low"
+        assert selected["parameters"]["openai_reasoning_effort"] == "low"
+        assert client.patch(endpoint, headers=headers, json={"reasoningEffort": "bogus"}).status_code == 422
+        assert client.patch(endpoint, headers=headers, json={"reasoningEffort": "off"}).status_code == 400
+        assert client.get(f"/api/v1/sessions/{session_id}").json()["reasoning"]["effective"] == "low"
+
+
+def test_reasoning_preview_uses_draft_model_and_does_not_change_configuration(tmp_path: Path) -> None:
+    host = WorkspaceHost(ApiResources(tmp_path))  # type: ignore[arg-type]
+    app = create_web_app(host, launch_token="launch-secret", api_only=True)
+    with TestClient(app, base_url="http://testserver") as client:
+        endpoint = "/api/v1/configuration/reasoning"
+        body = {"expectedRevision": "sha256:preview", "id": "openai:deepseek-v4-flash",
+                "api": "responses", "baseUrl": "https://api.deepseek.com"}
+        assert client.post(endpoint, json=body).status_code == 401
+        client.get("/auth/exchange", params={"token": "launch-secret"})
+        headers = {"Origin": "http://testserver"}
+        before = client.get("/api/v1/configuration").json()
+        response = client.post(endpoint, headers=headers, json=body)
+        assert response.status_code == 200, response.json()
+        capability = response.json()["reasoning"]
+        assert capability["supported_levels"] == [
+            "provider_default", "off", "minimal", "low", "medium", "high", "xhigh", "max",
+        ]
+        assert capability["level_map"]["medium"] == "high"
+        assert capability["catalog_revision"]
+        assert capability["provider"] == "deepseek"
+        assert capability["capability_documents"][0].startswith("https://api-docs.deepseek.com/")
+        assert capability["requested"] is None
+        body.update(id="openai:k3", baseUrl="https://api.kimi.com/coding/v1")
+        capability = client.post(endpoint, headers=headers, json=body).json()["reasoning"]
+        assert "off" not in capability["supported_levels"]
+        assert capability["level_map"]["xhigh"] == "max"
+        invalid = client.post(endpoint, headers=headers, json={**body, "reasoningLevels": ["off"]})
+        assert invalid.status_code == 400
+        body.update(id="anthropic:qwen3.8-max", baseUrl="https://test.maas.aliyuncs.com/apps/anthropic")
+        capability = client.post(endpoint, headers=headers, json=body).json()["reasoning"]
+        assert capability["level_map"]["high"] == "xhigh"
+        assert client.get("/api/v1/configuration").json() == before
+        profile_body = {"expectedRevision": "sha256:preview", "id": "openai:gpt-5.6",
+                        "api": "responses", "baseUrl": "https://proxy.example/v1",
+                        "reasoningProfile": "openai-gpt56-sol"}
+        capability = client.post(endpoint, headers=headers, json=profile_body).json()["reasoning"]
+        assert capability["capability_source"] == "deployment_profile:openai-gpt56-sol"
+        assert "max" in capability["supported_levels"]
+        invalid = client.post(endpoint, headers=headers, json={**profile_body, "id": "openai:unknown"})
+        assert invalid.status_code == 400
+
+
 def test_web_api_authenticates_and_streams_a_run(tmp_path: Path) -> None:
     host = WorkspaceHost(ApiResources(tmp_path))  # type: ignore[arg-type]
     app = create_web_app(host, launch_token="launch-secret", api_only=True)
@@ -366,6 +479,7 @@ def test_web_api_authenticates_and_streams_a_run(tmp_path: Path) -> None:
         configuration = client.get("/api/v1/configuration")
         assert configuration.status_code == 200
         assert configuration.json()["models"][0]["name"] == "test"
+        assert configuration.json()["mcpServers"][0]["enabled"] is True
 
         headers = {"Origin": "http://testserver"}
         saved_model = client.put(
@@ -383,6 +497,14 @@ def test_web_api_authenticates_and_streams_a_run(tmp_path: Path) -> None:
         assert saved_model.status_code == 200
         assert saved_model.json()["restartRequired"] is True
         assert saved_model.json()["models"][-1]["baseUrl"].endswith("/v1")
+
+        mcp_toggled = client.patch(
+            "/api/v1/configuration/mcp/exa",
+            headers=headers,
+            json={"expectedRevision": saved_model.json()["revision"], "enabled": False},
+        )
+        assert mcp_toggled.status_code == 200
+        assert mcp_toggled.json()["mcpServers"][0]["enabled"] is False
 
         stale_model = client.put(
             "/api/v1/configuration/models/stale",
@@ -532,6 +654,51 @@ def test_web_api_authenticates_and_streams_a_run(tmp_path: Path) -> None:
         deleted = client.delete(f"/api/v1/sessions/{session_id}", headers=headers)
         assert deleted.json() == {"status": "deleted"}
         assert client.get(f"/api/v1/sessions/{session_id}").status_code == 404
+
+
+def test_web_api_regenerates_in_place_without_creating_a_second_session(tmp_path: Path) -> None:
+    host = WorkspaceHost(ApiResources(tmp_path))  # type: ignore[arg-type]
+    app = create_web_app(host, launch_token="launch-secret", api_only=True)
+
+    with TestClient(app, base_url="http://testserver") as client:
+        client.get("/auth/exchange", params={"token": "launch-secret"})
+        headers = {"Origin": "http://testserver"}
+        session_id = client.post("/api/v1/sessions", headers=headers).json()["sessionId"]
+        for index, prompt in enumerate(("prefix", "same prompt", "stale follow-up")):
+            started = client.post(
+                f"/api/v1/sessions/{session_id}/runs",
+                headers=headers,
+                json={"input": prompt, "clientRequestId": f"old-{index}"},
+            )
+            assert started.status_code == 202
+            assert client.get(f"/api/v1/runs/{started.json()['runId']}/events").status_code == 200
+        assert client.patch(
+            f"/api/v1/sessions/{session_id}",
+            headers=headers,
+            json={"title": "Stable title"},
+        ).status_code == 200
+
+        regenerated = client.post(
+            f"/api/v1/sessions/{session_id}/runs",
+            headers=headers,
+            json={
+                "input": "same prompt",
+                "clientRequestId": "same-text-regeneration",
+                "regenerateFromTurn": 1,
+            },
+        )
+        assert regenerated.status_code == 202
+        assert regenerated.json()["sessionId"] == session_id
+        assert client.get(f"/api/v1/runs/{regenerated.json()['runId']}/events").status_code == 200
+
+        snapshot = client.get(f"/api/v1/sessions/{session_id}").json()
+        assert [item["text"] for item in snapshot["timeline"] if item["kind"] == "user"] == [
+            "prefix",
+            "same prompt",
+        ]
+        sessions = client.get("/api/v1/sessions").json()["sessions"]
+        assert len(sessions) == 1
+        assert sessions[0]["title"] == "Stable title"
 
 
 def test_web_delete_failed_research_preserves_effect_journal_and_is_idempotent(tmp_path: Path) -> None:
@@ -748,6 +915,7 @@ def test_web_api_exposes_command_data_and_runs_mcp_prompt(tmp_path: Path) -> Non
 
         sources = client.get(f"/api/v1/sessions/{session_id}/context/sources")
         prompts = client.get("/api/v1/mcp/prompts")
+        instructions = client.get("/api/v1/instructions")
         hooks = client.get("/api/v1/hooks")
         started = client.post(
             f"/api/v1/sessions/{session_id}/controls",
@@ -772,6 +940,8 @@ def test_web_api_exposes_command_data_and_runs_mcp_prompt(tmp_path: Path) -> Non
             ]
         }
         assert prompts.json()["items"][0]["reference"] == "docs:summarize"
+        assert instructions.json()["mode"] == "preset"
+        assert instructions.json()["sources"][0]["origin"] == "builtin:lumen"
         assert hooks.json()["items"][0]["deny_count"] == 2
         assert started.status_code == 200
         run_id = started.json()["runId"]

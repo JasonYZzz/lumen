@@ -13,6 +13,7 @@ import yaml
 
 from lumen.config import ConfigLoadError, ModelSettingsConfig
 from lumen.config_resolver import ConfigResolution, ConfigResolver
+from lumen.models import native_web_search_enabled
 
 _MANAGED_HEADER = "# Managed by Lumen Web settings. Edit through the UI or remove this file.\n"
 _MODEL_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$")
@@ -40,6 +41,18 @@ class ModelConfigurationView:
     source: dict[str, str] | None
     auth_kind: str
     auth_available: bool
+    reasoning_effort: str | None = None
+    reasoning_levels: tuple[str, ...] | None = None
+    reasoning_profile: str | None = None
+    native_web_search: dict[str, Any] | None = None
+    native_web_search_enabled: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class McpServerConfigurationView:
+    name: str
+    enabled: bool
+    source: dict[str, str] | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -53,11 +66,13 @@ class ConfigurationSnapshot:
     warnings: list[str]
     default_model: str
     models: list[ModelConfigurationView]
+    mcp_servers: list[McpServerConfigurationView]
 
     def as_dict(self) -> dict[str, Any]:
         return {
             **asdict(self),
             "models": [asdict(model) for model in self.models],
+            "mcp_servers": [asdict(server) for server in self.mcp_servers],
         }
 
 
@@ -168,6 +183,25 @@ class WorkspaceConfiguration:
             agent["default_model"] = remaining[0]
         return self._validate_write_and_snapshot(raw)
 
+    def set_mcp_server_enabled(
+        self,
+        *,
+        expected_revision: str,
+        name: str,
+        enabled: bool,
+    ) -> ConfigurationSnapshot:
+        """Persist a non-secret activation override without copying server credentials."""
+
+        self._require_editable(expected_revision)
+        current = self._resolver().resolve(project_trusted=self.project_trusted)
+        if name not in current.config.mcp_servers:
+            raise ConfigurationEditError(f"unknown MCP server: {name}")
+        raw = self._read_managed()
+        mcp = self._mapping(raw, "mcp")
+        enabled_servers = self._mapping(mcp, "enabled")
+        enabled_servers[name] = enabled
+        return self._validate_write_and_snapshot(raw)
+
     def _resolver(self) -> ConfigResolver:
         return ConfigResolver(
             self.workspace,
@@ -200,6 +234,9 @@ class WorkspaceConfiguration:
                 auth_kind = "none"
             models.append(
                 ModelConfigurationView(
+                    reasoning_effort=model.reasoning_effort,
+                    reasoning_levels=model.reasoning_levels,
+                    reasoning_profile=model.reasoning_profile,
                     name=name,
                     id=str(reported_model["id"]),
                     api=cast(str | None, reported_model.get("api")),
@@ -218,6 +255,8 @@ class WorkspaceConfiguration:
                     source=provenance.get(source_key),
                     auth_kind=auth_kind,
                     auth_available=model.api_key is not None,
+                    native_web_search=model.native_web_search.model_dump(mode="json"),
+                    native_web_search_enabled=native_web_search_enabled(model),
                 )
             )
         editable, reason = self._editability()
@@ -231,6 +270,17 @@ class WorkspaceConfiguration:
             warnings=cast(list[str], report["warnings"]),
             default_model=default_model,
             models=models,
+            mcp_servers=[
+                McpServerConfigurationView(
+                    name=name,
+                    enabled=resolution.config.mcp.enabled.get(name, True),
+                    source=(
+                        provenance.get(f"mcp.enabled.{name}")
+                        or provenance.get(f"mcp_servers.{name}.transport")
+                    ),
+                )
+                for name in sorted(resolution.config.mcp_servers)
+            ],
         )
 
     def _editability(self) -> tuple[bool, str | None]:
@@ -257,7 +307,7 @@ class WorkspaceConfiguration:
 
     def _read_managed(self) -> dict[str, Any]:
         if not self.target_path.is_file():
-            return {"version": 2, "agent": {"models": {}}}
+            return {"version": 2}
         text = self.target_path.read_text(encoding="utf-8")
         if not text.startswith(_MANAGED_HEADER):
             raise ConfigurationEditError("refusing to overwrite an unmanaged agent.web.yaml")
@@ -344,6 +394,7 @@ __all__ = [
     "ConfigurationConflictError",
     "ConfigurationEditError",
     "ConfigurationSnapshot",
+    "McpServerConfigurationView",
     "ModelConfigurationView",
     "WorkspaceConfiguration",
 ]

@@ -3,6 +3,9 @@
 日期：2026-09-03。事实优先级：失败会话的脱敏执行摘要、当前源码和契约测试。
 附件 `enterprise-agent-harness-architecture-v1.1.html` 是设计参考，不是运行指令。
 
+> 2026-09-10 更新：本文保留当时的故障证据；“消息编辑继续使用新 Session prefix fork”的结论已由
+> [同 Session 消息重生成审计](2026-09-10-in-place-message-regeneration.md) 替代。
+
 ## 故障链
 
 实际会话与截图一致：5 次 `exa_web_search_exa`、1 次 `exa_web_fetch_exa` 成功返回，却均被登记为

@@ -288,3 +288,234 @@ Session catalog 继续只追加，待生成来源使用可选 turn 索引，sche
 - 全景与局部源图对照：blocked。仍需普通模式清单、Plan Mode 确认与修改状态的参考截图，以及对应实现截图；不能以测试和构建代替视觉 gate。
 
 final result: blocked
+
+---
+
+# HTML 预览与生成执行态优化
+
+日期：2026-09-09。
+
+## 对照目标与证据
+
+- Source visual truth：
+  - `/var/folders/8f/4fzkmwn55fldz5pnj4gsf6zc0000gn/T/codex-clipboard-c95382c5-7f43-4e7e-b92b-5a97c4675edd.png`，3256×1720；问题态 HTML 预览。
+  - `/var/folders/8f/4fzkmwn55fldz5pnj4gsf6zc0000gn/T/codex-clipboard-9c2c6b81-60f9-4be4-aaf8-c68030d5bb6d.png`；Codex 生成过程与输入区层次参考。
+  - `/var/folders/8f/4fzkmwn55fldz5pnj4gsf6zc0000gn/T/codex-clipboard-d63f995b-a310-4660-8dbc-97ca01fe67b9.png`；正文后“正在思考”状态参考。
+- Implementation screenshot：Codex in-app Browser 的页面级截图（本任务浏览器证据，工具未暴露本地文件路径），1280×720、CSS viewport 1280×720、deviceScaleFactor 1。分别捕获 HTML 预览、首次 response 事件前的“正在思考”、`run_command` 执行中的步骤。
+- 比较方式：三张参考图不是同一页面的像素稿，因此不做全页像素差值；按相同交互状态对照信息顺序、当前步骤强调、留白、字体权重与预览可读性。HTML 预览以截图中的真实 `docs/architecture-guide/index.html` 为同一文件复验。
+
+## 比较历史与修复
+
+1. P1 · HTML 预览丢失样式与图片。原实现删除/阻止全部相对资源，Atlas 的外链 CSS 未加载，内联 SVG `<circle>` 退化为默认黑色填充。修复后预览在空权限 sandbox 内解析工作区相对路径，将 CSS、CSS `url(...)`、图片和字体转为 data URL；脚本、iframe/object/embed、远端资源和非锚点导航仍被移除。复验 DOM：1 个内联 `<style>`、0 个 `<script>`、0 个 `<link>`；两个 SVG 均 `complete=true`，natural size 为 256×256 和 1920×1320；无 console warning/error。
+2. P1 · `run.started` 到首个 response 事件之间没有助手 loading。原 `ConversationTurn` 只有 `response.length > 0` 才挂载。修复后活动轮次立即出现 Lumen 身份与“正在思考”，并在正文已经流出但运行尚未终止时保持在正文末尾。模拟 Provider 走真实 Web → Host → SSE 链路，首次响应前页面级截图确认无布局跳空。
+3. P2 · 当前执行步骤与历史步骤层次不足。原实现只给图标做透明度脉冲。修复后仅 `running/approved` 的最后一个工具步骤获得文字表面流光和运行图标动画；完成、失败、审批状态保留原语义色，不被误标为运行。真实 `run_command` 运行截图确认“正在运行命令 · /bin/sleep 8”为当前强调行，过程说明保持普通正文层级。
+
+## 必查设计面
+
+- Fonts and typography：沿用 Geist 与 CJK fallback；状态字号继续使用 `--transcript-size`，450 字重，和现有过程正文同一基线。流光只改变前景绘制，不改变字宽，避免动画引发布局抖动。
+- Spacing and layout rhythm：loading 使用既有 42px 行高、9px 图文间距与 22px 轮次收尾间距；正文存在时状态置于正文之后。预览说明条可换行，iframe 获得 10px 圆角并保留最小 300px 高度。
+- Colors and visual tokens：灰阶来自 Lumen 的 ink/muted 体系；高光从 muted 过渡到 ink，不引入新的语义色。`forced-colors` 回退为 CanvasText，`prefers-reduced-motion` 复用全局减弱动画规则。
+- Image quality and asset fidelity：HTML 内的 SVG 以原始字节 data URL 渲染，无栅格化、拉伸或占位图；Atlas 1920×1320 架构图 natural size 正确。没有新增或伪造图像资产。
+- Copy and content：使用“正在思考”“正在处理”和工具 `active_verb`；不虚构步骤、进度百分比或耗时。HTML 状态条明确说明脚本/网络禁用、内联资源数及不可用资源数。
+- Icons：复用现有 Phosphor Sparkle、CircleNotch 和工具类别图标；尺寸 15–20px，与 16px 状态文字对齐。
+- Responsiveness and accessibility：预览在 700px 以下继续占满宽度；说明条允许换行。loading 使用 `role=status` 和可访问名称，装饰图标 `aria-hidden`；现有 accordion 的 `aria-expanded/controls` 不变。动画在 reduced-motion 下缩短为单次，在强制色模式下取消背景裁字。
+
+## 交互与验证
+
+- HTML 源码/预览往返切换可用，iframe 持续可见；下载入口不变。
+- 真实 Atlas 预览 iframe 为 616×579 CSS px；工作区资源内联计数为 3；页内锚点保留在 sandbox 内，外部导航不可用。
+- 临时本地 Provider 分别制造首事件延迟和 8 秒命令执行，只用于状态捕获；没有向外部 Provider 发送数据。临时服务、Session 和配置均已清理。
+- `pnpm --dir src/web test`：19 files / 159 tests passed。
+- `pnpm --dir src/web typecheck`：passed。
+- `pnpm --dir src/web build`：passed，静态输出由构建命令更新。
+- `git diff --check`：passed。
+
+## 残余说明
+
+- 静态预览有意不运行 JavaScript，因此搜索、动态折叠等脚本交互不会工作；这是安全约束，不是预览失败。CSS/图片/字体恢复后，静态内容和布局可读。
+- HTML 内联设置 64 个资源、16 MiB 总量上限；超过限制的资源安全省略并在状态条报告，避免超大预览拖垮 WebUI。
+- 本轮未修改 Host、Session、Runtime、审批或 Sandbox 权威，只扩展 Web Adapter 的安全预览与状态投影。
+
+final result: passed
+
+---
+
+# 单一 SVG 思考图标完整替换
+
+日期：2026-09-10。
+
+## 对照目标与证据
+
+- Source visual truth：`https://lobehub.com/zh/icons/claude` 的 Claude Model Logos 首屏；Codex in-app Browser 捕获为 650×734 px。目标是 12 向放射标记的形态语言。
+- Implementation：`http://127.0.0.1:8772/?session=ec38d78c-5e6a-418c-b257-eaa27dabe17f` 的真实运行态；同一 Browser 捕获为 650×734 px。Browser Interface 没有提供可持久化截图路径，源图与实现图已在本任务同一次 `emitImage` 比较输入中并排呈现。
+- Viewport/density：两侧均为 650×734 px 的 in-app Browser 页面捕获；未发现额外设备缩放。参考是营销页大图，实现是 18×18 px 状态图标，因此不作像素一致断言，只比较轮廓、重心、暖色与状态可读性。
+- State：隔离 QA workspace 的真实 Web → Host → SSE → 本地假 Provider 链路；Provider 延迟约 8 秒，捕获和动画采样发生在运行窗口内，不调用外部模型。
+- Full-view comparison：同一输入内同时放置 LobeHub 参考页和 Lumen 真实运行页。参考的放射形态在对话状态行中清晰可辨，没有与文字、头像或输入框竞争。
+- Focused evidence：未放大图标，避免放大掩盖 18 px 实际使用尺寸下的问题；改为读取 0.2s、0.8s、1.5s 三帧的 computed transform/opacity，并核对真实 DOM 与网络资产。
+
+## Findings 与比较历史
+
+1. P2 · 上一版仍混用旧 PNG 光核和两层 Phosphor Asterisk，不符合“直接替换为新 SVG”的最终要求。修复：`ThinkingOrb` 只保留一个 `<img src="/lumen-claude-amber.svg">`，删除旧光核/射线节点、CSS 与测试断言，并移除 `thinking-orb.png` 的 public 和构建输出素材。
+2. P0/P1/P2 · 最终无剩余问题。实现帧中琥珀放射标记清晰，18 px 固定槽位、9 px 图文间距和 42 px 状态行均未变化。控制台 error 为 0，DOM 中 `.thinking-orb-core,.thinking-orb-rays` 数量为 0。
+
+## 必查设计面
+
+- Fonts and typography：沿用现有 Geist/CJK fallback、transcript 字号、450 字重与 1.6 行高；图标动画不改变文字尺寸、字宽或换行。
+- Spacing and layout rhythm：单一 SVG 保持 18×18 px 固定槽位、9 px 图文间距和原状态行节奏；桌面捕获无重叠、裁切或布局跳动。
+- Colors and visual tokens：直接使用 `lumen-claude-amber.svg` 的 `#F59E0B` 琥珀填充，静态 drop shadow 只补足小尺寸清晰度；错误、审批与停止语义色不受影响。
+- Image quality and asset fidelity：唯一可见资产是用户指定的 24×24 viewBox 矢量 SVG；浏览器实际 `src` 为 `/lumen-claude-amber.svg`，没有 PNG、手绘替代层、CSS 图形、透明黑边或拉伸。
+- Copy and content：继续使用“正在思考”，不虚构阶段或进度；完成后图标随运行状态卸载。
+- Accessibility and motion：状态容器保留 `role=status` 和“Lumen 正在思考”；装饰图标空 alt 且 `aria-hidden`。`prefers-reduced-motion` 时不启动 GSAP；forced-colors 提高灰度对比。
+
+## 动效与行为验证
+
+- GSAP 2.15 秒循环仅作用于该 SVG：展开时轻微顺时针旋转与横向舒展，换相时反向旋转和纵向呼吸，最后缓慢收束；卸载时 `context.revert()` 清理。
+- 三帧 opacity 为 `0.9441 → 0.9626 → 0.8513`，transform 矩阵均不同；资产路径始终为 `/lumen-claude-amber.svg`，旧节点数量始终为 0。
+- 真实运行页 console error 为空；Web Vitest 19 files / 163 tests passed，TypeScript typecheck 和 Next production build passed。
+
+## Follow-up Polish
+
+- P3：可在高刷新率显示器继续观察 2.15 秒呼吸节奏；当前幅度在真实 18 px 状态行中克制且可辨，不阻塞交付。
+
+final result: passed
+
+---
+
+# 思考过程分层与琥珀光球动效复验
+
+日期：2026-09-09。
+
+## 对照目标与证据
+
+- Source visual truth：`/var/folders/8f/4fzkmwn55fldz5pnj4gsf6zc0000gn/T/codex-clipboard-1c63ba2a-f79e-4bb6-bed3-f304a2f3aa27.png`，2184×1144。它是问题态证据：完成后的处理标题已经收起，但两段中间过程仍留在最终正文上方。
+- Implementation screenshots：`.qa-web-native-search/ui-thinking-collapse-after.jpg`，1920×890，真实历史天气会话完成态；`.qa-web-native-search/ui-thinking-running.jpg`，1920×834，真实 Provider 请求的首事件等待态。
+- 同输入对照：`.qa-web-native-search/thinking-process-comparison.jpg` 为完整视图；`.qa-web-native-search/thinking-process-focused-comparison.jpg` 对对话主体做局部并排比较。两图均在同一视觉输入中放置问题截图与修复后截图，不以分离查看冒充对照。
+- Viewport 与归一化：源图来自用户桌面高密度截图，CSS viewport 与 deviceScaleFactor 未提供；实现由用户现有 Chrome 捕获，输出分别为 1920×890 与 1920×834。完整对照将两图等比放入 940×594 的相同槽位；局部对照分别裁出对话主体后等比放入相同槽位，不做拉伸或像素差值。
+- State：完成态为同一“北京一周天气查询”历史会话；运行态通过真实 Web → Host → SSE → Provider 链路捕获，不是静态 DOM 夹具。
+
+## Findings 与比较历史
+
+1. P1 · 原生服务端搜索后的过程文案被误归入最终正文。旧投影只把“最后一个客户端工具调用之前”的 assistant 文本视为过程；Provider 原生 `web_search` 不生成客户端 Tool 卡，搜索后的多段状态文字因此落到 foreground。修复为每轮只有最后一个 assistant 段是阅读面答案；更早且后续仍有 assistant/思考/进度的段落投影为 commentary，Session append-only journal 不改写。完成态对照中，折叠标题后直接进入最终天气回答，两段问题文案已消失。
+2. P2 · 同一句候选文本可能先以 assistant 输出，再被回撤并作为 CommentaryDelta 重放，且活动存在时底部仍额外出现固定“正在思考”。修复为显示投影按规范化文本去重，并把活动态光球整合到处理标题；只有首事件尚未到达且没有任何活动时才显示独立占位。真实运行截图中只有一个“琥珀光球 + 正在思考”，没有第二条固定状态。
+3. P2 · 动效层级未覆盖当前文字步骤且光球呼吸过弱。修复后光球以 2.15 秒周期做小幅缩放、1px 漂浮、饱和度/亮度与投影变化；标题文字与最新思考/进度或当前工具步骤使用同周期表面流光。完成、失败、审批状态不会继承运行态动效。修复后首次正式视觉比较没有新的 P0/P1/P2 问题。
+
+## 必查设计面
+
+- Fonts and typography：沿用现有 Geist/CJK fallback、transcript 字号、450 字重和 1.6 行高；文字流光不改变字宽、换行或布局。完成标题、最终正文及表格层级与修复前设计语言一致。
+- Spacing and layout rhythm：Lumen 身份、42px 状态行、9px 图文间距、22px 过程收尾间距均沿用现有 rail。完成态折叠后，最终正文紧接处理标题，不再被中间过程拉长。
+- Colors and visual tokens：琥珀位图继续使用品牌暖色；动画只调整真实图像的亮度、饱和度和阴影。文本流光仍从 muted 到 ink，不改变停止、错误或审批语义色。
+- Image quality and asset fidelity：使用 `src/web/public/thinking-orb.png` 的 96×96 RGBA 真图，15px 固定槽位下边缘清晰，无 CSS/内联 SVG 替代资产、透明黑边或布局拉伸。
+- Copy and content：运行态统一为“正在思考”，完成态为“已完成处理 · 耗时”；过程原文仍可在用户主动展开时审计，最终答案不复制过程文案。
+- Icons and behavior：活动存在时琥珀光球进入 disclosure 标题，没有第二个 spinner。当前工具/文字步骤才有流光；完成后光球消失，caret 保留可展开含义。
+- Accessibility and responsiveness：状态保留 `role=status` 与“Lumen 正在思考”可访问名称；图片空 alt 且 `aria-hidden`。`prefers-reduced-motion` 关闭光球和所有文字流光；forced-colors 使用 CanvasText。1920 宽真实页无重叠、裁切或横向溢出。
+
+## 交互、控制台与验证
+
+- 实际操作覆盖：首事件等待时单一思考提示、活动到达后光球移入过程标题、完成自动收起、手动展开查看思考/过程、再次收起回到纯最终正文。
+- Chrome 可访问树确认完成态 foreground 仅有一段最终 assistant 内容；过程从 3 项增长为正确的 5 项活动，展开后包含原始思考和两段中间说明。
+- 浏览器控制台 error 日志为空。临时运行态验收任务已停止或完成后归档，未留在最近列表；正式预览保留在原天气会话。
+- `pnpm --dir src/web test`：19 files / 163 tests passed。
+- `pnpm --dir src/web typecheck`：passed。
+- `pnpm --dir src/web build`：passed，`src/web/out/` 由构建命令更新。
+- `git diff --check`：passed。
+
+## Follow-up Polish
+
+- P3：可在高刷新率屏幕上继续观察 2.15 秒呼吸节奏；当前幅度控制在 0.94–1.07，既能表达运行又不会抢夺正文注意力。
+
+final result: passed
+
+---
+
+# 琥珀思考光球与联网配置
+
+日期：2026-09-09。
+
+## 对照目标与证据
+
+- Source visual truth：`/var/folders/8f/4fzkmwn55fldz5pnj4gsf6zc0000gn/T/codex-clipboard-6d76ef2e-9887-4327-8cd0-f487aa32a7ec.png`，1946×394。它是问题态裁图，明确标出输入区上方重复的“正在处理”。
+- Implementation screenshots：
+  - `outputs/web-native-search-2026-09-09/01-thinking-orb.png`，首轮运行态；
+  - `outputs/web-native-search-2026-09-09/02-thinking-orb-final.png`，裁紧资产后的最终运行态；
+  - `outputs/web-native-search-2026-09-09/03-native-search-settings.png`，模型原生联网配置；
+  - `outputs/web-native-search-2026-09-09/04-mcp-switch.png`，外部 MCP 启停配置。
+- 浏览器与密度：Codex in-app Browser，CSS viewport 1280×720；实现截图 1280×720，输出按 1 CSS px 对 1 image px。源图是 1946×394 的局部高密度裁图，无法还原完整 viewport，故不作整页像素差值，只对同一“生成中 + 输入区”局部状态判断。
+- 同输入对照：`outputs/web-native-search-2026-09-09/05-comparison-board.png` 将源图、最终运行态和两个配置态置于同一视觉输入；`outputs/web-native-search-2026-09-09/06-focused-comparison.png` 对生成状态与输入区做局部并排对照。
+- 状态：真实 Web → Host → SSE 链路，测试 Responses provider 在首事件后延迟 8 秒；截图在延迟窗口内捕获，不是静态 DOM 伪造。Exa 开关在隔离验收配置中完成 off → on → off，保存提示和“重启后生效”状态可见。
+
+## Findings 与比较历史
+
+1. P2 · 首轮光球有效图形过小。`01-thinking-orb.png` 中 15px 槽位加载了带大量透明留白的 96px 图像，实际发光核心约 6px，弱于源图约 18px 的 spinner。修复：从原始生成资产中心裁紧后重新缩放为 96×96 RGBA，保持真实透明背景；组件尺寸、行高与动效不变。`02-thinking-orb-final.png` 和局部对照显示圆形发光核心清晰，且未推挤文字。
+2. P0/P1/P2 · 最终无剩余问题。源图的输入区上方独立“正在处理”已完全删除；唯一运行提示位于当前 Assistant turn 内，文案为“正在思考”，左侧为琥珀光球，文字流光不改变字宽。输入区只保留补充指令和停止按钮。
+
+## 必查设计面
+
+- Fonts and typography：继续使用 Lumen 现有 Geist/CJK fallback；“正在思考”沿用 transcript 字号、450 字重和 1.6 行高。文字流光只改变前景绘制，静态截图和动画帧均无换行或抖动。
+- Spacing and layout rhythm：状态行保留现有 42px 最小高度、9px 图文间距和 22px 轮次收尾间距；光球占固定 15px，不与 Lumen 头像、正文或输入框竞争层级。
+- Colors and visual tokens：光球使用香槟高光、蜂蜜琥珀、铜色和深焦糖；与 Lumen 品牌暖色一致。文字仍从 muted 到 ink 流光，停止与审批语义色不变。
+- Image quality and asset fidelity：`src/web/public/thinking-orb.png` 是 96×96 RGBA 实际图像资产，浏览器下载 200，透明边缘无黑底、拉伸或占位。首轮透明留白问题已修复；CSS 只负责尺寸和呼吸变换，不绘制替代图形。
+- Copy and content：删除“正在处理”，保留更贴合模型阶段的“正在思考”；模型页明确区分自动识别、始终开启和关闭，扩展页明确说明停用 MCP 后不连接、不加载工具与内容。
+- Accessibility and motion：状态容器保留 `role=status` 与 `aria-label`，光球为空 alt 且 `aria-hidden`；MCP 使用原生 checkbox switch 和逐 server 可访问名称。`prefers-reduced-motion` 停止动画，强制色模式对图像提高灰度对比。
+- Configuration affordance：模型原生联网和搜索上下文位于模型定义内；Exa 等 MCP 位于扩展能力列表。保存后明确提示重启，启用但尚未重启时同时显示“配置为启用 · 当前状态：disabled”，没有伪报已连接。
+
+## 行为、控制台与验证
+
+- 三次真实运行都在延迟窗口显示单一思考状态，8 秒后替换为最终回答；底部没有第二个状态节点。
+- 浏览器实际打开模型页和扩展能力页，滚动到配置字段，测试 Exa 开关并恢复停用。可见页面没有 error boundary、破图或失败提示；验收 Browser Interface 不提供 console 消息读取 API，Host/Uvicorn 运行日志在完整流程中没有异常或 5xx。
+- 最终实现没有布局溢出；1280×720 下设置窗口、滚动区、底部保存区和对话输入框均可见。
+- 自动化验证以本节之后最新一次执行结果为准；QA 截图使用测试 provider，不向外部模型发送数据。
+
+## Follow-up Polish
+
+- P3：可在更多高 DPI 显示器上观察 15px 光球的锐度；当前 96px 源资产已有 6.4× 下采样余量，不阻塞交付。
+
+final result: passed
+
+---
+
+# Lumen 思考花瓣 GSAP 动效
+
+日期：2026-09-10。
+
+## 对照目标与证据
+
+- Source visual truth：`https://lobehub.com/zh/icons/claude` 的 Claude Model Logos 首屏，Codex in-app Browser 捕获为 650×734 px；参考对象是右侧 12 向有机放射轮廓，只借鉴动态语言，不复制 Claude 商标。
+- Implementation：`http://127.0.0.1:8772/?session=ec38d78c-5e6a-418c-b257-eaa27dabe17f` 的真实运行态，Codex in-app Browser 捕获为 1280×720 px、CSS viewport 1280×720、density 1。Browser Interface 本次未暴露截图文件路径，证据保留在本任务的页面级捕获中。
+- State：隔离 QA workspace 的真实 Web → Host → SSE → 本地假 Provider 链路；Provider 延迟 8 秒，未调用外部模型。运行态显示 Assistant turn 内唯一的“正在思考”。
+- Full-view comparison：参考页和实现页的截图在同一次视觉输入中打开比较。两者用途和尺寸不同，不作像素一致断言；检查放射轮廓、视觉重心、暖色关系和长时间 loading 的克制程度。
+- Focused comparison：未放大 18×18 px 图标，因为放大会掩盖真实 UI 尺寸下的光学问题。改为在同一真实页面尺寸检查，并读取 0.3s、0.8s、1.5s 三个 GSAP 帧的 transform/opacity；三帧均不同，且最后阶段朝初始矩阵连续收束。
+
+## Findings 与比较历史
+
+- P0/P1/P2：无剩余问题。参考的放射识别被转译为两个错相的 Phosphor Asterisk 图层；现有琥珀 PNG 缩为中心光核，避免直接使用 Claude 品牌图形。18px 槽位在 16px 状态文字旁清晰可辨，没有挤压基线或改变 42px 状态行。
+- 本次第一轮实现即通过视觉 gate，没有因 P0/P1/P2 进行后续修复。浏览器捕获中图标、文案、Lumen 身份和输入区层次清楚；控制台 warning/error 为空。
+
+## 必查设计面
+
+- Fonts and typography：沿用 Geist/CJK fallback、`--transcript-size`、450 字重与 1.6 行高；动效不修改文字尺寸或字宽，文字流光周期继续为 2.15s。
+- Spacing and layout rhythm：图标从 15px 调整为 18px，仍位于现有 42px 状态行、9px 图文间距和 22px 轮次间距内；真实桌面截图无重叠、裁切或布局跳动。
+- Colors and visual tokens：外层铜橙 `#c96842`、内层琥珀 `#e6a13a`，中心复用现有香槟/蜂蜜色真实 PNG；暖色与 Lumen logo 一致，未借用 Claude 的完整色块或商标。
+- Image quality and asset fidelity：96×96 RGBA `src/web/public/thinking-orb.png` 仅作为 7px 中心光核，透明边缘和高光清晰；外层形态来自现有 Phosphor icon library，不是手绘 SVG、CSS 图形或第三方 Logo。
+- Copy and content：继续使用“正在思考”，不虚构进度、阶段或耗时；完成后图标随活动状态消失。
+- Accessibility and motion：状态容器保留 `role=status` 与“Lumen 正在思考”可访问名；装饰图标整体 `aria-hidden`。`prefers-reduced-motion` 时 GSAP 不启动并保留静态标记；forced-colors 时放射层使用 CanvasText、光核隐藏。
+
+## 动效与行为验证
+
+- GSAP 2.15 秒循环依次执行展开、双层反向换相和收束；只使用 transform/opacity，避免布局与绘制抖动，卸载时由 context `revert()` 清理。
+- 三帧读数证明外层 opacity 约 `0.95 → 0.80 → 0.63`，内层约 `0.69 → 0.80 → 0.65`；旋转与非等比缩放同步变化，不是静态图或单一匀速 spinner。
+- 真实运行覆盖首次事件等待、连续三轮挂载/卸载及完成态；页面 console warning/error 为 0。
+- Web Vitest：19 files / 163 tests passed；TypeScript typecheck passed；Next production build passed。
+
+## Follow-up Polish
+
+- P3：可在 120Hz / 144Hz 显示器继续观察回弹强度；当前 `back.out(1.6)` 只作用于 7px 光核，不阻塞交付。
+
+final result: passed
+
+---
+
+# 当前交付状态
+
+`单一 SVG 思考图标完整替换` 是本文件当前权威验收；此前 PNG 光核与双 Asterisk 章节仅保留迭代历史，所述代码和素材均已删除。当前构建只使用 `lumen-claude-amber.svg`，真实运行态、三帧 GSAP 采样、旧 DOM 节点清零、控制台和自动化检查均已通过。
+
+final result: passed

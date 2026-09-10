@@ -7,6 +7,7 @@ import hashlib
 import inspect
 import json
 import re
+import time
 from collections.abc import Awaitable, Callable, Sequence
 from pathlib import Path
 from typing import Protocol
@@ -101,6 +102,7 @@ class AgentOrchestrator:
         self._semaphores: dict[str, asyncio.Semaphore] = {}
         self._condition = asyncio.Condition()
         self._event_lock = asyncio.Lock()
+        self._spawn_lock = asyncio.Lock()
         self._recovered_sessions: set[str] = set()
         self._progress_counts: dict[str, int] = {}
         bind_status = getattr(runtime_factory, "bind_status_handler", None)
@@ -133,6 +135,13 @@ class AgentOrchestrator:
         plan_step_id: str | None = None,
         criterion_ids: list[str] | None = None,
     ) -> str:
+        async with self._spawn_lock:
+            return await self._spawn_agent(task, agent_type, task_name, plan_step_id, criterion_ids)
+
+    async def _spawn_agent(
+        self, task: str, agent_type: str | None, task_name: str | None,
+        plan_step_id: str | None, criterion_ids: list[str] | None,
+    ) -> str:
         session_id, root_run_id = self._bound_context()
         prompt = task.strip()
         if not prompt:
@@ -150,10 +159,6 @@ class AgentOrchestrator:
         self._validate_plan_targets(plan_step_id, criteria)
         state = self.repository.load(session_id).agent_state
         current_run = [item for item in state.threads if item.ref.root_run_id == root_run_id]
-        if len(current_run) >= self.config.max_agents_per_run:
-            raise ValueError(
-                f"agent limit reached for root run ({self.config.max_agents_per_run})"
-            )
         requested_name = task_name or self._default_task_name(prompt)
         idempotency_key = self._idempotency_key(
             session_id,
@@ -168,6 +173,10 @@ class AgentOrchestrator:
         )
         if existing is not None:
             return self._json(existing)
+        if len(current_run) >= self.config.max_agents_per_run:
+            raise ValueError(
+                f"agent limit reached for root run ({self.config.max_agents_per_run})"
+            )
         normalized_name = self._unique_task_name(state, requested_name)
         agent_id = f"agent-{uuid4().hex[:16]}"
         snapshot = self.runtime_factory.snapshot(profile, approval_mode=self._approval_mode)
@@ -178,6 +187,8 @@ class AgentOrchestrator:
             and dirty_hash_provider is not None
             else None
         )
+        if inspect.isawaitable(parent_dirty_hash):
+            parent_dirty_hash = await parent_dirty_hash
         thread = AgentThreadState(
             ref=AgentThreadRef(
                 id=agent_id,
@@ -373,6 +384,7 @@ class AgentOrchestrator:
                 "status": status,
                 "updated_at": utc_now(),
                 "result": imported_result,
+                "usage": self._merge_usage(thread.usage, result.usage),
             }
         )
         self.repository.append_agent_result(thread.ref.parent_session_id, imported_result)
@@ -505,12 +517,14 @@ class AgentOrchestrator:
 
     async def _execute(self, agent_id: str) -> None:
         thread = self._owned_thread(agent_id)
+        queued_at = time.monotonic()
         semaphore = self._semaphores.setdefault(
             thread.ref.parent_session_id,
             asyncio.Semaphore(self.config.max_concurrency),
         )
         try:
             async with semaphore:
+                queue_seconds = time.monotonic() - queued_at
                 thread = await self._transition(
                     thread,
                     AgentStatus.RUNNING,
@@ -521,6 +535,9 @@ class AgentOrchestrator:
                 messages = [item for item in state.messages if item.agent_id == agent_id]
                 async with asyncio.timeout(thread.config.timeout_seconds):
                     execution = await self.runtime_factory.execute(thread, profile, messages)
+                execution = execution.model_copy(update={
+                    "usage": {**execution.usage, "agent_queue_seconds": round(queue_seconds, 6)},
+                })
                 artifact_ref = self.artifacts.store(execution.output) if execution.output else None
                 transcript_ref = (
                     self.artifacts.store(execution.transcript) if execution.transcript else None
@@ -773,26 +790,32 @@ class AgentOrchestrator:
             if thread.config.workspace_mode is WorkspaceMode.READ_ONLY:
                 self._schedule(thread)
                 continue
-            classifier = getattr(self.runtime_factory, "classify_recovery", None)
-            status = (
-                classifier(thread)
-                if classifier is not None
-                else (
-                    AgentStatus.IMPORT_PENDING
-                    if thread.commit
-                    else AgentStatus.RECONCILIATION_REQUIRED
-                )
-            )
-            kind = (
-                AgentEventKind.IMPORT_PENDING
-                if status is AgentStatus.IMPORT_PENDING
-                else AgentEventKind.RECONCILIATION_REQUIRED
-            )
-            updated = thread.model_copy(update={"status": status, "updated_at": utc_now()})
+            # Hold completion closed while cancellable Git inspection runs.
+            updated = thread.model_copy(update={
+                "status": AgentStatus.RECONCILIATION_REQUIRED, "updated_at": utc_now(),
+            })
             self.repository.append_agent_thread(session_id, updated)
-            task = asyncio.create_task(self._emit(updated, kind))
+            task = asyncio.create_task(self._recover_writable(updated))
             self._background_tasks.add(task)
             task.add_done_callback(self._background_tasks.discard)
+
+    async def _recover_writable(self, thread: AgentThreadState) -> None:
+        classifier = getattr(self.runtime_factory, "classify_recovery", None)
+        try:
+            status = classifier(thread) if classifier is not None else AgentStatus.RECONCILIATION_REQUIRED
+            if inspect.isawaitable(status):
+                status = await status
+        except Exception:
+            status = AgentStatus.RECONCILIATION_REQUIRED
+        state = self.repository.load(thread.ref.parent_session_id).agent_state
+        latest = next(item for item in state.threads if item.ref.id == thread.ref.id)
+        if latest.status is not AgentStatus.RECONCILIATION_REQUIRED or latest.resolution:
+            return
+        await self._transition(
+            latest, status,
+            AgentEventKind.IMPORT_PENDING if status is AgentStatus.IMPORT_PENDING
+            else AgentEventKind.RECONCILIATION_REQUIRED,
+        )
 
     @staticmethod
     def _default_task_name(task: str) -> str:

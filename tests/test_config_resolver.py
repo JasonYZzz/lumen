@@ -248,7 +248,9 @@ def test_relative_paths_and_mcp_environment_follow_declaring_source(
         """version: 2
 agent:
   model: {id: test}
-  instructions_file: prompts/system.md
+  prompt:
+    mode: append
+    append_file: prompts/system.md
 sessions:
   directory: state/sessions
 mcp_servers:
@@ -267,7 +269,7 @@ mcp_servers:
     config = ConfigResolver(workspace, home=home).resolve().config
     server = config.mcp_servers["local"]
 
-    assert config.agent.instructions_file == home / ".lumen" / "prompts" / "system.md"
+    assert config.agent.prompt.append_file == home / ".lumen" / "prompts" / "system.md"
     assert config.sessions.directory == home / ".lumen" / "state" / "sessions"
     assert server.command == "python"
     assert server.args == [str(workspace), "fallback"]

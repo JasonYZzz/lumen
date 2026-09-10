@@ -1,6 +1,9 @@
 from __future__ import annotations
 
-from pydantic_ai.models import Model
+from typing import Any, cast
+
+from openai.types import responses
+from pydantic_ai.models import Model, ModelRequestParameters
 from pydantic_ai.models.anthropic import AnthropicModel
 from pydantic_ai.models.google import GoogleModel
 from pydantic_ai.models.openai import OpenAIChatModel, OpenAIResponsesModel
@@ -10,17 +13,50 @@ from pydantic_ai.providers.google import GoogleProvider
 from pydantic_ai.providers.ollama import OllamaProvider
 from pydantic_ai.providers.openai import OpenAIProvider
 
+from lumen.agent_loop import ModelNativeTool
 from lumen.config import ModelSettingsConfig
+from lumen.provider_catalog import (
+    ModelProtocol,
+    effective_base_url,
+    find_native_web_search_rule,
+    model_protocol,
+    supports_native_web_search,
+)
 
-# Aliases some configs (e.g. Roo Code) use. We normalise them to our two real
-# paths so users can paste their existing config verbatim.
-_API_ALIAS = {
-    "openai-completions": "chat",
-    "openai-responses": "responses",
-    "chat-completions": "chat",
-    "chat": "chat",
-    "responses": "responses",
-}
+
+class _OpenAIResponsesWebSearchCompatibilityModel(OpenAIResponsesModel):
+    """Thin Adapter for compatible endpoints that reject optional web-search fields."""
+
+    def _get_native_tools(
+        self,
+        model_request_parameters: ModelRequestParameters,
+    ) -> list[responses.ToolParam]:
+        tools = super()._get_native_tools(model_request_parameters)
+        for tool in tools:
+            if tool.get("type") in {"web_search", "web_search_preview"}:
+                cast(dict[str, Any], tool).pop("search_context_size", None)
+        return tools
+
+
+def native_web_search_enabled(config: ModelSettingsConfig) -> bool:
+    """Resolve the model-level policy without guessing unknown provider capabilities."""
+
+    if config.native_web_search.mode == "disabled":
+        return False
+    if config.native_web_search.mode == "enabled":
+        return True
+    return supports_native_web_search(config.id, config.api, config.base_url)
+
+
+def build_native_tools(config: ModelSettingsConfig) -> tuple[ModelNativeTool, ...]:
+    if not native_web_search_enabled(config):
+        return ()
+    return (
+        ModelNativeTool(
+            kind="web_search",
+            search_context_size=config.native_web_search.search_context_size,
+        ),
+    )
 
 
 def build_model(config: ModelSettingsConfig) -> Model | str:
@@ -45,11 +81,19 @@ def build_model(config: ModelSettingsConfig) -> Model | str:
         raise ValueError("model id must use the '<provider>:<model>' format") from error
 
     if provider_name == "openai":
-        provider = OpenAIProvider(api_key=config.api_key, base_url=config.base_url)
-        api_choice = _API_ALIAS.get(config.api) if config.api is not None else "responses"
-        if api_choice == "responses":
-            return OpenAIResponsesModel(model_name, provider=provider)
-        if api_choice == "chat":
+        provider = OpenAIProvider(
+            api_key=config.api_key, base_url=effective_base_url(config.id, config.base_url),
+        )
+        api_choice = model_protocol(config.id, config.api)
+        if api_choice is ModelProtocol.RESPONSES:
+            native_search = find_native_web_search_rule(config.id, config.api, config.base_url)
+            model_type = (
+                OpenAIResponsesModel
+                if native_search is None or native_search.sends_search_context_size
+                else _OpenAIResponsesWebSearchCompatibilityModel
+            )
+            return model_type(model_name, provider=provider)
+        if api_choice is ModelProtocol.CHAT:
             return OpenAIChatModel(model_name, provider=provider)
         # ModelSettingsConfig validates known values, so this is only defensive
         # for callers that bypass normal validation.
@@ -58,14 +102,18 @@ def build_model(config: ModelSettingsConfig) -> Model | str:
         provider = OllamaProvider(base_url=config.base_url, api_key=config.api_key)
         return OpenAIChatModel(model_name, provider=provider)
     if provider_name == "anthropic":
-        provider = AnthropicProvider(api_key=config.api_key, base_url=config.base_url)
+        provider = AnthropicProvider(
+            api_key=config.api_key, base_url=effective_base_url(config.id, config.base_url),
+        )
         return AnthropicModel(model_name, provider=provider)
     if provider_name in {"google", "gemini"}:
         if config.api_key is None:
             if config.base_url is not None:
                 raise ValueError("a Google base_url requires api_key_env")
             return config.id
-        provider = GoogleProvider(api_key=config.api_key, base_url=config.base_url)
+        provider = GoogleProvider(
+            api_key=config.api_key, base_url=effective_base_url(config.id, config.base_url),
+        )
         return GoogleModel(model_name, provider=provider)
 
     if config.api_key is not None or config.base_url is not None:

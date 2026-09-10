@@ -17,6 +17,8 @@ def test_run_limits_are_opt_in_and_finite_legacy_values_remain_valid() -> None:
     assert defaults.model_request_timeout_seconds is None
     assert defaults.model_stream_idle_timeout_seconds == 300
     assert defaults.model_retries == 5
+    assert defaults.parallel_tool_calls == "parallel_safe"
+    assert LimitsConfig(parallel_tool_calls="sequential").parallel_tool_calls == "sequential"
     finite = LimitsConfig(request_count=60, tool_calls=100, model_request_timeout_seconds=300)
     assert (finite.request_count, finite.tool_calls, finite.model_request_timeout_seconds) == (60, 100, 300)
     assert LimitsConfig(tool_calls=0).tool_calls == 0
@@ -43,7 +45,9 @@ def test_load_config_resolves_relative_paths_and_environment(
 version: 2
 agent:
   name: test-agent
-  instructions_file: prompts/system.md
+  prompt:
+    mode: append
+    append_file: prompts/system.md
   model:
     id: openai:gpt-5
     api_key_env: MODEL_TOKEN
@@ -63,11 +67,25 @@ sessions:
 
     config = load_config(config_path)
 
-    assert config.agent.instructions_file == (tmp_path / "prompts/system.md").resolve()
+    assert config.agent.prompt.append_file == (tmp_path / "prompts/system.md").resolve()
     assert config.agent.model is not None
     assert config.agent.model.api_key == "secret-model-token"
     assert config.mcp_servers["weather"].headers == {"Authorization": "Bearer secret-mcp-token"}
     assert config.sessions.directory == (tmp_path / "state/sessions").resolve()
+
+
+def test_load_config_rejects_removed_instructions_file(tmp_path: Path) -> None:
+    config_path = write_config(
+        tmp_path / "agent.yaml",
+        """version: 2
+agent:
+  model: {id: test}
+  instructions_file: prompts/system.md
+""",
+    )
+
+    with pytest.raises(ConfigLoadError, match="instructions_file"):
+        load_config(config_path)
 
 
 def test_load_config_rejects_missing_environment_variable(tmp_path: Path) -> None:
@@ -326,6 +344,74 @@ agent:
     assert config.agent.default_model is None
     # Pydantic preserves insertion order for dicts; alpha is first.
     assert config.agent.default_model_name() == "alpha"
+
+
+def test_native_web_search_defaults_to_auto_and_rejects_openai_chat_force() -> None:
+    from pydantic import ValidationError
+
+    from lumen.config import ModelSettingsConfig
+    from lumen.models import native_web_search_enabled
+
+    deepseek = ModelSettingsConfig(
+        id="openai:deepseek-v4-flash",
+        base_url="https://api.deepseek.com",
+        api="responses",
+    )
+    assert deepseek.native_web_search.mode == "auto"
+    assert native_web_search_enabled(deepseek) is True
+    assert native_web_search_enabled(
+        ModelSettingsConfig(
+            id="openai:k3",
+            base_url="https://api.kimi.com/coding/v1",
+            api="responses",
+        )
+    ) is True
+    for model in ("qwen3.8-max", "qwen3.8-flash"):
+        assert native_web_search_enabled(
+            ModelSettingsConfig(
+                id=f"anthropic:{model}",
+                base_url="https://token-plan.cn-beijing.maas.aliyuncs.com/apps/anthropic",
+            )
+        ) is True
+    assert native_web_search_enabled(ModelSettingsConfig(id="openai:unknown-model")) is False
+    assert native_web_search_enabled(
+        ModelSettingsConfig.model_validate(
+            {"id": "openai:unknown-model", "native_web_search": {"mode": "enabled"}}
+        )
+    ) is True
+    with pytest.raises(ValidationError, match="requires the Responses API"):
+        ModelSettingsConfig.model_validate(
+            {
+                "id": "openai:legacy-model",
+                "api": "chat",
+                "native_web_search": {"mode": "enabled"},
+            }
+        )
+
+
+def test_mcp_activation_policy_rejects_unknown_server(tmp_path: Path) -> None:
+    enabled = load_yaml(
+        tmp_path,
+        """
+version: 2
+agent: {model: {id: test}}
+mcp_servers:
+  exa: {transport: streamable_http, url: https://mcp.exa.ai/mcp}
+mcp:
+  enabled: {exa: false}
+""",
+    )
+    assert enabled.mcp.enabled == {"exa": False}
+    with pytest.raises(ConfigLoadError, match="unknown servers"):
+        load_yaml(
+            tmp_path,
+            """
+version: 2
+agent: {model: {id: test}}
+mcp:
+  enabled: {missing: false}
+""",
+        )
 
 
 def test_single_model_form_still_supported(tmp_path: Path) -> None:

@@ -89,7 +89,7 @@
               <div class="topology-module"><b>TaskWorkspace</b><small>effect · verify · gate</small></div>
               <div class="topology-module"><b>AgentOrchestrator</b><small>threads · evidence · import</small></div>
               <div class="topology-module"><b>CapabilityGateway</b><small>guard · approval · receipt</small></div>
-              <div class="topology-module"><b>SessionRepository</b><small>v9 append-only JSONL</small></div>
+              <div class="topology-module"><b>SessionRepository</b><small>v10 append-only JSONL</small></div>
             </div>
             <div class="topology-contracts">
               <span><b>ProviderRequestReceipt</b> route · tokens · tool digest</span>
@@ -106,7 +106,7 @@
         <div class="hero-ledger glass" aria-label="当前架构契约摘要">
           <div class="ledger-head"><span>AUTHORITY LEDGER</span><strong>REV · 2026.09</strong></div>
           <dl>
-            <div><dt>Session</dt><dd>v9 · append-only</dd></div>
+            <div><dt>Session</dt><dd>v10 · append-only</dd></div>
             <div><dt>Config</dt><dd>v2 · strict</dd></div>
             <div><dt>Sandbox</dt><dd>workspace_write</dd></div>
             <div><dt>Tool contract</dt><dd>V2 · 3 projections</dd></div>
@@ -145,7 +145,7 @@
         <div class="callout-row architecture-readout">
           <article class="callout glass"><b>唯一应用入口</b><p>TUI、Web、CLI 和 Realtime 都通过 WorkspaceHost command Interface；OS execution lock 只阻止跨进程 writer，UI reducer 只是投影。</p></article>
           <article class="callout glass"><b>双执行路径，共享能力</b><p>文字 Runtime 与 Live Provider 路由不同，但工具都回到 ToolRegistry、CapabilityGateway 与同一权限策略。</p></article>
-          <article class="callout glass"><b>事实与上下文分离</b><p>Session v9 保存完整事实；ContextEngine 只构造下一次模型请求所需的有界 active history。</p></article>
+          <article class="callout glass"><b>事实与上下文分离</b><p>Session v10 保存完整事实；ContextEngine 只构造下一次模型请求所需的有界 active history。</p></article>
           <article class="callout glass"><b>完成声明受控</b><p>Plan evidence、TaskWorkspace verification 和 AgentOrchestrator unresolved state 任一未满足都会阻止完成。</p></article>
         </div>
         <div class="blueprint-sources glass-inset">
@@ -183,7 +183,7 @@
             <div class="module-top"><span>EXECUTION · 执行层</span><code>run(...) → RunOutcome</code></div>
             <h3>AgentRuntime</h3>
             <p>保持稳定 RunOutcome/RunEvent 外壳；唯一委托 LumenAgentLoop，并拥有 Driver 生命周期。</p>
-            <ul><li>请求清单与流式文本回撤</li><li>工具审批、Hook、恢复与交互输入</li><li>provider retry + partial outcome</li></ul>
+            <ul><li>请求清单、流式文本回撤与分阶段计时</li><li>默认安全并发；工具完成立即显示，模型结果按调用顺序回填</li><li>工具审批、Hook、恢复与交互输入</li><li>provider retry + partial outcome</li></ul>
             <a href="../../src/lumen/runtime.py">runtime.py ↗</a>
           </article>
           <article class="module-card glass">
@@ -270,11 +270,12 @@
           <p>完整历史是事实，active history 是预算内投影。模型 profile 与传输协议解耦；Checkpoint V2 只增量处理新 transcript 区间。</p>
         </header>
         <figure class="diagram glass context-board">
-          <figcaption><strong>ContextEnvelope · 12 个预算 Zone</strong><span>Zone 解释成本、来源、信任和保留，不等于 12 条 provider message。</span></figcaption>
+          <figcaption><strong>ContextEnvelope · 13 个预算 Zone</strong><span>Zone 解释成本、来源、信任和保留，不等于 13 条 provider message。</span></figcaption>
           <div class="token-ruler"><span>0 tokens</span><div><i style="width:76%"></i></div><strong>模型上下文窗口</strong></div>
           <div class="zone-stack">
             <div class="zone z-system"><b>SYSTEM</b><small>系统身份与运行指令</small><em>固定保留 PINNED</em></div>
             <div class="zone z-system"><b>POLICY</b><small>行为规则与安全策略</small><em>每轮注入 REINJECT</em></div>
+            <div class="zone z-runtime"><b>RUNTIME_<wbr>CONTEXT</b><small>模型/工作区等瞬时运行上下文</small><em>瞬时注入 · 4%</em></div>
             <div class="zone z-memory"><b>MEMORY_<wbr>INDEX</b><small>长期记忆索引</small><em>每轮注入 · 4%</em></div>
             <div class="zone z-tools"><b>CAPABILITY_<wbr>CATALOG</b><small>工具与能力 Schema</small><em>每轮注入 · 8%</em></div>
             <div class="zone z-skill"><b>TASK_<wbr>STATE</b><small>计划、进度与任务状态</small><em>每轮注入 · 10%</em></div>
@@ -366,13 +367,14 @@
           <div class="event-track">
             <div class="event"><i>01</i><b>运行开始</b><small>RunStarted</small></div><div class="event"><i>02</i><b>文本增量</b><small>TextDelta</small></div><div class="event"><i>03</i><b>工具开始</b><small>ToolCallStarted</small></div><div class="event coral"><i>04</i><b>等待审批</b><small>ToolApprovalPending</small></div><div class="event"><i>05</i><b>工具完成</b><small>ToolCallFinished</small></div><div class="event mint"><i>06</i><b>运行完成</b><small>fsync 后 RunCompleted</small></div>
           </div>
-          <div class="event-bottom"><div class="node">EventJournal<small>内存有序事件流</small></div><span>→</span><div class="node mint">Session v9 Journal<small>只追加的类型化 JSONL records</small></div><span>→</span><div class="node">恢复 resume()<small>消息 · 计划 · checkpoint · Agent · Live</small></div></div>
+          <div class="event-bottom"><div class="node">EventJournal<small>内存有序事件流</small></div><span>→</span><div class="node mint">Session v10 Journal<small>只追加的类型化 JSONL records</small></div><span>→</span><div class="node">恢复 resume()<small>消息 · 计划 · checkpoint · 推理档位 · Agent · Live</small></div></div>
           <div class="invariant-strip"><span>✓ 普通增量实时发布</span><span>✓ terminal candidate 先随 turn fsync</span><span>✓ 每个 run 只公开一个 terminal</span><span>✓ 持久化失败只发布 RunFailed</span></div>
         </figure>
         <div class="data-record glass">
           <div><span>TurnRecord</span><code>user_input</code><code>status</code><code>messages</code><code>attachments[]</code><code>request_receipts[]</code></div>
           <div><span>Audit</span><code>approvals</code><code>usage</code><code>diagnostics</code><code>partial_text</code></div>
           <div><span>Recovery</span><code>active_prefix</code><code>summary</code><code>checkpoint</code><code>plan</code></div>
+          <div><span>Thinking</span><code>Provider 官方目录 · 端点/协议/精确 ID</code><code>Host 查询 · Session 选择</code><code>requested → effective → parameters</code><code>child 冻结继承</code></div>
         </div>
         <div class="data-record glass" aria-label="客户端能力矩阵">
           <div><span>Core shared</span><code>Session / Run / Approval</code><code>Skill / MCP / Context</code><code>AttachmentRef 图片</code></div>
@@ -389,7 +391,7 @@
           <div class="eco-ring">
             <div class="eco-item local"><b>内置工具 Built-in</b><small>读取 · 写入 · 命令执行</small></div>
             <div class="eco-item"><b>Python 插件</b><small>注册 list[ToolSpec]</small></div>
-            <div class="eco-item violet"><b>MCP 工具集</b><small>延迟 Schema · 风险分类</small></div>
+            <div class="eco-item violet"><b>MCP 工具集</b><small>可独立停用 · 延迟 Schema · 风险分类</small></div>
             <div class="eco-center"><b>AgentRuntime</b><small>统一的执行边界 execution seam</small></div>
             <div class="eco-item violet"><b>MCP 内容</b><small>资源 · Prompt · OAuth</small></div>
             <div class="eco-item"><b>Agent Skills</b><small>目录 · 工作集 · 脚本</small></div>
@@ -413,7 +415,7 @@
       <section id="mcp-skills" class="searchable" data-title="MCP Skills 协议 工具 资源 Prompt OAuth SKILL.md working set progressive disclosure">
         <header class="section-heading">
           <div><span class="section-index">08</span><h2>MCP 与 Skills 深入说明</h2></div>
-          <p>二者都扩展 Agent，但抽象完全不同：MCP 连接外部能力，Skill 为模型提供按需加载的专业操作方法。</p>
+          <p>MCP 连接外部能力，Skill 提供按需加载的专业方法；DeepSeek、Kimi 与百炼 Qwen 的 provider 原生 web_search 则按精确路由随冻结模型请求发送，三者不共享开关或状态权威。</p>
         </header>
 
         <div class="capability-compare">

@@ -40,6 +40,7 @@ from lumen.context.compaction import (
     Thresholds,
     degrade_to_window,
 )
+from lumen.context.instructions import InstructionSource
 from lumen.context.legacy import (
     CompactionRecord,
     ContextBudgetExceeded,
@@ -184,16 +185,16 @@ def _extract_exact_literals(
 
 
 def _summary_prefix(summary: ContextSummary) -> ModelRequest:
-    lines = ["Prior conversation summary:"]
+    lines = ["先前对话摘要:"]
     for label, items in (
-        ("Goals", summary.goals),
-        ("Constraints", summary.constraints),
-        ("Completed", summary.completed),
-        ("Current plan", summary.current_plan),
-        ("Important files", summary.important_files),
-        ("Key facts", summary.key_facts),
-        ("Failures and approvals", summary.failures_and_approvals),
-        ("Outstanding", summary.outstanding),
+        ("目标", summary.goals),
+        ("约束", summary.constraints),
+        ("已完成", summary.completed),
+        ("当前计划", summary.current_plan),
+        ("重要文件", summary.important_files),
+        ("关键事实", summary.key_facts),
+        ("失败与审批", summary.failures_and_approvals),
+        ("待处理", summary.outstanding),
     ):
         if items:
             lines.append(f"{label}:")
@@ -274,6 +275,11 @@ class RuntimeContextSnapshot:
     instructions: str
     system_instructions: str = ""
     policy_instructions: str = ""
+    instruction_sources: tuple[InstructionSource, ...] = ()
+    runtime_context: str = ""
+    prompt_mode: str = "legacy"
+    prompt_preset: str | None = None
+    prompt_version: str = "legacy"
     tool_schema_documents: tuple[dict[str, Any], ...] = ()
     active_skill_documents: tuple[dict[str, Any], ...] = ()
     retrieved_context_documents: tuple[dict[str, Any], ...] = ()
@@ -464,8 +470,8 @@ class ContextEngine:
     _pending: dict[str, ContextEnvelope] = field(default_factory=dict[str, ContextEnvelope])
     _pending_requests: dict[str, ContextRequest] = field(default_factory=dict[str, ContextRequest])
     #: fingerprint -> committed transition, for commit idempotency.
-    _committed: dict[str, tuple[str, ContextTransition]] = field(
-        default_factory=dict[str, tuple[str, ContextTransition]]
+    _committed: dict[str, tuple[str, str, ContextTransition]] = field(
+        default_factory=dict[str, tuple[str, str, ContextTransition]]
     )
     #: session id -> anti-thrash state (plan §9.1).
     _thrash: dict[str, CompactionThrashState] = field(default_factory=dict[str, CompactionThrashState])
@@ -725,6 +731,8 @@ class ContextEngine:
         assembled = self._assembler.assemble(
             instructions=request.runtime.system_instructions or request.runtime.instructions,
             policy=request.runtime.policy_instructions,
+            instruction_sources=request.runtime.instruction_sources,
+            runtime_context=request.runtime.runtime_context,
             prompt=request.prompt,
             tool_schemas=request.runtime.tool_schema_documents,
             history=active_history,
@@ -759,6 +767,8 @@ class ContextEngine:
             assembled = self._assembler.assemble(
                 instructions=request.runtime.system_instructions or request.runtime.instructions,
                 policy=request.runtime.policy_instructions,
+                instruction_sources=request.runtime.instruction_sources,
+                runtime_context=request.runtime.runtime_context,
                 prompt=request.prompt,
                 tool_schemas=request.runtime.tool_schema_documents,
                 history=active_history,
@@ -810,6 +820,10 @@ class ContextEngine:
         output_reserve_tokens: int,
         task: TaskSnapshot,
         emit: EventSink,
+        runtime_context: str | None = None,
+        active_skill_documents: Sequence[dict[str, Any]] | None = None,
+        retrieved_context_documents: Sequence[dict[str, Any]] | None = None,
+        work_product_documents: Sequence[dict[str, Any]] | None = None,
         force: bool = False,
     ) -> tuple[ContextEnvelope, list[ModelMessage]]:
         """Compact completed steps inside a run, without publishing a checkpoint.
@@ -822,6 +836,69 @@ class ContextEngine:
         if request is None or self._pending.get(session_id) != envelope:
             raise ContextSequenceError("request step does not belong to the active context envelope")
         current = list(messages)
+        refreshed_runtime = replace(
+            request.runtime,
+            runtime_context=(
+                request.runtime.runtime_context if runtime_context is None else runtime_context
+            ),
+            tool_schema_documents=tuple(tool_schemas),
+            active_skill_documents=(
+                request.runtime.active_skill_documents
+                if active_skill_documents is None
+                else tuple(active_skill_documents)
+            ),
+            retrieved_context_documents=(
+                request.runtime.retrieved_context_documents
+                if retrieved_context_documents is None
+                else tuple(retrieved_context_documents)
+            ),
+            work_product_documents=(
+                request.runtime.work_product_documents
+                if work_product_documents is None
+                else tuple(work_product_documents)
+            ),
+        )
+        if refreshed_runtime != request.runtime or task != request.task:
+            request = replace(request, runtime=refreshed_runtime, task=task)
+            canonical_current = [message for message in current if _transient_kind(message) is None]
+            memory_index, recalled_memory = self._memory_context(request.prompt)
+            assembled = self._assembler.assemble(
+                instructions=refreshed_runtime.system_instructions or refreshed_runtime.instructions,
+                policy=refreshed_runtime.policy_instructions,
+                instruction_sources=refreshed_runtime.instruction_sources,
+                runtime_context=refreshed_runtime.runtime_context,
+                prompt=request.prompt,
+                tool_schemas=refreshed_runtime.tool_schema_documents,
+                history=canonical_current,
+                memory_index=memory_index,
+                recalled_memory=recalled_memory,
+                active_skills=refreshed_runtime.active_skill_documents,
+                retrieved_context=refreshed_runtime.retrieved_context_documents,
+                task_state=_render_task_state(task.plan, refreshed_runtime.work_product_documents),
+            )
+            current = [
+                *self._policy_message(assembled.blocks),
+                *canonical_current,
+                *self._context_data_message(assembled.blocks),
+            ]
+            snapshot = self.snapshot_request(
+                session_id=session_id,
+                model_step=model_step,
+                messages=current,
+                instructions=instructions,
+                tool_schemas=tool_schemas,
+                output_reserve_tokens=output_reserve_tokens,
+            )
+            envelope = replace(
+                envelope,
+                provider_history=tuple(current),
+                blocks=assembled.blocks,
+                budget=assembled.budget,
+                request_snapshot=snapshot,
+                fingerprint=self._fingerprint(request, current),
+            )
+            self._pending[session_id] = envelope
+            self._pending_requests[session_id] = request
         snapshot = self.snapshot_request(
             session_id=session_id, model_step=model_step, messages=current,
             instructions=instructions, tool_schemas=tool_schemas,
@@ -1147,7 +1224,9 @@ class ContextEngine:
         messages_digest = _messages_digest(commit.new_messages)
         cached = self._committed.get(commit.envelope_fingerprint)
         if cached is not None:
-            cached_digest, transition = cached
+            cached_session_id, cached_digest, transition = cached
+            if cached_session_id != commit.session.id:
+                raise ContextSequenceError("context fingerprint belongs to a different session")
             if cached_digest != messages_digest:
                 raise ContextSequenceError(
                     "a repeated commit for the same envelope contained different messages"
@@ -1158,8 +1237,39 @@ class ContextEngine:
                 *prepared.canonical_history, *commit.new_messages[prepared.covered_new_messages:],
             ),
         )
-        self._committed[commit.envelope_fingerprint] = (messages_digest, transition)
+        self._committed[commit.envelope_fingerprint] = (
+            commit.session.id,
+            messages_digest,
+            transition,
+        )
         return transition
+
+    def reset_session_projection(self, session_id: str) -> None:
+        """Discard ephemeral context state after the active history lineage changes."""
+
+        task = self._background_tasks.pop(session_id, None)
+        if task is not None:
+            task.cancel()
+        self._pending.pop(session_id, None)
+        self._pending_requests.pop(session_id, None)
+        self._thrash.pop(session_id, None)
+        self._force_sessions.discard(session_id)
+        self._last_checkpoints.pop(session_id, None)
+        self._compacted_prefix_lengths.pop(session_id, None)
+        self._request_snapshots.pop(session_id, None)
+        self._request_input_estimates.pop(session_id, None)
+        self._usage_drift.pop(session_id, None)
+        self._checkpoint_hits.pop(session_id, None)
+        self._background_candidates.pop(session_id, None)
+        self._background_status.pop(session_id, None)
+        self._last_compaction_reason.pop(session_id, None)
+        stale = [
+            fingerprint
+            for fingerprint, (owner, _digest, _transition) in self._committed.items()
+            if owner == session_id
+        ]
+        for fingerprint in stale:
+            self._committed.pop(fingerprint, None)
 
     def confirm_persisted(
         self,
@@ -1575,6 +1685,9 @@ class ContextEngine:
         tool_schemas: Sequence[dict[str, Any]],
         route: str,
         settings: Mapping[str, Any] | None = None,
+        prompt_mode: str = "legacy",
+        prompt_preset: str | None = None,
+        prompt_version: str = "legacy",
     ) -> ModelInputManifest:
         """Describe one actual provider request without copying source bodies.
 
@@ -1642,19 +1755,33 @@ class ContextEngine:
         settings_digest = _canonical_digest(dict(settings or {}))
         source_payload = [source.model_dump(mode="json") for source in sources]
         context_sources_digest = _canonical_digest(source_payload)
+        stable_zones = {
+            ContextZone.SYSTEM,
+            ContextZone.POLICY,
+            ContextZone.CAPABILITY_CATALOG,
+        }
+        stable_sources = [
+            source.model_dump(mode="json") for source in sources if source.zone in stable_zones
+        ]
+        dynamic_sources = [
+            source.model_dump(mode="json") for source in sources if source.zone not in stable_zones
+        ]
         stable_prefix_digest = _canonical_digest(
             {
                 "instructions": instructions_digest,
                 "tools": tool_schema_digest,
                 "settings": settings_digest,
-                "context_sources": context_sources_digest,
+                "context_sources": stable_sources,
             }
+        )
+        dynamic_tail_digest = _canonical_digest(
+            {"messages": message_history_digest, "context_sources": dynamic_sources}
         )
         request_fingerprint = _canonical_digest(
             {
                 "route": route,
                 "stable_prefix": stable_prefix_digest,
-                "dynamic_tail": message_history_digest,
+                "dynamic_tail": dynamic_tail_digest,
                 "output_reserve_tokens": snapshot.output_reserve_tokens,
                 "context_fingerprint": envelope.fingerprint,
             }
@@ -1669,6 +1796,9 @@ class ContextEngine:
             route=route[:512],
             provider=provider[:128],
             model=model[:384],
+            prompt_mode=prompt_mode,
+            prompt_preset=prompt_preset,
+            prompt_version=prompt_version,
             context_fingerprint=envelope.fingerprint[:256],
             message_count=len(messages),
             tool_count=len(tool_schemas),
@@ -1678,7 +1808,7 @@ class ContextEngine:
             settings_digest=settings_digest,
             context_sources_digest=context_sources_digest,
             stable_prefix_digest=stable_prefix_digest,
-            dynamic_tail_digest=message_history_digest,
+            dynamic_tail_digest=dynamic_tail_digest,
             request_fingerprint=request_fingerprint,
             sources=tuple(sources),
             replay_eligibility=(
@@ -1967,12 +2097,20 @@ def _render_task_state(
 
     lines: list[str] = []
     if plan.steps:
-        lines.append(f"Plan revision: {plan.revision}")
+        lines.append(f"计划版本: {plan.revision}")
         for step in plan.steps:
             note = f" — {step.note}" if step.note else ""
             lines.append(f"- [{step.status.value}] `{step.id}` {step.title}{note}")
+            for criterion in step.acceptance_criteria:
+                lines.append(f"  验收条件 `{criterion.id}`: {criterion.description}")
+            if step.evidence_ids:
+                lines.append(f"  已关联证据: {', '.join(step.evidence_ids)}")
+        if any(step.acceptance_criteria for step in plan.steps):
+            lines.append("link_evidence 可用的近期执行回执(不是工作对象 ID):")
+            for receipt in plan.evidence[-8:]:
+                lines.append(f"- `{receipt.id}` 通过={receipt.passed}: {receipt.summary[:160]}")
     if work_product_documents:
-        lines.append("Active work products and recent effects:")
+        lines.append("当前工作对象和近期副作用:")
         lines.append(json.dumps(list(work_product_documents), ensure_ascii=False, sort_keys=True))
     return "\n".join(lines)
 

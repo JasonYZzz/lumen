@@ -1,5 +1,17 @@
 # Lumen
 
+文本 Agent 支持统一推理强度：模型配置 `reasoning_effort: medium`，CLI
+`lumen --thinking low` / `lumen web --thinking medium`，TUI 与 Web `/thinking`。
+可用档位按模型能力提供，只在空闲时切换，按 Session 与模型保存并供子 Agent 继承。
+DeepSeek V4、Kimi Coding K3、百炼 Anthropic Qwen 3.8 已提供原生参数映射；
+选择器显示 `medium → high` 等实际映射，未知模型会说明推理控制尚未配置。
+新初始化模板明确 medium；旧配置省略时维持 Provider 默认，`off` 必须由模型支持。
+默认安全工具并行、子 Agent 同时 3 个；独立任务先派发后等待，写入仍隔离到 worktree。
+详细优先级与兼容规则见[推理配置](docs/architecture-guide/07-configuration-and-data.md)。
+Provider 能力按供应商端点、协议和精确模型 ID 匹配；[对应关系列表](docs/generated/provider-reasoning.md)
+与代码同源生成，附官方依据和核对日期。[供应商升级流程](docs/architecture-guide/15-provider-catalog.md)
+包括更新目录、参数契约验证及生成物检查。未知新型号不自动套用旧规则。
+
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="docs/brand/lumen-lockup-dark.svg">
@@ -29,18 +41,19 @@ flowchart LR
 - OpenAI、Anthropic、Google、Ollama 及 OpenAI-compatible 模型。
 - YAML 配置模型、提示词、限制、本地插件和多个 MCP 服务。
 - **三种一致入口**：全屏 TUI、本机单工作区 Web 客户端，以及适合脚本/CI 的 `lumen -p` headless 模式；共用会话、审批、上下文、记忆、Skill 和 MCP 运行内核。
-- **Web 实时语音**：通过 capability-aware Router 支持 OpenAI Realtime 与阿里云百炼 Qwen Realtime；API Key、工具执行、审批和完成门禁始终留在 Lumen Host。语音与文字 turn 共用 Session v9、工作对象、MCP 和 Agent 能力。
+- **Web 实时语音**：通过 capability-aware Router 支持 OpenAI Realtime 与阿里云百炼 Qwen Realtime；API Key、工具执行、审批和完成门禁始终留在 Lumen Host。语音与文字 turn 共用 Session v10、工作对象、MCP 和 Agent 能力。
 - stdio 与 Streamable HTTP MCP；工具统一使用 `<server>_<tool>` 名称，通过 `search_tools` 的有界目录、关键词搜索或分页浏览发现后加载完整 schema，`/mcp` 查看连接状态。只有明确声明 `tool_effects: observe` 的调用在断线后自动重连重试一次；其他调用返回 `mcp_outcome_unknown`，要求先核实远端结果。
-- 内置只读工具 `read_file`、`list_directory`、`search_text`，严格限制在 `--cwd` 工作区内。
+- 内置只读工具 `read_file`、`list_directory`、`search_text`，严格限制在 `--cwd` 工作区内；
+  `search_text.path` 可传文件或目录，传文件时只搜索该文件。
 - 可选启用的工作区能力工具 `write_file`、`edit_file`、`run_command`，默认需要审批。
 - 计划与公开进度：模型在动手前调用 `set_plan`，过程中通过 `report_progress` 输出简短、公开的进度说明。
 - **Agent Skills**：扫描 `.lumen/skills/` 和 `~/.lumen/skills/` 发现 `SKILL.md` 技能包，模型自主按需加载或用户手动 `/skill:<name>` 触发；精确正文以内容寻址 artifact 固定在当前 session，resume 恢复同一 revision。
-- **显式并发契约**：`sequential` 逐个执行；当前原生 Loop 中 `parallel_safe` 和 `parallel` 都只重叠 Gateway 判定为 `ToolConcurrency.PARALLEL_SAFE` 的调用，未声明并发能力时串行。Risk 只决定审批；同轮审批聚合展示。
+- **显式并发契约**：默认 `parallel_safe`；显式 `sequential` 逐个执行。原生 Loop 中 `parallel_safe` 和 `parallel` 都只重叠 Gateway 判定为 `ToolConcurrency.PARALLEL_SAFE` 的调用，未声明并发能力时串行。工具完成立即显示，模型结果仍按调用顺序回填。Risk 只决定审批；同轮审批聚合展示。
 - **原生多 Agent Runtime**：`AgentOrchestrator` 持久化 depth-one Agent Thread，统一提供并行调度、消息路由、权限收窄、隔离 worktree、证据、恢复与完成门禁；旧 child 工具仅作为弃用兼容入口。
 - **自研 Agent Loop**：`LumenAgentLoop` 是唯一模型—工具循环权威，负责模型请求、工具批次、继续、重试、取消和 terminal candidate；Provider 传输与生命周期由低层 `PydanticAIModelDriver` 适配。
 - **生命周期钩子**：command/Python 钩子覆盖 prompt、工具前后与 stop，本地和 MCP 工具共用同一执行 seam。
 - **MCP resources/prompts/OAuth**：资源显式激活为当前 session 的 retrieved-context snapshot，prompt 按需渲染并标记外部来源；OAuth 使用 PKCE、刷新令牌与 0600 本地凭证。
-- 时间线 TUI：默认 Normal 信息密度会折叠 commentary，并按读取、搜索、本地探索、Web、MCP 等可见意图分别聚合低风险活动；命令、修改、失败和审批保持独立。进行态/完成态使用 `Reading/Read`、`Searching/Searched` 等明确文案，可用 `Ctrl+O` 切到 Verbose 审计视图。还提供语义化 loading、Lazy 消息渲染、流式 Markdown、工具专用卡片、固定队列式审批、可搜索 transcript、Agent 面板和请求/工具/token/耗时度量。
+- 时间线 TUI：默认 Normal 信息密度会折叠 commentary，并按读取、搜索、本地探索、Web、MCP 等可见意图分别聚合低风险活动；命令、修改、失败和审批保持独立。Provider 工具卡片使用“正在读取/已读取”“正在搜索/已搜索”等中文文案，可用 `Ctrl+O` 切到 Verbose 审计视图。还提供语义化 loading、Lazy 消息渲染、流式 Markdown、工具专用卡片、固定队列式审批、可搜索 transcript、Agent 面板和请求/工具/token/耗时度量。
 - 工具展示由 Tool Contract V2 生成可重放的 `ToolCallView/ToolResultView`；TUI 与 Web 消费同一 schema intent，未知工具自动降级为通用卡片，展示失败不影响工具真实结果。
 - 结构化上下文：system、memory、Skill、MCP catalog、历史和当前输入分区计费并执行硬上限；超过软阈值时只摘要上一 checkpoint 之后的 delta，完整 JSONL 历史仍追加持久化。
 - 大工具输出 receipt 化：旧轮次的超大工具结果只留摘要与 head/tail，正文写入 0600 内容寻址 artifact；模型追问细节时可用 `read_artifact` 按 ref 分页读回全文，涉密输出（`artifact_policy="never"`）永不落盘也不可回读。
@@ -50,19 +63,29 @@ flowchart LR
 
 ## 公开进度与私有推理
 
+- Agent Loop 与模型思考开关独立。未显式配置时保留 Provider 默认，不按模型名称
+  自动开关思考。`settings.thinking` 或 Provider 原生参数控制调用行为；Anthropic
+  路由显式设为 `thinking: false` 时，Driver 发送 `thinking: {type: disabled}`，
+  避免 SDK 省略字段后继续沿用上游默认。
+- 模型生成工具参数期间会显示准备提示，参数完整并通过校验后才进入工具执行；
+  思考开关不会关闭工具、调研进度或执行结果事件。
+- 多阶段工作使用一份简短计划，简单问答、单次修改或命令不强制规划。计划有验收条件时，
+  工具结果向模型附带 `plan_evidence` receipt；用 `link_evidence` 关联真实执行证据后
+  再完成步骤。未知证据和缺少验收仍安全失败，不能通过删条件冒充验证。
+  Web 进度胶囊明确显示“已完成 N / M”，不把当前步骤序号当作完成数量。
 - `report_progress` 仅承载面向用户的简短说明：发现、改动、错误、恢复与下一步动作。
 - 系统提示词明确禁止把私有思维链（chain-of-thought）写入进度。
 - 运行时不会把模型专属 reasoning/thinking 当成公开进度、最终文本或 canonical completion 证据；公开进度始终是结构化、经过校验的文本。
-- provider 返回的 reasoning/thinking 流（如 extended thinking）以只读的 `ThinkingDelta` 事件呈现为可折叠的 "Model reasoning" 块：仅用于展示，不进入最终答案，也不会被工具调用回撤；verbose 密度下默认展开。
+- Provider 返回的 reasoning/thinking 流（如 extended thinking）以只读的 `ThinkingDelta` 事件呈现在“处理过程”中：仅用于展示，不进入最终答案，也不会被工具调用回撤；verbose 密度下默认展开。Lumen 会按当前用户请求识别本轮主要语言，并要求可见推理、工具调用前说明、公开进度和最终回答使用该语言；Provider 原生私有推理不会被事后翻译或改写。
 
 ## 工作区能力工具
 
 - `write_file(path, content, overwrite=False)`：UTF-8 原子写入；默认拒绝覆盖，需显式 `overwrite=True`。
 - `edit_file(path, find, replace)`：要求 `find` 在文件中精确出现一次，否则失败。
 - `run_command(argv, cwd=".", timeout=None, env=None)`：以 `argv` 数组直接 `exec`，**不经过 shell**；超时或取消时终止整个进程组；stdout/stderr 并发 drain,各自只保留头尾各 64 KiB(中间丢弃但计入总字节数),所以 100 MB 的输出也不会撑爆内存,同时开头和结尾(通常是真正的报错/堆栈)都保留可见。
-- `web_fetch(url, start_char=1, max_chars=20000)`：抓取公共 http(s) URL 的一页可读文本；HTML 转 plain text，JSON/XML/YAML 原样返回，支持按 `next_start_char` 翻页。SSRF 防护：DNS 解析后拒绝 loopback/私网/链路本地地址，重定向逐跳重新校验；默认最多解析 2 MiB 内容，当前会先读取完整 HTTP 响应。`Risk=external`（默认需审批），`EffectKind=observe`；当前未声明并发策略，按 exclusive 执行。
+- `web_fetch(url, start_char=1, max_chars=20000)`：读取网页、API、JSON 或 RSS/XML 的默认工具，不写工作区。HTML 转为保留链接的 plain text，结构化文本原样返回，支持按 `next_start_char` 翻页；请求携带明确的 Accept/User-Agent，对 408/425/429/5xx 和传输故障最多尝试 3 次并遵守数值型 `Retry-After`。响应按流式 2 MiB 上限停止读取。SSRF 防护：DNS 解析后拒绝 loopback/私网/链路本地地址，重定向逐跳重新校验。`Risk=external`（默认需审批），`EffectKind=observe`；当前未声明并发策略，按 exclusive 执行。
 - `web_search(query)`：需在 `tools.web.search` 配置 provider（`tavily` 或 `brave`）与 `api_key_env` 后才会注册；返回 `title — url — snippet` 行。
-- `download_file(url, path, overwrite=False, sha256=None)`：把公共 URL 的 UTF-8 原始文件直接下载到工作区；不经模型转写或 HTML 提取，仅返回路径、字节数和 SHA-256。流式限制下载大小，拒绝二进制、HTML 页面、哈希不符和路径逃逸；原子发布并通过 TaskWorkspace journal 验证。`Risk=external`、`EffectKind=mutation`，默认需审批，Plan 模式不允许执行；需加入 `tools.builtins` 显式启用。
+- `download_file(url, path, overwrite=False, sha256=None)`：仅用于把已知原始 URL 的完整 UTF-8 文件保存到工作区；读取网页、API 或 RSS 应使用 `web_fetch`。它不经模型转写或 HTML 提取，仅返回路径、字节数和 SHA-256；与 `web_fetch` 使用相同的请求标识和瞬时故障重试，并继续流式限制下载大小、拒绝二进制、HTML、哈希不符和路径逃逸，最后原子发布并通过 TaskWorkspace journal 验证。`Risk=external`、`EffectKind=mutation`，默认需审批，Plan 模式不允许执行；需加入 `tools.builtins` 显式启用。
 - 文件工具及命令 cwd 受 `--cwd` 工作区约束，禁止路径逃逸；Web 工具访问公共 URL，使用独立的网络与审批约束。
 - `install_skill(source, path=None, ref=None, name=None, scope="project", overwrite=False)`：从 GitHub 或工作区本地目录安装完整 Skill，包括二进制资源、脚本可执行标记和空目录。自动解析默认分支并固定 commit，目录发布后验证全部内容，返回简短回执；安装后当前运行即可通过 `list_skills` / `load_skill` 发现与加载。需在 `tools.builtins` 显式启用；与其他写工具共用审批，Plan 模式不可执行。
 
@@ -86,6 +109,8 @@ tools:
     #   api_key_env: TAVILY_API_KEY
     #   max_results: 8
 ```
+
+网页能力按用途分三层：已核对支持的 Responses/Anthropic provider 可使用模型原生 `web_search`；需要独立搜索结果时可配置 Tavily/Brave `web_search` 或外部 MCP；已有 URL 的静态 HTML/API/RSS 内容使用内置 `web_fetch`。需要登录、点击、执行 JavaScript 或处理反爬挑战的页面不由 `web_fetch` 冒充支持，应连接受控 Browser MCP。实现与 Codex、Claude Code、Pi 的公开能力对照见 [网页检索能力审计](docs/research/2026-09-10-web-retrieval-capability-audit.md)。
 
 命令执行同时经过审批策略和 OS 沙箱。默认 `workspace_write`：macOS 使用 Seatbelt、Linux 使用 bubblewrap，网络关闭，隔离 `HOME/TMPDIR`，环境变量按 allowlist 构建；适配器缺失时 fail closed。只有显式配置 `sandbox.mode: disabled` 才放弃隔离。
 
@@ -173,6 +198,10 @@ context:
 
 ```yaml
 agent:
+  prompt:
+    mode: append                 # minimal | preset | append | replace
+    preset: lumen
+    append_file: prompts/system.md
   models:
     deepseek-v4-flash:
       id: openai:deepseek-v4-flash
@@ -180,6 +209,15 @@ agent:
         profile: deepseek-v4-flash
         # window_tokens / max_output_tokens / tokenizer 均可按部署显式覆盖
 ```
+
+`agent.prompt` 是稳定 Provider instructions 的唯一配置入口。`minimal` 使用精简内置指令，
+`preset` 使用版本化的 `lumen` preset，`append` 在 preset 后加入 `append_file`，`replace` 用
+`replace_file` 替换 preset。`replace` 仍保留 Lumen 的运行控制 policy，因为计划验收、澄清和并发
+语义属于 Runtime 契约。旧 `instructions_file` 已删除，配置中出现该字段会直接校验失败。
+
+模型名称、模型 ID、MCP 状态、工作目录和 Skill 目录属于动态运行上下文，由 ContextEngine 在每次
+请求中以 system role 注入，不进入稳定 instructions。`/instructions` 可查看当前 mode、preset 版本、
+摘要 digest 和来源，不回显正文。
 
 解析优先级为模型显式字段 → 显式 profile → 精确模型 slug alias → 80k conservative fallback。未知模型的初始输出 reserve 按 window 自适应：以 16K 为现代基线、32K 为未验证能力上限，同时不超过窗口的 1/4；发生 `LENGTH` 时可继续有界扩容。旧 `soft_token_limit` / `keep_recent_tokens` 仍可读取，但 `/context` 和配置诊断会显示弃用提示。
 
@@ -324,7 +362,7 @@ Web 输入区采用紧凑圆角输入框。点击 `+` 可添加图片或打开�
 
 历史工具错误不会让已结束的处理过程一直展开或显示“需要确认”；失败记录仍可展开查看。Web 的 `@文件` 支持在光标处插入、键盘选择和中文/空格路径，并保持高亮层与输入光标的字宽、换行和滚动同步。
 
-右上角“设置”在新任务页和已打开任务中始终可用。模型页读取脱敏后的最终配置、来源和字段状态；保存时只接受 API key 环境变量名，不接收或回显密钥明文。Web 不改写可能含注释或凭据的 User/Project/Local YAML，而是原子写入 `.lumen/agent.web.yaml` 受管覆盖层；并发修改、未受管的同名文件、无效合并结果和活动 Run 都会安全失败。首次把旧的单模型配置转换为模型注册表时会保留原模型和原默认选择；含内联密钥的单模型必须先改为环境变量引用，不能被不安全地复制进受管层。保存后需要重启 Web 才会重建模型注册表。扩展能力与 Agent 预设页当前使用 `ResourceManager.capabilities_report()` 提供真实只读清单。
+右上角“设置”在新任务页和已打开任务中始终可用。模型页读取脱敏后的最终配置、来源和字段状态，并可配置 provider 原生联网模式；保存时只接受 API key 环境变量名，不接收或回显密钥明文。Web 不改写可能含注释或凭据的 User/Project/Local YAML，而是原子写入 `.lumen/agent.web.yaml` 受管覆盖层；并发修改、未受管的同名文件、无效合并结果和活动 Run 都会安全失败。首次把旧的单模型配置转换为模型注册表时会保留原模型和原默认选择；含内联密钥的单模型必须先改为环境变量引用，不能被不安全地复制进受管层。扩展能力页可独立启停已配置的 MCP server；开关只写 `mcp.enabled`，不会复制 URL、header 或凭据，保存后需要重启 Web 才会重建资源连接。其余能力与 Agent 预设清单仍来自 `ResourceManager.capabilities_report()` 的真实投影。
 
 #### Web Live 实时语音
 
@@ -520,7 +558,7 @@ uv run lumen --resume <session-uuid>
 
 各层可以只写覆盖字段，合并后才执行完整 schema 校验。普通 mapping 深度合并；`agent.models` 和 `mcp_servers` 按名称合并，同名项整项替换，YAML `null` 删除继承项；`tools.builtins` 整体替换；插件与权限列表合并去重，`always_deny` 最终优先。设置 `agent.model` 会清除继承的多模型配置，设置 `agent.models` 会清除继承的单模型配置。
 
-`instructions_file`、显式 session 目录和插件来源相对于**声明它的配置文件**解析。未配置 session 目录时固定使用 `<workspace>/.lumen/sessions`；stdio MCP 始终以 workspace 为 cwd。MCP 字符串支持 `${VAR}` 与 `${VAR:-default}`，`${LUMEN_PROJECT_DIR}` 始终由 Lumen 设置为 workspace，不能被配置覆盖。
+`agent.prompt.append_file` / `replace_file`、显式 session 目录和插件来源相对于**声明它的配置文件**解析。未配置 session 目录时固定使用 `<workspace>/.lumen/sessions`；stdio MCP 始终以 workspace 为 cwd。MCP 字符串支持 `${VAR}` 与 `${VAR:-default}`，`${LUMEN_PROJECT_DIR}` 始终由 Lumen 设置为 workspace，不能被配置覆盖。
 
 Legacy、Project、Local 配置和项目 Skills 在项目受信任前不会被解析或执行。交互终端会列出文件并询问；CI 等非交互环境默认拒绝，可显式管理：
 
@@ -837,17 +875,41 @@ agent:
 ```
 
 > **关于 Responses API 的状态与内置工具**：Lumen 自己拥有 Session journal、ContextEngine、
-> ToolRegistry、审批和 Sandbox，因此 Responses 路径默认不开 `previous_response_id` / `conversation`
-> 和 provider 内置工具；每次请求携带 Lumen 准备的历史与 function tools。这样 OpenAI 的有状态实现、
-> DeepSeek 的无状态部分兼容实现以及第三方 provider 都投影到同一套 Lumen 运行时权威。
+> ToolRegistry、审批和 Sandbox，因此 Responses 路径仍不开 `previous_response_id` / `conversation`；
+> 每次请求携带 Lumen 准备的历史与 function tools。provider 原生 `web_search` 是一个明确例外：
+> 它按模型配置进入冻结请求清单，由 provider 在服务端执行，不成为 Lumen 本地 ToolRegistry 的第二套
+> 权威。
+
+模型原生联网按路由配置，不与 Exa 等 MCP 混为一个开关：
+
+```yaml
+agent:
+  models:
+    deepseek-v4-flash:
+      id: openai:deepseek-v4-flash
+      base_url: https://api.deepseek.com
+      api: responses
+      native_web_search:
+        mode: auto              # auto | enabled | disabled
+        search_context_size: medium  # low | medium | high
+```
+
+- `auto` 只为 Provider Catalog 中“模型 ID + 协议 + 官方端点”精确核对过的路由开启；当前配置的
+  DeepSeek V4 Flash / Pro、Kimi Code K3 和百炼 Qwen3.8 Max / Flash 都会默认启用。
+  未知兼容代理不会被猜测为支持。
+- `enabled` 用于显式开启其他已知支持 provider 原生搜索的 Responses 路由；`disabled` 强制关闭。
+- 原生搜索由 provider 执行，不经过 Lumen 的 MCP `CapabilityGateway`、本地审批或 Sandbox；请求
+  manifest 仍记录它的 schema digest，并把原生调用视为不可安全重放的外部动作。
+- `search_context_size` 只会发送给接受该字段的 Responses provider。Kimi Code K3 已实测会拒绝此
+  可选字段，因此 Adapter 保留原生搜索、自动省略该参数；Anthropic 协议使用自身的 server tool 形状。
 
 ### DeepSeek / Kimi / 阿里云百炼示例
 
 它们都是 OpenAI-compatible 端点，直接使用 `openai:` 前缀和对应 `base_url`：
 
-- **DeepSeek V4 Flash / Pro**：`base_url: https://api.deepseek.com`，默认 `api: responses`。其 Responses 实现支持 function tools、reasoning Items 和语义化 SSE，但不支持 `previous_response_id`、`conversation`、`store` 或 background（[官方兼容性明细](https://api-docs.deepseek.com/zh-cn/guides/responses_api/)）。
-- **Kimi Code K3**：`id: openai:k3`，`base_url: https://api.kimi.com/coding/v1`，默认 `api: responses`；K3 已验证支持 `input_image`，应声明 `input_modalities: [text, image]`；需要回退时显式 `api: chat`（[Kimi K3 模型能力](https://www.kimi.com/code/docs/kimi-code/models.html) / [provider 协议配置](https://www.kimi.com/code/docs/kimi-code-cli/configuration/providers.html#openai-responses)）。
-- **阿里云百炼 GLM-5.2 / Qwen**：OpenAI 与 Anthropic 兼容端点均可使用；协议前缀只选择传输，不推断模型能力。当前 Token Plan Qwen 配置使用已验证的 Anthropic 兼容端点 `https://token-plan.cn-beijing.maas.aliyuncs.com/apps/anthropic`。`qwen3.8-max` / `qwen3.8-flash` 可使用 `alibaba-qwen3.8` profile（1M context、131072 最大输出）（[Qwen3.8 Max 规格](https://help.aliyun.com/zh/model-studio/qwen3-8-max) / [Token Plan 快速开始](https://help.aliyun.com/zh/model-studio/token-plan-personal-quick-start)）。
+- **DeepSeek V4 Flash / Pro**：`base_url: https://api.deepseek.com`，默认 `api: responses`。其 Responses 实现支持 function tools、provider 原生 `web_search`、reasoning Items 和语义化 SSE，但不支持 `previous_response_id`、`conversation`、`store` 或 background（[官方兼容性明细](https://api-docs.deepseek.com/zh-cn/guides/responses_api/)）。精确匹配该官方路由时，`native_web_search.mode: auto` 默认生效。
+- **Kimi Code K3**：`id: openai:k3`，`base_url: https://api.kimi.com/coding/v1`，默认 `api: responses`；K3 已验证支持 `input_image` 和 provider 原生 `web_search`，应声明 `input_modalities: [text, image]`；原生搜索请求不能携带 `search_context_size`，由 Adapter 自动省略。需要回退时显式 `api: chat`（[Kimi K3 模型能力](https://www.kimi.com/code/docs/kimi-code/models.html) / [provider 协议配置](https://www.kimi.com/code/docs/kimi-code-cli/configuration/providers.html#openai-responses)）。
+- **阿里云百炼 GLM-5.2 / Qwen**：OpenAI 与 Anthropic 兼容端点均可使用；协议前缀只选择传输，不推断模型能力。当前 Token Plan Qwen 配置使用已验证的 Anthropic 兼容端点 `https://token-plan.cn-beijing.maas.aliyuncs.com/apps/anthropic`。`qwen3.8-max` / `qwen3.8-flash` 可使用 `alibaba-qwen3.8` profile（1M context、131072 最大输出），且 `auto` 会添加 Anthropic server-side `web_search`（[百炼联网搜索](https://help.aliyun.com/zh/model-studio/web-search) / [Token Plan 快速开始](https://help.aliyun.com/zh/model-studio/token-plan-personal-quick-start)）。
 
 ### 本地 oMLX / Qwen3.8
 
@@ -925,6 +987,18 @@ mcp_servers:
     load_prompts: true
     required: false
 ```
+
+每个已配置 server 可用独立策略停用，而不删除其连接定义：
+
+```yaml
+mcp:
+  enabled:
+    weather: false
+```
+
+未写入 `mcp.enabled` 的 server 默认启用，兼容既有配置。设为 `false` 后不会建立连接，也不会加载
+该 server 的 tools、resources 或 prompts；Web“设置 → 扩展能力”提供同一开关，保存后需重启。
+策略中的名称必须存在于最终合并后的 `mcp_servers`，拼错会在配置检查阶段失败。
 
 需要 OAuth 的远程服务可配置 `oauth.client_id`、`scopes` 与凭证文件。Lumen 通过
 MCP protected-resource metadata 发现授权端点，使用浏览器 PKCE 流程，并自动刷新、
@@ -1071,7 +1145,7 @@ agent:
 
 **模型自主**:模型看到 system prompt 中的 `<available_skills>` 目录后,判断任务相关时调用 `load_skill(name)` 加载正文；若正文引用 `reference.md` 等文件，再调用 `read_skill_resource(name, path)`。
 
-加载后的 Skill 正文立即写入 0600 内容寻址 artifact。由 schema v5 引入、并由当前 Session v9 继续承载的 `context_state` 只保存 name/revision/source/ref。它只在当前 session 的后续请求中重注入；其他 session 不可见。resume 使用同一 artifact，不会因磁盘上的 `SKILL.md` 已变化而静默升级；重新激活才采用新 revision。`/context sources` 可查看当前活动来源。
+加载后的 Skill 正文立即写入 0600 内容寻址 artifact。由 schema v5 引入、并由当前 Session v10 继续承载的 `context_state` 只保存 name/revision/source/ref。它只在当前 session 的后续请求中重注入；其他 session 不可见。resume 使用同一 artifact，不会因磁盘上的 `SKILL.md` 已变化而静默升级；重新激活才采用新 revision。`/context sources` 可查看当前活动来源。
 
 **用户手动**:在输入框打 `/skill:<name> [args]`,skill body 被包装为 `<skill>` XML 块作为用户消息发送。带补全自动补全:
 
@@ -1113,7 +1187,7 @@ memory:
 
 ## 会话与安全
 
-- 会话保存在 `.lumen/sessions/<uuid>.jsonl`；新会话使用 schema v9。v1–v8 可兼容加载，首次追加高版本事实时只写入 `schema_upgrade`，不会改写 header 或历史记录。
+- 会话保存在 `.lumen/sessions/<uuid>.jsonl`；新会话使用 schema v11。v1–v10 可兼容加载，首次追加高版本事实时只写入 `schema_upgrade`，不会改写 header 或历史记录。Web 编辑历史消息会在同一 Session 追加 `history_rewind` 后重新生成，保留标题和窗口；旧分支仍可审计，但不会进入活动上下文。
 - 加载会话时活动上下文以最近一次压缩前缀为起点重建；完整 JSONL 始终是权威事实。read projection cache 只加速 materialized 读取，digest 不一致时从 journal 冷算，删除缓存不会丢失历史。
 - 内置文件工具阻止 `..` 和符号链接越过工作区。`read_file` 流式返回带 `has_more` / `next_start_line` 的分页结果，默认每页 400 行并受 64 KiB 内容预算约束；二进制、无效 UTF-8 和单行超预算会返回可恢复错误。`list_directory` / `search_text` 输出截到 64 KiB；`run_command` 并发 drain stdout/stderr，各自保留头尾各 64 KiB。
 - Python 插件仍在 Lumen 进程内执行，MCP 远端副作用也不受本地 workspace sandbox 代替约束；两者必须经过 Tool Registry、Risk、PermissionPolicy、Hook 与单调 `ToolGuard`。未声明的外部副作用按 `external_unknown` 处理，不能在恢复时自动重放；OS sandbox 只对进入执行 Seam 的本地进程强制实际系统权限。

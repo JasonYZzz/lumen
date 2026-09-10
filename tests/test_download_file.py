@@ -16,7 +16,7 @@ from lumen.sessions import SessionRepository
 from lumen.skills import SkillLoader
 from lumen.tools.gateway import CapabilityApproval, CapabilityGateway, CapabilityInvocation, CapabilityStatus
 from lumen.tools.registry import PermissionPolicy, ToolRegistry
-from lumen.tools.web import build_download_file_spec
+from lumen.tools.web import build_download_file_spec, build_web_fetch_spec
 from lumen.work_products import EffectStatus, TaskWorkspace
 
 
@@ -109,6 +109,99 @@ async def test_download_cancellation_during_network_does_not_write(tmp_path: Pat
     with pytest.raises(asyncio.CancelledError):
         await task
     assert not (tmp_path / "source.md").exists()
+
+
+async def test_download_retries_transient_upstream_failures(tmp_path: Path) -> None:
+    calls: list[httpx.Request] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        calls.append(request)
+        if len(calls) < 3:
+            return httpx.Response(504, request=request)
+        return httpx.Response(200, content=b"source", request=request)
+
+    spec = build_download_file_spec(
+        tmp_path,
+        host_guard=lambda _: True,
+        transport=httpx.MockTransport(respond),
+        retry_backoff_seconds=0,
+    )
+    assert spec.description is not None and "不要用它阅读" in spec.description
+    result = await spec.function("https://example.com/source", "source.md")
+
+    assert result["bytes"] == 6
+    assert (tmp_path / "source.md").read_bytes() == b"source"
+    assert len(calls) == 3
+    assert calls[0].headers["user-agent"].startswith("Mozilla/5.0")
+
+
+def test_web_fetch_retries_and_keeps_page_links() -> None:
+    calls: list[httpx.Request] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        calls.append(request)
+        if len(calls) == 1:
+            return httpx.Response(503, request=request)
+        return httpx.Response(
+            200,
+            request=request,
+            headers={"content-type": "text/html; charset=utf-8"},
+            content=b'<main><p>Read <a href="/docs">the docs</a>.</p></main>',
+        )
+
+    spec = build_web_fetch_spec(
+        host_guard=lambda _: True,
+        transport=httpx.MockTransport(respond),
+        retry_backoff_seconds=0,
+    )
+    assert spec.description is not None and "优先使用本工具" in spec.description
+    result = spec.function("https://example.com/start")
+
+    assert result["content"] == "Read the docs (https://example.com/docs)."
+    assert result["url"] == "https://example.com/start"
+    assert len(calls) == 2
+    assert calls[0].headers["accept"].startswith("text/html")
+    assert calls[0].headers["user-agent"].startswith("Mozilla/5.0")
+
+
+def test_web_fetch_stops_reading_at_the_byte_limit() -> None:
+    spec = build_web_fetch_spec(
+        max_bytes=8,
+        host_guard=lambda _: True,
+        transport=httpx.MockTransport(
+            lambda request: httpx.Response(
+                200,
+                request=request,
+                headers={"content-type": "application/rss+xml"},
+                content=b"0123456789",
+            )
+        ),
+    )
+
+    result = spec.function("https://example.com/data")
+
+    assert result["content"] == "01234567"
+    assert result["truncated"] is True
+    assert result["total_chars"] is None
+
+
+def test_web_fetch_explains_exhausted_transient_retries() -> None:
+    calls = 0
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return httpx.Response(504, request=request)
+
+    spec = build_web_fetch_spec(
+        host_guard=lambda _: True,
+        transport=httpx.MockTransport(respond),
+        retry_backoff_seconds=0,
+    )
+
+    with pytest.raises(RuntimeError, match=r"failed after 3 attempts.*504 Gateway Timeout"):
+        spec.function("https://example.com/data")
+    assert calls == 3
 
 
 async def test_download_requires_approval_before_network(tmp_path: Path) -> None:

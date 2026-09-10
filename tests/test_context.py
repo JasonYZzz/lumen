@@ -498,8 +498,8 @@ def test_summary_instructions_includes_previous_summary_when_given() -> None:
         diagnostics=[],
         previous_summary=prior,
     )
-    assert "UPDATE" in instructions
-    assert "PRESERVE" in instructions
+    assert "这是一次更新" in instructions
+    assert "必须保留" in instructions
     assert "original goal" in instructions
 
 
@@ -513,7 +513,7 @@ def test_summary_instructions_omits_previous_section_on_first_run() -> None:
         diagnostics=[],
         previous_summary=None,
     )
-    assert "UPDATE" not in instructions
+    assert "这是一次更新" not in instructions
     assert "<previous-summary>" not in instructions
 
 
@@ -568,7 +568,7 @@ async def test_session_resume_restores_summary_for_iterative_compaction(tmp_path
     instructions = manager._summary_instructions(  # type: ignore[reportPrivateUsage]
         PlanState(), [], previous_summary=restored
     )
-    assert "UPDATE" in instructions
+    assert "这是一次更新" in instructions
     assert "first goal" in instructions
 
 

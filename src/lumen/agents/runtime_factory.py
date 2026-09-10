@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import subprocess
+import time
 from collections.abc import Awaitable, Callable, Sequence
 from pathlib import Path
 from typing import cast
@@ -23,12 +25,16 @@ from lumen.config import (
 )
 from lumen.context import ContextEngine
 from lumen.context.artifacts import ArtifactStore
+from lumen.context.instructions import InstructionSource
 from lumen.events import ApprovalRequest, ProgressReported, ToolCallStarted
 from lumen.interactive_queue import QueueMode
-from lumen.models import build_model
+from lumen.models import build_model, build_native_tools
+from lumen.reasoning import ReasoningSelection, resolve_reasoning
 from lumen.runtime import AgentRuntime, ApprovalHandler, CompletionPolicy, ToolApproval
+from lumen.sandbox import SandboxRunner
 from lumen.task_control import CONTROL_TOOL_NAMES
 from lumen.tools.builtin import build_builtin_specs
+from lumen.tools.capability import run_prepared_command
 from lumen.tools.gateway import CapabilityGateway
 from lumen.tools.registry import PermissionPolicy, ToolRegistry
 from lumen.tools.spec import EffectKind, Risk, ToolConcurrency, ToolSpec
@@ -66,6 +72,7 @@ class NativeAgentRuntimeFactory(AgentRuntimeFactory):
         artifacts: ArtifactStore,
         context_config: ContextConfig,
         task_workspace: TaskWorkspace | None = None,
+        parent_reasoning: Callable[[], ReasoningSelection | None] | None = None,
     ) -> None:
         self.workspace = Path(workspace).expanduser().resolve()
         self.config = config
@@ -80,6 +87,9 @@ class NativeAgentRuntimeFactory(AgentRuntimeFactory):
         self.artifacts = artifacts
         self.context_config = context_config
         self.task_workspace = task_workspace
+        self.parent_reasoning = parent_reasoning
+        self._git_lock = asyncio.Lock()
+        self._import_lock = asyncio.Lock()
         self._approval_handler: ApprovalHandler | None = None
         self._status_handler: Callable[[str, AgentStatus], Awaitable[None]] | None = None
         self._progress_handler: Callable[[str, str, str | None], Awaitable[None]] | None = None
@@ -152,10 +162,20 @@ class NativeAgentRuntimeFactory(AgentRuntimeFactory):
             }
         request_limits = [v for v in (self.config.request_count, self.limits.request_count) if v is not None]
         tool_limits = [v for v in (self.config.tool_calls, self.limits.tool_calls) if v is not None]
+        inherited = (
+            self.parent_reasoning()
+            if self.parent_reasoning is not None and model_name == self.active_model_name() else None
+        )
+        reasoning = (
+            resolve_reasoning(model, profile.reasoning_effort, source="agent_profile")
+            if profile.reasoning_effort is not None
+            else inherited or resolve_reasoning(model)
+        )
         return AgentConfigSnapshot(
             model_name=model_name,
             model_id=model.id,
             reasoning_effort=profile.reasoning_effort,
+            reasoning=reasoning,
             tool_names=tuple(sorted(candidates)),
             tool_policies=tuple(
                 AgentToolPolicy(
@@ -189,20 +209,28 @@ class NativeAgentRuntimeFactory(AgentRuntimeFactory):
         return await self._execute_runtime(thread, profile, messages, self.workspace)
 
     async def import_changes(self, thread: AgentThreadState) -> AgentExecutionResult:
+        started = time.monotonic()
+        async with self._import_lock:
+            result = await self._import_changes(thread)
+        return result.model_copy(update={
+            "usage": {**result.usage, "worktree_import_seconds": round(time.monotonic() - started, 6)},
+        })
+
+    async def _import_changes(self, thread: AgentThreadState) -> AgentExecutionResult:
         if not thread.commit:
             raise ValueError("agent has no commit to import")
-        current_head = self._git(self.workspace, "rev-parse", "HEAD").strip()
+        current_head = (await self._git(self.workspace, "rev-parse", "HEAD")).strip()
         child_paths = set(
-            self._git(
+            (await self._git(
                 self.workspace,
                 "diff-tree",
                 "--no-commit-id",
                 "--name-only",
                 "-r",
                 thread.commit,
-            ).splitlines()
+            )).splitlines()
         )
-        dirty_paths = self._dirty_paths(self.workspace)
+        dirty_paths = (await self._dirty_paths(self.workspace))
         overlap = sorted(child_paths & dirty_paths)
         if overlap:
             return AgentExecutionResult(
@@ -219,10 +247,10 @@ class NativeAgentRuntimeFactory(AgentRuntimeFactory):
             raise FileExistsError(f"integration worktree already exists: {integration}")
         integration.parent.mkdir(parents=True, exist_ok=True)
         try:
-            self._git(self.workspace, "worktree", "add", "--detach", str(integration), current_head)
-            preflight = self._git_result(integration, "cherry-pick", thread.commit)
+            (await self._git(self.workspace, "worktree", "add", "--detach", str(integration), current_head))
+            preflight = (await self._git_result(integration, "cherry-pick", thread.commit))
             if preflight.returncode != 0:
-                self._git_result(integration, "cherry-pick", "--abort")
+                (await self._git_result(integration, "cherry-pick", "--abort"))
                 return AgentExecutionResult(
                     status=AgentStatus.RECONCILIATION_REQUIRED,
                     output="import preflight found a merge conflict",
@@ -232,10 +260,10 @@ class NativeAgentRuntimeFactory(AgentRuntimeFactory):
                     base_commit=thread.base_commit,
                     commit=thread.commit,
                 )
-            self._git(integration, "diff", "--check", f"{current_head}..HEAD")
+            (await self._git(integration, "diff", "--check", f"{current_head}..HEAD"))
         finally:
-            self._git_result(self.workspace, "worktree", "remove", "--force", str(integration))
-        if self._git(self.workspace, "rev-parse", "HEAD").strip() != current_head:
+            (await self._git_result(self.workspace, "worktree", "remove", "--force", str(integration)))
+        if (await self._git(self.workspace, "rev-parse", "HEAD")).strip() != current_head:
             return AgentExecutionResult(
                 status=AgentStatus.RECONCILIATION_REQUIRED,
                 output="main HEAD changed during import preflight",
@@ -246,14 +274,14 @@ class NativeAgentRuntimeFactory(AgentRuntimeFactory):
                 commit=thread.commit,
             )
         prepared_effects: tuple[str, ...] = ()
-        import_diff = self._git(
+        import_diff = (await self._git(
             self.workspace,
             "show",
             "--format=",
             "--no-ext-diff",
             "--no-renames",
             thread.commit,
-        )
+        ))
         if self.task_workspace is not None:
             try:
                 self.task_workspace.bind_session(thread.ref.parent_session_id)
@@ -271,9 +299,9 @@ class NativeAgentRuntimeFactory(AgentRuntimeFactory):
                     base_commit=thread.base_commit,
                     commit=thread.commit,
                 )
-        imported = self._git_result(self.workspace, "cherry-pick", thread.commit)
+        imported = (await self._git_result(self.workspace, "cherry-pick", thread.commit))
         if imported.returncode != 0:
-            self._git_result(self.workspace, "cherry-pick", "--abort")
+            (await self._git_result(self.workspace, "cherry-pick", "--abort"))
             if self.task_workspace is not None:
                 self.task_workspace.finalize_import_effects(
                     prepared_effects,
@@ -337,27 +365,27 @@ class NativeAgentRuntimeFactory(AgentRuntimeFactory):
         )
         return True
 
-    def classify_recovery(self, thread: AgentThreadState) -> AgentStatus:
+    async def classify_recovery(self, thread: AgentThreadState) -> AgentStatus:
         """Conservatively classify a persisted writable Agent after restart."""
 
         if thread.config.workspace_mode is WorkspaceMode.READ_ONLY:
             return AgentStatus.QUEUED
         if thread.commit:
-            commit = self._git_result(
+            commit = (await self._git_result(
                 self.workspace,
                 "cat-file",
                 "-e",
                 f"{thread.commit}^{{commit}}",
-            )
+            ))
             if commit.returncode == 0:
                 return AgentStatus.IMPORT_PENDING
         return AgentStatus.RECONCILIATION_REQUIRED
 
     async def close(self, thread: AgentThreadState) -> None:
         if thread.worktree:
-            self._git_result(self.workspace, "worktree", "remove", "--force", thread.worktree)
+            (await self._git_result(self.workspace, "worktree", "remove", "--force", thread.worktree))
         if thread.branch:
-            self._git_result(self.workspace, "branch", "-D", thread.branch)
+            (await self._git_result(self.workspace, "branch", "-D", thread.branch))
 
     async def _execute_worktree(
         self,
@@ -365,10 +393,11 @@ class NativeAgentRuntimeFactory(AgentRuntimeFactory):
         profile: AgentProfile,
         messages: Sequence[AgentMessage],
     ) -> AgentExecutionResult:
-        root = self._git(self.workspace, "rev-parse", "--show-toplevel").strip()
+        started = time.monotonic()
+        root = (await self._git(self.workspace, "rev-parse", "--show-toplevel")).strip()
         if Path(root).resolve() != self.workspace:  # noqa: ASYNC240 - synchronous Git boundary
             raise RuntimeError("writable agents require the workspace Git root")
-        base = thread.base_commit or self._git(self.workspace, "rev-parse", "HEAD").strip()
+        base = thread.base_commit or (await self._git(self.workspace, "rev-parse", "HEAD")).strip()
         branch = thread.branch or (
             f"lumen/agent/{thread.ref.parent_session_id[:8]}/"
             f"{thread.ref.id.removeprefix('agent-')}"
@@ -380,9 +409,14 @@ class NativeAgentRuntimeFactory(AgentRuntimeFactory):
         )
         if not worktree.exists():
             worktree.parent.mkdir(parents=True, exist_ok=True)
-            self._git(self.workspace, "worktree", "add", "-b", branch, str(worktree), base)
+            (await self._git(self.workspace, "worktree", "add", "-b", branch, str(worktree), base))
+        prepared_seconds = time.monotonic() - started
         execution = await self._execute_runtime(thread, profile, messages, worktree)
-        status = self._git(worktree, "status", "--porcelain")
+        finalizing = time.monotonic()
+        execution = execution.model_copy(update={
+            "usage": {**execution.usage, "worktree_prepare_seconds": round(prepared_seconds, 6)},
+        })
+        status = (await self._git(worktree, "status", "--porcelain"))
         if not status.strip():
             return execution.model_copy(
                 update={
@@ -390,11 +424,13 @@ class NativeAgentRuntimeFactory(AgentRuntimeFactory):
                     "worktree": str(worktree),
                     "branch": branch,
                     "base_commit": base,
+                    "usage": {**execution.usage,
+                              "worktree_finalize_seconds": round(time.monotonic() - finalizing, 6)},
                 }
             )
-        self._git(worktree, "diff", "--check")
-        self._git(worktree, "add", "-A")
-        self._git(
+        (await self._git(worktree, "diff", "--check"))
+        (await self._git(worktree, "add", "-A"))
+        (await self._git(
             worktree,
             "-c",
             "user.name=Lumen Agent",
@@ -403,9 +439,9 @@ class NativeAgentRuntimeFactory(AgentRuntimeFactory):
             "commit",
             "-m",
             f"lumen agent {thread.task_name}: {thread.task[:72]}",
-        )
-        commit = self._git(worktree, "rev-parse", "HEAD").strip()
-        diff = self._git(worktree, "show", "--stat", "--oneline", "--no-renames", commit)
+        ))
+        commit = (await self._git(worktree, "rev-parse", "HEAD")).strip()
+        diff = (await self._git(worktree, "show", "--stat", "--oneline", "--no-renames", commit))
         return execution.model_copy(
             update={
                 "status": AgentStatus.IMPORT_PENDING,
@@ -414,6 +450,8 @@ class NativeAgentRuntimeFactory(AgentRuntimeFactory):
                 "base_commit": base,
                 "commit": commit,
                 "diff": diff,
+                "usage": {**execution.usage,
+                          "worktree_finalize_seconds": round(time.monotonic() - finalizing, 6)},
             }
         )
 
@@ -425,10 +463,13 @@ class NativeAgentRuntimeFactory(AgentRuntimeFactory):
         cwd: Path,
     ) -> AgentExecutionResult:
         model_config = self.model_registry[thread.config.model_name]
+        if model_config.id != thread.config.model_id:
+            raise ValueError("Agent model configuration changed; restore its original model ID to continue")
         tools, metadata = self._tools_for(thread, cwd)
         effective_model_settings = dict(model_config.settings)
-        if thread.config.reasoning_effort is not None:
-            effective_model_settings["thinking"] = thread.config.reasoning_effort
+        reasoning = thread.config.reasoning or resolve_reasoning(
+            model_config, thread.config.reasoning_effort, source="agent_profile",
+        )
         effect_receipts: list[EffectReceipt] = []
 
         def record_effect(
@@ -492,14 +533,25 @@ class NativeAgentRuntimeFactory(AgentRuntimeFactory):
             replacements=replacement_specs,
             effect_recorder=record_effect,
         )
+        child_instructions = (
+            f"{profile.instructions}\n\n"
+            "你是一层深度的子 Agent。不要创建或协调其他 Agent。"
+            "向父 Agent 返回简洁且有证据支持的结果。"
+        )
         runtime = AgentRuntime(
             model=child_model,
             tools=tools,
             toolsets=(),
-            instructions=(
-                f"{profile.instructions}\n\n"
-                "You are a child Agent at depth one. Do not spawn or coordinate other agents. "
-                "Return a concise result for the parent Agent."
+            instructions=child_instructions,
+            prompt_mode="replace",
+            prompt_version=profile.revision,
+            prompt_sources=(
+                InstructionSource(
+                    origin=profile.file_path or f"builtin:agent-profile:{profile.name}",
+                    role="system",
+                    text=child_instructions,
+                    revision=profile.revision,
+                ),
             ),
             limits=self.limits.model_copy(
                 update={
@@ -510,6 +562,7 @@ class NativeAgentRuntimeFactory(AgentRuntimeFactory):
             ),
             tool_metadata=metadata,
             model_settings=cast(ModelSettings, effective_model_settings),
+            native_tools=build_native_tools(model_config),
             effect_recorder=record_effect,
             context_engine=ContextEngine(
                 config=self.context_config,
@@ -579,6 +632,7 @@ class NativeAgentRuntimeFactory(AgentRuntimeFactory):
         if queued:
             prompt += "\n\nParent messages:\n" + "\n".join(f"- {item}" for item in queued[-8:])
         try:
+            runtime.configure_reasoning(reasoning)
             async with runtime:
                 outcome = await runtime.run(
                     prompt,
@@ -683,9 +737,8 @@ class NativeAgentRuntimeFactory(AgentRuntimeFactory):
             return []
         return list(ModelMessagesTypeAdapter.validate_json(body))
 
-    @staticmethod
-    def _dirty_paths(cwd: Path) -> set[str]:
-        output = NativeAgentRuntimeFactory._git(cwd, "status", "--porcelain")
+    async def _dirty_paths(self, cwd: Path) -> set[str]:
+        output = (await self._git(cwd, "status", "--porcelain"))
         paths: set[str] = set()
         for line in output.splitlines():
             value = line[3:] if len(line) >= 4 else ""
@@ -695,28 +748,30 @@ class NativeAgentRuntimeFactory(AgentRuntimeFactory):
                 paths.add(value)
         return paths
 
-    @staticmethod
-    def _git_result(cwd: Path, *args: str) -> subprocess.CompletedProcess[str]:
-        return subprocess.run(
-            ["git", *args],
-            cwd=cwd,
-            stdin=subprocess.DEVNULL,
-            capture_output=True,
-            text=True,
-            check=False,
-            timeout=120,
-        )
+    async def _git_result(self, cwd: Path, *args: str) -> subprocess.CompletedProcess[str]:
+        # Host-owned lifecycle Git commands are serialized. Child model tools
+        # retain their separately narrowed sandbox and approval policy.
+        sandbox = SandboxRunner(cwd, SandboxConfig(mode="disabled"))
+        argv = ["git", *args]
+        async with self._git_lock:
+            result = await run_prepared_command(
+                sandbox.prepare(argv, cwd=cwd), argv=argv, resolved_cwd=cwd, cwd=str(cwd),
+                timeout_seconds=120, sandbox_config=sandbox.config,
+            )
+        if result["timed_out"]:
+            raise TimeoutError("Agent Git operation timed out")
+        if result["stdout_truncated"] or result["stderr_truncated"]:
+            raise RuntimeError("Agent Git output exceeds safe capture; refusing partial evidence")
+        return subprocess.CompletedProcess(argv, int(result["exit_code"]), result["stdout"], result["stderr"])
 
-    @staticmethod
-    def _git(cwd: Path, *args: str) -> str:
-        result = NativeAgentRuntimeFactory._git_result(cwd, *args)
+    async def _git(self, cwd: Path, *args: str) -> str:
+        result = (await self._git_result(cwd, *args))
         if result.returncode != 0:
             raise RuntimeError(result.stderr.strip() or f"git {' '.join(args)} failed")
         return result.stdout
 
-    @staticmethod
-    def parent_dirty_hash(workspace: Path) -> str:
-        result = NativeAgentRuntimeFactory._git(workspace, "status", "--porcelain")
+    async def parent_dirty_hash(self, workspace: Path) -> str:
+        result = (await self._git(workspace, "status", "--porcelain"))
         return "sha256:" + hashlib.sha256(result.encode()).hexdigest()
 
 

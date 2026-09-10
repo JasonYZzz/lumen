@@ -39,7 +39,32 @@ describe('turn activity presentation', () => {
     expect(presentation.foreground).toEqual([final])
     expect(presentation.activity[0]).toMatchObject({ id: 'interim', kind: 'commentary' })
     expect(interim.kind).toBe('assistant')
-    expect(turnPresentation([interim, final]).foreground).toEqual([interim, final])
+    expect(turnPresentation([interim, final]).foreground).toEqual([final])
+  })
+
+  it('keeps provider-native search narration in activity and leaves only the final answer visible', () => {
+    const first = entry('assistant', { id: 'first', text: '先搜索相关天气信息。' })
+    const duplicate = entry('commentary', { id: 'duplicate', text: '先搜索相关天气信息。' })
+    const second = entry('assistant', { id: 'second', text: '再打开权威页面核实。' })
+    const final = entry('assistant', { id: 'final', text: '这是天气总结。' })
+    const presentation = turnPresentation([
+      entry('thinking', { id: 'thinking-1', text: '选择来源' }),
+      first,
+      entry('progress', { text: '准备搜索' }),
+      duplicate,
+      entry('thinking', { id: 'thinking-2', text: '核实日期' }),
+      second,
+      entry('thinking', { id: 'thinking-3', text: '整理答案' }),
+      final,
+    ])
+
+    expect(presentation.foreground).toEqual([final])
+    expect(presentation.activity.filter((item) => item.text === first.text)).toEqual([duplicate])
+    expect(presentation.activity.find((item) => item.id === second.id)?.kind).toBe('commentary')
+  })
+
+  it('uses the thinking status for an active generic run', () => {
+    expect(activityTitle(turnPresentation([entry('thinking')]), true)).toBe('正在思考')
   })
   it('keeps recovered tool errors in the audit summary without an open confirmation', () => {
     const presentation = turnPresentation([

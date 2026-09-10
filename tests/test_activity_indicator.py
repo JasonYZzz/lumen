@@ -5,6 +5,7 @@ import asyncio
 from rich.text import Text
 from textual.app import App, ComposeResult
 
+from lumen.tools.presentation import ToolPresentationCatalog
 from lumen.ui.activity_indicator import (
     RunActivityIndicator,
     ToolActivityFamily,
@@ -20,6 +21,23 @@ class ActivityHost(App[None]):
 
     def on_mount(self) -> None:
         register_themes(self)  # type: ignore[arg-type]
+
+
+def test_runtime_tool_cards_use_chinese_presentation_copy() -> None:
+    catalog = ToolPresentationCatalog()
+
+    search = catalog.call_view(
+        "search_text",
+        {"query": "async def run", "path": "src/lumen/agent_loop/loop.py"},
+        origin="builtin",
+        risk="read",
+    )
+    read = catalog.call_view("read_file", {"path": "README.md"}, origin="builtin", risk="read")
+
+    assert search.active_verb == "正在搜索"
+    assert search.completed_verb == "已搜索"
+    assert read.active_verb == "正在读取"
+    assert read.completed_verb == "已读取"
 
 
 def test_tool_activity_descriptions_are_user_facing() -> None:

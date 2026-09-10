@@ -1,3 +1,6 @@
+# Model-facing Chinese prose is kept as authored for readability.
+# ruff: noqa: RUF001, RUF002
+
 from __future__ import annotations
 
 import codecs
@@ -5,7 +8,9 @@ import os
 import re
 from collections.abc import Iterator
 from pathlib import Path
-from typing import TYPE_CHECKING, TypeAlias
+from typing import TYPE_CHECKING, Annotated, TypeAlias
+
+from pydantic import Field
 
 from lumen.config import SandboxConfig
 from lumen.constants import IGNORED_DIRS
@@ -27,7 +32,7 @@ def _truncate(text: str) -> str:
     if len(encoded) <= MAX_OUTPUT_BYTES:
         return text
     kept = encoded[:MAX_OUTPUT_BYTES].decode("utf-8", errors="ignore")
-    return f"{kept}\n[output truncated at {MAX_OUTPUT_BYTES} bytes]"
+    return f"{kept}\n[输出已在 {MAX_OUTPUT_BYTES} 字节处截断]"
 
 
 def _iter_search_files(base: Path, glob: str) -> Iterator[Path]:
@@ -69,20 +74,22 @@ def build_builtin_specs(
 
     workspace = Workspace(root)
 
-    def read_file(path: str, start_line: int = 1, max_lines: int = 400) -> ReadFileResult:
-        """Read one bounded page of a UTF-8 workspace file with continuation metadata.
+    def read_file(
+        path: Annotated[str, Field(description="工作区内 UTF-8 文件的相对路径。")],
+        start_line: Annotated[int, Field(description="从 1 开始的起始行号。", ge=1)] = 1,
+        max_lines: Annotated[int, Field(description="本次最多返回的行数。", ge=1)] = 400,
+    ) -> ReadFileResult:
+        """分页读取工作区内的一个 UTF-8 文本文件，并返回续读元数据。
 
-        The result contains ``content``, ``start_line``, ``end_line``,
-        ``lines_returned``, ``has_more``, ``next_start_line``, ``total_lines``
-        (when EOF was reached), and ``truncated_reason``. Continue a partial
-        result by calling ``read_file`` again with ``start_line`` set to
-        ``next_start_line``.
+        结果包含 content、start_line、end_line、lines_returned、has_more、
+        next_start_line、total_lines（到达文件末尾时）和 truncated_reason。
+        若 has_more 为 true，请把 next_start_line 作为下一次 start_line 继续读取。
         """
         if start_line < 1 or max_lines < 1:
-            raise ValueError("start_line and max_lines must be positive")
+            raise ValueError("start_line 和 max_lines 必须是正整数")
         resolved = workspace.resolve(path)
         if not resolved.is_file():
-            raise FileNotFoundError(f"file not found: {path}")
+            raise FileNotFoundError(f"文件不存在: {path}")
 
         # Reject obvious binary data before creating a text decoder. This is a
         # bounded probe rather than a full-file pre-read, so a small page never
@@ -90,13 +97,13 @@ def build_builtin_specs(
         with resolved.open("rb") as binary_file:
             sample = binary_file.read(_BINARY_SAMPLE_BYTES)
         if b"\x00" in sample:
-            raise ValueError(f"binary file is not supported by read_file: {path}")
+            raise ValueError(f"read_file 不支持二进制文件: {path}")
         try:
             # ``final=False`` permits the bounded sample to end in the middle
             # of an otherwise valid multi-byte code point.
             codecs.getincrementaldecoder("utf-8")(errors="strict").decode(sample, final=False)
         except UnicodeDecodeError as error:
-            raise ValueError(f"file is not valid UTF-8 text: {path}") from error
+            raise ValueError(f"文件不是有效的 UTF-8 文本: {path}") from error
 
         rendered_lines: list[str] = []
         content_bytes = 0
@@ -140,9 +147,8 @@ def build_builtin_specs(
                     if content_bytes + separator_bytes + rendered_bytes > MAX_OUTPUT_BYTES:
                         if not rendered_lines:
                             raise ValueError(
-                                f"line {line_number} exceeds the read_file output limit of "
-                                f"{MAX_OUTPUT_BYTES} bytes; use search_text to locate relevant "
-                                "content or read the file with a character-range capable tool"
+                                f"第 {line_number} 行超过 read_file 的 {MAX_OUTPUT_BYTES} 字节输出上限；"
+                                "请用 search_text 定位相关内容，或使用支持字符范围读取的工具"
                             )
                         has_more = True
                         next_start_line = line_number
@@ -154,9 +160,8 @@ def build_builtin_specs(
                         # reported as a successful complete line.
                         if not rendered_lines:
                             raise ValueError(
-                                f"line {line_number} exceeds the read_file output limit of "
-                                f"{MAX_OUTPUT_BYTES} bytes; use search_text to locate relevant "
-                                "content or read the file with a character-range capable tool"
+                                f"第 {line_number} 行超过 read_file 的 {MAX_OUTPUT_BYTES} 字节输出上限；"
+                                "请用 search_text 定位相关内容，或使用支持字符范围读取的工具"
                             )
                         has_more = True
                         next_start_line = line_number
@@ -166,7 +171,7 @@ def build_builtin_specs(
                     rendered_lines.append(rendered)
                     content_bytes += separator_bytes + rendered_bytes
         except UnicodeDecodeError as error:
-            raise ValueError(f"file is not valid UTF-8 text: {path}") from error
+            raise ValueError(f"文件不是有效的 UTF-8 文本: {path}") from error
 
         lines_returned = len(rendered_lines)
         end_line = start_line + lines_returned - 1 if lines_returned else None
@@ -183,13 +188,16 @@ def build_builtin_specs(
             "content": "\n".join(rendered_lines),
         }
 
-    def list_directory(path: str = ".", depth: int = 1) -> str:
-        """List files and directories within the workspace."""
+    def list_directory(
+        path: Annotated[str, Field(description="工作区内目录的相对路径。")] = ".",
+        depth: Annotated[int, Field(description="列出的目录层级，范围为 1 到 4。", ge=1, le=4)] = 1,
+    ) -> str:
+        """列出工作区目录中的文件和子目录。"""
         if not 1 <= depth <= 4:
-            raise ValueError("depth must be between 1 and 4")
+            raise ValueError("depth 必须在 1 到 4 之间")
         resolved = workspace.resolve(path)
         if not resolved.is_dir():
-            raise NotADirectoryError(f"directory not found: {path}")
+            raise NotADirectoryError(f"目录不存在: {path}")
         rows: list[str] = []
         base_parts = len(resolved.parts)
         for entry in sorted(resolved.rglob("*")):
@@ -199,19 +207,42 @@ def build_builtin_specs(
             safe_entry = workspace.resolve(entry)
             suffix = "/" if safe_entry.is_dir() else ""
             rows.append(f"{safe_entry.relative_to(workspace.root).as_posix()}{suffix}")
-        return _truncate("\n".join(rows) if rows else "[empty directory]")
+        return _truncate("\n".join(rows) if rows else "[空目录]")
 
-    def search_text(query: str, path: str = ".", glob: str = "**/*", max_results: int = 100) -> str:
-        """Search workspace text files using a regular expression."""
+    def search_text(
+        query: Annotated[
+            str,
+            Field(
+                description=(
+                    "用于匹配每一行的 Python 正则表达式。空格会按字面匹配; 多个备选项应写成"
+                    " (run|_run|step), 不要在 | 两侧添加无意的空格。"
+                )
+            ),
+        ],
+        path: Annotated[
+            str,
+            Field(description="工作区内现有文件或目录的相对路径；传入文件时只搜索该文件。"),
+        ] = ".",
+        glob: Annotated[
+            str,
+            Field(description="path 为目录时使用的 glob；path 为文件时忽略。"),
+        ] = "**/*",
+        max_results: Annotated[int, Field(description="本次最多返回的匹配数。", ge=1)] = 100,
+    ) -> str:
+        """用正则表达式搜索工作区文本；path 可以是一个文件或目录。"""
         if max_results < 1:
-            raise ValueError("max_results must be positive")
+            raise ValueError("max_results 必须是正整数")
         pattern = re.compile(query)
         resolved = workspace.resolve(path)
-        if not resolved.is_dir():
-            raise NotADirectoryError(f"directory not found: {path}")
+        if resolved.is_file():
+            candidates = (resolved,)
+        elif resolved.is_dir():
+            candidates = _iter_search_files(resolved, glob)
+        else:
+            raise FileNotFoundError(f"文件或目录不存在: {path}")
         matches: list[str] = []
         truncated = False
-        for file_path in _iter_search_files(resolved, glob):
+        for file_path in candidates:
             try:
                 safe_file = workspace.resolve(file_path)
             except WorkspaceViolation:
@@ -233,8 +264,8 @@ def build_builtin_specs(
             if truncated:
                 break
         if truncated:
-            matches.append(f"[results truncated at {max_results} matches]")
-        return _truncate("\n".join(matches) if matches else "[no matches]")
+            matches.append(f"[结果已在 {max_results} 条匹配处截断]")
+        return _truncate("\n".join(matches) if matches else "[没有匹配结果]")
 
     read_specs = [
         ToolSpec(

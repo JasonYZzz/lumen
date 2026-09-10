@@ -106,6 +106,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/configuration/mcp/{server_name}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** Set Mcp Server Enabled */
+        patch: operations["set_mcp_server_enabled_api_v1_configuration_mcp__server_name__patch"];
+        trace?: never;
+    };
     "/api/v1/configuration/models/{model_name}": {
         parameters: {
             query?: never;
@@ -119,6 +136,23 @@ export interface paths {
         post?: never;
         /** Delete Model Configuration */
         delete: operations["delete_model_configuration_api_v1_configuration_models__model_name__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/configuration/reasoning": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Inspect Reasoning */
+        post: operations["inspect_reasoning_api_v1_configuration_reasoning_post"];
+        delete?: never;
         options?: never;
         head?: never;
         patch?: never;
@@ -184,6 +218,23 @@ export interface paths {
         };
         /** Hooks */
         get: operations["hooks_api_v1_hooks_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/instructions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Instructions */
+        get: operations["instructions_api_v1_instructions_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -751,6 +802,8 @@ export interface components {
             payload?: {
                 [key: string]: unknown;
             };
+            /** Regeneratefromturn */
+            regenerateFromTurn?: number | null;
             /**
              * Type
              * @enum {string}
@@ -774,6 +827,13 @@ export interface components {
             /** Detail */
             detail?: components["schemas"]["ValidationError"][];
         };
+        /** McpServerConfigurationBody */
+        McpServerConfigurationBody: {
+            /** Enabled */
+            enabled: boolean;
+            /** Expectedrevision */
+            expectedRevision: string;
+        };
         /** ModelConfigurationBody */
         ModelConfigurationBody: {
             /** Api */
@@ -792,6 +852,15 @@ export interface components {
             id: string;
             /** Inputmodalities */
             inputModalities?: ("text" | "image")[];
+            /** Nativewebsearch */
+            nativeWebSearch?: {
+                [key: string]: unknown;
+            };
+            reasoningEffort?: components["schemas"]["ReasoningLevel"] | null;
+            /** Reasoninglevels */
+            reasoningLevels?: components["schemas"]["ReasoningLevel"][] | null;
+            /** Reasoningprofile */
+            reasoningProfile?: string | null;
             /**
              * Setdefault
              * @default false
@@ -832,6 +901,11 @@ export interface components {
             /** Text */
             text: string;
         };
+        /**
+         * ReasoningLevel
+         * @enum {string}
+         */
+        ReasoningLevel: "provider_default" | "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
         /** RenameSessionBody */
         RenameSessionBody: {
             /** Title */
@@ -848,6 +922,7 @@ export interface components {
             approvalMode?: ("manual" | "accept_edits" | "auto") | null;
             /** Collaborationmode */
             collaborationMode?: ("default" | "plan") | null;
+            reasoningEffort?: components["schemas"]["ReasoningLevel"] | null;
             /** Transcriptdensity */
             transcriptDensity?: ("normal" | "verbose") | null;
         };
@@ -868,6 +943,8 @@ export interface components {
             clientRequestId: string;
             /** Input */
             input: string;
+            /** Regeneratefromturn */
+            regenerateFromTurn?: number | null;
         };
         /** ValidationError */
         ValidationError: {
@@ -1076,6 +1153,43 @@ export interface operations {
             };
         };
     };
+    set_mcp_server_enabled_api_v1_configuration_mcp__server_name__patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                server_name: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["McpServerConfigurationBody"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     upsert_model_configuration_api_v1_configuration_models__model_name__put: {
         parameters: {
             query?: never;
@@ -1125,6 +1239,41 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": components["schemas"]["ConfigurationRevisionBody"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    inspect_reasoning_api_v1_configuration_reasoning_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ModelConfigurationBody"];
             };
         };
         responses: {
@@ -1236,6 +1385,28 @@ export interface operations {
         };
     };
     hooks_api_v1_hooks_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+        };
+    };
+    instructions_api_v1_instructions_get: {
         parameters: {
             query?: never;
             header?: never;

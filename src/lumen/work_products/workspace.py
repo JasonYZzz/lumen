@@ -1,5 +1,7 @@
 """Session-scoped work-product orchestration behind one small interface."""
 
+# ruff: noqa: RUF002
+
 from __future__ import annotations
 
 import json
@@ -100,7 +102,7 @@ class TaskWorkspace:
         kind: str | None = None,
         selector: str | None = None,
     ) -> dict[str, Any]:
-        """Open a workspace resource and optionally locate a target within it."""
+        """打开一个工作区资源，并可选地在其中定位目标。"""
 
         self._require_enabled()
         resource = self._canonical_resource(resource)
@@ -145,7 +147,7 @@ class TaskWorkspace:
         work_product_id: str,
         selector: str | None = None,
     ) -> dict[str, Any]:
-        """Refresh a product and return bounded target candidates."""
+        """刷新工作对象，并返回数量受限的目标候选项。"""
 
         self._require_enabled()
         session_id, state = self._bound()
@@ -171,7 +173,7 @@ class TaskWorkspace:
         target: str,
         change: Any,
     ) -> dict[str, Any]:
-        """Apply and verify one constrained change to an opened product."""
+        """对已打开的工作对象执行一次受约束的修改并验证结果。"""
 
         self._require_enabled()
         session_id, state = self._bound()
@@ -258,7 +260,7 @@ class TaskWorkspace:
         work_product_id: str,
         revision: str | None = None,
     ) -> dict[str, Any]:
-        """Restore an exact recorded revision without overwriting outside edits."""
+        """恢复到精确记录的修订版本，不覆盖工作对象之外发生的修改。"""
 
         self._require_enabled()
         session_id, state = self._bound()

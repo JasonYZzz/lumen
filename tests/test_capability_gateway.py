@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
+from types import SimpleNamespace
+
+import pytest
 
 from lumen.config import PermissionsConfig
 from lumen.events import ApprovalRequest
@@ -136,6 +139,47 @@ async def test_gateway_timeout_is_a_typed_failure(tmp_path: Path) -> None:
     assert result.status is CapabilityStatus.FAILED
     assert result.error is not None
     assert "TimeoutError" in result.error
+    assert result.execution_seconds is not None
+
+
+async def test_executor_timing_excludes_approval_hooks_and_replayed_execution(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    clock_value = 0.0
+
+    async def before(_invocation: CapabilityInvocation) -> CapabilityBeforeDecision:
+        nonlocal clock_value
+        clock_value += 7
+        return CapabilityBeforeDecision()
+
+    async def approve(_request: ApprovalRequest) -> CapabilityApproval:
+        nonlocal clock_value
+        clock_value += 11
+        return CapabilityApproval(True)
+
+    async def mutate() -> str:
+        nonlocal clock_value
+        clock_value += 5
+        return "written"
+
+    async def after(_invocation: CapabilityInvocation, _result: CapabilityResult) -> None:
+        nonlocal clock_value
+        clock_value += 13
+
+    monkeypatch.setattr("lumen.tools.gateway.time", SimpleNamespace(monotonic=lambda: clock_value))
+    registry = ToolRegistry(tmp_path)
+    registry.add(ToolSpec(mutate, risk=Risk.WRITE), origin="test")
+    gateway = CapabilityGateway(registry, PermissionPolicy(PermissionsConfig()), default_timeout=1,
+                                before_invoke=before, after_invoke=after)
+    invocation = _invocation("mutate", {})
+    result = await gateway.invoke(invocation, approve=approve)
+    assert result.succeeded
+    assert result.execution_seconds == 5
+    assert clock_value == 36
+    replay = await gateway.invoke(invocation, approve=approve)
+    assert replay.status is CapabilityStatus.REPLAYED
+    assert replay.execution_seconds is None
+    assert clock_value == 43  # Only the prepare hook runs on this replay.
 
 
 async def test_gateway_hooks_run_before_approval_and_after_canonical_result(tmp_path: Path) -> None:

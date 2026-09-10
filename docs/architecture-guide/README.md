@@ -34,6 +34,7 @@ Module、Interface、Seam、状态变化和失败路径展开。
 12. [当前实现审计](12-current-implementation-audit.md)：按源码、schema 与契约测试核对状态权威、兼容版本和文档漂移。
 13. [LumenAgentLoop 单轨决策记录](13-native-agent-loop-migration.md)：自研 Loop 的权威、Driver/能力/恢复契约与旧 Agent graph 删除证据。
 14. [长任务持续执行、恢复与排障](14-long-running-recovery.md)：滑动空闲、重试、同轮压缩、失败续跑、计数语义和踩坑检查。
+15. [Provider 模型能力目录与升级约定](15-provider-catalog.md)：官方档位依据、精确匹配、代理声明、参数映射与目录升级验证。
 
 ## 一句话架构
 
@@ -43,7 +44,7 @@ Lumen 是一个本地优先、事件驱动的 coding-agent 框架：`WorkspaceHo
 
 `LumenAgentLoop` 是单 Agent 模型—工具循环的唯一权威；`PydanticAIModelDriver` 只在
 `ModelDriver` seam 下提供成熟的 Model/Provider wire translation 与资源生命周期。`AgentRuntime`、
-`ContextEngine`、`CapabilityGateway`、Session v9 与完成门禁各自保持单一权威，不存在运行时 selector
+`ContextEngine`、`CapabilityGateway`、Session v10 与完成门禁各自保持单一权威，不存在运行时 selector
 或隐藏旧 Agent graph 回退路径。Context 摘要与 Memory 提取中的无工具 typed Agent 仅是结构化输出
 Adapter，不是第二套模型—工具 Loop。
 
@@ -67,7 +68,7 @@ Adapter，不是第二套模型—工具 Loop。
 - TUI 与 Web 共用运行逻辑，但 UI 渲染分别由 Textual 和 Next.js 实现。
 - Realtime 语音是可选 Web transport；它共用 Host 能力和 Session，但原始音频默认不持久化，进程重启后也不会自动重放未确认的远端动作。
 - MCP 工具可以延迟暴露 schema；MCP resource 和 prompt 只有显式激活后才进入上下文。
-- 当前 Session schema 是 v9；v1–v8 只读加载，首次写入较新 record 时追加 `schema_upgrade`，不会重写 header 或历史行。
+- 当前 Session schema 是 v11；v1–v10 只读加载，首次写入较新 record 时追加 `schema_upgrade`，不会重写 header 或历史行。同 Session 消息重生成以 `history_rewind` 选择活动 lineage，不删除旧事实。
 - `Risk`、`EffectKind`、`ToolConcurrency` 分别负责审批、效果追踪/验证与调用重叠；三者不能互相推断。
 - 所有文件 mutation 经过 expected revision 与无符号链接 hop 的 `Workspace.atomic_write/remove`；冲突返回 `STALE_RESOURCE`，不会猜测覆盖。
 - `lumen capabilities --json`、TUI `/context capabilities` 与 Web `/api/v1/capabilities` 使用同一只读能力投影。

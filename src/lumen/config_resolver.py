@@ -225,8 +225,11 @@ def _resolve_declared_path(value: Any, source: ConfigSource) -> Any:
 def _prepare_layer(raw: dict[str, Any], source: ConfigSource) -> dict[str, Any]:
     prepared = copy.deepcopy(raw)
     agent = _mapping(prepared.get("agent"))
-    if agent is not None and agent.get("instructions_file") is not None:
-        agent["instructions_file"] = _resolve_declared_path(agent["instructions_file"], source)
+    prompt = _mapping(agent.get("prompt")) if agent is not None else None
+    if prompt is not None:
+        for key in ("append_file", "replace_file"):
+            if prompt.get(key) is not None:
+                prompt[key] = _resolve_declared_path(prompt[key], source)
 
     sessions = _mapping(prepared.get("sessions"))
     if sessions is not None and sessions.get("directory") is not None:

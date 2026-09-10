@@ -60,7 +60,7 @@ Tool、Hook、MCP 与 Capability 注册必须返回 disposer 并加入当前 `Re
 sequenceDiagram
     participant Parent as Root Agent
     participant AO as AgentOrchestrator
-    participant SR as Session v9 Journal
+    participant SR as Session v10 Journal
     participant Child as Isolated AgentRuntime
 
     Parent->>AO: spawn_agent(task, profile, plan targets)
@@ -83,7 +83,7 @@ sequenceDiagram
 - `default` 与 `worker` 在独立 Git worktree 中执行写操作；
 - 角色只能收窄父级模型、工具、审批与 sandbox 能力，不能扩大；
 - Session 级并发、每 Run Agent 数、request、tool call 与 timeout 均有独立上限；
-- 消息、事件、结果和不可伪造 evidence 追加写入 Session v9，大正文进入 ArtifactStore；
+- 消息、事件、结果和不可伪造 evidence 追加写入 Session v10，大正文进入 ArtifactStore；
 - child 的非控制工具调用与 `report_progress` 被压缩为有界 `agent.progress` 事件，每个 Agent 最多 60 条；完整 child transcript 仍在自己的 history artifact 中；
 - worktree 导入先检查父工作区 dirty path 和三方冲突，重叠时进入协调状态；
 - 活动、待审批、未送达结果、未处理失败、待导入、冲突或未通过证据都会阻止根 Agent 完成。

@@ -5,7 +5,7 @@
 
 ## 决策
 
-Lumen 使用 Host 生命周期内稳定的 `AgentOrchestrator` 作为多 Agent 控制面，以 Session v9 append-only records 作为持久状态权威。模型可调用的 spawn、message、follow-up、wait、interrupt、list、close 工具保持为薄 Adapter；`NativeAgentRuntimeFactory` 为每个 child 创建独立 `ContextEngine`、`PydanticAIModelDriver` 与唯一的 `LumenAgentLoop` Runtime。child Gateway 严格收窄父能力，writable child 的本地工具重绑定到独立 worktree，MCP 只复用父级连接 Adapter，不共享执行结果或幂等状态。v9 由 Realtime `live_session` record 引入，不改变 v8 Agent record 的语义。
+Lumen 使用 Host 生命周期内稳定的 `AgentOrchestrator` 作为多 Agent 控制面，以 Session v10 append-only records 作为持久状态权威。模型可调用的 spawn、message、follow-up、wait、interrupt、list、close 工具保持为薄 Adapter；`NativeAgentRuntimeFactory` 为每个 child 创建独立 `ContextEngine`、`PydanticAIModelDriver` 与唯一的 `LumenAgentLoop` Runtime。child Gateway 严格收窄父能力，writable child 的本地工具重绑定到独立 worktree，MCP 只复用父级连接 Adapter，不共享执行结果或幂等状态。v10 增加 Session 推理选择与 child 推理快照；v9 由 Realtime `live_session` record 引入，不改变 v8 Agent record 的语义。
 
 V1 不引入 LangGraph。Lumen 已有 Session/EventJournal、RunCoordinator、TaskWorkspace、审批、ArtifactStore 和恢复协议；引入第二套 checkpoint/graph persistence 会产生双重状态权威。未来只有在单一 Agent 内确实需要可复用的确定性图执行、且能由 Session journal 统一提交时，才重新评估 LangGraph。
 
@@ -29,6 +29,23 @@ V1 不引入 LangGraph。Lumen 已有 Session/EventJournal、RunCoordinator、Ta
 7. terminal 状态不等于可完成：结果送达、失败 resolution、import/reject、Plan evidence 和 TaskWorkspace verification 都必须满足。
 
 ## 兼容性
+
+2026-09-08 并发与执行更新：默认 `max_concurrency=3`、每 Run 上限 8；spawn 按序登记、
+立即返回后后台执行，调度仍由同一个 Orchestrator 和每 Session Semaphore 管理。模型指令
+明确要求先派发已知独立任务，再做父任务工作，依赖结果时等待剩余 Agent；不会自动分析依赖
+或为了并发拆分简单任务。`explicit` 增加对应模型指令，不是新的许可或任务拆分算法。
+重放相同 spawn 即使数量已达上限仍返回原 Thread，登记锁防止异步检查期间重复创建。
+
+worktree Git 复用工具命令的异步子进程执行 Seam，替代 async 路径中的 `subprocess.run`；
+取消和超时会终止进程组并回收输出，父进程先退出也会清理持有管道的后代。Git 命令串行锁
+保护共享元数据，导入另有事务锁；不会阻塞其他 Agent 的模型流或事件循环。Git 输出截断时
+拒绝作为完整 evidence。writable 恢复先记录 reconciliation 阻止完成，再异步检查，不能重放
+未知动作；仍保留只读恢复、dirty path 和三方冲突检查、导入验收与父权限收窄。
+
+child usage 增加 `agent_queue_seconds`、`worktree_prepare_seconds`、
+`worktree_finalize_seconds` 和 `worktree_import_seconds`（适用时记录）。队列指标从调度
+task 开始计时；worktree 准备包含等待 Git 锁，导入包含等待导入锁。它们不是 Provider usage。
+推理快照优先级、原始配置兼容及 Session v10 见[第 7 章](07-configuration-and-data.md)。
 
 2026-09-04 实施对齐：原生 Agent 的 `request_count`、`tool_calls`、`timeout_seconds` 默认 `null`，
 长任务不再被默认 10/20 次或 180 秒截断。Factory 捕获配置时，对父/child 显式请求和工具预算取

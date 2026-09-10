@@ -1,6 +1,23 @@
 # 3. 上下文引擎、Prompt、压缩与记忆
 
-本章描述当前源码中的真实组装路径。最重要的结论是：**Lumen 的 Prompt 不是一个拼接后的字符串，Context zone 也不等于 provider role。** `ContextAssembler` 负责预算、来源、信任、保留策略和裁剪；`AgentRuntime` 在 `LumenAgentLoop` 每个请求边界冻结输入，再交给低层 `PydanticAIModelDriver`。
+本章描述当前源码中的真实组装路径。最重要的结论是：**Lumen 的模型输入不只有一段拼接字符串，Context zone 也不等于 provider role。** `ContextAssembler` 负责预算、来源、信任、保留策略和裁剪；`AgentRuntime` 在 `LumenAgentLoop` 每个请求边界冻结输入，再交给低层 `PydanticAIModelDriver`。
+
+### Prompt profile 与动态上下文
+
+`agent.prompt` 是稳定 Provider instructions 的唯一配置入口，支持 `minimal`、`preset`、
+`append` 和 `replace`。Context instructions Module 保存版本、来源与 digest；Runtime 不再自行追加
+Skill 目录或模型信息。模型名称、模型 ID、MCP 状态、工作目录和 Skill 目录进入
+`runtime_context` zone，由 ContextEngine 作为瞬时 system-role 消息注入。
+
+Provider request manifest 将 SYSTEM、POLICY 和 CAPABILITY_CATALOG 计入稳定前缀 digest，将
+`runtime_context`、Session 状态、历史与当前输入计入动态尾部 digest。`/instructions` 与
+`GET /api/v1/instructions` 只返回 mode、版本、大小、digest 和来源，不返回 prompt 正文。
+Runtime 还会从协作模式包装后的真实用户正文识别本轮主要语言，将语言要求写入每次请求的
+`runtime_context`；所有 prompt mode 都保留的 control policy 同时要求可见推理、工具调用前说明、
+公开进度和最终回答跟随该语言。Provider 原生私有推理保持原始协议内容，不做事后翻译。
+每个 request receipt 还保留内置 preset、控制 policy、能力条件提示、项目追加文件或子 Agent
+角色 profile 各自的 origin、revision、token 估算和内容 digest；正文仍只存在于运行时配置或
+ArtifactStore，不复制进 Session journal。
 
 ## 3.1 四种历史
 
@@ -107,6 +124,7 @@ turn 前缀，active history 只拼接未覆盖尾部，full history 仍保留�
 |---|---|---|---|
 | `SYSTEM` | Agent 身份和稳定运行说明 | `system` | pinned |
 | `POLICY` | 控制规则、项目指令、权限说明 | `policy` | reinject |
+| `RUNTIME_CONTEXT` | 模型名称/ID、MCP 状态、工作目录、语言要求等瞬时运行上下文 | `system` | ephemeral |
 | `MEMORY_INDEX` | 有界长期记忆索引 | `durable` | reinject |
 | `CAPABILITY_CATALOG` | 当前工具 schema 与精简能力目录 | `system` | reinject |
 | `TASK_STATE` | Plan、阻塞步骤、恢复状态 | `system` | reinject |
@@ -166,7 +184,7 @@ Runtime 会把 resolved reserve 写入真实 Provider 请求，避免预算与�
 `build_input_manifest()` 流程；工具结果和请求边界的 steer/follow-up 先进入 messages，再冻结下一步
 `ModelDriverRequest`。因此预算和请求证据只在真正掌握 provider I/O 边界的单一位置采集。
 
-每个真正准备发往 provider 的 snapshot 会连同已冻结的 route、provider/model 与 Context fingerprint 转成有界 `ProviderRequestReceipt`。Runtime 把 receipt 附在完整或 partial outcome 上，`RunCoordinator` 与 terminal turn 一起追加到 Session v9；因此正常完成、取消和失败都保留实际请求证据。
+每个真正准备发往 provider 的 snapshot 会连同已冻结的 route、provider/model 与 Context fingerprint 转成有界 `ProviderRequestReceipt`。Runtime 把 receipt 附在完整或 partial outcome 上，`RunCoordinator` 与 terminal turn 一起追加到 Session v10；因此正常完成、取消和失败都保留实际请求证据。
 
 receipt 内嵌同一步 `ModelInputManifest`：它对 instructions、实际 messages、完整有序 tool schema、模型
 settings、Context source、stable prefix 和 dynamic tail 分别计算 SHA-256，并保存 source
@@ -231,7 +249,7 @@ request/response/tool-result 轨迹，并保留 Driver 返回的完整 `ModelRes
 
 ## 3.8 SessionContextState：Skill/MCP 激活、恢复与卸载
 
-`SessionContextState` 由 schema v5 引入；当前新 session 是 v9，仍沿用同一 `context_state` record：
+`SessionContextState` 由 schema v5 引入；当前新 session 是 v10，仍沿用同一 `context_state` record：
 
 ```text
 SessionContextState

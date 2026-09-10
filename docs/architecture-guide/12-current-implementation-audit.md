@@ -60,7 +60,7 @@
 
 ## 12.4 已确认的实现演进
 
-1. **Session 已是 v9。** v5 Context、v6 Settings/Plan、v7 Work Product、v8 Agent、v9 Live 事实都通过追加 `schema_upgrade` 支持历史会话；marker 必须形成连续的有效 schema 链，且不重写 header。
+1. **Session 已是 v10。** v5 Context、v6 Settings/Plan、v7 Work Product、v8 Agent、v9 Live、v10 推理选择事实都通过追加 `schema_upgrade` 支持历史会话；marker 必须形成连续的有效 schema 链，且不重写 header。
 2. **Sandbox 已进入生产路径。** 默认 `workspace_write` 使用 Seatbelt/bubblewrap 且 fail closed；旧文档“仅实现审批和路径限制”已失效。
 3. **审批增加项目永久范围。** `always` 规则由 `ApprovalRuleStore` 以项目 identity 持久化，不污染配置 YAML。
 4. **Provider reasoning 可展示。** `ThinkingDelta` 与最终文本、commentary 分离，只作为 timeline 展示，不进入 completion 文本。
@@ -125,7 +125,7 @@
 
 ## 12.5 兼容、安全与恢复结论
 
-- 保留 v1–v8 Session 只读兼容；升级只追加，不原地迁移。
+- 保留 v1–v10 Session 只读兼容；升级只追加，不原地迁移。
 - 配置仍为 v2；v1 仅内存迁移并警告。
 - `Risk`、`EffectKind` 与 `ToolConcurrency` 保持三轴独立；未知远端动作不自动重放，未声明并发安全时使用 exclusive。
 - `ToolGuard` 只有 abstain/deny；任一 deny 都不能被后续 Hook 或 Adapter 放宽。
@@ -155,7 +155,7 @@
 | `tests/test_runtime.py` 的 PlanStepInput 伪重导出 | 仓库无消费者，只由 `_ = PlanStepInput` 保活 | 正式领域类型与 `test_task_control.py` 的公开契约 |
 
 没有按日期或 `legacy` 名称批量删除测试。ContextManager 仍是 ContextEngine 的内部结构化摘要
-Implementation；Session v1–v8、配置 v1、旧 child Adapter 仍是兼容契约。Web Mascot 仍由
+Implementation；Session v1–v10、配置 v1、旧 child Adapter 仍是兼容契约。Web Mascot 仍由
 `LumenApp → LandingEntry → MascotScene` 调用，相关测试与待交付 Rive 计划保留。外部研究与隔离
 spike 保留其日期、版本和证据属性，不将它们描述为当前生产行为。
 

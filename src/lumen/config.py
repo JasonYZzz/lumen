@@ -8,6 +8,8 @@ from typing import Annotated, Any, Literal, cast
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
+from lumen.reasoning import REASONING_KEYS, ReasoningLevel, apply_reasoning, resolve_reasoning
+
 
 class ConfigLoadError(ValueError):
     """Raised when an agent configuration cannot be loaded safely."""
@@ -43,6 +45,13 @@ class ModelContextOverride(StrictModel):
     keep_recent_tokens: int | None = Field(default=None, gt=0)
 
 
+class ModelNativeWebSearchConfig(StrictModel):
+    """Provider-executed web search policy for one model route."""
+
+    mode: Literal["auto", "enabled", "disabled"] = "auto"
+    search_context_size: Literal["low", "medium", "high"] = "medium"
+
+
 class ModelSettingsConfig(StrictModel):
     id: str
     api_key_env: str | None = None
@@ -57,8 +66,43 @@ class ModelSettingsConfig(StrictModel):
         "responses"
     )
     settings: dict[str, Any] = Field(default_factory=dict)
+    reasoning_effort: ReasoningLevel | None = None
+    reasoning_levels: tuple[ReasoningLevel, ...] | None = None
+    reasoning_profile: str | None = None
     context: ModelContextOverride = Field(default_factory=ModelContextOverride)
     input_modalities: tuple[Literal["text", "image"], ...] = ("text",)
+    native_web_search: ModelNativeWebSearchConfig = Field(
+        default_factory=ModelNativeWebSearchConfig
+    )
+
+    @model_validator(mode="after")
+    def validate_reasoning(self) -> ModelSettingsConfig:
+        if (
+            self.native_web_search.mode == "enabled"
+            and self.id.partition(":")[0] in {"openai", "ollama"}
+            and self.api in {"chat", "openai-completions", "chat-completions"}
+        ):
+            raise ValueError(
+                "native_web_search requires the Responses API for OpenAI-compatible models"
+            )
+        if self.reasoning_profile is not None:
+            resolve_reasoning(self)
+        if self.reasoning_effort is not None and REASONING_KEYS.intersection(self.settings):
+            raise ValueError("reasoning_effort and settings inference controls cannot be combined")
+        if self.reasoning_levels is not None:
+            if ReasoningLevel.PROVIDER_DEFAULT in self.reasoning_levels:
+                raise ValueError("reasoning_levels lists model capabilities, not provider_default")
+            if len(set(self.reasoning_levels)) != len(self.reasoning_levels):
+                raise ValueError("reasoning_levels must be unique")
+            for level in self.reasoning_levels:
+                resolve_reasoning(self, level)
+        if self.reasoning_effort is not None:
+            raw_selection = resolve_reasoning(self.model_copy(update={"reasoning_effort": None}))
+            if raw_selection.mapping == "unverified":
+                raise ValueError("reasoning_effort and settings inference controls cannot be combined")
+        if self.reasoning_effort is not None:
+            apply_reasoning(self.settings, resolve_reasoning(self))
+        return self
 
     @field_validator("input_modalities")
     @classmethod
@@ -99,7 +143,7 @@ class LimitsConfig(StrictModel):
     #: ``sequential`` disables overlap. The native Loop treats both parallel
     #: modes as permission to batch explicitly PARALLEL_SAFE invocations;
     #: neither mode overrides an exclusive Gateway concurrency contract.
-    parallel_tool_calls: Literal["sequential", "parallel_safe", "parallel"] = "sequential"
+    parallel_tool_calls: Literal["sequential", "parallel_safe", "parallel"] = "parallel_safe"
 
 
 class DelegationConfig(StrictModel):
@@ -136,6 +180,33 @@ class AgentsConfig(StrictModel):
     timeout_seconds: float | None = Field(default=None, gt=0)
 
 
+class PromptConfig(StrictModel):
+    """Select how Lumen constructs the stable provider instructions."""
+
+    mode: Literal["minimal", "preset", "append", "replace"] = "preset"
+    preset: Literal["lumen"] = "lumen"
+    append_file: Path | None = None
+    replace_file: Path | None = None
+
+    @model_validator(mode="after")
+    def validate_mode(self) -> PromptConfig:
+        if self.mode == "append":
+            if self.append_file is None:
+                raise ValueError("agent.prompt.append_file is required when mode is 'append'")
+            if self.replace_file is not None:
+                raise ValueError("agent.prompt.replace_file is only valid when mode is 'replace'")
+        elif self.mode == "replace":
+            if self.replace_file is None:
+                raise ValueError("agent.prompt.replace_file is required when mode is 'replace'")
+            if self.append_file is not None:
+                raise ValueError("agent.prompt.append_file is only valid when mode is 'append'")
+        elif self.append_file is not None or self.replace_file is not None:
+            raise ValueError(
+                "agent.prompt file fields are only valid with mode 'append' or 'replace'"
+            )
+        return self
+
+
 class AgentSection(StrictModel):
     """Agent configuration with single- or multi-model support.
 
@@ -151,15 +222,15 @@ class AgentSection(StrictModel):
     """
 
     name: str = "lumen"
-    instructions_file: Path | None = None
+    prompt: PromptConfig = Field(default_factory=PromptConfig)
     model: ModelSettingsConfig | None = None
     models: dict[str, ModelSettingsConfig] = Field(default_factory=dict[str, ModelSettingsConfig])
     default_model: str | None = None
     limits: LimitsConfig = Field(default_factory=LimitsConfig)
     #: Whether to discover Agent Skills (SKILL.md files) from
-    #: ``<workspace>/.lumen/skills/`` and ``~/.lumen/skills/`` and
-    #: inject their catalog into the system prompt. Set to ``false`` to
-    #: disable skill discovery entirely.
+    #: ``<workspace>/.lumen/skills/`` and ``~/.lumen/skills/``. The current
+    #: catalog is injected through the dynamic runtime-context zone. Set to
+    #: ``false`` to disable skill discovery entirely.
     skills_enabled: bool = True
     #: Ship builtin skills with the wheel but keep activation opt-in so
     #: existing installations retain their exact discovered catalog.
@@ -336,6 +407,12 @@ class McpServerConfig(StrictModel):
         if self.oauth is not None and self.transport != "streamable_http":
             raise ValueError("MCP OAuth requires streamable_http transport")
         return self
+
+
+class McpPolicyConfig(StrictModel):
+    """Workspace overrides for configured MCP server activation."""
+
+    enabled: dict[str, bool] = Field(default_factory=dict[str, bool])
 
 
 class PermissionsConfig(StrictModel):
@@ -546,6 +623,7 @@ class AppConfig(StrictModel):
     ui: UiConfig = Field(default_factory=UiConfig)
     tools: ToolsConfig = Field(default_factory=ToolsConfig)
     mcp_servers: dict[str, McpServerConfig] = Field(default_factory=dict)
+    mcp: McpPolicyConfig = Field(default_factory=McpPolicyConfig)
     permissions: PermissionsConfig = Field(default_factory=PermissionsConfig)
     collaboration: CollaborationConfig = Field(default_factory=CollaborationConfig)
     sandbox: SandboxConfig = Field(default_factory=SandboxConfig)
@@ -562,6 +640,13 @@ class AppConfig(StrictModel):
     config_warnings: tuple[str, ...] = Field(default_factory=tuple, exclude=True, repr=False)
     project_trusted: bool = Field(default=True, exclude=True, repr=False)
     mcp_diagnostics: tuple[dict[str, Any], ...] = Field(default_factory=tuple, exclude=True, repr=False)
+
+    @model_validator(mode="after")
+    def validate_mcp_policy(self) -> AppConfig:
+        unknown = sorted(set(self.mcp.enabled) - set(self.mcp_servers))
+        if unknown:
+            raise ValueError(f"mcp.enabled references unknown servers: {unknown}")
+        return self
 
 
 _ENV_PATTERN = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-([^}]*))?\}")
@@ -657,14 +742,20 @@ def validate_config_data(
         raise ConfigLoadError(str(error)) from error
 
     base = config_path.parent
-    instructions_file = config.agent.instructions_file
-    resolved_instructions = (
-        (base / instructions_file).expanduser().resolve()
-        if instructions_file is not None and not instructions_file.is_absolute()
-        else instructions_file.expanduser().resolve()
-        if instructions_file is not None
-        else None
-    )
+
+    def resolve_prompt(prompt: PromptConfig) -> PromptConfig:
+        def resolve(path: Path | None) -> Path | None:
+            if path is None:
+                return None
+            expanded = path.expanduser()
+            return (base / expanded).resolve() if not expanded.is_absolute() else expanded.resolve()
+
+        return prompt.model_copy(
+            update={
+                "append_file": resolve(prompt.append_file),
+                "replace_file": resolve(prompt.replace_file),
+            }
+        )
 
     # Resolve API keys for every configured model. Both single- and multi-model
     # forms may declare api_key_env; we look the env var up once per model and
@@ -757,7 +848,7 @@ def validate_config_data(
         update={
             "agent": config.agent.model_copy(
                 update={
-                    "instructions_file": resolved_instructions,
+                    "prompt": resolve_prompt(config.agent.prompt),
                     "model": resolved_single,
                     "models": resolved_models,
                 }

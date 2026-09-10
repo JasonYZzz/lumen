@@ -311,14 +311,14 @@ class EventRendererMixin:
             activity.start("Thinking")
         elif isinstance(event, ContextCompactionStarted):
             await self._close_assistant_segment()
-            await self._update_compaction_row("Compacting context…")
-            activity.describe("Compacting context")
+            await self._update_compaction_row("正在压缩上下文……")
+            activity.describe("正在压缩上下文")
         elif isinstance(event, ContextCompactionCompleted):
             await self._update_compaction_row(
-                f"Context compacted: {event.active_message_count} active messages."
+                f"上下文已压缩: 保留 {event.active_message_count} 条活动消息。"
             )
         elif isinstance(event, ContextCompactionFailed):
-            await self._update_compaction_row(f"✗ Context compaction failed: {event.message}", failed=True)
+            await self._update_compaction_row(f"✗ 上下文压缩失败: {event.message}", failed=True)
         elif isinstance(event, UsageUpdated):
             status.update(self._status_line(event))
         elif isinstance(event, RunCompleted):

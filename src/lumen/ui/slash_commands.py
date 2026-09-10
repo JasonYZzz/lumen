@@ -158,6 +158,14 @@ _COMMANDS: tuple[SlashCommand, ...] = (
     ),
     # --- model / approval ---------------------------------------------------
     SlashCommand(
+        name="thinking",
+        usage="/thinking [level]",
+        description="Choose reasoning effort for this Session",
+        category=CATEGORY_MODEL,
+        handler="_cmd_thinking",
+        in_palette=True,
+    ),
+    SlashCommand(
         name="model",
         usage="/model [name]",
         description="Choose a model or switch by name",
@@ -197,6 +205,13 @@ _COMMANDS: tuple[SlashCommand, ...] = (
         description="Show context budget · zones, blocks, pressure",
         category=CATEGORY_CONTEXT,
         handler="_cmd_context",
+    ),
+    SlashCommand(
+        name="instructions",
+        usage="/instructions [--json]",
+        description="查看稳定 prompt、动态上下文和来源摘要",
+        category=CATEGORY_CONTEXT,
+        handler="_cmd_instructions",
     ),
     SlashCommand(
         name="compact",

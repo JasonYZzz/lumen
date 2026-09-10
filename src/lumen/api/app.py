@@ -41,6 +41,8 @@ from lumen.application import (
     ForkSessionAtTurn,
     GetBootstrap,
     GetConfiguration,
+    GetInstructions,
+    InspectReasoning,
     InterruptAgent,
     InterruptLiveSession,
     InvalidStateError,
@@ -61,11 +63,13 @@ from lumen.application import (
     RetryRun,
     RunNotFoundError,
     SelectModel,
+    SelectReasoning,
     SendAgentMessage,
     SessionNotFoundError,
     SetApprovalMode,
     SetCollaborationMode,
     SetContextSource,
+    SetMcpServerEnabled,
     SetSessionArchived,
     SetTranscriptDensity,
     StartLiveSession,
@@ -86,6 +90,7 @@ from .schemas import (
     ConfigurationRevisionBody,
     ControlBody,
     ForkSessionBody,
+    McpServerConfigurationBody,
     ModelConfigurationBody,
     PlanReviewBody,
     QueueInputBody,
@@ -123,6 +128,7 @@ def _camel_snapshot(value: Any) -> dict[str, Any]:
         "collaborationMode": raw["collaboration_mode"],
         "planReviewStatus": raw["plan_review_status"],
         "transcriptDensity": raw["transcript_density"],
+        "reasoning": value.reasoning.model_dump(mode="json"),
         "pendingClarification": raw["pending_clarification"],
         "workProducts": raw["work_products"],
         "pendingEffects": raw["pending_effects"],
@@ -151,14 +157,27 @@ def _camel_configuration(raw: dict[str, Any]) -> dict[str, Any]:
                 "baseUrl": model["base_url"],
                 "apiKeyEnv": model["api_key_env"],
                 "settings": model["settings"],
+                "reasoningEffort": model.get("reasoning_effort"),
+                "reasoningLevels": model.get("reasoning_levels"),
+                "reasoningProfile": model.get("reasoning_profile"),
                 "context": model["context"],
                 "inputModalities": model.get("input_modalities", ("text",)),
+                "nativeWebSearch": model.get("native_web_search", {}),
+                "nativeWebSearchEnabled": model.get("native_web_search_enabled", False),
                 "isDefault": model["is_default"],
                 "source": model["source"],
                 "authKind": model["auth_kind"],
                 "authAvailable": model["auth_available"],
             }
             for model in raw["models"]
+        ],
+        "mcpServers": [
+            {
+                "name": server["name"],
+                "enabled": server["enabled"],
+                "source": server["source"],
+            }
+            for server in raw.get("mcp_servers", [])
         ],
         **(
             {"restartRequired": raw["restart_required"]}
@@ -276,6 +295,7 @@ def create_web_app(
             "warnings": raw["warnings"],
             "activeRunId": raw["active_run_id"],
             "liveEnabled": raw["live_enabled"],
+            "reasoning": result.reasoning.model_dump(mode="json"),
         }
 
     @app.patch("/api/v1/workspace/settings")
@@ -294,6 +314,13 @@ def create_web_app(
     async def get_configuration() -> dict[str, Any]:
         result = await host.dispatch(GetConfiguration())
         return _camel_configuration(result.data)
+
+    @app.post("/api/v1/configuration/reasoning")
+    async def inspect_reasoning(body: ModelConfigurationBody) -> dict[str, Any]:
+        definition = body.model_dump(mode="json", by_alias=False,
+                                     exclude={"expected_revision", "set_default"}, exclude_none=True)
+        result = await host.dispatch(InspectReasoning(definition))
+        return result.data
 
     @app.put("/api/v1/configuration/models/{model_name}")
     async def upsert_model_configuration(
@@ -329,9 +356,26 @@ def create_web_app(
         )
         return {"status": result.status, **_camel_configuration(result.data)}
 
+    @app.patch("/api/v1/configuration/mcp/{server_name}")
+    async def set_mcp_server_enabled(
+        server_name: str,
+        body: McpServerConfigurationBody,
+    ) -> dict[str, Any]:
+        result = await host.dispatch(
+            SetMcpServerEnabled(
+                expected_revision=body.expected_revision,
+                name=server_name,
+                enabled=body.enabled,
+            )
+        )
+        return {"status": result.status, **_camel_configuration(result.data)}
+
     @app.patch("/api/v1/sessions/{session_id}/settings")
     async def update_session_settings(session_id: str, body: SessionSettingsBody) -> dict[str, Any]:
         changed: dict[str, Any] = {}
+        if body.reasoning_effort is not None:
+            result = await host.dispatch(SelectReasoning(session_id, body.reasoning_effort))
+            changed.update(cast(Any, result).data)
         if body.approval_mode is not None:
             result = await host.dispatch(SetApprovalMode(session_id, body.approval_mode))
             changed.update(cast(Any, result).data)
@@ -402,6 +446,7 @@ def create_web_app(
                 body.input,
                 body.client_request_id,
                 attachments=tuple(item.model_dump() for item in body.attachments),
+                regenerate_from_turn=body.regenerate_from_turn,
             )
         )
         return {
@@ -720,6 +765,11 @@ def create_web_app(
         result = await host.dispatch(ContextControl(session_id, "report"))
         return {"status": cast(Any, result).status, **cast(Any, result).data}
 
+    @app.get("/api/v1/instructions")
+    async def instructions() -> dict[str, Any]:
+        result = await host.dispatch(GetInstructions())
+        return {"status": cast(Any, result).status, **cast(Any, result).data}
+
     @app.get("/api/v1/sessions/{session_id}/context/sources")
     async def session_context_sources(session_id: str) -> dict[str, Any]:
         result = await host.dispatch(ListContextSources(session_id))
@@ -746,6 +796,7 @@ def create_web_app(
                     body.name,
                     body.arguments,
                     body.client_request_id,
+                    body.regenerate_from_turn,
                 )
             )
             return {
@@ -775,6 +826,7 @@ def create_web_app(
                     cast(dict[str, str], raw_arguments),
                     body.arguments,
                     body.client_request_id,
+                    body.regenerate_from_turn,
                 )
             )
             return {

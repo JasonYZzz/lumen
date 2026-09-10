@@ -1,31 +1,51 @@
+# Python environments, caches, coverage, and package builds
 .venv/
-.pytest_cache/
-.ruff_cache/
-.lumen/
-.DS_Store
-.idea/
-.claude/
-.zcode/
-.workbuddy/
-outputs/
 __pycache__/
 *.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
 .coverage
-snapshot_report.html
+.coverage.*
+coverage.xml
+htmlcov/
+build/
+dist/
+*.egg-info/
+
+# JavaScript dependencies, caches, and build outputs
 node_modules/
 .pnpm-store/
-# Local skill-install staging and release archives are not source artifacts.
-.skill-staging/
-dist/
 .next/
 *.tsbuildinfo
-# Local agent config may contain plaintext API keys.
-agent.yaml
-agent.local.yaml
+# CI rebuilds this Next.js static export before `uv build`; source assets live
+# in `src/web/public/` and the wheel build hook bundles the fresh export.
+/src/web/out/
+
+# Lumen runtime state and local QA/build artifacts
+/.lumen/
+/outputs/
+/snapshot_report.html
+/.qa-*/
+# Local skill-install staging and release archives are not source artifacts.
+/.skill-staging/
+# One-off chart input/output helper for the ignored TKA report workspace.
+/scripts/chart_geometry.py
+
+# Local configuration and secrets
+/agent.yaml
+/agent.local.yaml
 .env
 .env.*
 !.env.example
 !.env.template
-# Reference clones of upstream projects (posting, pi, etc.) — not part of
-# Lumen's source tree; used only as design references.
-posting/
+
+# Editors, operating systems, and local coding agents
+.DS_Store
+/.idea/
+/.claude/
+/.zcode/
+/.workbuddy/
+
+# Reference clones of upstream projects are design inputs, not Lumen sources.
+/posting/

@@ -40,6 +40,16 @@ afterEach(async () => {
 })
 
 describe('conversation process disclosure', () => {
+  it('shows an immediate live placeholder before the first response event arrives', async () => {
+    await render([], true)
+    expect(container.querySelector('.assistant-turn')).not.toBeNull()
+    expect(container.querySelector('.turn-live-placeholder[role="status"]')?.textContent).toBe('正在思考')
+    expect(container.querySelector('.turn-live-placeholder img.thinking-orb')?.getAttribute('src'))
+      .toBe('/lumen-claude-amber.svg')
+    expect(container.querySelectorAll('.turn-live-placeholder img.thinking-orb')).toHaveLength(1)
+    expect(summary()).toBeNull()
+  })
+
   it('uses the same readable projection for transcript display and copy, retaining raw diagnostics', async () => {
     const writeText = vi.fn().mockResolvedValue(undefined)
     vi.stubGlobal('navigator', { clipboard: { writeText } })
@@ -90,10 +100,17 @@ describe('conversation process disclosure', () => {
     expect(content().querySelector('.process-text strong')?.textContent).toBe('公开资料')
     expect(content().querySelector('.process-text > div > strong')).toBeNull()
     expect(content().querySelector('.tool-glyph svg')).not.toBeNull()
+    expect(content().querySelector('.web-tool-card.is-live')).not.toBeNull()
+    expect(container.querySelector('.turn-live-placeholder')).toBeNull()
+    expect(summary().textContent).toContain('正在思考')
+    expect(summary().querySelector('img.thinking-orb')?.getAttribute('src'))
+      .toBe('/lumen-claude-amber.svg')
     expect(content().querySelector('.tool-title-line')?.textContent).toBe('正在读取 · README.md')
     // Receiving the final answer does not collapse while the run is still active.
     await render([thought, { ...tool, status: 'completed' }, answer], true)
     expect(content().hidden).toBe(false)
+    expect(content().querySelector('.web-tool-card.is-live')).toBeNull()
+    expect(container.querySelector('.assistant-turn-body > .turn-live-placeholder')).toBeNull()
     expect(content().querySelector('.timeline-assistant')).toBeNull()
     expect(container.querySelector('.timeline-assistant')?.textContent).toContain('这是最终回答')
     await render([thought, { ...tool, status: 'completed' }, answer], false, 155.9)
@@ -104,6 +121,34 @@ describe('conversation process disclosure', () => {
     await render([thought, { ...tool, status: 'completed' }, answer], false, 155.9)
     expect(content().hidden).toBe(false)
     expect(content().querySelector('.tool-title-line')?.textContent).toBe('已读取 · README.md')
+  })
+
+  it('collapses all intermediate assistant narration with the process after completion', async () => {
+    const first = { id: 'first', kind: 'assistant' as const, text: '先搜索相关天气信息。' }
+    const second = { id: 'second', kind: 'assistant' as const, text: '再打开权威页面核实。' }
+    const final = { id: 'final', kind: 'assistant' as const, text: '这是最终天气总结。' }
+    await render([
+      thought,
+      first,
+      { ...tool, status: 'completed' },
+      second,
+      { id: 'last-thought', kind: 'thinking', text: '整理答案' },
+      final,
+    ], false, 27)
+
+    expect(content().hidden).toBe(true)
+    expect(container.querySelectorAll('.assistant-turn-body > .timeline-assistant')).toHaveLength(1)
+    expect(container.querySelector('.assistant-turn-body > .timeline-assistant')?.textContent)
+      .toContain(final.text)
+    expect(container.querySelector('.assistant-turn-body > .timeline-assistant')?.textContent)
+      .not.toContain(first.text)
+    expect(container.querySelector('.assistant-turn-body > .timeline-assistant')?.textContent)
+      .not.toContain(second.text)
+
+    await click(summary())
+    expect(content().textContent).toContain(first.text)
+    expect(content().textContent).toContain(second.text)
+    expect(content().textContent).not.toContain(final.text)
   })
 
   it('respects manual collapse during streaming and opens when a new approval needs attention', async () => {

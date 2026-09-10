@@ -4,40 +4,41 @@ from __future__ import annotations
 
 import hashlib
 from pathlib import Path
-from typing import Any, Literal, cast
+from typing import Any, cast
 
 import yaml
+
+from lumen.reasoning import ReasoningLevel
 
 from .types import AgentProfile, WorkspaceMode
 
 _BUILTIN_PROFILES = {
     "default": AgentProfile(
         name="default",
-        description="General-purpose delegated work in an isolated worktree.",
+        description="在隔离 worktree 中执行通用委派任务。",
         workspace_mode=WorkspaceMode.WORKTREE,
         instructions=(
-            "Complete only the delegated task. Keep changes scoped, verify the result, "
-            "and return a concise evidence-backed summary to the parent agent."
+            "只完成被委派的任务。严格控制改动范围, 验证结果, "
+            "并向父 Agent 返回简洁且有证据支持的摘要。"
         ),
         revision="builtin:default:v1",
     ),
     "explorer": AgentProfile(
         name="explorer",
-        description="Read-only investigation and evidence collection.",
+        description="只读调查与证据收集。",
         workspace_mode=WorkspaceMode.READ_ONLY,
         instructions=(
-            "Investigate only the delegated question using observation tools. Cite concrete "
-            "paths or results and do not claim to modify state."
+            "只使用观察类工具调查被委派的问题。引用具体路径或结果, 不得声称修改了状态。"
         ),
         revision="builtin:explorer:v1",
     ),
     "worker": AgentProfile(
         name="worker",
-        description="Focused implementation and verification in an isolated worktree.",
+        description="在隔离 worktree 中完成聚焦的实现与验证。",
         workspace_mode=WorkspaceMode.WORKTREE,
         instructions=(
-            "Implement the bounded delegated change in the isolated worktree. Run relevant "
-            "verification and summarize the exact changes, tests, and remaining risks."
+            "在隔离 worktree 中实现范围明确的委派修改。运行相关验证, "
+            "并概述准确改动、测试和剩余风险。"
         ),
         revision="builtin:worker:v1",
     ),
@@ -103,10 +104,7 @@ class AgentProfileLoader:
             tools=tools,
             model=(str(frontmatter["model"]) if frontmatter.get("model") else None),
             reasoning_effort=(
-                cast(
-                    Literal["minimal", "low", "medium", "high", "xhigh"],
-                    str(frontmatter["reasoning-effort"]),
-                )
+                ReasoningLevel(str(frontmatter["reasoning-effort"]))
                 if frontmatter.get("reasoning-effort")
                 else None
             ),

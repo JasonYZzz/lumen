@@ -60,7 +60,7 @@ Lumen 是通用、可配置的 Agent framework。模型 provider 是可替换实
 ### Session 与上下文
 
 - Session 是 append-only journal。修改历史事实要追加新 record，不原地改写旧 record。
-- 当前 Session schema 是 v9；v1–v8 必须可加载，且加载不能重写历史文件。旧会话首次写入高版本 record 时只追加 `schema_upgrade`，不改写 header。
+- 当前 Session schema 是 v11；v1–v10 必须可加载，且加载不能重写历史文件。旧会话首次写入高版本 record 时只追加 `schema_upgrade`，不改写 header。
 - 大正文、transcript、diff 和结果载荷进入内容寻址 ArtifactStore；Session 只保存引用和有界摘要。
 - compaction 不能丢弃 canonical history，也不能把瞬时 Skill/Memory/MCP 内容重复写入历史。
 - 配置 schema 是 v2。v1 仅在内存中迁移并警告，不自动改写可能含凭据和注释的用户文件。
@@ -139,7 +139,7 @@ python3 /absolute/path/to/lumen/scripts/install_editable.py
 6. 配置、Session、Runtime、TaskWorkspace 或 Agent 生命周期修改完成后运行全量 pytest。
 7. 打包/入口修改运行 `uv build`，并从生成 wheel 执行至少一次 `lumen --version` 或 `--check-config`。
 
-`src/web/openapi.json`、`src/web/src/lib/api/schema.generated.ts` 和 `src/web/out/` 是生成物。只通过对应生成/构建命令更新，不手工编辑；提交前确认生成物与源 schema 一致。
+`src/web/openapi.json` 和 `src/web/src/lib/api/schema.generated.ts` 是生成物，纳入版本控制以让 CI 校验与源 schema 一致；只通过对应生成命令更新，不手工编辑。`src/web/out/` 是 Next.js 静态导出产物，不纳入版本控制：CI 在 `uv build` 前运行 `pnpm --dir src/web build` 重新生成，`lumen web` 优先使用 wheel 内置的 `api/static/`；从源码运行 Web UI 前需先本地构建前端。
 
 ## 变更交付检查
 

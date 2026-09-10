@@ -108,6 +108,141 @@
           "title": "LoopRequestAttempted",
           "type": "object"
         },
+        "LoopRequestObserved": {
+          "additionalProperties": false,
+          "description": "Per-attempt stream wall time; semantic events, not raw HTTP bytes.",
+          "properties": {
+            "elapsed_seconds": {
+              "minimum": 0,
+              "title": "Elapsed Seconds",
+              "type": "number"
+            },
+            "error_category": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Error Category"
+            },
+            "first_event_seconds": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "First Event Seconds"
+            },
+            "first_text_seconds": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "First Text Seconds"
+            },
+            "first_thinking_seconds": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "First Thinking Seconds"
+            },
+            "first_tool_call_seconds": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "First Tool Call Seconds"
+            },
+            "kind": {
+              "const": "request_observed",
+              "default": "request_observed",
+              "title": "Kind",
+              "type": "string"
+            },
+            "model_attempts": {
+              "minimum": 1,
+              "title": "Model Attempts",
+              "type": "integer"
+            },
+            "request_index": {
+              "minimum": 1,
+              "title": "Request Index",
+              "type": "integer"
+            },
+            "sequence": {
+              "minimum": 0,
+              "title": "Sequence",
+              "type": "integer"
+            },
+            "stop_reason": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/ModelStopReason"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "text_characters": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Text Characters",
+              "type": "integer"
+            },
+            "thinking_characters": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Thinking Characters",
+              "type": "integer"
+            },
+            "tool_names": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "title": "Tool Names",
+              "type": "array"
+            }
+          },
+          "required": [
+            "sequence",
+            "request_index",
+            "model_attempts",
+            "elapsed_seconds"
+          ],
+          "title": "LoopRequestObserved",
+          "type": "object"
+        },
         "LoopRetryScheduled": {
           "additionalProperties": false,
           "properties": {
@@ -383,9 +518,53 @@
           "title": "LoopToolCallPrepared",
           "type": "object"
         },
+        "LoopToolCallStreaming": {
+          "additionalProperties": false,
+          "description": "A provider is generating a call; arguments are not yet safe to execute.",
+          "properties": {
+            "call_id": {
+              "title": "Call Id",
+              "type": "string"
+            },
+            "kind": {
+              "const": "tool_call_streaming",
+              "default": "tool_call_streaming",
+              "title": "Kind",
+              "type": "string"
+            },
+            "name": {
+              "title": "Name",
+              "type": "string"
+            },
+            "request_index": {
+              "minimum": 1,
+              "title": "Request Index",
+              "type": "integer"
+            },
+            "sequence": {
+              "minimum": 0,
+              "title": "Sequence",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "sequence",
+            "request_index",
+            "call_id",
+            "name"
+          ],
+          "title": "LoopToolCallStreaming",
+          "type": "object"
+        },
         "LoopToolResultRecorded": {
           "additionalProperties": false,
           "properties": {
+            "approval_seconds": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Approval Seconds",
+              "type": "number"
+            },
             "call_id": {
               "title": "Call Id",
               "type": "string"
@@ -419,6 +598,12 @@
               "default": null,
               "title": "Effect Receipt Id"
             },
+            "elapsed_seconds": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Elapsed Seconds",
+              "type": "number"
+            },
             "error": {
               "anyOf": [
                 {
@@ -430,6 +615,19 @@
               ],
               "default": null,
               "title": "Error"
+            },
+            "execution_seconds": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Execution Seconds"
             },
             "idempotency_key": {
               "title": "Idempotency Key",
@@ -453,6 +651,18 @@
               "minimum": 0,
               "title": "Order",
               "type": "integer"
+            },
+            "preparation_seconds": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Preparation Seconds",
+              "type": "number"
+            },
+            "queue_seconds": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Queue Seconds",
+              "type": "number"
             },
             "request_index": {
               "minimum": 1,
@@ -600,6 +810,20 @@
           ],
           "title": "LoopUsageObserved",
           "type": "object"
+        },
+        "ModelStopReason": {
+          "enum": [
+            "end_turn",
+            "tool_call",
+            "length",
+            "refusal",
+            "content_filter",
+            "suspended",
+            "error",
+            "unknown"
+          ],
+          "title": "ModelStopReason",
+          "type": "string"
         }
       },
       "discriminator": {
@@ -607,6 +831,7 @@
           "commentary_emitted": "#/$defs/LoopCommentaryEmitted",
           "completion_decided": "#/$defs/LoopCompletionDecided",
           "request_attempted": "#/$defs/LoopRequestAttempted",
+          "request_observed": "#/$defs/LoopRequestObserved",
           "retry_scheduled": "#/$defs/LoopRetryScheduled",
           "stall_observed": "#/$defs/LoopStallObserved",
           "state_changed": "#/$defs/LoopTransition",
@@ -614,6 +839,7 @@
           "text_retracted": "#/$defs/LoopTextRetracted",
           "thinking_emitted": "#/$defs/LoopThinkingEmitted",
           "tool_call_prepared": "#/$defs/LoopToolCallPrepared",
+          "tool_call_streaming": "#/$defs/LoopToolCallStreaming",
           "tool_result_recorded": "#/$defs/LoopToolResultRecorded",
           "usage_observed": "#/$defs/LoopUsageObserved"
         },
@@ -636,6 +862,9 @@
           "$ref": "#/$defs/LoopCommentaryEmitted"
         },
         {
+          "$ref": "#/$defs/LoopToolCallStreaming"
+        },
+        {
           "$ref": "#/$defs/LoopToolCallPrepared"
         },
         {
@@ -652,6 +881,9 @@
         },
         {
           "$ref": "#/$defs/LoopRequestAttempted"
+        },
+        {
+          "$ref": "#/$defs/LoopRequestObserved"
         },
         {
           "$ref": "#/$defs/LoopCompletionDecided"
@@ -698,19 +930,6 @@
             "default": null,
             "title": "Default Model"
           },
-          "instructions_file": {
-            "anyOf": [
-              {
-                "format": "path",
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null,
-            "title": "Instructions File"
-          },
           "limits": {
             "$ref": "#/$defs/LimitsConfig"
           },
@@ -736,6 +955,9 @@
             "default": "lumen",
             "title": "Name",
             "type": "string"
+          },
+          "prompt": {
+            "$ref": "#/$defs/PromptConfig"
           },
           "skills_enabled": {
             "default": true,
@@ -1196,7 +1418,7 @@
             "type": "integer"
           },
           "parallel_tool_calls": {
-            "default": "sequential",
+            "default": "parallel_safe",
             "enum": [
               "sequential",
               "parallel_safe",
@@ -1452,6 +1674,21 @@
           }
         },
         "title": "LiveTurnDetectionConfig",
+        "type": "object"
+      },
+      "McpPolicyConfig": {
+        "additionalProperties": false,
+        "description": "Workspace overrides for configured MCP server activation.",
+        "properties": {
+          "enabled": {
+            "additionalProperties": {
+              "type": "boolean"
+            },
+            "title": "Enabled",
+            "type": "object"
+          }
+        },
+        "title": "McpPolicyConfig",
         "type": "object"
       },
       "McpServerConfig": {
@@ -1754,6 +1991,34 @@
         "title": "ModelContextOverride",
         "type": "object"
       },
+      "ModelNativeWebSearchConfig": {
+        "additionalProperties": false,
+        "description": "Provider-executed web search policy for one model route.",
+        "properties": {
+          "mode": {
+            "default": "auto",
+            "enum": [
+              "auto",
+              "enabled",
+              "disabled"
+            ],
+            "title": "Mode",
+            "type": "string"
+          },
+          "search_context_size": {
+            "default": "medium",
+            "enum": [
+              "low",
+              "medium",
+              "high"
+            ],
+            "title": "Search Context Size",
+            "type": "string"
+          }
+        },
+        "title": "ModelNativeWebSearchConfig",
+        "type": "object"
+      },
       "ModelSettingsConfig": {
         "additionalProperties": false,
         "properties": {
@@ -1832,6 +2097,47 @@
             },
             "title": "Input Modalities",
             "type": "array"
+          },
+          "native_web_search": {
+            "$ref": "#/$defs/ModelNativeWebSearchConfig"
+          },
+          "reasoning_effort": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/ReasoningLevel"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "reasoning_levels": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/$defs/ReasoningLevel"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Reasoning Levels"
+          },
+          "reasoning_profile": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Reasoning Profile"
           },
           "settings": {
             "additionalProperties": true,
@@ -2051,6 +2357,71 @@
         ],
         "title": "PluginConfig",
         "type": "object"
+      },
+      "PromptConfig": {
+        "additionalProperties": false,
+        "description": "Select how Lumen constructs the stable provider instructions.",
+        "properties": {
+          "append_file": {
+            "anyOf": [
+              {
+                "format": "path",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Append File"
+          },
+          "mode": {
+            "default": "preset",
+            "enum": [
+              "minimal",
+              "preset",
+              "append",
+              "replace"
+            ],
+            "title": "Mode",
+            "type": "string"
+          },
+          "preset": {
+            "const": "lumen",
+            "default": "lumen",
+            "title": "Preset",
+            "type": "string"
+          },
+          "replace_file": {
+            "anyOf": [
+              {
+                "format": "path",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Replace File"
+          }
+        },
+        "title": "PromptConfig",
+        "type": "object"
+      },
+      "ReasoningLevel": {
+        "enum": [
+          "provider_default",
+          "off",
+          "minimal",
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max"
+        ],
+        "title": "ReasoningLevel",
+        "type": "string"
       },
       "SandboxConfig": {
         "additionalProperties": false,
@@ -2335,6 +2706,9 @@
       "live": {
         "$ref": "#/$defs/LiveConfig"
       },
+      "mcp": {
+        "$ref": "#/$defs/McpPolicyConfig"
+      },
       "mcp_diagnostics": {
         "items": {
           "additionalProperties": true,
@@ -2452,6 +2826,25 @@
       "module": "AgentOrchestrator"
     }
   ],
+  "provider_catalog": {
+    "authority": "lumen.provider_catalog",
+    "generated_matrix": "docs/generated/provider-reasoning.md",
+    "profiles": [
+      "deepseek-v4-responses",
+      "deepseek-v4-chat",
+      "deepseek-v4-anthropic",
+      "bailian-qwen38",
+      "bailian-deepseek-glm",
+      "kimi-coding-openai",
+      "kimi-coding-anthropic",
+      "moonshot-k3",
+      "openai-gpt56-sol",
+      "openai-gpt56-terra",
+      "openai-gpt56-luna",
+      "openai-gpt6-astra"
+    ],
+    "revision": "2026-09-09.2"
+  },
   "run_events": {
     "$defs": {
       "AcceptanceCriterion": {
@@ -2917,6 +3310,7 @@
         "additionalProperties": false,
         "properties": {
           "acceptance_criteria": {
+            "description": "由具体工具结果验证的可选要求。普通进度步骤和仅作推理准备的步骤（例如确定提纲）应留空。每项验收标准都必须在步骤完成前关联一条通过的执行回执。",
             "items": {
               "$ref": "#/$defs/AcceptanceCriterion"
             },
@@ -3564,7 +3958,7 @@
       "owner": "LumenAgentLoop"
     },
     {
-      "enforced_by": "ordered invocation batches and LoopToolResultRecorded order",
+      "enforced_by": "provider-ordered tool continuation; completion-ordered events retain call order",
       "name": "tool_results_preserve_provider_call_order",
       "owner": "LumenAgentLoop"
     },
@@ -3610,7 +4004,7 @@
     }
   ],
   "session": {
-    "current_schema": 9,
+    "current_schema": 11,
     "model_input_manifest": {
       "$defs": {
         "ContextZone": {
@@ -3618,6 +4012,7 @@
           "enum": [
             "system",
             "policy",
+            "runtime_context",
             "memory_index",
             "capability_catalog",
             "task_state",
@@ -3733,6 +4128,7 @@
           "enum": [
             "system",
             "policy",
+            "runtime",
             "memory",
             "capability",
             "task",
@@ -3790,6 +4186,31 @@
           "maxItems": 128,
           "title": "Non Replayable Reasons",
           "type": "array"
+        },
+        "prompt_mode": {
+          "default": "legacy",
+          "maxLength": 32,
+          "title": "Prompt Mode",
+          "type": "string"
+        },
+        "prompt_preset": {
+          "anyOf": [
+            {
+              "maxLength": 128,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Prompt Preset"
+        },
+        "prompt_version": {
+          "default": "legacy",
+          "maxLength": 128,
+          "title": "Prompt Version",
+          "type": "string"
         },
         "provider": {
           "maxLength": 128,
@@ -3883,6 +4304,7 @@
       "agent_thread",
       "context_state",
       "effect",
+      "history_rewind",
       "live_session",
       "plan_state",
       "schema_upgrade",
@@ -3899,6 +4321,7 @@
           "enum": [
             "system",
             "policy",
+            "runtime_context",
             "memory_index",
             "capability_catalog",
             "task_state",
@@ -3959,6 +4382,31 @@
               "maxItems": 128,
               "title": "Non Replayable Reasons",
               "type": "array"
+            },
+            "prompt_mode": {
+              "default": "legacy",
+              "maxLength": 32,
+              "title": "Prompt Mode",
+              "type": "string"
+            },
+            "prompt_preset": {
+              "anyOf": [
+                {
+                  "maxLength": 128,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Prompt Preset"
+            },
+            "prompt_version": {
+              "default": "legacy",
+              "maxLength": 128,
+              "title": "Prompt Version",
+              "type": "string"
             },
             "provider": {
               "maxLength": 128,
@@ -4146,6 +4594,7 @@
           "enum": [
             "system",
             "policy",
+            "runtime",
             "memory",
             "capability",
             "task",
@@ -4266,7 +4715,9 @@
       6,
       7,
       8,
-      9
+      9,
+      10,
+      11
     ],
     "upgrade_policy": "append-only schema_upgrade; never rewrite prior records"
   },
@@ -4977,6 +5428,18 @@
         "title": "GetConfiguration",
         "type": "object"
       },
+      "GetInstructions": {
+        "properties": {
+          "type": {
+            "const": "get_instructions",
+            "default": "get_instructions",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "title": "GetInstructions",
+        "type": "object"
+      },
       "ImportAttachmentPath": {
         "properties": {
           "path": {
@@ -4994,6 +5457,26 @@
           "path"
         ],
         "title": "ImportAttachmentPath",
+        "type": "object"
+      },
+      "InspectReasoning": {
+        "properties": {
+          "definition": {
+            "additionalProperties": true,
+            "title": "Definition",
+            "type": "object"
+          },
+          "type": {
+            "const": "inspect_reasoning",
+            "default": "inspect_reasoning",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "definition"
+        ],
+        "title": "InspectReasoning",
         "type": "object"
       },
       "InterruptAgent": {
@@ -5055,6 +5538,18 @@
             "title": "Reference",
             "type": "string"
           },
+          "regenerate_from_turn": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Regenerate From Turn"
+          },
           "session_id": {
             "title": "Session Id",
             "type": "string"
@@ -5089,6 +5584,18 @@
           "name": {
             "title": "Name",
             "type": "string"
+          },
+          "regenerate_from_turn": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Regenerate From Turn"
           },
           "session_id": {
             "title": "Session Id",
@@ -5312,6 +5819,20 @@
         "title": "QueueRunInput",
         "type": "object"
       },
+      "ReasoningLevel": {
+        "enum": [
+          "provider_default",
+          "off",
+          "minimal",
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max"
+        ],
+        "title": "ReasoningLevel",
+        "type": "string"
+      },
       "RejectAgentImport": {
         "properties": {
           "agent_id": {
@@ -5451,6 +5972,29 @@
         "title": "SelectModel",
         "type": "object"
       },
+      "SelectReasoning": {
+        "properties": {
+          "effort": {
+            "$ref": "#/$defs/ReasoningLevel"
+          },
+          "session_id": {
+            "title": "Session Id",
+            "type": "string"
+          },
+          "type": {
+            "const": "select_reasoning",
+            "default": "select_reasoning",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "session_id",
+          "effort"
+        ],
+        "title": "SelectReasoning",
+        "type": "object"
+      },
       "SendAgentMessage": {
         "properties": {
           "agent_id": {
@@ -5568,6 +6112,35 @@
           "active"
         ],
         "title": "SetContextSource",
+        "type": "object"
+      },
+      "SetMcpServerEnabled": {
+        "properties": {
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "expected_revision": {
+            "title": "Expected Revision",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "type": {
+            "const": "set_mcp_server_enabled",
+            "default": "set_mcp_server_enabled",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "expected_revision",
+          "name",
+          "enabled"
+        ],
+        "title": "SetMcpServerEnabled",
         "type": "object"
       },
       "SetSessionArchived": {
@@ -5708,6 +6281,18 @@
             "default": null,
             "title": "Model Prompt"
           },
+          "regenerate_from_turn": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Regenerate From Turn"
+          },
           "session_id": {
             "title": "Session Id",
             "type": "string"
@@ -5836,7 +6421,16 @@
         "$ref": "#/$defs/GetConfiguration"
       },
       {
+        "$ref": "#/$defs/GetInstructions"
+      },
+      {
+        "$ref": "#/$defs/InspectReasoning"
+      },
+      {
         "$ref": "#/$defs/UpsertModelConfiguration"
+      },
+      {
+        "$ref": "#/$defs/SetMcpServerEnabled"
       },
       {
         "$ref": "#/$defs/DeleteModelConfiguration"
@@ -5941,6 +6535,9 @@
         "$ref": "#/$defs/SelectModel"
       },
       {
+        "$ref": "#/$defs/SelectReasoning"
+      },
+      {
         "$ref": "#/$defs/RetryRun"
       },
       {
@@ -5998,6 +6595,31 @@
         "title": "CommandAcknowledged",
         "type": "object"
       },
+      "GoogleThinkingConfig": {
+        "additionalProperties": false,
+        "properties": {
+          "include_thoughts": {
+            "default": true,
+            "title": "Include Thoughts",
+            "type": "boolean"
+          },
+          "thinking_level": {
+            "enum": [
+              "MINIMAL",
+              "LOW",
+              "MEDIUM",
+              "HIGH"
+            ],
+            "title": "Thinking Level",
+            "type": "string"
+          }
+        },
+        "required": [
+          "thinking_level"
+        ],
+        "title": "GoogleThinkingConfig",
+        "type": "object"
+      },
       "LiveStartedResult": {
         "properties": {
           "answer_sdp": {
@@ -6038,6 +6660,265 @@
           "state"
         ],
         "title": "LiveStartedResult",
+        "type": "object"
+      },
+      "ReasoningLevel": {
+        "enum": [
+          "provider_default",
+          "off",
+          "minimal",
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max"
+        ],
+        "title": "ReasoningLevel",
+        "type": "string"
+      },
+      "ReasoningParameters": {
+        "additionalProperties": false,
+        "description": "Credential-free subset safe to freeze in the Session journal.",
+        "properties": {
+          "anthropic_effort": {
+            "anyOf": [
+              {
+                "enum": [
+                  "low",
+                  "medium",
+                  "high",
+                  "xhigh",
+                  "max"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Anthropic Effort"
+          },
+          "anthropic_thinking": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/ThinkingBudget"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "google_thinking_config": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/GoogleThinkingConfig"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "openai_reasoning_effort": {
+            "anyOf": [
+              {
+                "enum": [
+                  "none",
+                  "minimal",
+                  "low",
+                  "medium",
+                  "high",
+                  "xhigh",
+                  "max"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Openai Reasoning Effort"
+          },
+          "thinking": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "enum": [
+                  "minimal",
+                  "low",
+                  "medium",
+                  "high",
+                  "xhigh"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Thinking"
+          },
+          "wire_thinking": {
+            "anyOf": [
+              {
+                "enum": [
+                  "enabled",
+                  "disabled"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Wire Thinking"
+          }
+        },
+        "title": "ReasoningParameters",
+        "type": "object"
+      },
+      "ReasoningSelection": {
+        "additionalProperties": false,
+        "properties": {
+          "capability_documents": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Capability Documents",
+            "type": "array"
+          },
+          "capability_note": {
+            "default": "",
+            "title": "Capability Note",
+            "type": "string"
+          },
+          "capability_reviewed_on": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Capability Reviewed On"
+          },
+          "capability_source": {
+            "default": "unknown",
+            "title": "Capability Source",
+            "type": "string"
+          },
+          "capability_status": {
+            "default": "unknown",
+            "enum": [
+              "supported",
+              "unsupported",
+              "unknown"
+            ],
+            "title": "Capability Status",
+            "type": "string"
+          },
+          "catalog_revision": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Catalog Revision"
+          },
+          "effective": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/ReasoningLevel"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "level_map": {
+            "additionalProperties": {
+              "$ref": "#/$defs/ReasoningLevel"
+            },
+            "propertyNames": {
+              "$ref": "#/$defs/ReasoningLevel"
+            },
+            "title": "Level Map",
+            "type": "object"
+          },
+          "mapping": {
+            "default": "provider_default",
+            "title": "Mapping",
+            "type": "string"
+          },
+          "parameters": {
+            "$ref": "#/$defs/ReasoningParameters"
+          },
+          "provider": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Provider"
+          },
+          "provider_default_level": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/ReasoningLevel"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "requested": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/ReasoningLevel"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "source": {
+            "default": "provider_default",
+            "title": "Source",
+            "type": "string"
+          },
+          "supported_levels": {
+            "default": [
+              "provider_default"
+            ],
+            "items": {
+              "$ref": "#/$defs/ReasoningLevel"
+            },
+            "title": "Supported Levels",
+            "type": "array"
+          }
+        },
+        "title": "ReasoningSelection",
         "type": "object"
       },
       "RunStartedResult": {
@@ -6130,6 +7011,38 @@
         "title": "SessionSummary",
         "type": "object"
       },
+      "ThinkingBudget": {
+        "additionalProperties": false,
+        "properties": {
+          "budget_tokens": {
+            "anyOf": [
+              {
+                "minimum": 1024,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Budget Tokens"
+          },
+          "type": {
+            "enum": [
+              "enabled",
+              "disabled",
+              "adaptive"
+            ],
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type"
+        ],
+        "title": "ThinkingBudget",
+        "type": "object"
+      },
       "WorkspaceBootstrap": {
         "properties": {
           "active_model": {
@@ -6189,6 +7102,9 @@
           "model_id": {
             "title": "Model Id",
             "type": "string"
+          },
+          "reasoning": {
+            "$ref": "#/$defs/ReasoningSelection"
           },
           "skills": {
             "items": {

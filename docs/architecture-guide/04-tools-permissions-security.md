@@ -85,8 +85,16 @@ flowchart TD
 
 `web_fetch` 与按配置注册的 `web_search` 属于 `Risk=external`、`EffectKind=observe`，当前默认
 exclusive。抓取会在 DNS 解析和每次重定向后拒绝 loopback、私网与链路本地地址；`fetch_max_bytes`
-限制解析的内容字节数，当前 HTTP Adapter 先读取完整响应，不能将该参数描述为传输或峰值内存上限。
-搜索 API key 只从配置指定的环境变量读取。
+通过流式读取限制响应正文，HTML Adapter 保留公开链接。HTTP Adapter 为静态抓取声明 Accept 与
+User-Agent，对 408、425、429、500、502、503、504 和传输故障做最多三次有界退避重试，并尊重
+数值型 `Retry-After`。`download_file` 复用相同网络策略，但仍是 TaskWorkspace mutation：它只接收
+需要原样落盘的 UTF-8 原始资源，不替代 `web_fetch` 阅读网页、API 或 RSS。搜索 API key 只从配置
+指定的环境变量读取。
+
+模型原生 `web_search`、配置型搜索/MCP、内置 `web_fetch` 是三条不同 Interface：前者由 provider
+返回搜索与来源事件，中间层提供搜索发现，后者只读取已知公共 URL 的静态文本。需要认证、浏览器
+交互、JavaScript 渲染或反爬挑战时必须使用显式 Browser MCP；内置 HTTP Adapter 不宣称具备浏览器
+执行能力。
 
 ## 4.5 Hook 链
 

@@ -333,7 +333,7 @@ async def test_compaction_failure_row_uses_error_styling(tmp_path: Path) -> None
 
         row = app.query_one(".compaction-row", Static)
         assert row.has_class("is-error")
-        assert "✗ Context compaction failed: summarizer unavailable" in str(row.content)
+        assert "✗ 上下文压缩失败: summarizer unavailable" in str(row.content)
 
 
 async def test_long_markdown_answer_keeps_one_top_level_widget(tmp_path: Path) -> None:

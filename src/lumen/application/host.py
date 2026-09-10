@@ -26,6 +26,7 @@ from lumen.collaboration import (
     SessionSettingsState,
     apply_collaboration_context,
 )
+from lumen.config import ModelSettingsConfig
 from lumen.configuration import ConfigurationConflictError, ConfigurationEditError
 from lumen.context import ContextCompactCommand, ContextMemoryCommand, ContextReportCommand
 from lumen.context.memory.redaction import redact_secrets
@@ -49,6 +50,7 @@ from lumen.live import LiveConnectRequest, LiveEvent
 from lumen.live.manager import LiveSessionManager
 from lumen.live.types import LiveConnectionState
 from lumen.plan import EvidenceKind, EvidenceReceipt, PlanLifecycle
+from lumen.reasoning import ReasoningLevel, ReasoningSelection, apply_reasoning, resolve_reasoning
 from lumen.run_coordinator import RunCoordinator, RunInput
 from lumen.run_diagnostics import build_run_diagnostic
 from lumen.runtime import AgentRuntime, CompletionPolicy, ToolApproval
@@ -86,7 +88,9 @@ from .models import (
     ForkSessionAtTurn,
     GetBootstrap,
     GetConfiguration,
+    GetInstructions,
     ImportAttachmentPath,
+    InspectReasoning,
     InterruptAgent,
     InterruptLiveSession,
     InvalidStateError,
@@ -110,6 +114,7 @@ from .models import (
     RunNotFoundError,
     RunStartedResult,
     SelectModel,
+    SelectReasoning,
     SendAgentMessage,
     SessionCreated,
     SessionList,
@@ -119,6 +124,7 @@ from .models import (
     SetApprovalMode,
     SetCollaborationMode,
     SetContextSource,
+    SetMcpServerEnabled,
     SetSessionArchived,
     SetTranscriptDensity,
     StartLiveSession,
@@ -156,6 +162,7 @@ class WorkspaceResources(Protocol):
     async def render_mcp_prompt(self, reference: str, arguments: dict[str, str]) -> str: ...
     def hook_summary(self) -> list[dict[str, object]]: ...
     def capabilities_report(self) -> dict[str, Any]: ...
+    def instructions_report(self) -> dict[str, object]: ...
     def summary(self) -> dict[str, Any]: ...
 
 @dataclass(slots=True)
@@ -215,6 +222,7 @@ class WorkspaceHost:
             # still be written once the underlying I/O recovers.
             self._persistent_approval_keys = set()
         self._live_execution_id: str | None = None
+        self._startup_reasoning_applied: set[str] = set()
         self._live_approvals: dict[str, dict[str, _PendingApproval]] = {}
         self._live_manager = getattr(resources, "live_manager", None)
         self._attachment_store = AttachmentStore(resources.artifact_store)
@@ -291,7 +299,14 @@ class WorkspaceHost:
 
     @overload
     async def dispatch(
-        self, command: GetConfiguration | UpsertModelConfiguration | DeleteModelConfiguration
+        self,
+        command: (
+            GetConfiguration
+            | InspectReasoning
+            | UpsertModelConfiguration
+            | SetMcpServerEnabled
+            | DeleteModelConfiguration
+        ),
     ) -> CommandAcknowledged: ...
 
     @overload
@@ -322,6 +337,7 @@ class WorkspaceHost:
             | RenameSession
             | SetSessionArchived
             | SelectModel
+            | SelectReasoning
             | ContextControl
             | SetContextSource
             | CancelClarification
@@ -344,7 +360,10 @@ class WorkspaceHost:
             | CloseChildRun
             | WaivePlanVerification
             | GetConfiguration
+            | GetInstructions
+            | InspectReasoning
             | UpsertModelConfiguration
+            | SetMcpServerEnabled
             | DeleteModelConfiguration
             | StoreAttachment
             | ImportAttachmentPath
@@ -385,8 +404,17 @@ class WorkspaceHost:
                 "stored",
                 {"attachment": attachment.model_dump(mode="json")},
             )
+        if isinstance(command, InspectReasoning):
+            try:
+                config = ModelSettingsConfig.model_validate(command.definition)
+                selection = resolve_reasoning(config)
+            except ValueError as error:
+                raise InvalidStateError(str(error)) from error
+            return CommandAcknowledged("ok", {"reasoning": selection.model_dump(mode="json")})
         if isinstance(command, GetConfiguration):
             return CommandAcknowledged("ok", self.resources.configuration.inspect().as_dict())
+        if isinstance(command, GetInstructions):
+            return CommandAcknowledged("ok", self.resources.instructions_report())
         if isinstance(command, UpsertModelConfiguration):
             self._require_configuration_edit_safe()
             try:
@@ -395,6 +423,22 @@ class WorkspaceHost:
                     name=command.name,
                     definition=command.definition,
                     set_default=command.set_default,
+                )
+            except ConfigurationConflictError as error:
+                raise ConfigurationConflictHostError(str(error)) from error
+            except ConfigurationEditError as error:
+                raise InvalidStateError(str(error)) from error
+            return CommandAcknowledged(
+                "saved",
+                {**snapshot.as_dict(), "restart_required": True},
+            )
+        if isinstance(command, SetMcpServerEnabled):
+            self._require_configuration_edit_safe()
+            try:
+                snapshot = self.resources.configuration.set_mcp_server_enabled(
+                    expected_revision=command.expected_revision,
+                    name=command.name,
+                    enabled=command.enabled,
                 )
             except ConfigurationConflictError as error:
                 raise ConfigurationConflictHostError(str(error)) from error
@@ -579,6 +623,8 @@ class WorkspaceHost:
             return CommandAcknowledged("closed", {"child": value.model_dump(mode="json")})
         if isinstance(command, SelectModel):
             return await self._select_model(command)
+        if isinstance(command, SelectReasoning):
+            return await self._select_reasoning(command)
         if isinstance(command, RetryRun):
             actor = self._actor(command.session_id)
             state = actor.coordinator.state
@@ -663,6 +709,7 @@ class WorkspaceHost:
             warnings=list(self.resources.warnings),
             active_run_id=self._active_run_id,
             live_enabled=self._live_manager is not None,
+            reasoning=self._reasoning_for(),
         )
 
     def _list_sessions(self, *, include_archived: bool = False) -> SessionList:
@@ -871,6 +918,7 @@ class WorkspaceHost:
             collaboration_mode=actor.settings.collaboration_mode.value,
             plan_review_status=actor.settings.plan_review_status.value,
             transcript_density=actor.settings.transcript_density,
+            reasoning=self._reasoning_for(actor),
             pending_clarification=pending.model_dump(mode="json") if pending is not None else None,
             work_products=[item.model_dump(mode="json") for item in work_state.work_products],
             pending_effects=[
@@ -945,6 +993,7 @@ class WorkspaceHost:
         # project-scoped store is the persistence authority for them.
         actor.approval_keys.update(self._persistent_approval_keys)
         self._sessions[state.session.id] = actor
+        self._apply_startup_reasoning(actor)
         return SessionCreated(state.session.id)
 
     @staticmethod
@@ -1015,6 +1064,7 @@ class WorkspaceHost:
         # project-scoped store is the persistence authority for them.
         actor.approval_keys.update(self._persistent_approval_keys)
         self._sessions[session_id] = actor
+        self._apply_startup_reasoning(actor)
         return actor
 
     def _coordinator(self) -> RunCoordinator:
@@ -1083,6 +1133,23 @@ class WorkspaceHost:
                 if loaded.catalog.archived_at is not None:
                     raise InvalidStateError("restore the archived Session before starting a run")
                 self._check_effect_recovery(command.session_id)
+                if command.regenerate_from_turn is not None:
+                    if not 0 <= command.regenerate_from_turn < len(loaded.turns):
+                        raise InvalidStateError("turn index out of range")
+                    self.resources.session_repository.rewind(
+                        command.session_id,
+                        before_turn=command.regenerate_from_turn,
+                    )
+                    runtime = self.resources.runtime
+                    if runtime is not None and runtime.context_engine is not None:
+                        memory = runtime.context_engine.memory
+                        if memory is not None:
+                            memory.retract_session_suffix(
+                                command.session_id,
+                                active_turn_count=command.regenerate_from_turn,
+                            )
+                        runtime.context_engine.reset_session_projection(command.session_id)
+                    loaded = self._managed_session(command.session_id)
                 actor = self._sessions.get(command.session_id)
                 if actor is None:
                     actor = self._actor(command.session_id)
@@ -1090,6 +1157,14 @@ class WorkspaceHost:
                     state = actor.coordinator.resume(command.session_id)
                     actor.metadata = state.session
                     actor.settings = loaded.settings
+                selection = self._reasoning_for(actor)
+                if selection.requested is not None:
+                    selection = self._resolve_reasoning(selection.requested, source=selection.source)
+                runtime = self.resources.runtime
+                if runtime is not None:
+                    runtime.configure_reasoning(selection)
+                if actor.settings.reasoning.get(self._reasoning_key()) != selection:
+                    self._store_reasoning(actor, selection)
                 run_id = str(uuid4())
                 record = _RunRecord(
                     id=run_id,
@@ -1683,7 +1758,7 @@ class WorkspaceHost:
         self.resources.session_repository.append_session_settings(command.session_id, actor.settings)
         started = await self._start_run(
             StartRun(command.session_id, feedback, command.client_request_id),
-            model_prompt=f"Revise plan revision {command.revision} using this feedback:\n{feedback}",
+            model_prompt=f"根据以下反馈修订计划版本 {command.revision}:\n{feedback}",
             initial_events=(PlanReviewResolved(command.revision, False, feedback),),
         )
         actor.settings = actor.settings.model_copy(
@@ -1758,6 +1833,65 @@ class WorkspaceHost:
             {"evidence": receipt.model_dump(mode="json"), "effect_count": waived_effects},
         )
 
+    def _reasoning_key(self) -> str:
+        return f"{self.resources.active_model_name()}:{self.resources.active_model_config().id}"
+
+    def _resolve_reasoning(
+        self, effort: ReasoningLevel | None = None, *, source: str = "model",
+    ) -> ReasoningSelection:
+        config = self.resources.active_model_config()
+        if not isinstance(config, ModelSettingsConfig):
+            config = ModelSettingsConfig(id=str(config.id))
+        return resolve_reasoning(config, effort, source=source)
+
+    def _reasoning_for(self, actor: _SessionActor | None = None) -> ReasoningSelection:
+        if actor is not None and (saved := actor.settings.reasoning.get(self._reasoning_key())) is not None:
+            current = self._resolve_reasoning()
+            # Capabilities are current model facts, not a frozen Session preference.
+            return saved.model_copy(update={name: getattr(current, name) for name in (
+                "supported_levels", "capability_status", "capability_source", "level_map",
+                "catalog_revision", "provider", "capability_documents", "capability_reviewed_on",
+                "capability_note", "provider_default_level",
+            )})
+        startup = getattr(self.resources, "startup_reasoning", None)
+        if actor is None and startup is not None:
+            return self._resolve_reasoning(startup, source="cli")
+        return self._resolve_reasoning()
+
+    def _store_reasoning(self, actor: _SessionActor, selection: ReasoningSelection) -> None:
+        settings = actor.settings.model_copy(update={
+            "reasoning": {**actor.settings.reasoning, self._reasoning_key(): selection},
+        })
+        self.resources.session_repository.append_session_settings(actor.metadata.id, settings)
+        actor.settings = settings
+
+    def _apply_startup_reasoning(self, actor: _SessionActor) -> None:
+        effort = getattr(self.resources, "startup_reasoning", None)
+        if effort is not None and actor.metadata.id not in self._startup_reasoning_applied:
+            self._store_reasoning(actor, self._resolve_reasoning(effort, source="cli"))
+            self._startup_reasoning_applied.add(actor.metadata.id)
+
+    async def _select_reasoning(self, command: SelectReasoning) -> CommandAcknowledged:
+        async with self._state_lock:
+            if self._active_run_id is not None or self._live_execution_id is not None:
+                raise WorkspaceBusyError("cannot change thinking while execution is active")
+            if not self._workspace_run_lock.acquire():
+                raise WorkspaceBusyError("another Lumen process is running in this workspace")
+            try:
+                actor = self._actor(command.session_id)
+                actor.settings = self._managed_session(command.session_id).settings
+                try:
+                    selection = self._resolve_reasoning(ReasoningLevel(command.effort), source="session")
+                    # Validate conflicting raw controls before persisting a selection.
+                    config = self.resources.active_model_config()
+                    apply_reasoning(getattr(config, "settings", {}), selection)
+                except ValueError as error:
+                    raise InvalidStateError(str(error)) from error
+                self._store_reasoning(actor, selection)
+            finally:
+                self._workspace_run_lock.release()
+        return CommandAcknowledged("updated", {"reasoning": selection.model_dump(mode="json")})
+
     async def _select_model(self, command: SelectModel) -> CommandAcknowledged:
         async with self._state_lock:
             if self._active_run_id is not None:
@@ -1790,7 +1924,12 @@ class WorkspaceHost:
             invocation = expand_skill_for_message(skill, arguments)
         prompt = expand_file_mentions(invocation, Workspace(self.resources.workspace))
         return await self._start_run(
-            StartRun(command.session_id, display, command.client_request_id),
+            StartRun(
+                command.session_id,
+                display,
+                command.client_request_id,
+                regenerate_from_turn=command.regenerate_from_turn,
+            ),
             model_prompt=prompt,
         )
 
@@ -1801,7 +1940,12 @@ class WorkspaceHost:
         except Exception as error:
             raise InvalidStateError(f"cannot render MCP prompt: {error}") from error
         return await self._start_run(
-            StartRun(command.session_id, command.display_input, command.client_request_id),
+            StartRun(
+                command.session_id,
+                command.display_input,
+                command.client_request_id,
+                regenerate_from_turn=command.regenerate_from_turn,
+            ),
             model_prompt=prompt,
         )
 

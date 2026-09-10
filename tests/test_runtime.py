@@ -35,6 +35,7 @@ from lumen.agent_loop import (
     LoopRequestTimeout,
     LoopTruncated,
     ModelDriverRequest,
+    ModelNativeTool,
     ModelProviderError,
     ModelResponseCompleted,
     ModelResponseStarted,
@@ -72,11 +73,35 @@ from lumen.events import (
 )
 from lumen.interactive_queue import QueueMode
 from lumen.plan import PlanState, PlanStep, StepStatus
-from lumen.runtime import AgentRuntime, PartialRunOutcome, ToolApproval, get_partial_outcome
+from lumen.runtime import (
+    AgentRuntime,
+    PartialRunOutcome,
+    ToolApproval,
+    _preferred_response_language,  # pyright: ignore[reportPrivateUsage]
+    get_partial_outcome,
+)
 from lumen.task_control import CONTROL_TOOL_NAMES
 from lumen.tools.gateway import CapabilityDescriptor, CapabilityGateway
 from lumen.tools.registry import PermissionPolicy, ToolRegistry
 from lumen.tools.spec import EffectKind, Risk, ToolConcurrency, ToolSpec
+
+
+@pytest.mark.parametrize(
+    ("prompt", "expected"),
+    [
+        ("<collaboration-mode>默认中文说明</collaboration-mode>\n\n请检查这个问题", "中文"),
+        ("<collaboration-mode>默认中文说明</collaboration-mode>\n\nInspect this issue", "英语"),
+        (
+            "<collaboration-mode>默认中文说明</collaboration-mode>\n\nInspect "
+            '<file path="notes.md">\n大量中文资料\n</file> this issue',
+            "英语",
+        ),
+        ("この問題を確認してください", "日语"),
+        ("이 문제를 확인하세요", "韩语"),
+    ],
+)
+def test_response_language_uses_actual_user_prompt(prompt: str, expected: str) -> None:
+    assert _preferred_response_language(prompt) == expected
 
 
 class _RuntimeDriverStream:
@@ -758,6 +783,42 @@ async def test_runtime_can_select_lumen_agent_loop_for_text_only_execution() -> 
     assert projected_assistant_text(events) == "native answer"
 
 
+async def test_runtime_freezes_native_search_in_request_manifest() -> None:
+    async def unused_model(_messages: list[ModelMessage], _info: AgentInfo) -> AsyncIterator[str]:
+        raise AssertionError("PydanticAI Agent loop must not execute")
+        yield "unreachable"
+
+    model = FunctionModel(stream_function=unused_model)
+    driver = _LumenTextDriver()
+    runtime = AgentRuntime(
+        model=model,
+        tools=[],
+        toolsets=[],
+        instructions="Search when current sources are required.",
+        limits=LimitsConfig(),
+        tool_metadata={},
+        model_driver=driver,
+        native_tools=(ModelNativeTool(kind="web_search", search_context_size="high"),),
+    )
+
+    async def emit(_event: RunEvent) -> None:
+        return None
+
+    async def approve(_request: Any) -> ToolApproval:
+        raise AssertionError("provider-native search does not use the local approval seam")
+
+    outcome = await runtime.run("latest status", [], emit, approve, session_id="native-search")
+
+    request = driver.requests[0]
+    manifest = outcome.request_receipts[0].input_manifest
+    assert request.native_tools == (
+        ModelNativeTool(kind="web_search", search_context_size="high"),
+    )
+    assert manifest is not None
+    assert manifest.tool_count == len(request.tools) + 1
+    assert "web_search" in outcome.request_receipts[0].visible_tools
+
+
 async def test_runtime_lumen_loop_executes_gateway_tools_and_commits_full_trajectory(
     tmp_path: Path,
 ) -> None:
@@ -1307,6 +1368,9 @@ async def test_runtime_lumen_loop_cancellation_preserves_request_evidence() -> N
     assert len(partial.request_receipts) == 1
     assert partial.request_receipts[0].input_manifest is not None
     assert any(isinstance(event, RunCancelled) for event in events)
+    observation = next(d for d in partial.diagnostics if d.get("kind") == "request_observed")
+    assert observation["error_category"] == "cancelled"
+    assert observation["first_thinking_seconds"] is None
 
 
 async def test_runtime_request_deadline_preserves_partial_evidence_and_usage() -> None:
@@ -1734,7 +1798,7 @@ async def test_completion_gate_retries_visible_observation_then_allows_fix() -> 
         elif attempt == 2:
             retry = last_retry_prompt(messages)
             assert retry is not None
-            assert "completion_gate_failed" in str(retry.content)
+            assert "完成门禁未通过" in str(retry.content)
             yield update_step_delta(
                 "finish-after-gate",
                 step_id="implement",
@@ -2107,7 +2171,7 @@ async def test_runtime_truncated_tool_call_yields_max_tokens_hint() -> None:
     failures = [event for event in events if isinstance(event, RunFailed)]
     assert len(failures) == 1
     assert "max_tokens" in failures[0].message
-    assert "truncated" in failures[0].message
+    assert "被截断" in failures[0].message
 
 
 async def test_runtime_recovers_implicit_output_limit_and_records_each_budget() -> None:
@@ -2147,7 +2211,7 @@ async def test_runtime_recovers_implicit_output_limit_and_records_each_budget() 
     assert all(manifest is not None for manifest in manifests)
     assert manifests[0].settings_digest != manifests[1].settings_digest  # type: ignore[union-attr]
     assert any(
-        isinstance(event, ProgressReported) and "retrying safely" in event.summary
+        isinstance(event, ProgressReported) and "安全重试" in event.summary
         for event in events
     )
 
@@ -2277,7 +2341,7 @@ async def test_runtime_usage_limit_reports_limit_not_model_failure() -> None:
     failures = [event for event in events if isinstance(event, RunFailed)]
     assert len(failures) == 1
     message = failures[0].message.lower()
-    assert "usage limit" in message
+    assert "使用量限制" in message
     assert "request_count" in message
     assert "agent.limits" in message
 async def test_runtime_tool_failure_surfaces_raw_message_without_classification() -> None:

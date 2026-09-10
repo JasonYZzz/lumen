@@ -12,7 +12,9 @@ import hashlib
 import inspect
 import json
 import random
-from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Mapping, Sequence
+import time
+from collections.abc import AsyncGenerator, Awaitable, Callable, Mapping, Sequence
+from contextlib import aclosing
 from dataclasses import dataclass, replace
 from enum import StrEnum
 from typing import Annotated, Any, Generic, Literal, NoReturn, TypeVar, cast
@@ -23,6 +25,7 @@ from lumen.agent_loop.driver import (
     ModelDriver,
     ModelDriverRequest,
     ModelProviderError,
+    ModelResponseCompleted,
     ModelResponseStarted,
     ModelStopReason,
     ModelStreamEvent,
@@ -108,7 +111,7 @@ class LoopLimits(_LoopContract):
     output_limit_retries: int = Field(default=3, ge=0)
     model_request_timeout_seconds: float | None = Field(default=None, gt=0)
     model_stream_idle_timeout_seconds: float = Field(default=300.0, gt=0)
-    parallel_tool_calls: bool = False
+    parallel_tool_calls: bool = True
 
 
 class LoopTransition(_LoopContract):
@@ -148,6 +151,16 @@ class LoopCommentaryEmitted(_LoopContract):
     request_index: int = Field(ge=1)
 
 
+class LoopToolCallStreaming(_LoopContract):
+    """A provider is generating a call; arguments are not yet safe to execute."""
+
+    kind: Literal["tool_call_streaming"] = "tool_call_streaming"
+    sequence: int = Field(ge=0)
+    request_index: int = Field(ge=1)
+    call_id: str
+    name: str
+
+
 class LoopToolCallPrepared(_LoopContract):
     kind: Literal["tool_call_prepared"] = "tool_call_prepared"
     sequence: int = Field(ge=0)
@@ -175,6 +188,11 @@ class LoopToolResultRecorded(_LoopContract):
     idempotency_key: str
     call_view: dict[str, Any] | None = None
     result_view: dict[str, Any] | None = None
+    preparation_seconds: float = Field(default=0, ge=0)
+    approval_seconds: float = Field(default=0, ge=0)
+    queue_seconds: float = Field(default=0, ge=0)
+    elapsed_seconds: float = Field(default=0, ge=0)
+    execution_seconds: float | None = Field(default=None, ge=0)
 
 
 class LoopStallObserved(_LoopContract):
@@ -214,6 +232,25 @@ class LoopRequestAttempted(_LoopContract):
     model_attempts: int = Field(ge=1)
 
 
+class LoopRequestObserved(_LoopContract):
+    """Per-attempt stream wall time; semantic events, not raw HTTP bytes."""
+
+    kind: Literal["request_observed"] = "request_observed"
+    sequence: int = Field(ge=0)
+    request_index: int = Field(ge=1)
+    model_attempts: int = Field(ge=1)
+    elapsed_seconds: float = Field(ge=0)
+    first_event_seconds: float | None = Field(default=None, ge=0)
+    first_thinking_seconds: float | None = Field(default=None, ge=0)
+    first_text_seconds: float | None = Field(default=None, ge=0)
+    first_tool_call_seconds: float | None = Field(default=None, ge=0)
+    thinking_characters: int = Field(default=0, ge=0)
+    text_characters: int = Field(default=0, ge=0)
+    tool_names: tuple[str, ...] = ()
+    stop_reason: ModelStopReason | None = None
+    error_category: str | None = None
+
+
 class LoopCompletionDecided(_LoopContract):
     kind: Literal["completion_decided"] = "completion_decided"
     sequence: int = Field(ge=0)
@@ -228,12 +265,14 @@ LoopEvent = Annotated[
     | LoopTextRetracted
     | LoopThinkingEmitted
     | LoopCommentaryEmitted
+    | LoopToolCallStreaming
     | LoopToolCallPrepared
     | LoopToolResultRecorded
     | LoopStallObserved
     | LoopUsageObserved
     | LoopRetryScheduled
     | LoopRequestAttempted
+    | LoopRequestObserved
     | LoopCompletionDecided,
     Field(discriminator="kind"),
 ]
@@ -620,15 +659,18 @@ class LumenAgentLoop(Generic[MessageT]):
         approve: GatewayApprovalHandler | None,
         approve_batch: ApprovalBatchHandler | None,
     ) -> tuple[CapabilityResult, ...]:
-        capabilities = tuple(
-            [
+        capabilities: list[PreparedCapability] = []
+        preparation_seconds: dict[str, float] = {}
+        for invocation in invocations:
+            started = time.monotonic()
+            capabilities.append(
                 PreparedCapability(invocation, "tool_not_loaded: discover this deferred tool first")
                 if not self._capability_visible(invocation.name)
                 else await gateway.prepare(invocation)
-                for invocation in invocations
-            ]
-        )
+            )
+            preparation_seconds[invocation.provider_call_id] = time.monotonic() - started
         await self._emit_prepared_calls(gateway, capabilities, sink)
+        approval_started = time.monotonic()
         decisions = await self._approval_decisions(
             gateway,
             capabilities,
@@ -636,44 +678,64 @@ class LumenAgentLoop(Generic[MessageT]):
             approve=approve,
             approve_batch=approve_batch,
         )
+        approval_seconds = time.monotonic() - approval_started
         await self._transition(LoopState.EXECUTING_TOOLS, "tool_batch_ready", sink)
-        results: list[CapabilityResult] = []
+        ready_at = time.monotonic()
+        orders = {invocation.provider_call_id: order for order, invocation in enumerate(invocations)}
+        results: dict[str, CapabilityResult] = {}
+        timings: dict[str, tuple[float, float]] = {}
+        published: set[str] = set()
+
+        async def invoke(prepared: PreparedCapability) -> CapabilityResult:
+            call_id = prepared.invocation.provider_call_id
+            started = time.monotonic()
+            result = await self._invoke_capability(gateway, prepared, decisions.get(call_id))
+            timings[call_id] = (started - ready_at, time.monotonic() - started)
+            results[call_id] = result
+            return result
+
+        async def publish(result: CapabilityResult) -> None:
+            call_id = result.invocation.provider_call_id
+            if call_id in published:
+                return
+            queued, elapsed = timings[call_id]
+            # One consumer publishes results, so async sinks cannot interleave
+            # sequence allocation or evidence updates. Finish an in-flight
+            # publication on cancellation rather than replaying half its effects.
+            publication = asyncio.create_task(self._emit_tool_result(
+                result, order=orders[call_id], sink=sink,
+                preparation_seconds=preparation_seconds[call_id],
+                approval_seconds=approval_seconds, queue_seconds=queued,
+                elapsed_seconds=elapsed,
+            ))
+            try:
+                await asyncio.shield(publication)
+            except asyncio.CancelledError:
+                await asyncio.shield(publication)
+                raise
+            finally:
+                if publication.done() and not publication.cancelled() and publication.exception() is None:
+                    published.add(call_id)
+
         try:
             for batch in self._tool_batches(gateway, capabilities):
                 if len(batch) == 1:
-                    prepared = batch[0]
-                    results.append(
-                        await self._invoke_capability(
-                            gateway,
-                            prepared,
-                            decisions.get(prepared.invocation.provider_call_id),
-                        )
-                    )
+                    await publish(await invoke(batch[0]))
                     continue
-                tasks = [
-                    asyncio.create_task(
-                        self._invoke_capability(
-                            gateway,
-                            prepared,
-                            decisions.get(prepared.invocation.provider_call_id),
-                        )
-                    )
-                    for prepared in batch
-                ]
+                tasks = [asyncio.create_task(invoke(prepared)) for prepared in batch]
                 try:
-                    results.extend(await asyncio.gather(*tasks))
-                except asyncio.CancelledError:
+                    for finished in asyncio.as_completed(tasks):
+                        await publish(await finished)
+                finally:
                     for task in tasks:
                         if not task.done():
                             task.cancel()
-                    settled = await asyncio.shield(asyncio.gather(*tasks, return_exceptions=True))
-                    results.extend(item for item in settled if isinstance(item, CapabilityResult))
-                    raise
+                    await asyncio.shield(asyncio.gather(*tasks, return_exceptions=True))
         except asyncio.CancelledError:
-            if results:
-                await asyncio.shield(self._emit_tool_results(results, sink=sink))
+            for result in results.values():
+                await publish(result)
             raise
-        return tuple(results)
+        return tuple(results[invocation.provider_call_id] for invocation in invocations)
 
     @staticmethod
     def _tool_signature(result: CapabilityResult, model_output: str) -> str:
@@ -691,14 +753,12 @@ class LumenAgentLoop(Generic[MessageT]):
         ).encode("utf-8")
         return f"sha256:{hashlib.sha256(payload).hexdigest()}"
 
-    async def _record_tool_results(
+    async def _record_tool_commentary(
         self,
-        results: Sequence[CapabilityResult],
         *,
         candidate: str,
         sink: LoopEventSink,
     ) -> None:
-        await self._transition(LoopState.APPENDING_TOOL_RESULTS, "tool_results_ready", sink)
         if candidate:
             await self._emit(
                 sink,
@@ -716,51 +776,57 @@ class LumenAgentLoop(Generic[MessageT]):
                     request_index=self._request_index,
                 ),
             )
-        await self._emit_tool_results(results, sink=sink)
-
-    async def _emit_tool_results(
+    async def _emit_tool_result(
         self,
-        results: Sequence[CapabilityResult],
+        result: CapabilityResult,
         *,
+        order: int,
         sink: LoopEventSink,
+        preparation_seconds: float,
+        approval_seconds: float,
+        queue_seconds: float,
+        elapsed_seconds: float,
     ) -> None:
-        """Publish completed receipts, including calls that finished before cancellation."""
-
-        for order, result in enumerate(results):
-            model_output = result.model_output or result.error or "capability failed"
+        """Publish in completion order; order retains the provider's call position."""
+        model_output = result.model_output or result.error or "能力调用失败"
+        await self._emit(
+            sink,
+            LoopToolResultRecorded(
+                sequence=self._event_sequence,
+                request_index=self._request_index,
+                order=order,
+                call_id=result.invocation.provider_call_id,
+                name=result.invocation.name,
+                status=result.status.value,
+                canonical_output=result.output,
+                model_output=model_output,
+                error=result.error,
+                effect_receipt_id=result.effect_receipt_id,
+                idempotency_key=result.idempotency_key,
+                call_view=result.call_view,
+                result_view=result.result_view,
+                preparation_seconds=preparation_seconds,
+                approval_seconds=approval_seconds,
+                queue_seconds=queue_seconds,
+                elapsed_seconds=elapsed_seconds,
+                execution_seconds=result.execution_seconds,
+            ),
+        )
+        signature = self._tool_signature(result, model_output)
+        window_count = self._stall_window.count(signature) + 1
+        if window_count >= 2:
             await self._emit(
                 sink,
-                LoopToolResultRecorded(
+                LoopStallObserved(
                     sequence=self._event_sequence,
                     request_index=self._request_index,
-                    order=order,
                     call_id=result.invocation.provider_call_id,
-                    name=result.invocation.name,
-                    status=result.status.value,
-                    canonical_output=result.output,
-                    model_output=model_output,
-                    error=result.error,
-                    effect_receipt_id=result.effect_receipt_id,
-                    idempotency_key=result.idempotency_key,
-                    call_view=result.call_view,
-                    result_view=result.result_view,
+                    signature=signature,
+                    window_count=window_count,
                 ),
             )
-            signature = self._tool_signature(result, model_output)
-            window_count = self._stall_window.count(signature) + 1
-            if window_count >= 2:
-                await self._emit(
-                    sink,
-                    LoopStallObserved(
-                        sequence=self._event_sequence,
-                        request_index=self._request_index,
-                        call_id=result.invocation.provider_call_id,
-                        signature=signature,
-                        window_count=window_count,
-                    ),
-                )
-            self._stall_window.append(signature)
-            self._stall_window = self._stall_window[-8:]
+        self._stall_window.append(signature)
+        self._stall_window = self._stall_window[-8:]
 
     async def _continue_after_tool_calls(
         self,
@@ -786,6 +852,7 @@ class LumenAgentLoop(Generic[MessageT]):
             )
             for call in calls
         )
+        await self._record_tool_commentary(candidate=candidate, sink=sink)
         results = await self._execute_tools(
             gateway,
             invocations,
@@ -793,7 +860,7 @@ class LumenAgentLoop(Generic[MessageT]):
             approve=approve,
             approve_batch=approve_batch,
         )
-        await self._record_tool_results(results, candidate=candidate, sink=sink)
+        await self._transition(LoopState.APPENDING_TOOL_RESULTS, "tool_results_ready", sink)
         return await _resolve(
             continuation(
                 LoopToolContinuation[MessageT](
@@ -839,7 +906,8 @@ class LumenAgentLoop(Generic[MessageT]):
         self,
         request: ModelDriverRequest[MessageT],
         response_holder: list[MessageT | None],
-    ) -> AsyncIterator[ModelStreamEvent]:
+        sink: LoopEventSink,
+    ) -> AsyncGenerator[ModelStreamEvent, None]:
         # HTTP-backed drivers enforce idle on raw bytes (including SSE pings).
         # Other drivers use event-idle. Never time the consumer/UI's processing.
         idle = self._limits.model_stream_idle_timeout_seconds
@@ -848,6 +916,16 @@ class LumenAgentLoop(Generic[MessageT]):
             replace(request, stream_idle_timeout_seconds=idle), response_holder,
         )
         sequence = 0
+        started = time.monotonic()
+        first_event: float | None = None
+        first_thinking: float | None = None
+        first_text: float | None = None
+        first_tool: float | None = None
+        thinking_characters = 0
+        text_characters = 0
+        tool_names: list[str] = []
+        stop_reason: ModelStopReason | None = None
+        error_category: str | None = None
         try:
             while True:
                 deadline = asyncio.timeout(timeout)
@@ -862,6 +940,7 @@ class LumenAgentLoop(Generic[MessageT]):
                     if sequence == 0:
                         yield ModelResponseStarted(sequence=0)
                         sequence = 1
+                    error_category = "stream_idle_timeout"
                     yield ModelProviderError(
                         sequence=sequence,
                         category="stream_idle_timeout",
@@ -870,9 +949,49 @@ class LumenAgentLoop(Generic[MessageT]):
                     )
                     return
                 sequence = event.sequence + 1
+                elapsed = time.monotonic() - started
+                if first_event is None:
+                    first_event = elapsed
+                if isinstance(event, ModelThinkingDelta):
+                    if first_thinking is None:
+                        first_thinking = elapsed
+                    thinking_characters += len(event.content)
+                elif isinstance(event, ModelTextDelta):
+                    if first_text is None:
+                        first_text = elapsed
+                    text_characters += len(event.content)
+                elif isinstance(event, ModelToolCallStarted):
+                    if first_tool is None:
+                        first_tool = elapsed
+                    tool_names.append(event.name)
+                elif isinstance(event, ModelResponseCompleted):
+                    stop_reason = event.stop_reason
+                elif isinstance(event, ModelProviderError):
+                    error_category = event.category
                 yield event
+        except asyncio.CancelledError:
+            error_category = "cancelled"
+            raise
+        except Exception as error:
+            error_category = type(error).__name__
+            raise
         finally:
             await events.aclose()
+            await self._emit(sink, LoopRequestObserved(
+                sequence=self._event_sequence,
+                request_index=self._request_index,
+                model_attempts=self._model_attempts,
+                elapsed_seconds=time.monotonic() - started,
+                first_event_seconds=first_event,
+                first_thinking_seconds=first_thinking,
+                first_text_seconds=first_text,
+                first_tool_call_seconds=first_tool,
+                thinking_characters=thinking_characters,
+                text_characters=text_characters,
+                tool_names=tuple(tool_names),
+                stop_reason=stop_reason,
+                error_category=error_category,
+            ))
 
     async def _stream_request(
         self,
@@ -904,135 +1023,145 @@ class LumenAgentLoop(Generic[MessageT]):
             provider_error: ModelProviderError | None = None
             response_holder: list[MessageT | None] = []
 
-            async for event in self._driver_events(request, response_holder):
-                if event.sequence != expected_sequence:
-                    await self._fail(
-                        LoopProtocolError(
-                            "provider event sequence mismatch: "
-                            f"expected {expected_sequence}, received {event.sequence}",
-                            partial_output=partial_output + "".join(candidate_text),
-                        ),
-                        sink,
-                    )
-                expected_sequence += 1
-                if response_completed:
-                    await self._fail(
-                        LoopProtocolError(
-                            "provider emitted an event after its terminal event",
-                            partial_output=partial_output + "".join(candidate_text),
-                        ),
-                        sink,
-                    )
+            async with aclosing(self._driver_events(request, response_holder, sink)) as events:
+                async for event in events:
+                    if event.sequence != expected_sequence:
+                        await self._fail(
+                            LoopProtocolError(
+                                "provider event sequence mismatch: "
+                                f"expected {expected_sequence}, received {event.sequence}",
+                                partial_output=partial_output + "".join(candidate_text),
+                            ),
+                            sink,
+                        )
+                    expected_sequence += 1
+                    if response_completed:
+                        await self._fail(
+                            LoopProtocolError(
+                                "provider emitted an event after its terminal event",
+                                partial_output=partial_output + "".join(candidate_text),
+                            ),
+                            sink,
+                        )
 
-                if isinstance(event, ModelResponseStarted):
-                    if response_started or event.sequence != 0:
-                        await self._fail(
-                            LoopProtocolError("response_started must be the first event"), sink
-                        )
-                    response_started = True
-                    await self._transition(
-                        LoopState.STREAMING_MODEL,
-                        "provider_stream_started",
-                        sink,
-                    )
-                elif not response_started:
-                    await self._fail(
-                        LoopProtocolError("provider stream did not start with response_started"),
-                        sink,
-                    )
-                elif isinstance(event, ModelTextDelta):
-                    candidate_text.append(event.content)
-                    await self._emit(
-                        sink,
-                        LoopTextEmitted(
-                            sequence=self._event_sequence,
-                            text=event.content,
-                            request_index=self._request_index,
-                        ),
-                    )
-                elif isinstance(event, ModelThinkingDelta):
-                    candidate_thinking.append(event.content)
-                    await self._emit(
-                        sink,
-                        LoopThinkingEmitted(
-                            sequence=self._event_sequence,
-                            text=event.content,
-                            request_index=self._request_index,
-                        ),
-                    )
-                elif isinstance(event, ModelUsage):
-                    self._active_request_usage = LoopUsageTotals(
-                        input_tokens=max(
-                            self._active_request_usage.input_tokens,
-                            event.input_tokens,
-                        ),
-                        output_tokens=max(
-                            self._active_request_usage.output_tokens,
-                            event.output_tokens,
-                        ),
-                        cache_read_tokens=max(
-                            self._active_request_usage.cache_read_tokens,
-                            event.cache_read_tokens or 0,
-                        ),
-                        cache_write_tokens=max(
-                            self._active_request_usage.cache_write_tokens,
-                            event.cache_write_tokens or 0,
-                        ),
-                    )
-                    await self._emit(
-                        sink,
-                        LoopUsageObserved(
-                            sequence=self._event_sequence,
-                            request_index=self._request_index,
-                            input_tokens=event.input_tokens,
-                            output_tokens=event.output_tokens,
-                            cache_read_tokens=event.cache_read_tokens,
-                            cache_write_tokens=event.cache_write_tokens,
-                        ),
-                    )
-                elif isinstance(event, ModelToolCallStarted):
-                    if event.call_id in tool_calls:
-                        await self._fail(
-                            LoopProtocolError(f"duplicate tool call id: {event.call_id}"), sink
-                        )
-                    tool_calls[event.call_id] = event.name
-                    if self._state is LoopState.STREAMING_MODEL:
+                    if isinstance(event, ModelResponseStarted):
+                        if response_started or event.sequence != 0:
+                            await self._fail(
+                                LoopProtocolError("response_started must be the first event"), sink
+                            )
+                        response_started = True
                         await self._transition(
-                            LoopState.COLLECTING_TOOL_CALLS,
-                            "tool_call_started",
+                            LoopState.STREAMING_MODEL,
+                            "provider_stream_started",
                             sink,
                         )
-                elif isinstance(event, ModelToolArgumentsDelta):
-                    if event.call_id not in tool_calls:
+                    elif not response_started:
                         await self._fail(
-                            LoopProtocolError(
-                                f"tool arguments precede tool call start: {event.call_id}"
-                            ),
+                            LoopProtocolError("provider stream did not start with response_started"),
                             sink,
                         )
-                elif isinstance(event, ModelToolCallCompleted):
-                    if event.call_id not in tool_calls:
-                        await self._fail(
-                            LoopProtocolError(
-                                f"completed tool call has no start event: {event.call_id}"
-                            ),
+                    elif isinstance(event, ModelTextDelta):
+                        candidate_text.append(event.content)
+                        await self._emit(
                             sink,
-                        )
-                    if tool_calls[event.call_id] != event.name:
-                        await self._fail(
-                            LoopProtocolError(
-                                f"tool call name changed for {event.call_id}: "
-                                f"{tool_calls[event.call_id]} -> {event.name}"
+                            LoopTextEmitted(
+                                sequence=self._event_sequence,
+                                text=event.content,
+                                request_index=self._request_index,
                             ),
-                            sink,
                         )
-                    completed_tool_calls[event.call_id] = event
-                elif isinstance(event, ModelProviderError):
-                    response_completed = True
-                    provider_error = event
-                else:
-                    response_completed = True
-                    stop_reason = event.stop_reason
+                    elif isinstance(event, ModelThinkingDelta):
+                        candidate_thinking.append(event.content)
+                        await self._emit(
+                            sink,
+                            LoopThinkingEmitted(
+                                sequence=self._event_sequence,
+                                text=event.content,
+                                request_index=self._request_index,
+                            ),
+                        )
+                    elif isinstance(event, ModelUsage):
+                        self._active_request_usage = LoopUsageTotals(
+                            input_tokens=max(
+                                self._active_request_usage.input_tokens,
+                                event.input_tokens,
+                            ),
+                            output_tokens=max(
+                                self._active_request_usage.output_tokens,
+                                event.output_tokens,
+                            ),
+                            cache_read_tokens=max(
+                                self._active_request_usage.cache_read_tokens,
+                                event.cache_read_tokens or 0,
+                            ),
+                            cache_write_tokens=max(
+                                self._active_request_usage.cache_write_tokens,
+                                event.cache_write_tokens or 0,
+                            ),
+                        )
+                        await self._emit(
+                            sink,
+                            LoopUsageObserved(
+                                sequence=self._event_sequence,
+                                request_index=self._request_index,
+                                input_tokens=event.input_tokens,
+                                output_tokens=event.output_tokens,
+                                cache_read_tokens=event.cache_read_tokens,
+                                cache_write_tokens=event.cache_write_tokens,
+                            ),
+                        )
+                    elif isinstance(event, ModelToolCallStarted):
+                        if event.call_id in tool_calls:
+                            await self._fail(
+                                LoopProtocolError(f"duplicate tool call id: {event.call_id}"), sink
+                            )
+                        tool_calls[event.call_id] = event.name
+                        await self._emit(
+                            sink,
+                            LoopToolCallStreaming(
+                                sequence=self._event_sequence,
+                                request_index=self._request_index,
+                                call_id=event.call_id,
+                                name=event.name,
+                            ),
+                        )
+                        if self._state is LoopState.STREAMING_MODEL:
+                            await self._transition(
+                                LoopState.COLLECTING_TOOL_CALLS,
+                                "tool_call_started",
+                                sink,
+                            )
+                    elif isinstance(event, ModelToolArgumentsDelta):
+                        if event.call_id not in tool_calls:
+                            await self._fail(
+                                LoopProtocolError(
+                                    f"tool arguments precede tool call start: {event.call_id}"
+                                ),
+                                sink,
+                            )
+                    elif isinstance(event, ModelToolCallCompleted):
+                        if event.call_id not in tool_calls:
+                            await self._fail(
+                                LoopProtocolError(
+                                    f"completed tool call has no start event: {event.call_id}"
+                                ),
+                                sink,
+                            )
+                        if tool_calls[event.call_id] != event.name:
+                            await self._fail(
+                                LoopProtocolError(
+                                    f"tool call name changed for {event.call_id}: "
+                                    f"{tool_calls[event.call_id]} -> {event.name}"
+                                ),
+                                sink,
+                            )
+                        completed_tool_calls[event.call_id] = event
+                    elif isinstance(event, ModelProviderError):
+                        response_completed = True
+                        provider_error = event
+                    else:
+                        response_completed = True
+                        stop_reason = event.stop_reason
 
             response_message = response_holder[-1] if response_holder else None
             if not response_completed:
@@ -1106,7 +1235,7 @@ class LumenAgentLoop(Generic[MessageT]):
                 continue
             await self._fail(
                 LoopProviderFailure(
-                    provider_error.message,
+                    provider_error.message or f"Provider failed ({provider_error.category}) without details.",
                     partial_output=partial_output + "".join(candidate_text),
                     retryable=provider_error.retryable and provider_error.replay_safe,
                 ),
@@ -1640,6 +1769,7 @@ __all__ = [
     "LoopTextRetracted",
     "LoopThinkingEmitted",
     "LoopToolCallPrepared",
+    "LoopToolCallStreaming",
     "LoopToolCallsUnsupported",
     "LoopToolContinuation",
     "LoopToolResultRecorded",

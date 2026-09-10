@@ -2,6 +2,10 @@
 
 MCP 和 Skill 都能扩展 Lumen，但它们解决的问题不同：MCP 是连接外部系统的协议适配层，Skill 是向模型渐进式披露专业方法的本地指令包。
 
+Provider 原生 `web_search` 不属于 MCP。它由模型端点执行，作为冻结 `ModelDriverRequest` 的
+native tool 进入请求 manifest；MCP 则先由 `ResourceManager` 建立连接，再把能力投影到统一
+`CapabilityGateway`。两条路径不能共享一个开关或状态权威。
+
 ## 1. 核心区别
 
 | 维度 | MCP | Agent Skill |
@@ -50,6 +54,10 @@ flowchart LR
 `queries: [""]` 或 `["*"]` 按名称浏览下一批最多 10 个未加载工具。跨语言关键词无匹配时可以
 使用浏览，不把词面匹配失败解释成能力不存在。发现只加载 Schema，不改变 Risk、EffectKind 或审批。
 Runtime 指令同时提供 MCP 启动连接状态；这是启动快照，不保证后续请求必然成功。
+
+`mcp.enabled.<server>: false` 会在 `ResourceManager` 构建前排除对应 server：不连接、不加载工具、
+Resources 或 Prompts，状态投影为 `disabled`。Web 设置只修改这个布尔策略并要求重启，不复制
+`mcp_servers` 中的 URL、OAuth、header 或 secret；未写策略的已有 server 继续默认启用，以保持兼容。
 
 远端 MCP 工具仍进入统一 Tool Contract：未声明副作用时 Risk 为 `external_unknown`、EffectKind 为 `unknown`，并发默认 `exclusive`。Capability observation 会显示 loaded/deferred/disabled、审批决定和 schema digest；它只解释实际策略结果，不替代 `ToolRegistry`、`PermissionPolicy` 或 MCP toolset 的权威。
 

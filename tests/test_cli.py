@@ -9,6 +9,7 @@ from typer.testing import CliRunner
 
 import lumen.cli as cli
 from lumen.cli import app
+from lumen.config import AppConfig
 
 # This module intentionally verifies the private version fallback seam.
 # pyright: reportPrivateUsage=false
@@ -58,6 +59,16 @@ sessions:
     assert result.exit_code == 0
     assert "Configuration OK" in result.stdout
     assert "read_file" in result.stdout
+
+
+def test_thinking_option_validates_without_contacting_provider(tmp_path: Path) -> None:
+    config = tmp_path / "agent.yaml"
+    config.write_text("version: 2\nagent:\n  model: {id: 'openai:gpt-6-astra', api_key: test}\n")
+    args = ["--config", str(config), "--cwd", str(tmp_path), "--check-config", "--thinking"]
+    result = CliRunner().invoke(app, [*args, "medium"])
+    assert result.exit_code == 0, result.output
+    assert '"effective": "medium"' in result.output
+    assert CliRunner().invoke(app, [*args, "invalid"]).exit_code == 2
 
 
 def test_dump_effective_config_is_json_and_never_prints_resolved_secrets(tmp_path: Path) -> None:
@@ -234,6 +245,32 @@ def test_mcp_approval_fingerprint_does_not_persist_expanded_secret(tmp_path: Pat
     assert '"approval": "always"' in listed.output
     approval_file = next((home / ".lumen" / "state" / "mcp-approvals").glob("*.json"))
     assert "actual-database-password" not in approval_file.read_text(encoding="utf-8")
+
+
+def test_disabled_project_mcp_does_not_require_approval(tmp_path: Path) -> None:
+    config = AppConfig.model_validate(
+        {
+            "version": 2,
+            "config_path": tmp_path / "agent.yaml",
+            "agent": {"model": {"id": "test"}},
+            "mcp_servers": {
+                "exa": {
+                    "transport": "streamable_http",
+                    "url": "https://mcp.exa.ai/mcp",
+                    "source_scope": "project",
+                    "definition_fingerprint": "sha256:test",
+                }
+            },
+            "mcp": {"enabled": {"exa": False}},
+        }
+    )
+
+    resolved = cli._apply_mcp_approvals(config, tmp_path, interactive=False)
+
+    assert resolved.mcp_servers["exa"].approval_status == "disabled"
+    assert resolved.mcp_diagnostics == (
+        {"name": "exa", "scope": "project", "approval": "disabled"},
+    )
 
 
 def test_web_command_refuses_non_loopback_host() -> None:

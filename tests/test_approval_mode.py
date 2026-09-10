@@ -233,14 +233,14 @@ async def test_mode_context_tells_model_when_plan_starts_and_ends(tmp_path: Path
             "inspect this"
         )
         assert 'name="plan"' in plan_prompt
-        assert "Work read-only" in plan_prompt
+        assert "以只读方式工作" in plan_prompt
 
         app.set_approval_mode("auto")
         auto_prompt = app._apply_permission_mode_context(  # type: ignore[reportPrivateUsage]
             "implement this"
         )
         assert 'name="default"' in auto_prompt
-        assert "Follow the user's request normally" in auto_prompt
+        assert "正常执行用户请求" in auto_prompt
 
 
 def test_set_approval_mode_validates(tmp_path: Path) -> None:

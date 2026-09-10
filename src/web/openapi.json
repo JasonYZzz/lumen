@@ -211,6 +211,18 @@
             "title": "Payload",
             "type": "object"
           },
+          "regenerateFromTurn": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Regeneratefromturn"
+          },
           "type": {
             "enum": [
               "invoke_skill",
@@ -274,6 +286,26 @@
           }
         },
         "title": "HTTPValidationError",
+        "type": "object"
+      },
+      "McpServerConfigurationBody": {
+        "properties": {
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "expectedRevision": {
+            "maxLength": 100,
+            "minLength": 8,
+            "title": "Expectedrevision",
+            "type": "string"
+          }
+        },
+        "required": [
+          "expectedRevision",
+          "enabled"
+        ],
+        "title": "McpServerConfigurationBody",
         "type": "object"
       },
       "ModelConfigurationBody": {
@@ -347,6 +379,47 @@
             },
             "title": "Inputmodalities",
             "type": "array"
+          },
+          "nativeWebSearch": {
+            "additionalProperties": true,
+            "title": "Nativewebsearch",
+            "type": "object"
+          },
+          "reasoningEffort": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ReasoningLevel"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "reasoningLevels": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/ReasoningLevel"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reasoninglevels"
+          },
+          "reasoningProfile": {
+            "anyOf": [
+              {
+                "maxLength": 100,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reasoningprofile"
           },
           "setDefault": {
             "default": false,
@@ -432,6 +505,20 @@
         "title": "QueueInputBody",
         "type": "object"
       },
+      "ReasoningLevel": {
+        "enum": [
+          "provider_default",
+          "off",
+          "minimal",
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max"
+        ],
+        "title": "ReasoningLevel",
+        "type": "string"
+      },
       "RenameSessionBody": {
         "properties": {
           "title": {
@@ -494,6 +581,16 @@
               }
             ],
             "title": "Collaborationmode"
+          },
+          "reasoningEffort": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ReasoningLevel"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "transcriptDensity": {
             "anyOf": [
@@ -575,6 +672,18 @@
             "minLength": 1,
             "title": "Input",
             "type": "string"
+          },
+          "regenerateFromTurn": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Regeneratefromturn"
           }
         },
         "required": [
@@ -874,6 +983,57 @@
         "summary": "Get Configuration"
       }
     },
+    "/api/v1/configuration/mcp/{server_name}": {
+      "patch": {
+        "operationId": "set_mcp_server_enabled_api_v1_configuration_mcp__server_name__patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "server_name",
+            "required": true,
+            "schema": {
+              "title": "Server Name",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/McpServerConfigurationBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Set Mcp Server Enabled Api V1 Configuration Mcp  Server Name  Patch",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Set Mcp Server Enabled"
+      }
+    },
     "/api/v1/configuration/models/{model_name}": {
       "delete": {
         "operationId": "delete_model_configuration_api_v1_configuration_models__model_name__delete",
@@ -972,6 +1132,46 @@
           }
         },
         "summary": "Upsert Model Configuration"
+      }
+    },
+    "/api/v1/configuration/reasoning": {
+      "post": {
+        "operationId": "inspect_reasoning_api_v1_configuration_reasoning_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ModelConfigurationBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Inspect Reasoning Api V1 Configuration Reasoning Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Inspect Reasoning"
       }
     },
     "/api/v1/files/content": {
@@ -1098,6 +1298,26 @@
           }
         },
         "summary": "Hooks"
+      }
+    },
+    "/api/v1/instructions": {
+      "get": {
+        "operationId": "instructions_api_v1_instructions_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Instructions Api V1 Instructions Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Instructions"
       }
     },
     "/api/v1/live/{live_session_id}": {

@@ -5,6 +5,8 @@
 
 ## Agent Harness 与架构
 
+- [Lumen 网页检索与文件下载能力审计](2026-09-10-web-retrieval-capability-audit.md)
+- [同 Session 消息重生成与活动历史审计](2026-09-10-in-place-message-regeneration.md)
 - [长任务持续执行：实施与验证记录](2026-09-04-run-resilience-upgrade.md)
 - [长任务上限、滑动超时与自动恢复方案](2026-09-04-run-limits-sliding-recovery-analysis.md)
 - [全局 Skill 安装与澄清交互修复](2026-09-04-skill-scope-clarification-ui.md)

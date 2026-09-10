@@ -64,6 +64,62 @@ Web 模型设置不重写用户维护的 YAML，而由 `WorkspaceConfiguration` 
 
 这些设置不会热替换正在运行的 Python 类；源码升级后需重启 Lumen 进程。
 
+`agent.limits.parallel_tool_calls` 默认 `parallel_safe`。只有已明确声明 PARALLEL_SAFE 的
+调用可重叠；控制工具、未知副作用和 exclusive 调用仍作为有序屏障。
+显式 `sequential` 配置保持有效，加载旧配置不会改写文件。
+
+### 文本 Agent 推理强度（2026-09-08）
+
+模型配置新增 `reasoning_effort` 和可选 `reasoning_levels`。档位为
+`provider_default/off/minimal/low/medium/high/xhigh/max`；可选集合由模型、协议、端点对应的
+Provider 显式目录或部署能力声明决定；不再使用 SDK 宽泛名称推断。DeepSeek V4、Kimi K3 和百炼
+Anthropic 路由的 Qwen 3.8 有专门映射；不能仅凭 `anthropic:` 前缀认定兼容模型支持 Claude 档位。
+未知模型标记“推理控制未配置”，已知不支持的模型标记“不支持调节”，单一默认选项不可点击。
+`level_map` 向客户端提供别名与实际强度，例如 DeepSeek `medium → high`、Qwen `high → xhigh`。
+新初始化模板对已知推理模型设置 medium；旧配置缺省继续保留原有 Provider/SDK 行为。
+`provider_default` 表示不发送应用指定档位，`off` 表示明确关闭；不支持关闭时拒绝，不向上钳制。
+内置目录只收录 OpenAI 5.6/6 及当前 DeepSeek、百炼、Kimi 路由；Claude、Gemini 无内置条目。
+
+`reasoning.py` 负责 requested → effective → parameters 的统一解析；OpenAI Chat/Responses
+直接设置对应原生 effort；DeepSeek Chat 另发送 thinking 开关。Anthropic 兼容路由使用
+原生 effort。自定义部署声明仍保留预算型 Anthropic 和 Google level 参数 Adapter。
+自定义预算型 Anthropic medium 固定使用 Lumen 的 10000 token 策略，不等同于 pi 的 8192。
+显式 `max_tokens` 不会被偷偷放大；预算不够时配置或切换安全失败。
+
+优先级：child 角色显式选择 > 同模型父 Session 有效选择 > 模型配置 > Provider 默认。
+CLI `--thinking` 在首次打开该 Session 时追加覆盖；TUI `/thinking` 和 Web 选择器通过
+Host `SelectReasoning` 更新同一状态。仅空闲时可切换，下次 Run 前冻结。每个 Session 按
+逻辑模型名与实际模型 ID 保存选择；切换模型不会把其他模型的档位带过去。
+
+同层新档位与旧 settings 推理字段混用时报错；Session/角色显式覆盖会替换旧原生冲突字段。
+高层显式选择也清理 `extra_body` 中已知的推理控制及 `output_config.effort`，保留其中无关字段；
+同层配置混用仍报错。未选择新档位的旧 settings
+保持兼容，UI 标记为未校验，不声称获知服务端实际预算。
+
+Session v10 起使用原有 `session_settings` 和 `agent_thread.config` 保存类型化推理选择与参数，
+只包含推理字段，不能持久化任意 settings、凭据或 extra_body；DeepSeek Chat 开关只保存类型化
+`wire_thinking`。v1–v10 只读加载，首次追加
+新事实才写 `schema_upgrade`；fork 保留 Session 选择，旧 child 快照保留兼容解析。
+新 child spawn 冻结选择；同模型继承父级，角色改模型则重新按目标模型解析。
+Session 恢复保留用户选择，同时从当前模型刷新能力元数据，防止历史上的单选列表锁死新能力；
+新 Run 开始前重新校验显式选择、解析参数并追加变化事实，已派发 child 的冻结快照不随之漂移。
+Web 设置页通过 Host `InspectReasoning` 查询正在编辑的模型定义，复用同一解析器；
+`POST /api/v1/configuration/reasoning` 只做本地能力解析，不写配置、不访问 Provider。
+请求诊断 `resolved_reasoning` 记录来源、映射和客户端参数，不代表服务端回显或真实预算。
+Live Realtime 的 `reasoning_effort` 仍属于独立协议。
+供应商规则、代理的 `reasoning_profile`、来源审计及升级流程见
+[Provider 目录约定](15-provider-catalog.md)和[自动生成的对应列表](../generated/provider-reasoning.md)。
+
+模型还可配置 `native_web_search.mode: auto|enabled|disabled` 与
+`search_context_size: low|medium|high`。`auto` 只开启 Provider Catalog 精确核对的路由；当前为
+DeepSeek V4 Flash / Pro Responses、Kimi Code K3 Responses，以及百炼 Qwen3.8 Max / Flash
+Anthropic 端点。该配置随模型定义保存并进入冻结 Driver 请求，不复用 MCP 开关或 ToolRegistry
+状态。目录还拥有可选字段兼容性：Kimi K3 保留 `web_search`，但在 wire request 中省略其拒绝的
+`search_context_size`。
+
+MCP server 的定义仍在 `mcp_servers.<name>`，启停策略单独保存在 `mcp.enabled.<name>`。
+Web 设置只写受管层的布尔值；`false` 会在 ResourceManager 构建连接前排除 server，且保存后需重启。
+
 ## 7.3 ResourceManager 生命周期
 
 ```mermaid
