@@ -27,7 +27,7 @@ from lumen.agents.runtime_factory import NativeAgentRuntimeFactory
 from lumen.attachments import AttachmentStore
 from lumen.branding import FRAMEWORK_NAME
 from lumen.completion import CompletionBlocker, CompletionGate
-from lumen.config import AppConfig, ModelSettingsConfig
+from lumen.config import AgentSection, AppConfig, ModelSettingsConfig
 from lumen.config_resolver import ConfigScope
 from lumen.configuration import WorkspaceConfiguration
 from lumen.context import ArtifactStore, ArtifactStoreError, ContextEngine
@@ -975,6 +975,62 @@ class ResourceManager:
             self.startup_reasoning = None
         self._active_model_name = name
 
+    async def apply_model_configuration(
+        self,
+        agent: AgentSection,
+        *,
+        active_model_name: str | None = None,
+    ) -> None:
+        """Atomically publish a persisted model registry into the live runtime.
+
+        Adding or editing an inactive model only updates the registry. Changing
+        the active route, or editing its definition, first builds a complete
+        candidate runtime and publishes it only after construction succeeds.
+        Existing MCP clients, Session state, tools and the child-runtime
+        registry reference remain intact.
+        """
+
+        registry = agent.model_registry()
+        target = active_model_name or (
+            self._active_model_name
+            if self._active_model_name in registry
+            else agent.default_model_name()
+        )
+        if target not in registry:
+            raise KeyError(f"unknown model {target!r}; configured: {sorted(registry)}")
+
+        current_config = self.model_registry.get(self._active_model_name)
+        rebuild = target != self._active_model_name or current_config != registry[target]
+        old_runtime_scope = self._runtime_scope
+        candidate: tuple[AgentRuntime, RegistrationScope, Any] | None = None
+        if self._stack is not None and rebuild:
+            candidate = await self._build_runtime(
+                for_name=target,
+                model_config=registry[target],
+            )
+
+        if candidate is not None:
+            new_runtime, new_runtime_scope, new_extractor = candidate
+            self.memory_manager.configure_learning(extractor=new_extractor)
+            self.runtime = new_runtime
+            self._runtime_scope = new_runtime_scope
+        self.model_registry.clear()
+        self.model_registry.update(registry)
+        self.config.agent = self.config.agent.model_copy(
+            update={
+                "model": agent.model,
+                "models": agent.models,
+                "default_model": agent.default_model,
+            }
+        )
+        if rebuild:
+            self.startup_reasoning = None
+        self._active_model_name = target
+        if candidate is not None:
+            self.memory_manager.start()
+            if old_runtime_scope is not None:
+                self._record_scope_diagnostics(await old_runtime_scope.close_and_wait())
+
     async def _rebuild_runtime_for(self, name: str) -> None:
         """Publish a ready candidate atomically, then close the old runtime scope.
 
@@ -1233,6 +1289,7 @@ class ResourceManager:
         self,
         *,
         for_name: str | None = None,
+        model_config: ModelSettingsConfig | None = None,
     ) -> tuple[AgentRuntime, RegistrationScope, Any]:
         """Construct the AgentRuntime for ``for_name`` (or the active model).
 
@@ -1244,7 +1301,7 @@ class ResourceManager:
         if self._stack is None:
             raise RuntimeError("_build_runtime requires the resource stack to be open")
         model_name = for_name if for_name is not None else self._active_model_name
-        model_cfg = self.model_registry[model_name]
+        model_cfg = model_config if model_config is not None else self.model_registry[model_name]
         profile = self._resolve_prompt_profile()
         self._set_prompt_profile(profile)
         runtime_scope = RegistrationScope(f"runtime:{model_name}")

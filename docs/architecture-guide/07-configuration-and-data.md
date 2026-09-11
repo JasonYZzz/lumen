@@ -29,9 +29,13 @@ Web 模型设置不重写用户维护的 YAML，而由 `WorkspaceConfiguration` 
 `<workspace>/.lumen/agent.web.yaml`。该文件带所有权标记、使用 `0600` 权限并通过同目录临时文件
 `fsync + os.replace` 原子发布；没有标记的同名文件拒绝覆盖。保存前先以 `ConfigResolver` 的
 `source_overrides` 对完整合并结果执行严格校验，再以所有配置层内容摘要做乐观并发检查。
-`--config` 独占模式保持只读。保存只更新下次启动的注册表，活动 Run 会阻止修改，浏览器会明确返回
-`restartRequired`，不会伪装成运行时热切换。旧的单模型形式转换为注册表时，Module 会把原模型复制为
-同名注册项并维持原默认选择；原模型若只有内联密钥则安全失败，要求先迁移到 `api_key_env`。
+`--config` 独占模式保持只读。模型保存由 Host 状态锁串行化，活动 Run 或 Live execution 会阻止修改；
+持久化成功后，Host 从同一个 `ConfigResolver` 重新取得含环境变量解析结果的 `AgentSection`，再交给
+`ResourceManager.apply_model_configuration()` 发布。新增或编辑非当前模型只原地更新 registry；修改当前
+模型、删除当前模型或把新模型设为默认时，先在局部 Scope 构造 candidate Runtime，成功后一次发布
+Runtime、活动名称和 registry，再关闭旧 Scope。因此 Session、MCP、Tool 和 child runtime 的 registry
+引用保持不变，响应返回 `restartRequired: false`。旧的单模型形式转换为注册表时，Module 会把原模型
+复制为同名注册项并维持原默认选择；原模型若只有内联密钥则安全失败，要求先迁移到 `api_key_env`。
 
 `ConfigResolver.resolve().report()` 是只读 observation projection：它展示最终配置、参与合并的 source 与显式字段 provenance，但不参与运行决策。`api_key`、MCP env/header、OAuth secret 等值在投影前统一脱敏；CLI 的 `--dump-effective-config` 只序列化该报告。
 
@@ -72,7 +76,7 @@ Web 模型设置不重写用户维护的 YAML，而由 `WorkspaceConfiguration` 
 
 模型配置新增 `reasoning_effort` 和可选 `reasoning_levels`。档位为
 `provider_default/off/minimal/low/medium/high/xhigh/max`；可选集合由模型、协议、端点对应的
-Provider 显式目录或部署能力声明决定；不再使用 SDK 宽泛名称推断。DeepSeek V4、Kimi K3 和百炼
+Provider 显式目录或部署能力声明决定；不再使用 SDK 宽泛名称推断。DeepSeek Flash、Kimi K3 和百炼
 Anthropic 路由的 Qwen 3.8 有专门映射；不能仅凭 `anthropic:` 前缀认定兼容模型支持 Claude 档位。
 未知模型标记“推理控制未配置”，已知不支持的模型标记“不支持调节”，单一默认选项不可点击。
 `level_map` 向客户端提供别名与实际强度，例如 DeepSeek `medium → high`、Qwen `high → xhigh`。
@@ -112,7 +116,7 @@ Live Realtime 的 `reasoning_effort` 仍属于独立协议。
 
 模型还可配置 `native_web_search.mode: auto|enabled|disabled` 与
 `search_context_size: low|medium|high`。`auto` 只开启 Provider Catalog 精确核对的路由；当前为
-DeepSeek V4 Flash / Pro Responses、Kimi Code K3 Responses，以及百炼 Qwen3.8 Max / Flash
+DeepSeek Flash Responses、Kimi Code K3 Responses，以及百炼 Qwen3.8 Max / Flash
 Anthropic 端点。该配置随模型定义保存并进入冻结 Driver 请求，不复用 MCP 开关或 ToolRegistry
 状态。目录还拥有可选字段兼容性：Kimi K3 保留 `web_search`，但在 wire request 中省略其拒绝的
 `search_context_size`。

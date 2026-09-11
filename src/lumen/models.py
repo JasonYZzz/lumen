@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any, cast
 
 from openai.types import responses
+from pydantic_ai.messages import UserPromptPart
 from pydantic_ai.models import Model, ModelRequestParameters
 from pydantic_ai.models.anthropic import AnthropicModel
 from pydantic_ai.models.google import GoogleModel
@@ -24,8 +25,17 @@ from lumen.provider_catalog import (
 )
 
 
-class _OpenAIResponsesWebSearchCompatibilityModel(OpenAIResponsesModel):
-    """Thin Adapter for compatible endpoints that reject optional web-search fields."""
+class _KimiResponsesModel(OpenAIResponsesModel):
+    """Kimi wire quirks; remove these overrides when its endpoint accepts SDK defaults."""
+
+    async def _map_user_prompt(self, part: UserPromptPart) -> responses.EasyInputMessageParam:
+        message = await super()._map_user_prompt(part)
+        # Kimi accepts a bare content string, but does not reliably execute
+        # native search for that form. Content parts preserve search routing
+        # as well as mixed text/image input. Do not mutate canonical history.
+        if isinstance(content := message["content"], str):
+            message["content"] = [{"type": "input_text", "text": content}]
+        return message
 
     def _get_native_tools(
         self,
@@ -89,8 +99,8 @@ def build_model(config: ModelSettingsConfig) -> Model | str:
             native_search = find_native_web_search_rule(config.id, config.api, config.base_url)
             model_type = (
                 OpenAIResponsesModel
-                if native_search is None or native_search.sends_search_context_size
-                else _OpenAIResponsesWebSearchCompatibilityModel
+                if native_search is None or native_search.vendor != "kimi-coding"
+                else _KimiResponsesModel
             )
             return model_type(model_name, provider=provider)
         if api_choice is ModelProtocol.CHAT:

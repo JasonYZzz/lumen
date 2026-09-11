@@ -4,11 +4,12 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from lumen.context.artifacts import ArtifactStore, ArtifactStoreError
+if TYPE_CHECKING:
+    from lumen.context.artifacts import ArtifactStore
 
 MAX_ATTACHMENTS_PER_INPUT = 8
 MAX_IMAGE_BYTES = 20 * 1024 * 1024
@@ -75,6 +76,8 @@ class AttachmentStore:
         return candidate.model_copy(update={"artifact_ref": self.artifacts.store(content)})
 
     def read(self, attachment: AttachmentRef) -> bytes:
+        from lumen.context.artifacts import ArtifactStoreError
+
         try:
             content = self.artifacts.read(attachment.artifact_ref)
         except ArtifactStoreError as error:

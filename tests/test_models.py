@@ -78,7 +78,7 @@ def test_api_alias_openai_completions_maps_to_chat() -> None:
 
     model = build_model(
         ModelSettingsConfig(
-            id="openai:deepseek-v4-flash",
+            id="openai:deepseek-flash",
             api_key="token",
             base_url="https://api.deepseek.com/v1",
             api="openai-completions",
@@ -90,7 +90,7 @@ def test_api_alias_openai_completions_maps_to_chat() -> None:
 def test_api_alias_chat_completions_maps_to_chat() -> None:
     model = build_model(
         ModelSettingsConfig(
-            id="openai:deepseek-v4-flash",
+            id="openai:deepseek-flash",
             api_key="token",
             base_url="https://api.deepseek.com/v1",
             api="chat-completions",
@@ -179,6 +179,24 @@ async def test_responses_adapter_maps_neutral_image_to_input_image() -> None:
 
     assert mapped["content"][1]["type"] == "input_image"  # type: ignore[index]
     assert mapped["content"][1]["image_url"].startswith("data:image/png;base64,")  # type: ignore[index,union-attr]
+
+
+async def test_kimi_responses_uses_content_parts_without_mutating_history() -> None:
+    model = build_model(ModelSettingsConfig(
+        id="openai:k3", api_key="test", base_url="https://api.kimi.com/coding/v1",
+    ))
+    assert isinstance(model, OpenAIResponsesModel)
+    part = UserPromptPart("北京天气 🌤️")
+    mapped = await model._map_user_prompt(part)  # type: ignore[reportPrivateUsage]
+    assert mapped["content"] == [{"type": "input_text", "text": "北京天气 🌤️"}]
+    assert part.content == "北京天气 🌤️"
+    image = BinaryContent(b"\x89PNG\r\n\x1a\nimage", media_type="image/png")
+    multimodal = await model._map_user_prompt(  # type: ignore[reportPrivateUsage]
+        UserPromptPart([TextContent("inspect"), image])
+    )
+    assert multimodal["content"][0] == {"type": "input_text", "text": "inspect"}
+    assert multimodal["content"][1]["type"] == "input_image"  # type: ignore[index]
+    assert multimodal["content"][1]["image_url"].startswith("data:image/png;base64,")  # type: ignore[index,union-attr]
 
 
 async def test_chat_adapter_maps_neutral_image_to_image_url_content() -> None:

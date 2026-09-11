@@ -55,6 +55,19 @@ async function render(path: string) {
 }
 
 describe('workspace document preview', () => {
+  it('shows the linked site favicon and falls back without breaking the link', async () => {
+    await render('https://example.com/article?q=private#section')
+    const link = container.querySelector('a')!
+    const icon = link.querySelector('img')!
+    expect(icon.getAttribute('src')).toBe('https://example.com/favicon.ico')
+    expect(icon.getAttribute('referrerpolicy')).toBe('no-referrer')
+    expect(link.target).toBe('_blank')
+    await act(async () => { icon.dispatchEvent(new Event('error')) })
+    expect(link.querySelector('img')).toBeNull()
+    expect(link.querySelector('svg')).not.toBeNull()
+    expect(link.href).toBe('https://example.com/article?q=private#section')
+  })
+
   it('normalizes local links but rejects outside, hidden, encoded traversal and remote paths', () => {
     expect(documentPath('/project/docs/report.md:12', '/project')).toBe('docs/report.md')
     expect(documentPath('./docs/report.md#section', '/project')).toBe('docs/report.md')

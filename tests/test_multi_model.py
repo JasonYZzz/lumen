@@ -13,7 +13,7 @@ import pytest
 from typer.testing import CliRunner
 
 from lumen.cli import app
-from lumen.config import load_config
+from lumen.config import AgentSection, ModelSettingsConfig, load_config
 from lumen.resources import ResourceManager
 
 
@@ -251,3 +251,70 @@ async def test_select_model_failure_preserves_old_model_and_runtime(tmp_path: Pa
         assert manager.active_model_name() == original_name
         # The published runtime was never replaced by the failed candidate.
         assert manager.runtime is original_runtime
+
+
+async def test_apply_model_configuration_adds_inactive_model_without_rebuilding(
+    tmp_path: Path,
+) -> None:
+    manager = ResourceManager(load_config(_multi_model_config(tmp_path)), workspace=tmp_path)
+    async with manager:
+        original_runtime = manager.runtime
+        agent = AgentSection(
+            models={
+                **manager.model_registry,
+                "gamma": ModelSettingsConfig(id="test", api_key="k-gamma"),
+            },
+            default_model="alpha",
+        )
+
+        await manager.apply_model_configuration(agent, active_model_name="alpha")
+
+        assert manager.runtime is original_runtime
+        assert manager.available_models() == ["alpha", "beta", "gamma"]
+        assert manager.active_model_name() == "alpha"
+
+
+async def test_apply_model_configuration_rebuilds_an_edited_active_model(
+    tmp_path: Path,
+) -> None:
+    manager = ResourceManager(load_config(_multi_model_config(tmp_path)), workspace=tmp_path)
+    async with manager:
+        original_runtime = manager.runtime
+        agent = AgentSection(
+            models={
+                "alpha": ModelSettingsConfig(id="test", api_key="updated-alpha"),
+                "beta": manager.model_registry["beta"],
+            },
+            default_model="alpha",
+        )
+
+        await manager.apply_model_configuration(agent, active_model_name="alpha")
+
+        assert manager.runtime is not original_runtime
+        assert manager.active_model_config().api_key == "updated-alpha"
+
+
+async def test_apply_model_configuration_failure_preserves_published_registry(
+    tmp_path: Path,
+) -> None:
+    from unittest.mock import AsyncMock
+
+    manager = ResourceManager(load_config(_multi_model_config(tmp_path)), workspace=tmp_path)
+    async with manager:
+        original_runtime = manager.runtime
+        original_registry = dict(manager.model_registry)
+        agent = AgentSection(
+            models={
+                **manager.model_registry,
+                "gamma": ModelSettingsConfig(id="test", api_key="k-gamma"),
+            },
+            default_model="gamma",
+        )
+        manager._build_runtime = AsyncMock(side_effect=RuntimeError("candidate failed"))  # type: ignore[method-assign]
+
+        with pytest.raises(RuntimeError, match="candidate failed"):
+            await manager.apply_model_configuration(agent, active_model_name="gamma")
+
+        assert manager.runtime is original_runtime
+        assert manager.active_model_name() == "alpha"
+        assert manager.model_registry == original_registry

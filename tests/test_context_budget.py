@@ -120,7 +120,7 @@ def test_provider_counter_uses_injected_tokenizer() -> None:
     ("model_id", "expected_window", "estimated"),
     [
         ("openai:gpt-4o", 128_000, False),
-        ("openai:deepseek-v4-flash", 1_000_000, False),
+        ("openai:deepseek-flash", 1_000_000, False),
         ("openai:glm-5.2", 1_000_000, False),
     ],
 )

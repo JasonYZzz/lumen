@@ -5,6 +5,7 @@ from typing import Any, TypeAlias, cast
 
 from pydantic import BaseModel
 
+from lumen.attachments import AttachmentRef
 from lumen.plan import PlanState
 
 
@@ -25,6 +26,7 @@ class ToolExecutionDiagnostic:
 @dataclass(frozen=True, slots=True)
 class RunStarted:
     prompt: str
+    attachments: tuple[AttachmentRef, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -311,6 +313,10 @@ class TimelineEventRecord:
         if event_type is None:
             raise ValueError(f"unknown timeline event type: {self.type}")
         data = dict(self.data)
+        if event_type is RunStarted:
+            data["attachments"] = tuple(
+                AttachmentRef.model_validate(item) for item in data.get("attachments", [])
+            )
         if event_type in {PlanCreated, PlanUpdated, PlanReviewPending}:
             data["plan"] = PlanState.model_validate(data["plan"])
         elif event_type is ToolApprovalBatchPending:

@@ -113,6 +113,7 @@ export interface ConfigurationSnapshot {
   sources: Array<{ scope: string; path: string }>
   warnings: string[]
   defaultModel: string
+  activeModel?: string
   models: ConfiguredModel[]
   mcpServers?: ConfiguredMcpServer[]
   restartRequired?: boolean

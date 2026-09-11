@@ -324,8 +324,8 @@ version: 2
 agent:
   default_model: glm-5.2
   models:
-    deepseek-v4-flash:
-      id: openai:deepseek-v4-flash
+    deepseek-flash:
+      id: openai:deepseek-flash
       api_key: sk-deepseek
       base_url: https://api.deepseek.com/v1
     glm-5.2:
@@ -335,7 +335,7 @@ agent:
 """,
     )
     assert config.agent.model is None
-    assert set(config.agent.models) == {"deepseek-v4-flash", "glm-5.2"}
+    assert set(config.agent.models) == {"deepseek-flash", "glm-5.2"}
     assert config.agent.default_model == "glm-5.2"
     assert config.agent.default_model_name() == "glm-5.2"
     assert config.agent.model_registry()["glm-5.2"].api_key == "sk-dashscope"
@@ -364,12 +364,12 @@ def test_native_web_search_defaults_to_auto_and_rejects_openai_chat_force() -> N
     from lumen.models import native_web_search_enabled
 
     deepseek = ModelSettingsConfig(
-        id="openai:deepseek-v4-flash",
+        id="openai:deepseek-flash",
         base_url="https://api.deepseek.com",
         api="responses",
     )
     assert deepseek.native_web_search.mode == "auto"
-    assert native_web_search_enabled(deepseek) is True
+    assert native_web_search_enabled(deepseek) is False
     assert native_web_search_enabled(
         ModelSettingsConfig(
             id="openai:k3",
@@ -380,8 +380,9 @@ def test_native_web_search_defaults_to_auto_and_rejects_openai_chat_force() -> N
     for model in ("qwen3.8-max", "qwen3.8-flash"):
         assert native_web_search_enabled(
             ModelSettingsConfig(
-                id=f"anthropic:{model}",
-                base_url="https://token-plan.cn-beijing.maas.aliyuncs.com/apps/anthropic",
+                id=f"openai:{model}",
+                api="responses",
+                base_url="https://workspace.cn-beijing.maas.aliyuncs.com/api/v2/apps/protocols/compatible-mode/v1",
             )
         ) is True
     assert native_web_search_enabled(ModelSettingsConfig(id="openai:unknown-model")) is False
@@ -504,8 +505,8 @@ def test_multi_model_resolves_api_key_env_per_entry(tmp_path: Path, monkeypatch:
 version: 2
 agent:
   models:
-    deepseek-v4-flash:
-      id: openai:deepseek-v4-flash
+    deepseek-flash:
+      id: openai:deepseek-flash
       api_key_env: DEEPSEEK_API_KEY
       base_url: https://api.deepseek.com/v1
     glm-5.2:
@@ -514,7 +515,7 @@ agent:
       base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
 """,
     )
-    assert config.agent.models["deepseek-v4-flash"].api_key == "resolved-deepseek"
+    assert config.agent.models["deepseek-flash"].api_key == "resolved-deepseek"
     assert config.agent.models["glm-5.2"].api_key == "resolved-dashscope"
 
 
@@ -526,8 +527,8 @@ def test_multi_model_missing_env_var_fails(tmp_path: Path) -> None:
 version: 2
 agent:
   models:
-    deepseek-v4-flash:
-      id: openai:deepseek-v4-flash
+    deepseek-flash:
+      id: openai:deepseek-flash
       api_key_env: DEEPSEEK_API_KEY
 """,
         )
@@ -574,11 +575,11 @@ def test_repo_example_config_loads_without_drift(monkeypatch: pytest.MonkeyPatch
     assert config.version == 2
     # Prove that the example's real model fields survive YAML validation and
     # feed the same resolved policy used by ContextEngine at startup.
-    flash = config.agent.models["deepseek-v4-flash"]
-    assert flash.context.profile == "deepseek-v4-flash"
+    flash = config.agent.models["deepseek-flash"]
+    assert flash.context.profile == "deepseek-flash"
     assert flash.settings["max_tokens"] == 65_536
     policy = resolve_context_policy(flash, config.context)
-    assert policy.profile_id == "deepseek-v4-flash"
+    assert policy.profile_id == "deepseek-flash"
     assert policy.context_window_tokens == 1_000_000
     assert policy.architectural_max_output_tokens == 384_000
     assert policy.output_reserve_tokens == 65_536

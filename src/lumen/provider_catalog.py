@@ -13,7 +13,7 @@ from datetime import date
 from enum import StrEnum
 from urllib.parse import urlsplit
 
-CATALOG_REVISION = "2026-09-09.2"
+CATALOG_REVISION = "2026-09-11.2"
 
 
 class ReasoningLevel(StrEnum):
@@ -107,6 +107,8 @@ ENDPOINTS = (
     ProviderEndpoint("bailian", (P.ANTHROPIC,),
                      ("dashscope.aliyuncs.com", "dashscope-intl.aliyuncs.com"), ("/apps/anthropic",),
                      ".maas.aliyuncs.com"),
+    ProviderEndpoint("bailian", (P.RESPONSES,), (),
+                     ("/api/v2/apps/protocols/compatible-mode/v1",), ".maas.aliyuncs.com"),
 )
 
 
@@ -140,8 +142,8 @@ class NativeWebSearchRule:
     reviewed_on: str = "2026-09-09"
 
 
-DEEPSEEK_MODELS = ("deepseek-v4-flash", "deepseek-v4-pro")
-BAILIAN_DEEPSEEK_MODELS = (*DEEPSEEK_MODELS, "deepseek-v4-flash-0731", "deepseek-v4-pro-0813", "glm-5.2")
+DEEPSEEK_MODELS = ("deepseek-flash",)
+BAILIAN_DEEPSEEK_MODELS = (*DEEPSEEK_MODELS, "glm-5.2")
 DS_RESPONSES = "https://api-docs.deepseek.com/api/create-response/"
 DS_RESPONSES_GUIDE = "https://api-docs.deepseek.com/guides/responses_api/"
 DS_CHAT = "https://api-docs.deepseek.com/api/create-chat-completion"
@@ -149,6 +151,7 @@ DS_ANTHROPIC = "https://api-docs.deepseek.com/guides/anthropic_api/"
 DS_THINKING = "https://api-docs.deepseek.com/zh-cn/guides/thinking_mode/"
 BAILIAN = "https://help.aliyun.com/zh/model-studio/anthropic-api-messages"
 BAILIAN_WEB_SEARCH = "https://help.aliyun.com/zh/model-studio/web-search"
+BAILIAN_RESPONSES = "https://help.aliyun.com/zh/model-studio/qwen-api-via-openai-responses"
 KIMI = "https://www.kimi.com/code/docs/en/kimi-code/models.html"
 MOONSHOT = "https://platform.kimi.com/docs/guide/kimi-k3-quickstart"
 LMH = (L.LOW, L.MEDIUM, L.HIGH)
@@ -156,17 +159,22 @@ DS_LEVELS = (L.OFF, L.LOW, L.HIGH, L.MAX)
 DS_ALIASES = ((L.MEDIUM, L.HIGH), (L.XHIGH, L.HIGH))
 
 RULES = (
-    ModelReasoningRule("deepseek-v4-responses", "deepseek", DEEPSEEK_MODELS, (P.RESPONSES,),
+    ModelReasoningRule("deepseek-flash-responses", "deepseek", DEEPSEEK_MODELS, (P.RESPONSES,),
                        C.OPENAI, DS_LEVELS, (DS_RESPONSES, DS_THINKING),
                        (*DS_ALIASES, (L.MINIMAL, L.LOW)), default_level=L.HIGH),
-    ModelReasoningRule("deepseek-v4-chat", "deepseek", DEEPSEEK_MODELS, (P.CHAT,),
+    ModelReasoningRule("deepseek-flash-chat", "deepseek", DEEPSEEK_MODELS, (P.CHAT,),
                        C.DEEPSEEK_CHAT, DS_LEVELS, (DS_CHAT, DS_THINKING), DS_ALIASES, default_level=L.HIGH),
-    ModelReasoningRule("deepseek-v4-anthropic", "deepseek", DEEPSEEK_MODELS, (P.ANTHROPIC,),
+    ModelReasoningRule("deepseek-flash-anthropic", "deepseek", DEEPSEEK_MODELS, (P.ANTHROPIC,),
                        C.ANTHROPIC_EFFORT, DS_LEVELS, (DS_ANTHROPIC, DS_THINKING), DS_ALIASES,
                        default_level=L.HIGH),
     ModelReasoningRule("bailian-qwen38", "bailian", ("qwen3.8-max", "qwen3.8-max-0902", "qwen3.8-flash"),
                        (P.ANTHROPIC,), C.ANTHROPIC_EFFORT, (L.OFF, L.LOW, L.MEDIUM, L.XHIGH),
                        (BAILIAN,), ((L.HIGH, L.XHIGH), (L.MAX, L.XHIGH)), default_level=L.XHIGH),
+    ModelReasoningRule("bailian-qwen38-responses", "bailian",
+                       ("qwen3.8-max", "qwen3.8-max-0902", "qwen3.8-flash"),
+                       (P.RESPONSES,), C.OPENAI, (L.OFF, L.LOW, L.MEDIUM, L.XHIGH),
+                       (BAILIAN_RESPONSES,), ((L.MINIMAL, L.LOW), (L.HIGH, L.XHIGH), (L.MAX, L.XHIGH)),
+                       default_level=L.XHIGH, reviewed_on="2026-09-11"),
     ModelReasoningRule("bailian-deepseek-glm", "bailian", BAILIAN_DEEPSEEK_MODELS, (P.ANTHROPIC,),
                        C.ANTHROPIC_EFFORT, (L.OFF, L.HIGH, L.MAX), (BAILIAN,),
                        ((L.LOW, L.HIGH), (L.MEDIUM, L.HIGH), (L.XHIGH, L.MAX)), default_level=L.MAX),
@@ -199,26 +207,24 @@ RULES = (
 )
 
 NATIVE_WEB_SEARCH_RULES = (
-    NativeWebSearchRule(
-        vendor="deepseek",
-        models=DEEPSEEK_MODELS,
-        protocols=(P.RESPONSES,),
-        sources=(DS_RESPONSES_GUIDE,),
-    ),
+    # DeepSeek's current Responses guide explicitly says built-in tools are
+    # ignored. Accepting web_search in a request is not execution support.
     NativeWebSearchRule(
         vendor="kimi-coding",
         models=("k3",),
         protocols=(P.RESPONSES,),
-        sources=(KIMI,),
+        sources=("https://www.kimi.com/code/docs/third-party-tools/codex.html",),
         # Kimi's Responses endpoint accepts {"type": "web_search"} but
         # rejects the optional OpenAI search_context_size extension.
         sends_search_context_size=False,
+        reviewed_on="2026-09-11",
     ),
     NativeWebSearchRule(
         vendor="bailian",
         models=("qwen3.8-max", "qwen3.8-flash"),
-        protocols=(P.ANTHROPIC,),
-        sources=(BAILIAN_WEB_SEARCH,),
+        protocols=(P.RESPONSES,),
+        sources=(BAILIAN_WEB_SEARCH, BAILIAN_RESPONSES),
+        reviewed_on="2026-09-11",
     ),
 )
 

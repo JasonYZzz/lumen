@@ -3,7 +3,7 @@ from __future__ import annotations
 import time
 from pathlib import Path
 from types import SimpleNamespace
-from typing import cast
+from typing import Any, cast
 
 from fastapi.testclient import TestClient
 from pydantic_ai.messages import ModelMessage
@@ -13,7 +13,7 @@ from lumen.api import create_web_app
 from lumen.application import WorkspaceHost
 from lumen.attachments import AttachmentStore
 from lumen.completion import CompletionGate
-from lumen.config import LimitsConfig, LiveConfig, ModelSettingsConfig, PermissionsConfig
+from lumen.config import AgentSection, LimitsConfig, LiveConfig, ModelSettingsConfig, PermissionsConfig
 from lumen.configuration import ConfigurationConflictError
 from lumen.context import ArtifactStore
 from lumen.live.manager import LiveSessionManager
@@ -56,9 +56,11 @@ class ApiConfigurationSnapshot:
         revision: str,
         models: list[dict[str, object]],
         mcp_servers: list[dict[str, object]] | None = None,
+        default_model: str | None = None,
     ) -> None:
         self.revision = revision
         self.models = models
+        self.default_model = default_model or str(models[0]["name"])
         self.mcp_servers = mcp_servers or [
             {"name": "exa", "enabled": True, "source": {"scope": "project", "path": "agent.yaml"}}
         ]
@@ -72,7 +74,7 @@ class ApiConfigurationSnapshot:
             "exclusive": False,
             "sources": [{"scope": "project", "path": "/workspace/.lumen/agent.yaml"}],
             "warnings": [],
-            "default_model": str(self.models[0]["name"]),
+            "default_model": self.default_model,
             "models": self.models,
             "mcp_servers": self.mcp_servers,
         }
@@ -102,6 +104,25 @@ class ApiConfiguration:
     def inspect(self) -> ApiConfigurationSnapshot:
         return self.snapshot
 
+    def resolved_agent(self) -> AgentSection:
+        return AgentSection(
+            models={
+                str(item["name"]): ModelSettingsConfig.model_validate(
+                    {
+                        "id": item["id"],
+                        "api": item.get("api"),
+                        "base_url": item.get("base_url"),
+                        "api_key_env": item.get("api_key_env"),
+                        "settings": item.get("settings", {}),
+                        "context": item.get("context", {}),
+                        "input_modalities": item.get("input_modalities", ("text",)),
+                    }
+                )
+                for item in self.snapshot.models
+            },
+            default_model=self.snapshot.default_model,
+        )
+
     def upsert_model(
         self,
         *,
@@ -112,7 +133,13 @@ class ApiConfiguration:
     ) -> ApiConfigurationSnapshot:
         if expected_revision != self.snapshot.revision:
             raise ConfigurationConflictError("configuration changed")
-        models = [item for item in self.snapshot.models if item["name"] != name]
+        previous_default = self.snapshot.default_model
+        default_model = name if set_default else previous_default
+        models = [
+            {**item, "is_default": item["name"] == default_model}
+            for item in self.snapshot.models
+            if item["name"] != name
+        ]
         models.append(
             {
                 "name": name,
@@ -122,13 +149,18 @@ class ApiConfiguration:
                 "api_key_env": definition.get("api_key_env"),
                 "settings": definition.get("settings", {}),
                 "context": definition.get("context", {}),
-                "is_default": set_default,
+                "input_modalities": definition.get("input_modalities", ("text",)),
+                "is_default": name == default_model,
                 "source": {"scope": "managed", "path": "/workspace/.lumen/agent.web.yaml"},
                 "auth_kind": "environment" if definition.get("api_key_env") else "none",
                 "auth_available": bool(definition.get("api_key_env")),
             }
         )
-        self.snapshot = ApiConfigurationSnapshot("sha256:updated", models)
+        self.snapshot = ApiConfigurationSnapshot(
+            "sha256:updated",
+            models,
+            default_model=default_model,
+        )
         return self.snapshot
 
     def remove_model(
@@ -142,6 +174,11 @@ class ApiConfiguration:
         self.snapshot = ApiConfigurationSnapshot(
             "sha256:deleted",
             [item for item in self.snapshot.models if item["name"] != name],
+            default_model=(
+                next(str(item["name"]) for item in self.snapshot.models if item["name"] != name)
+                if self.snapshot.default_model == name
+                else self.snapshot.default_model
+            ),
         )
         return self.snapshot
 
@@ -195,6 +232,10 @@ class ApiResources:
         self.warnings: list[str] = []
         self.skills: list[object] = []
         self.live_manager: LiveSessionManager | None = None
+        self._active_model = "test"
+        self._model_registry = {
+            "test": ModelSettingsConfig(id="test-model", input_modalities=("text", "image"))
+        }
 
     async def open(self) -> ApiResources:
         return self
@@ -202,14 +243,23 @@ class ApiResources:
     async def close(self) -> None:
         return None
 
-    def active_model_config(self) -> SimpleNamespace:
-        return SimpleNamespace(id="test-model", input_modalities=("text", "image"))
+    def active_model_config(self) -> Any:
+        return self._model_registry[self._active_model]
 
     def active_model_name(self) -> str:
-        return "test"
+        return self._active_model
 
     def available_models(self) -> list[str]:
-        return ["test"]
+        return sorted(self._model_registry)
+
+    async def apply_model_configuration(
+        self,
+        agent: AgentSection,
+        *,
+        active_model_name: str | None = None,
+    ) -> None:
+        self._model_registry = agent.model_registry()
+        self._active_model = active_model_name or agent.default_model_name()
 
     def mcp_summary(self) -> list[dict[str, object]]:
         return []
@@ -411,7 +461,7 @@ def test_reasoning_preview_uses_draft_model_and_does_not_change_configuration(tm
     app = create_web_app(host, launch_token="launch-secret", api_only=True)
     with TestClient(app, base_url="http://testserver") as client:
         endpoint = "/api/v1/configuration/reasoning"
-        body = {"expectedRevision": "sha256:preview", "id": "openai:deepseek-v4-flash",
+        body = {"expectedRevision": "sha256:preview", "id": "openai:deepseek-flash",
                 "api": "responses", "baseUrl": "https://api.deepseek.com"}
         assert client.post(endpoint, json=body).status_code == 401
         client.get("/auth/exchange", params={"token": "launch-secret"})
@@ -491,11 +541,13 @@ def test_web_api_authenticates_and_streams_a_run(tmp_path: Path) -> None:
                 "api": "responses",
                 "baseUrl": "http://127.0.0.1:11434/v1",
                 "apiKeyEnv": "LOCAL_MODEL_KEY",
+                "inputModalities": ["text", "image"],
                 "setDefault": True,
             },
         )
         assert saved_model.status_code == 200
-        assert saved_model.json()["restartRequired"] is True
+        assert saved_model.json()["restartRequired"] is False
+        assert saved_model.json()["activeModel"] == "local"
         assert saved_model.json()["models"][-1]["baseUrl"].endswith("/v1")
 
         mcp_toggled = client.patch(
@@ -529,6 +581,19 @@ def test_web_api_authenticates_and_streams_a_run(tmp_path: Path) -> None:
         )
         assert uploaded.status_code == 201
         assert uploaded.json()["artifactRef"].startswith("sha256:")
+
+        preview = client.post("/api/v1/attachments/content", headers=headers, json=uploaded.json())
+        assert preview.status_code == 200
+        assert preview.content == b"\x89PNG\r\n\x1a\nweb-image"
+        assert preview.headers["content-type"] == "image/png"
+        assert preview.headers["x-content-type-options"] == "nosniff"
+        for invalid in (
+            {**uploaded.json(), "mediaType": "text/html"},
+            {**uploaded.json(), "byteSize": 1},
+            {**uploaded.json(), "artifactRef": "sha256:" + "0" * 64},
+        ):
+            rejected = client.post("/api/v1/attachments/content", headers=headers, json=invalid)
+            assert rejected.status_code == 400
 
         started = client.post(
             f"/api/v1/sessions/{session_id}/runs",
@@ -643,7 +708,7 @@ def test_web_api_authenticates_and_streams_a_run(tmp_path: Path) -> None:
         assert next(item for item in archived_items if item["sessionId"] == session_id) == {
             "sessionId": session_id,
             "createdAt": snapshot["createdAt"],
-            "modelId": "test-model",
+                "modelId": "openai:local",
             "title": "Managed conversation",
             "archived": True,
             "titlePending": False,

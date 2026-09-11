@@ -87,7 +87,7 @@ async def test_tool_preparation_is_visible_before_arguments_complete(
 def _responses_stream(*, call_tool: bool, raw_reasoning: bool) -> httpx.AsyncByteStream:
     response: dict[str, Any] = {
         "id": "response-1" if call_tool else "response-2", "object": "response", "created_at": 0,
-        "model": "deepseek-v4-flash", "status": "in_progress", "output": [],
+        "model": "deepseek-flash", "status": "in_progress", "output": [],
     }
     chunks: list[dict[str, Any]] = [{"type": "response.created", "response": response}]
     output: list[dict[str, Any]] = []
@@ -166,7 +166,7 @@ async def test_deepseek_responses_thinking_and_tool_results_round_trip(thinking:
     if thinking == "native":
         settings = {"thinking": False, "openai_reasoning_effort": "high"}
     async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:
-        model = OpenAIResponsesModel("deepseek-v4-flash", provider=OpenAIProvider(
+        model = OpenAIResponsesModel("deepseek-flash", provider=OpenAIProvider(
             openai_client=AsyncOpenAI(
                 api_key="test", base_url="https://api.deepseek.com", http_client=client,
             ),

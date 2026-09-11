@@ -149,6 +149,14 @@ Lumen 当前三项都实现，但保证不同：审批是意图授权，`Workspa
 推导为 MCP 不可用。`run_command` Schema 与结果明确给出该命令的 sandbox mode、网络策略和作用范围；
 退出码、stderr 是失败证据，策略值本身不是对 DNS、TLS 或服务可用性的诊断。
 
+每次模型请求由 `AgentRuntime` 根据实际发送的原生工具和可见函数工具生成联网选路指引，
+文案由 `context/instructions.py` 统一维护，计入 ContextEngine 预算和请求 manifest。
+已启用的 Provider 原生搜索优先用于发现资料；独立 `web_search` 在可见时可作为后备；
+已知 URL 使用 `web_fetch`，需要原样保存文本才使用 `download_file`。
+原生搜索未启用不等于供应商不支持，工具已启用也不等于请求已成功；后备路径不能绕过
+用户拒绝、显式禁止的操作或审批。指引随请求工具变化，根与 child Runtime 共用同一实现，
+不扩大工具权限、不修改 Sandbox，也不自动启用未经目录核实的供应商能力。
+
 Seatbelt 默认允许读取受限的公共 TLS 配置/证书、DNS 配置、已允许路径的祖先 metadata、
 系统开发工具路径 metadata 和必要设备；独立临时 HOME/TMP 与已允许写入路径可回读。
 不开放整个 `/etc`、TLS 私钥目录或用户 HOME。系统依赖可读不等于联网放行，network=false

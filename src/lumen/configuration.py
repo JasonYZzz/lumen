@@ -11,7 +11,7 @@ from uuid import uuid4
 
 import yaml
 
-from lumen.config import ConfigLoadError, ModelSettingsConfig
+from lumen.config import AgentSection, ConfigLoadError, ModelSettingsConfig
 from lumen.config_resolver import ConfigResolution, ConfigResolver
 from lumen.models import native_web_search_enabled
 
@@ -105,6 +105,17 @@ class WorkspaceConfiguration:
     def inspect(self) -> ConfigurationSnapshot:
         resolution = self._resolver().resolve(project_trusted=self.project_trusted)
         return self._snapshot(resolution)
+
+    def resolved_agent(self) -> AgentSection:
+        """Return the effective Agent configuration for runtime publication.
+
+        Secrets stay inside the application layer: Web clients continue to
+        receive only :class:`ConfigurationSnapshot`, while ``WorkspaceHost``
+        can publish the exact, environment-resolved model registry after a
+        managed mutation.
+        """
+
+        return self._resolver().resolve(project_trusted=self.project_trusted).config.agent
 
     def upsert_model(
         self,

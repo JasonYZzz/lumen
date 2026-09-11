@@ -189,7 +189,7 @@ class TimelineStore:
                         break
             return None
         if isinstance(event, RunStarted):
-            item = self._new(TimelineKind.USER, text=event.prompt)
+            item = self._new(TimelineKind.USER, text=event.prompt, attachments=event.attachments)
         elif isinstance(event, TextDelta):
             if self._items and self._items[-1].kind is TimelineKind.ASSISTANT:
                 item = replace(self._items[-1], text=self._items[-1].text + event.text)

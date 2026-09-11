@@ -13,18 +13,24 @@ provider 原生联网能力及官方依据。
 [当前对应关系列表](../generated/provider-reasoning.md)从生产目录生成，不能手写维护另一份表。
 每个 Profile 包含稳定 ID、官方文档链接和核对日期；目录版本进入 Session 和请求诊断。
 这份目录描述已核对的参数契约，不代表全球全部模型、账户可用性、配额或模型仍在售。
-目录版本 `2026-09-09.1` 还登记 DeepSeek V4 Flash / Pro 官方 Responses 路由的原生
-`web_search` 契约。此前版本按维护范围精简：删除全部 Claude、Gemini 及 OpenAI 旧型号条目，
+目录版本 `2026-09-11.1` 撤销此前误登记的 DeepSeek Flash Responses 原生搜索能力。
+此前版本按维护范围精简：删除全部 Claude、Gemini 及 OpenAI 旧型号条目，
 OpenAI 只保留 GPT-5.6（Sol、Terra、Luna，含 gpt-5.6 别名）和 GPT-6 Astra。
 DeepSeek、百炼 Qwen/DeepSeek/GLM、Kimi 条目继续保留。移除条目的模型回到 unknown，
 不再提供自动档位；显式引用已删除 Profile 会报错，不静默切换模型。
+
+通用 Harness 的 Session、ContextEngine、Loop、审批与恢复策略不按供应商或模型分支。
+已核对能力集中在 Provider Catalog，协议兼容差异限制在 Model Adapter，账户端点和凭据只进入
+部署配置。新增同协议部署无需修改核心实现；能力声明、账户可用性和真实工具执行分别验证，
+不能用一次普通回答或请求被接受代替联网执行证据。
 
 ## 匹配规则
 
 1. `id` 前缀确定协议 Adapter；`api` 别名统一到 Chat 或 Responses。协议不代表实际供应商。
 2. 配置 base_url 优先，其次对应 SDK 的环境变量覆盖，最后才是官方默认。
    比较 HTTPS 域名、端口、路径和协议，不用 `包含 deepseek` 或 `startswith(gpt-5)` 猜测。
-   百炼只识别已知 DashScope 域名及 `.maas.aliyuncs.com` 的 Anthropic 路径。
+   百炼识别已知 DashScope 域名及 `.maas.aliyuncs.com` 的 Anthropic 路径，以及该域名后缀下
+   的 Responses 路径 `/api/v2/apps/protocols/compatible-mode/v1`，不硬编码账户的 workspace ID。
 3. 供应商和协议匹配后精确查模型 ID。没有经过核对的新版本不会自动继承旧规则。
    同名模型通过不同供应商调用可匹配不同档位，例如官方 DeepSeek 与百炼 DeepSeek。
 4. 已知模型的 `reasoning_levels` 只能收窄，不能增加文档未支持的档位或制造 off。
@@ -32,9 +38,17 @@ DeepSeek、百炼 Qwen/DeepSeek/GLM、Kimi 条目继续保留。移除条目的�
 5. 自定义代理可用 `reasoning_profile` 引用已核对规则；精确模型 ID 和协议必须匹配。
    这是用户对代理兼容性的显式声明，显示为 `deployment_profile`；不能覆盖已识别供应商的身份。
 6. `native_web_search.mode: auto` 也只匹配已核对的供应商、精确模型 ID 和协议；当前覆盖
-   DeepSeek/Kimi Responses 与百炼 Qwen3.8 Anthropic server tool。目录同时记录 wire 参数差异，
+   Kimi Responses 与百炼 Qwen3.8 Responses。百炼 Anthropic 搜索另需客户端握手，当前 Adapter
+   未实现该握手，因此不自动声明支持；其普通问答与推理兼容路径保留。DeepSeek 当前 Responses 文档明确说明
+   忽略内置工具，不能因请求接受 `web_search` 就登记为支持。目录同时记录 wire 参数差异，
    例如 Kimi K3 必须省略 `search_context_size`。未登记模型与自定义代理默认关闭；部署者可用
    `enabled` 显式声明其支持，用 `disabled` 强制关闭。
+   Kimi 请求 Adapter 同时把用户纯文本编码为 `input_text` content parts；2026-09-11 的实测
+   对照中，裸字符串请求未执行原生搜索，content parts 请求返回 `web_search_call`。
+   此兼容转换不重写 Session，不改变其他供应商的消息格式，端点修复后可移除。
+   百炼 Qwen3.8 Responses 复用 OpenAI Model Adapter 与 effort codec：`none/low/medium/xhigh`
+   为原生档位，`minimal → low`、`high/max → xhigh`，默认 xhigh 只作元数据，不强制发送。
+   官方推荐标准 `reasoning.effort` 替代将弃用的 `enable_thinking`；无需新增 Harness 推理流程。
 7. Provider 原生 tool 的 Part 只用于判断 replay safety，不投影成 Lumen 本地 function call。
    若兼容 SDK 缺失本地工具的 start 事件，Driver 只在拿到完整 PartEnd 后补发有序 start/completed，
    不执行半截参数，也不放宽 Loop 的协议门禁。
@@ -81,6 +95,8 @@ Web 的 Session 推理状态仅对选中的任务生效；返回新任务时清�
 目录也不管理上下文窗口、价格、网络重试或供应商模型发现；这些不因能力规则重构而复制实现。
 原生搜索是冻结 `ModelDriverRequest` 的 native tool，不进入 `CapabilityGateway`。它的 schema 参与
 tool count、digest 与请求 fingerprint；provider 原生调用会把请求标记为不可安全重放。
+请求指令必须明确原生 `web_search` 不属于 `search_tools` 的本地/MCP 目录；目录未命中不能
+推导为没有联网能力。实时问题应实际搜索并引用结果，不能仅凭配置已启用宣称验证成功。
 
 ## 供应商升级流程
 

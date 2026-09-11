@@ -46,8 +46,9 @@ C = ReasoningCodec
 def config_for(rule: ModelReasoningRule, protocol: ModelProtocol, model: str) -> ModelSettingsConfig:
     endpoint = next(item for item in ENDPOINTS if item.vendor == rule.vendor and protocol in item.protocols)
     prefix = {P.CHAT: "openai", P.RESPONSES: "openai", P.ANTHROPIC: "anthropic", P.GOOGLE: "google"}[protocol]
+    host = endpoint.hosts[0] if endpoint.hosts else "workspace.cn-beijing" + str(endpoint.host_suffix)
     return ModelSettingsConfig.model_validate({
-        "id": f"{prefix}:{model}", "base_url": "https://" + endpoint.hosts[0] + endpoint.paths[0],
+        "id": f"{prefix}:{model}", "base_url": "https://" + host + endpoint.paths[0],
         "api": protocol.value if protocol in {P.CHAT, P.RESPONSES} else None,
     })
 
@@ -88,6 +89,9 @@ def test_documented_model_differences_are_preserved(model: str, levels: tuple[L,
     ("anthropic:claude-opus-4-6", "https://api.deepseek.com/anthropic"),
     ("openai:k3", "https://api.kimi.com/v1"),
     ("openai:gpt-5.99", None),
+    ("openai:deepseek-v4-flash", "https://api.deepseek.com"),
+    ("openai:deepseek-v4-pro", "https://api.deepseek.com"),
+    ("anthropic:deepseek-v4-pro", "https://api.deepseek.com/anthropic"),
     ("anthropic:claude-opus-99", None),
     ("google:gemini-99-pro", None),
 ])
@@ -99,21 +103,29 @@ def test_unknown_versions_and_endpoints_never_inherit_sdk_name_guesses(model: st
 
 
 @pytest.mark.parametrize(("model", "api", "url"), [
-    ("openai:deepseek-v4-flash", "responses", "https://api.deepseek.com"),
-    ("openai:deepseek-v4-pro", "responses", "https://api.deepseek.com"),
     ("openai:k3", "responses", "https://api.kimi.com/coding/v1"),
     (
-        "anthropic:qwen3.8-max",
-        None,
-        "https://token-plan.cn-beijing.maas.aliyuncs.com/apps/anthropic",
+        "openai:qwen3.8-max",
+        "responses",
+        "https://workspace.cn-beijing.maas.aliyuncs.com/api/v2/apps/protocols/compatible-mode/v1",
     ),
     (
-        "anthropic:qwen3.8-flash",
-        None,
-        "https://token-plan.cn-beijing.maas.aliyuncs.com/apps/anthropic",
+        "openai:qwen3.8-flash",
+        "responses",
+        "https://workspace.cn-beijing.maas.aliyuncs.com/api/v2/apps/protocols/compatible-mode/v1",
+    ),
+    (
+        "openai:qwen3.8-max",
+        "responses",
+        "https://llm-example.cn-beijing.maas.aliyuncs.com/api/v2/apps/protocols/compatible-mode/v1",
+    ),
+    (
+        "openai:qwen3.8-flash",
+        "responses",
+        "https://llm-example.cn-beijing.maas.aliyuncs.com/api/v2/apps/protocols/compatible-mode/v1",
     ),
 ])
-def test_every_current_project_model_has_reviewed_native_web_search(
+def test_reviewed_routes_enable_native_web_search(
     model: str,
     api: str | None,
     url: str,
@@ -123,6 +135,14 @@ def test_every_current_project_model_has_reviewed_native_web_search(
 
 
 def test_native_web_search_never_leaks_across_endpoints_or_protocols() -> None:
+    assert not supports_native_web_search(
+        "anthropic:qwen3.8-max", None, "https://workspace.cn-beijing.maas.aliyuncs.com/apps/anthropic",
+    )
+    assert not supports_native_web_search(
+        "openai:qwen3.8-max", "chat",
+        "https://workspace.cn-beijing.maas.aliyuncs.com/api/v2/apps/protocols/compatible-mode/v1",
+    )
+    assert not supports_native_web_search("openai:deepseek-flash", "responses", "https://api.deepseek.com")
     assert not supports_native_web_search("openai:k3", "responses", "https://api.kimi.com/v1")
     assert not supports_native_web_search("openai:k3", "chat", "https://api.kimi.com/coding/v1")
     assert not supports_native_web_search(
@@ -159,8 +179,10 @@ def test_known_capabilities_can_only_be_narrowed() -> None:
 
 def test_documented_defaults_are_metadata_and_never_turn_into_explicit_effort() -> None:
     expected = {
-        "deepseek-v4-responses": L.HIGH, "deepseek-v4-chat": L.HIGH, "deepseek-v4-anthropic": L.HIGH,
-        "bailian-qwen38": L.XHIGH, "bailian-deepseek-glm": L.MAX,
+        "deepseek-flash-responses": L.HIGH,
+        "deepseek-flash-chat": L.HIGH,
+        "deepseek-flash-anthropic": L.HIGH,
+        "bailian-qwen38": L.XHIGH, "bailian-qwen38-responses": L.XHIGH, "bailian-deepseek-glm": L.MAX,
         "kimi-coding-openai": L.HIGH, "kimi-coding-anthropic": L.HIGH, "moonshot-k3": L.MAX,
         "openai-gpt56-sol": L.MEDIUM, "openai-gpt56-terra": L.MEDIUM, "openai-gpt56-luna": L.MEDIUM,
         "openai-gpt6-astra": None,
@@ -188,6 +210,8 @@ def test_curated_catalog_excludes_removed_families_and_profiles() -> None:
     for model, profile in (
         ("openai:gpt-5", "openai-gpt5"), ("openai:gpt-5.4", "openai-gpt54"),
         ("openai:gpt-4o", "openai-gpt4o"),
+        ("openai:deepseek-v4-flash", "deepseek-v4-responses"),
+        ("openai:deepseek-v4-pro", "deepseek-v4-chat"),
         ("anthropic:claude-opus-4-6", "claude-adaptive46"),
         ("google:gemini-3-flash-preview", "gemini3-flash"),
     ):
@@ -221,6 +245,48 @@ def test_managed_configuration_round_trips_profile_without_editing_original(tmp_
     reopened = WorkspaceConfiguration(tmp_path, home=tmp_path / "home", environ={}).inspect()
     restored = next(item for item in reopened.models if item.name == "proxy")
     assert restored.reasoning_profile == model.reasoning_profile
+
+
+def test_layered_model_saves_never_publish_a_dangling_default(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    user_config = home / ".lumen/agent.yaml"
+    user_config.parent.mkdir(parents=True)
+    user_config.write_text(
+        """version: 2
+agent:
+  default_model: deepseek-flash
+  models:
+    deepseek-flash: {id: openai:deepseek-flash, base_url: https://api.deepseek.com}
+    kimi-k3: {id: openai:k3}
+""",
+        encoding="utf-8",
+    )
+    legacy_config = tmp_path / "agent.yaml"
+    legacy_config.write_text(
+        """version: 2
+agent:
+  default_model: deepseek-flash
+  models:
+    deepseek-flash: {id: openai:deepseek-flash, base_url: https://api.deepseek.com}
+""",
+        encoding="utf-8",
+    )
+    configuration = WorkspaceConfiguration(tmp_path, home=home, environ={})
+
+    initial = configuration.inspect()
+    added = configuration.upsert_model(
+        expected_revision=initial.revision,
+        name="local",
+        definition={"id": "openai:local", "base_url": "http://127.0.0.1:11434/v1"},
+        set_default=True,
+    )
+    assert added.default_model == "local"
+    assert added.default_model in {model.name for model in added.models}
+
+    removed = configuration.remove_model(expected_revision=added.revision, name="local")
+    assert removed.default_model == "deepseek-flash"
+    assert removed.default_model in {model.name for model in removed.models}
+    assert configuration.resolved_agent().default_model_name() == "deepseek-flash"
 
 
 def test_managed_mcp_toggle_writes_only_activation_policy(tmp_path: Path) -> None:
@@ -353,6 +419,6 @@ def test_duplicate_catalog_rules_fail_closed(monkeypatch: pytest.MonkeyPatch) ->
     monkeypatch.setattr("lumen.provider_catalog.RULES", (*RULES, RULES[0]))
     with pytest.raises(ValueError, match="invalid catalog rule"):
         validate_catalog()
-    config = config_for(RULES[0], P.RESPONSES, "deepseek-v4-flash")
+    config = config_for(RULES[0], P.RESPONSES, "deepseek-flash")
     with pytest.raises(ValueError, match="ambiguous model"):
         find_reasoning_rule(config.id, config.api, config.base_url)

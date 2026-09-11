@@ -11,6 +11,7 @@ export interface ChoiceOption<T extends string> {
   label: string
   compactLabel?: string
   description?: string
+  icon?: ReactNode
 }
 
 export function ChoiceMenu<T extends string>({
@@ -183,7 +184,7 @@ export function ChoiceMenu<T extends string>({
                 }
               }}
             >
-              {alignToComposer && icon && <span className="choice-option-icon" aria-hidden="true">{icon}</span>}
+              {(option.icon || (alignToComposer && icon)) && <span className="choice-option-icon" aria-hidden="true">{option.icon ?? icon}</span>}
               <span>
                 <strong>{option.label}</strong>
                 {option.description && <small>{option.description}</small>}

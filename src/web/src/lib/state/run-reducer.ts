@@ -235,7 +235,12 @@ export function runReducer(state: RunState, action: RunAction): RunState {
       pendingClarification: null,
       timeline: [
         ...(restored >= 0 ? state.timeline.slice(0, restored) : state.timeline),
-        { id: `user-${event.runId}-${event.sequence}`, kind: 'user', text: string(data.prompt), interactionId: event.runId },
+        { id: `user-${event.runId}-${event.sequence}`, kind: 'user', text: string(data.prompt),
+          interactionId: event.runId,
+          attachments: Array.isArray(data.attachments)
+            ? snapshotTimeline([data])[0].attachments
+            : restored >= 0 ? state.timeline[restored].attachments : [],
+        },
       ],
     }
   }

@@ -23,7 +23,7 @@ export const baseSlashCommands: SlashCommand[] = [
   { value: '/clear', description: '清空当前显示', keywords: 'timeline' },
   {
     value: '/plan ',
-    description: '先生成计划，确认后再执行任务',
+    description: '切换 Plan 模式，或输入任务先规划再确认执行',
     keywords: 'planning collaboration',
     kind: 'mode',
   },

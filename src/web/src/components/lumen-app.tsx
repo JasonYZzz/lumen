@@ -72,6 +72,7 @@ import { LiveVoiceControls } from './live-voice-controls'
 import { LumenLogo, LumenMark } from './lumen-logo'
 import { MarkdownMessage } from './markdown-message'
 import { PlanProgress, PlanProposal, PlanReview } from './plan-panel'
+import { ModelIcon } from './model-icon'
 import { DocumentProvider, DocumentResults } from './document-preview'
 import { SessionActionsMenu } from './session-actions-menu'
 import { SessionSearchDialog } from './session-search-dialog'
@@ -557,16 +558,21 @@ export function LumenApp() {
         return true
       }
       if (name === '/plan') {
-        if (!argument) {
-          dispatch({ type: 'local-message', message: '在 `/plan` 后输入任务，Lumen 会先生成计划供你确认。' })
-          setInput('/plan ')
-          return true
-        }
-        if (run.runId) {
+        if (run.runId || bootstrap?.activeRunId) {
           dispatch({ type: 'local-error', message: '/plan 在任务运行期间不可用，请先停止当前任务。' })
           return true
         }
         const targetSession = sessionId ?? (await createSession())
+        if (!argument) {
+          const current = run.sessionSettings?.collaborationMode ?? bootstrap?.collaborationMode ?? 'default'
+          const next = current === 'plan' ? 'default' : 'plan'
+          await updateSessionSettings(targetSession, { collaborationMode: next })
+          dispatch({ type: 'local-message', message: next === 'plan'
+            ? '已进入 Plan 模式。输入任务开始规划，再次输入 /plan 返回直接执行。'
+            : '已返回直接执行模式。' })
+          setInput('')
+          return true
+        }
         await updateSessionSettings(targetSession, { collaborationMode: 'plan' })
         const started = await lumenApi.startRun(targetSession, argument, requestId())
         dispatch({ type: 'run-registered', runId: started.runId })
@@ -832,6 +838,7 @@ export function LumenApp() {
       openInspector,
       refreshChrome,
       run.runId,
+      run.sessionSettings,
       run.timeline,
       sessionId,
       selectModel,
@@ -1203,25 +1210,17 @@ export function LumenApp() {
         alignToComposer
         value={bootstrap?.activeModel ?? ''}
         disabled={!bootstrap || workspaceBusy || modelChanging}
-        icon={<Sparkle size={14} />}
+        icon={<ModelIcon model={bootstrap?.activeModel ?? bootstrap?.modelId ?? ''} />}
         options={(bootstrap?.availableModels ?? []).map((model) => ({
           value: model,
           label: model,
+          icon: <ModelIcon model={model} />,
         }))}
         onChange={selectModel}
       />
-      <ChoiceMenu
-        className={collaborationMode === 'plan' ? 'is-plan-mode' : ''}
-        label="工作方式"
-        value={collaborationMode}
-        icon={<ListChecks size={14} />}
-        disabled={!bootstrap || workspaceBusy}
-        options={[
-          { value: 'default', label: '直接执行', description: '开始处理任务，工具操作仍遵守审批设置。' },
-          { value: 'plan', label: '先规划', description: '只读探索并提出方案，确认后开始执行。' },
-        ]}
-        onChange={setCollaborationMode}
-      />
+      {collaborationMode === 'plan' && <span className="composer-plan-indicator" role="status">
+        <ListChecks size={14} aria-hidden="true" /> Plan
+      </span>}
       <ChoiceMenu
         label="审批模式"
         open={modeMenuOpen}
@@ -1424,6 +1423,10 @@ export function LumenApp() {
             workspace={bootstrap?.workspace ?? ''}
             runActive={workspaceBusy}
             onClose={() => setSettingsOpen(false)}
+            onModelConfigurationApplied={() => {
+              setReasoning(null)
+              void refreshChrome()
+            }}
           />
         )}
 
@@ -1724,10 +1727,12 @@ function SettingsDialog({
   workspace,
   runActive,
   onClose,
+  onModelConfigurationApplied,
 }: {
   workspace: string
   runActive: boolean
   onClose: () => void
+  onModelConfigurationApplied: () => void
 }) {
   const [section, setSection] = useState<SettingsSection>('models')
   const [configuration, setConfiguration] = useState<ConfigurationSnapshot | null>(null)
@@ -1837,6 +1842,7 @@ function SettingsDialog({
       const saved = result.models.find((model) => model.name === draft.name.trim())
       if (saved) setDraft(modelDraft(saved))
       setRestartRequired(Boolean(result.restartRequired))
+      if (result.restartRequired === false) onModelConfigurationApplied()
       setDeleteArmed(false)
       setCloseArmed(false)
     } catch (saveError) {
@@ -1858,6 +1864,7 @@ function SettingsDialog({
       setConfiguration(result)
       setDraft(result.models[0] ? modelDraft(result.models[0]) : emptyModelDraft())
       setRestartRequired(Boolean(result.restartRequired))
+      if (result.restartRequired === false) onModelConfigurationApplied()
       setDeleteArmed(false)
       setCloseArmed(false)
     } catch (removeError) {
@@ -2018,6 +2025,12 @@ function SettingsDialog({
                     <span><strong>配置已保存</strong>重启 Lumen Web 后载入新的模型注册表。</span>
                   </div>
                 )}
+                {!restartRequired && configuration?.restartRequired === false && (
+                  <div className="settings-notice is-success" role="status">
+                    <CheckCircle size={17} weight="fill" />
+                    <span><strong>配置已生效</strong>模型注册表与当前 Runtime 已动态更新，无需重启。</span>
+                  </div>
+                )}
                 {runActive && (
                   <div className="settings-notice"><Info size={17} /><span>任务运行期间配置为只读，请在运行结束后保存。</span></div>
                 )}
@@ -2035,7 +2048,7 @@ function SettingsDialog({
                         setCloseArmed(false)
                       }}>
                       {draft?.originalName === null && <option value="">新模型</option>}
-                      {configuration?.models.map((model) => <option key={model.name} value={model.name}>{model.name}{model.isDefault ? ' · 默认' : ''}</option>)}
+                      {configuration?.models.map((model) => <option key={model.name} value={model.name}>{model.name}{configuration.activeModel === model.name ? ' · 当前' : model.isDefault ? ' · 默认' : ''}</option>)}
                     </select>
                   </label>
                   {draft && (
@@ -2084,7 +2097,7 @@ function SettingsDialog({
                           ? '每次请求声明由模型提供方执行的 web_search；OpenAI 兼容模型需使用 Responses。'
                           : draft.nativeWebSearch.mode === 'disabled'
                             ? '不向此模型声明内建联网工具。外部 MCP 开关不受影响。'
-                            : '已核对的 DeepSeek V4 Responses 默认开启；未知端点保持关闭，可显式开启。'}</small></label>
+                            : '已核对的 DeepSeek Flash Responses 默认开启；未知端点保持关闭，可显式开启。'}</small></label>
                         <label><span>搜索上下文</span><select aria-label="模型搜索上下文"
                           value={draft.nativeWebSearch.search_context_size ?? 'medium'}
                           disabled={busy || !editable || draft.nativeWebSearch.mode === 'disabled'}
@@ -2102,7 +2115,7 @@ function SettingsDialog({
                       {draft.authKind === 'inline' && !draft.apiKeyEnv.trim() && (
                         <div className="settings-notice"><WarningCircle size={17} /><span>此模型来自含内联密钥的配置。先改为环境变量名，Web 才会创建安全覆盖。</span></div>
                       )}
-                      <label className="settings-checkbox"><span>{draft.originalName && draft.setDefault ? '当前默认模型' : '设为重启后的默认模型'}</span><input type="checkbox" role="switch" checked={draft.setDefault} disabled={busy || !editable || Boolean(draft.originalName && draft.setDefault)} onChange={(event) => setDraft({ ...draft, setDefault: event.target.checked })} /></label>
+                      <label className="settings-checkbox"><span>{draft.originalName && draft.setDefault ? '当前默认模型' : '设为默认并立即切换'}</span><input type="checkbox" role="switch" checked={draft.setDefault} disabled={busy || !editable || Boolean(draft.originalName && draft.setDefault)} onChange={(event) => setDraft({ ...draft, setDefault: event.target.checked })} /></label>
                       <footer>
                         {draft.originalName && configuration && configuration.models.length > 1 && (
                           <button
@@ -2949,7 +2962,7 @@ Model:
   /model [name]                     — 打开模型选择器或按名称切换
   /mode [manual|accept_edits|auto]  — 打开审批选择器或按名称切换
   /tasks                            — 查看运行记录中的计划历史
-  /plan <task>                      — 先生成计划，确认后再执行
+  /plan [task]                      — 切换规划模式，或为指定任务生成计划
 Context:
   /context                          — 查看上下文预算
   /context sources                  — 查看当前会话上下文来源

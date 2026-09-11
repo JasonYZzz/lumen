@@ -97,7 +97,7 @@ from lumen.context import (
     SessionRef,
     TaskSnapshot,
 )
-from lumen.context.instructions import InstructionSource
+from lumen.context.instructions import InstructionSource, build_web_guidance
 from lumen.context.session_state import PendingClarification
 from lumen.events import (
     ApprovalRequest,
@@ -887,6 +887,13 @@ class AgentRuntime:
     def instructions(self) -> str:
         return self._instructions
 
+    def _request_instructions(self, tool_schemas: Sequence[dict[str, Any]]) -> str:
+        guidance = build_web_guidance(
+            visible_tools={str(tool["name"]) for tool in tool_schemas if tool.get("name")},
+            native_search=any(tool.kind == "web_search" for tool in self._native_tools),
+        )
+        return "\n\n".join(value for value in (self.instructions, guidance) if value)
+
     @property
     def current_runtime_context(self) -> str:
         return self._runtime_context() if self._runtime_context is not None else ""
@@ -917,6 +924,7 @@ class AgentRuntime:
         """Adapt, prove, and freeze one exact Native provider request."""
 
         settings = dict(self._model_settings if model_settings is None else model_settings)
+        instructions = self._request_instructions(tool_schemas)
         request_tool_schemas = self._request_tool_schemas(tool_schemas)
         resolved_output_reserve = output_reserve_tokens
         if resolved_output_reserve is None and envelope is not None and envelope.request_snapshot is not None:
@@ -936,7 +944,7 @@ class AgentRuntime:
 
         if context_engine is None or envelope is None:
             serialised_messages = ModelMessagesTypeAdapter.dump_python(list(messages), mode="json")
-            instructions_digest = _digest_json(self.instructions)
+            instructions_digest = _digest_json(instructions)
             message_digest = _digest_json(serialised_messages)
             tool_digest = _digest_json(request_tool_schemas)
             settings_digest = _digest_json(settings)
@@ -987,7 +995,7 @@ class AgentRuntime:
                     "direct_runtime_has_no_context_artifact_references",
                 ),
             )
-            instruction_tokens = max(1, len(self.instructions) // 4) if self.instructions else 0
+            instruction_tokens = max(1, len(instructions) // 4) if instructions else 0
             message_tokens = max(1, len(repr(serialised_messages)) // 4)
             tool_tokens = max(1, len(repr(request_tool_schemas)) // 4) if request_tool_schemas else 0
             snapshot = ProviderRequestSnapshot(
@@ -1023,7 +1031,7 @@ class AgentRuntime:
                 request_id=f"{session_id}:{model_step}:{fingerprint[-16:]}",
                 route=route,
                 messages=tuple(messages),
-                instructions=self.instructions,
+                instructions=instructions,
                 tools=tuple(tool_schemas),
                 input_manifest=manifest,
                 native_tools=self._native_tools,
@@ -1033,7 +1041,7 @@ class AgentRuntime:
         adapted, snapshot = context_engine.adapt_request_history(
             envelope,
             messages,
-            instructions=self.instructions,
+            instructions=instructions,
             tool_schemas=request_tool_schemas,
             output_reserve_tokens=resolved_output_reserve,
             session_id=session_id,
@@ -1044,7 +1052,7 @@ class AgentRuntime:
             envelope,
             snapshot,
             messages=adapted,
-            instructions=self.instructions,
+            instructions=instructions,
             tool_schemas=request_tool_schemas,
             route=route,
             settings=settings,
@@ -1064,7 +1072,7 @@ class AgentRuntime:
             request_id=f"{session_id}:{snapshot.model_step}:{manifest.request_fingerprint[-16:]}",
             route=route,
             messages=tuple(adapted),
-            instructions=self.instructions,
+            instructions=instructions,
             tools=tuple(tool_schemas),
             input_manifest=manifest,
             native_tools=self._native_tools,
@@ -1179,7 +1187,7 @@ class AgentRuntime:
         completion_policy: CompletionPolicy | None = None,
         attachments: Sequence[AttachmentRef] = (),
     ) -> RunOutcome:
-        await emit(RunStarted(prompt))
+        await emit(RunStarted(prompt, tuple(attachments)))
         resolved_session_id = session_id or "default"
         self._active_session_id.set(resolved_session_id)
         previous_clarification = (
@@ -1249,7 +1257,7 @@ class AgentRuntime:
                 prompt=prompt,
                 task=TaskSnapshot(plan=self.controller.snapshot(), diagnostics=tuple(diagnostics)),
                 runtime=RuntimeContextSnapshot(
-                    instructions=self.instructions,
+                    instructions=self._request_instructions(visible_tool_schemas),
                     system_instructions=self.system_instructions,
                     policy_instructions=self.policy_instructions,
                     instruction_sources=self.prompt_sources,
@@ -1496,7 +1504,7 @@ class AgentRuntime:
                         envelope, messages,
                         self._canonical_messages(native_new_messages, delivered_attachments),
                         session_id=resolved_session_id, model_step=model_step,
-                        instructions=self.instructions, tool_schemas=request_schemas,
+                        instructions=self._request_instructions(schemas), tool_schemas=request_schemas,
                         runtime_context=self._request_runtime_context(prompt),
                         active_skill_documents=tuple(
                             dict(document)

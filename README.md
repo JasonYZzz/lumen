@@ -3,7 +3,7 @@
 文本 Agent 支持统一推理强度：模型配置 `reasoning_effort: medium`，CLI
 `lumen --thinking low` / `lumen web --thinking medium`，TUI 与 Web `/thinking`。
 可用档位按模型能力提供，只在空闲时切换，按 Session 与模型保存并供子 Agent 继承。
-DeepSeek V4、Kimi Coding K3、百炼 Anthropic Qwen 3.8 已提供原生参数映射；
+DeepSeek Flash、Kimi Coding K3、百炼 Responses/Anthropic Qwen 3.8 已提供原生参数映射；
 选择器显示 `medium → high` 等实际映射，未知模型会说明推理控制尚未配置。
 新初始化模板明确 medium；旧配置省略时维持 Provider 默认，`off` 必须由模型支持。
 默认安全工具并行、子 Agent 同时 3 个；独立任务先派发后等待，写入仍隔离到 worktree。
@@ -222,10 +222,10 @@ agent:
     preset: lumen
     append_file: prompts/system.md
   models:
-    deepseek-v4-flash:
-      id: openai:deepseek-v4-flash
+    deepseek-flash:
+      id: openai:deepseek-flash
       context:
-        profile: deepseek-v4-flash
+        profile: deepseek-flash
         # window_tokens / max_output_tokens / tokenizer 均可按部署显式覆盖
 ```
 
@@ -377,11 +377,11 @@ Web 转录按用户 turn 组织阅读层级：最终回答、计划摘要、澄�
 
 Web 输入区采用紧凑圆角输入框。点击 `+` 可添加图片或打开模型、计划、审批、复制与分支等快捷操作；输入 `/` 按名称、说明或关键词检索命令。菜单优先展示动作名称，`Enter` 执行完整命令或打开选择器，`Tab` 只补全。`/model` 和输入区模型按钮共用可搜索选择器，`/model <name>` 仍可直接切换；运行期间由 Host 拒绝模型切换。通过快捷入口查看模型、计划或审批会保留草稿。侧栏提供任务标题搜索与收起功能。
 
-计划采用“正文摘要 → 单列步骤 → 按需展开说明”的层级。右上角计划入口或 `/tasks` 打开最新计划侧栏，显示目标、版本、完成数、跳过数、依赖与验收条件；跳过不计为完成。待确认方案放在输入框附近，支持查看完整计划、提交调整意见和确认执行。工作方式（直接执行 / 先规划）与审批模式分别显示；步骤全部完成不会被前端推断为执行授权或 Run 成功。
+计划采用“正文摘要 → 单列步骤 → 按需展开说明”的层级。右上角计划入口或 `/tasks` 打开最新计划侧栏，显示目标、版本、完成数、跳过数、依赖与验收条件；跳过不计为完成。待确认方案放在输入框附近，支持查看完整计划、提交调整意见和确认执行。Web 默认直接执行，通过 `/plan` 切换规划模式，进入后显示 Plan 标记；审批模式独立设置。步骤全部完成不会被前端推断为执行授权或 Run 成功。
 
 历史工具错误不会让已结束的处理过程一直展开或显示“需要确认”；失败记录仍可展开查看。Web 的 `@文件` 支持在光标处插入、键盘选择和中文/空格路径，并保持高亮层与输入光标的字宽、换行和滚动同步。
 
-右上角“设置”在新任务页和已打开任务中始终可用。模型页读取脱敏后的最终配置、来源和字段状态，并可配置 provider 原生联网模式；保存时只接受 API key 环境变量名，不接收或回显密钥明文。Web 不改写可能含注释或凭据的 User/Project/Local YAML，而是原子写入 `.lumen/agent.web.yaml` 受管覆盖层；并发修改、未受管的同名文件、无效合并结果和活动 Run 都会安全失败。首次把旧的单模型配置转换为模型注册表时会保留原模型和原默认选择；含内联密钥的单模型必须先改为环境变量引用，不能被不安全地复制进受管层。扩展能力页可独立启停已配置的 MCP server；开关只写 `mcp.enabled`，不会复制 URL、header 或凭据，保存后需要重启 Web 才会重建资源连接。其余能力与 Agent 预设清单仍来自 `ResourceManager.capabilities_report()` 的真实投影。
+右上角“设置”在新任务页和已打开任务中始终可用。模型页读取脱敏后的最终配置、来源和字段状态，并可配置 provider 原生联网模式；保存时只接受 API key 环境变量名，不接收或回显密钥明文。Web 不改写可能含注释或凭据的 User/Project/Local YAML，而是原子写入 `.lumen/agent.web.yaml` 受管覆盖层；并发修改、未受管的同名文件、无效合并结果和活动 Run/Live execution 都会安全失败。保存模型后，同一个 Host 会立即更新 registry；编辑当前模型或把新模型设为默认时，会先完整构造 candidate Runtime 再原子切换，不需要重启。首次把旧的单模型配置转换为模型注册表时会保留原模型和原默认选择；含内联密钥的单模型必须先改为环境变量引用，不能被不安全地复制进受管层。扩展能力页可独立启停已配置的 MCP server；开关只写 `mcp.enabled`，不会复制 URL、header 或凭据，保存后需要重启 Web 才会重建资源连接。其余能力与 Agent 预设清单仍来自 `ResourceManager.capabilities_report()` 的真实投影。
 
 #### Web Live 实时语音
 
@@ -836,10 +836,10 @@ agent:
 
 ```yaml
 agent:
-  default_model: deepseek-v4-flash
+  default_model: deepseek-flash
   models:
-    deepseek-v4-flash:
-      id: openai:deepseek-v4-flash
+    deepseek-flash:
+      id: openai:deepseek-flash
       api_key_env: DEEPSEEK_API_KEY           # 或 api_key: sk-...(明文,仅本地)
       base_url: https://api.deepseek.com
       settings: {max_tokens: 65536}
@@ -855,7 +855,7 @@ agent:
       settings: {max_tokens: 65536}
 ```
 
-启动后用 `--model <name>` 或 TUI `/model <name>` 实时切换。切换会事务性**重建 AgentRuntime**：candidate Runtime 与 Driver 先在局部 Scope 内完整打开，随后以一次无等待发布同时替换 Runtime、Scope 与活动模型名，再关闭旧 Scope；构建期间并发读取仍看到完整旧 Runtime。Host 使用与启动 run 相同的状态锁禁止切换/start 竞争。MCP 连接、会话历史、计划和工具注册全部保留，只替换活动模型运行实例。
+启动后用 `--model <name>`、TUI `/model <name>` 或 Web 设置实时切换。Web 也可直接新增模型或修改当前模型；非当前模型只更新 registry，当前路由发生变化时会事务性**重建 AgentRuntime**：candidate Runtime 与 Driver 先在局部 Scope 内完整打开，随后以一次无等待发布同时替换 Runtime、Scope、registry 与活动模型名，再关闭旧 Scope；构建期间并发读取仍看到完整旧 Runtime。Host 使用与启动 run 相同的状态锁禁止配置、切换与 start 竞争。MCP 连接、会话历史、计划和工具注册全部保留，只替换活动模型运行实例。
 
 ### 内置 provider
 
@@ -883,8 +883,8 @@ Chat Completions，必须显式写 `api: chat`；`ollama:` provider 仍固定使
 ```yaml
 agent:
   models:
-    deepseek-v4-flash:
-      id: openai:deepseek-v4-flash
+    deepseek-flash:
+      id: openai:deepseek-flash
       base_url: https://api.deepseek.com
       # api: responses         # 可省略；这是默认值
     legacy-chat-gateway:
@@ -904,8 +904,8 @@ agent:
 ```yaml
 agent:
   models:
-    deepseek-v4-flash:
-      id: openai:deepseek-v4-flash
+    deepseek-flash:
+      id: openai:deepseek-flash
       base_url: https://api.deepseek.com
       api: responses
       native_web_search:
@@ -914,21 +914,24 @@ agent:
 ```
 
 - `auto` 只为 Provider Catalog 中“模型 ID + 协议 + 官方端点”精确核对过的路由开启；当前配置的
-  DeepSeek V4 Flash / Pro、Kimi Code K3 和百炼 Qwen3.8 Max / Flash 都会默认启用。
+  Kimi Code K3 和百炼 Qwen3.8 Max / Flash 会默认启用。DeepSeek Flash 当前 Responses 接口
+  忽略内置搜索工具，因此不自动启用。配置声明不代表已成功检索，套餐额度也可能阻止调用。
   未知兼容代理不会被猜测为支持。
 - `enabled` 用于显式开启其他已知支持 provider 原生搜索的 Responses 路由；`disabled` 强制关闭。
 - 原生搜索由 provider 执行，不经过 Lumen 的 MCP `CapabilityGateway`、本地审批或 Sandbox；请求
   manifest 仍记录它的 schema digest，并把原生调用视为不可安全重放的外部动作。
 - `search_context_size` 只会发送给接受该字段的 Responses provider。Kimi Code K3 已实测会拒绝此
   可选字段，因此 Adapter 保留原生搜索、自动省略该参数；Anthropic 协议使用自身的 server tool 形状。
+- Kimi 的用户文本按 `content: [{type: input_text, text: ...}]` 发送。实测裸字符串形式能回答，
+  却未执行原生搜索；此转换只发生在 Kimi 请求 Adapter，保留 Session 历史和图片内容。
 
 ### DeepSeek / Kimi / 阿里云百炼示例
 
 它们都是 OpenAI-compatible 端点，直接使用 `openai:` 前缀和对应 `base_url`：
 
-- **DeepSeek V4 Flash / Pro**：`base_url: https://api.deepseek.com`，默认 `api: responses`。其 Responses 实现支持 function tools、provider 原生 `web_search`、reasoning Items 和语义化 SSE，但不支持 `previous_response_id`、`conversation`、`store` 或 background（[官方兼容性明细](https://api-docs.deepseek.com/zh-cn/guides/responses_api/)）。精确匹配该官方路由时，`native_web_search.mode: auto` 默认生效。
+- **DeepSeek Flash**：`base_url: https://api.deepseek.com`，默认 `api: responses`。其 Responses 实现支持 function tools、reasoning Items 和语义化 SSE，但当前忽略 `web_search` 等内置工具，也不支持 `previous_response_id`、`conversation`、`store` 或 background（[官方兼容性明细](https://api-docs.deepseek.com/guides/responses_api/)）。`native_web_search.mode: auto` 保持关闭；联网检索需要独立搜索工具。
 - **Kimi Code K3**：`id: openai:k3`，`base_url: https://api.kimi.com/coding/v1`，默认 `api: responses`；K3 已验证支持 `input_image` 和 provider 原生 `web_search`，应声明 `input_modalities: [text, image]`；原生搜索请求不能携带 `search_context_size`，由 Adapter 自动省略。需要回退时显式 `api: chat`（[Kimi K3 模型能力](https://www.kimi.com/code/docs/kimi-code/models.html) / [provider 协议配置](https://www.kimi.com/code/docs/kimi-code-cli/configuration/providers.html#openai-responses)）。
-- **阿里云百炼 GLM-5.2 / Qwen**：OpenAI 与 Anthropic 兼容端点均可使用；协议前缀只选择传输，不推断模型能力。当前 Token Plan Qwen 配置使用已验证的 Anthropic 兼容端点 `https://token-plan.cn-beijing.maas.aliyuncs.com/apps/anthropic`。`qwen3.8-max` / `qwen3.8-flash` 可使用 `alibaba-qwen3.8` profile（1M context、131072 最大输出），且 `auto` 会添加 Anthropic server-side `web_search`（[百炼联网搜索](https://help.aliyun.com/zh/model-studio/web-search) / [Token Plan 快速开始](https://help.aliyun.com/zh/model-studio/token-plan-personal-quick-start)）。
+- **阿里云百炼 GLM-5.2 / Qwen**：协议前缀只选择传输，不推断模型能力。Qwen3.8 示例使用 `openai:` 前缀、`api: responses`，地址为 `https://YOUR_WORKSPACE.cn-beijing.maas.aliyuncs.com/api/v2/apps/protocols/compatible-mode/v1`。`qwen3.8-max` / `qwen3.8-flash` 可使用 `alibaba-qwen3.8` profile（1M context、131072 最大输出），`auto` 添加 Responses 原生 `web_search`；思考档位通过标准 `reasoning.effort` 发送。Anthropic 兼容调用仍可使用，但其搜索需要额外客户端握手，当前不自动声明支持（[Responses 参数](https://help.aliyun.com/zh/model-studio/qwen-api-via-openai-responses) / [百炼联网搜索](https://help.aliyun.com/zh/model-studio/web-search)）。
 
 ### 本地 oMLX / Qwen3.8
 

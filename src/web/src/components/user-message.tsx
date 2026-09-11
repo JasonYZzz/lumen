@@ -4,6 +4,7 @@ import { CircleNotch, PencilSimpleLine } from '@phosphor-icons/react'
 import { useLayoutEffect, useRef, useState } from 'react'
 import type { TimelineEntry } from '@/lib/api/types'
 import { CopyButton } from './copy-button'
+import { AttachmentImage } from './attachment-image'
 
 export function UserMessage({ item, editDisabled, onEdit }: {
   item: TimelineEntry
@@ -63,7 +64,13 @@ export function UserMessage({ item, editDisabled, onEdit }: {
       </div>
       {editDisabled && <p className="message-edit-hint" role="status">{editDisabled}</p>}
     </div> : <>
-      <article className="timeline-user">{item.text}</article>
+      <article className="timeline-user">
+        {Boolean(item.attachments?.length) && <div className="user-message-attachments">
+          {item.attachments!.map((attachment, index) => <AttachmentImage
+            key={`${attachment.artifactRef}-${index}`} attachment={attachment} />)}
+        </div>}
+        {item.text}
+      </article>
       <div className="user-message-actions" aria-label="消息操作">
         <CopyButton text={item.text} label="复制消息" className="message-action" />
         {onEdit && <button type="button" className="message-action" ref={editButton} aria-label="编辑消息"

@@ -106,8 +106,8 @@ _PROFILES: tuple[ModelCapabilityProfile, ...] = (
         verified_at=date(2026, 7, 31),
     ),
     ModelCapabilityProfile(
-        id="deepseek-v4-flash",
-        aliases=("deepseek-v4-flash",),
+        id="deepseek-flash",
+        aliases=("deepseek-flash",),
         context_window_tokens=1_000_000,
         max_output_tokens=384_000,
         tokenizer=TokenizerSpec("conservative"),

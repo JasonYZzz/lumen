@@ -16,6 +16,7 @@ import { lumenApi } from '../lib/api/client'
 import type { AttachmentRef, FileSearchItem, QueueMode } from '../lib/api/types'
 import { fileMentionAt, insertFileMention, tokenizePrompt } from '../lib/prompt-highlighting'
 import { filterSlashCommands, type SlashCommand } from '../lib/slash-commands'
+import { AttachmentImage } from './attachment-image'
 
 export interface ComposerProps {
   value: string
@@ -68,6 +69,15 @@ export function Composer({
   const [commandsDismissed, setCommandsDismissed] = useState(false)
   const [actionsOpen, setActionsOpen] = useState(false)
   const [uploading, setUploading] = useState(false)
+  const uploadLock = useRef(false)
+  const [pendingImages, setPendingImages] = useState<{ name: string; url: string }[]>([])
+  const mounted = useRef(true)
+  useEffect(() => {
+    mounted.current = true
+    return () => { mounted.current = false }
+  }, [])
+  const attachmentsRef = useRef(attachments)
+  attachmentsRef.current = attachments
   const [attachmentError, setAttachmentError] = useState<string | null>(null)
   const visibleAttachmentError = !imageInputEnabled && attachments.length
     ? '当前模型不支持已添加的图片，请切换到视觉模型或移除图片。'
@@ -238,25 +248,46 @@ export function Composer({
   }
 
   const addImages = async (selected: File[]) => {
+    if (uploadLock.current || !selected.length) return
     if (!imageInputEnabled) {
       setAttachmentError('当前模型不支持图片输入，请先切换到视觉模型。')
       return
     }
-    const images = selected.filter((file) => file.type.startsWith('image/'))
-    if (!images.length) return
+    const images = selected.filter((file) => ['image/png', 'image/jpeg', 'image/gif', 'image/webp'].includes(file.type))
+    if (images.length !== selected.length) {
+      setAttachmentError('目前仅支持 PNG、JPEG、GIF、WebP 图片，暂不支持普通文件附件。')
+      return
+    }
+    if (images.some((file) => !file.size || file.size > 20 * 1024 * 1024)) {
+      setAttachmentError('图片不能为空，且每张不能超过 20 MB。')
+      return
+    }
     if (attachments.length + images.length > 8) {
       setAttachmentError('每条消息最多添加 8 张图片。')
       return
     }
+    uploadLock.current = true
+    const previews = images.map((file) => ({ name: file.name, url: URL.createObjectURL(file) }))
+    setPendingImages(previews)
     setUploading(true)
     setAttachmentError(null)
     try {
-      const uploaded = await Promise.all(images.map((file) => lumenApi.uploadAttachment(file)))
-      onAttachmentsChange([...attachments, ...uploaded])
+      const results = await Promise.allSettled(images.map((file) => lumenApi.uploadAttachment(file)))
+      if (!mounted.current) return
+      const uploaded = results.flatMap((result) => result.status === 'fulfilled' ? [result.value] : [])
+      const current = attachmentsRef.current
+      onAttachmentsChange([...current, ...uploaded.filter((item, index) =>
+        !current.some((existing) => existing.artifactRef === item.artifactRef)
+        && uploaded.findIndex((other) => other.artifactRef === item.artifactRef) === index)])
+      const failures = results.flatMap((result, index) => result.status === 'rejected' ? [images[index].name] : [])
+      if (failures.length) setAttachmentError(`上传失败：${failures.join('、')}。请重新添加；已成功上传的图片已保留。`)
     } catch (error) {
       setAttachmentError(error instanceof Error ? error.message : '图片上传失败')
     } finally {
+      previews.forEach((preview) => URL.revokeObjectURL(preview.url))
+      setPendingImages([])
       setUploading(false)
+      uploadLock.current = false
     }
   }
 
@@ -283,7 +314,7 @@ export function Composer({
         </div>
       )}
       <div
-        className={`composer composer--workspace ${attachments.length || visibleAttachmentError ? 'has-attachments' : ''}`}
+        className={`composer composer--workspace ${attachments.length || uploading || visibleAttachmentError ? 'has-attachments' : ''}`}
         onDragOver={(event) => event.preventDefault()}
         onDrop={handleDrop}
       >
@@ -324,10 +355,11 @@ export function Composer({
           />
         </div>
 
-        {(attachments.length > 0 || visibleAttachmentError) && (
+        {(attachments.length > 0 || uploading || visibleAttachmentError) && (
           <div className="composer-attachments" aria-live="polite">
             {attachments.map((attachment) => (
               <span key={attachment.artifactRef} className="composer-attachment">
+                <AttachmentImage attachment={attachment} />
                 <span>{attachment.filename}</span>
                 <button
                   type="button"
@@ -340,6 +372,11 @@ export function Composer({
                 </button>
               </span>
             ))}
+            {pendingImages.map((preview, index) => <span className="composer-attachment" key={`${preview.url}-${index}`}>
+              <span className="attachment-thumbnail"><img src={preview.url} alt={preview.name} /></span>
+              <span>{preview.name}</span>
+            </span>)}
+            {uploading && <span className="attachment-upload-status" role="status"><CircleNotch className="spin" size={18} />正在上传图片…</span>}
             {visibleAttachmentError && (
               <span className="composer-attachment-error">{visibleAttachmentError}</span>
             )}

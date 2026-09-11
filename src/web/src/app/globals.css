@@ -1775,7 +1775,9 @@ button:disabled {
 .plan-proposal .web-plan li { counter-increment: proposal-step; }
 .plan-proposal .web-plan li::before { content: counter(proposal-step) "."; min-width: 20px; color: var(--muted); font-variant-numeric: tabular-nums; }
 .plan-proposal .web-plan li > svg { display: none; }
-.composer-settings .is-plan-mode > button { color: #1769bd; background: #eaf3ff; border-radius: 999px; }
+.composer-plan-indicator { display: inline-flex; align-items: center; gap: 5px; padding: 4px 9px; color: #1769bd; background: #eaf3ff; border-radius: 999px; font-size: 12px; }
+.web-source-icon { display: inline-flex; width: 14px; height: 14px; margin-inline-end: 4px; vertical-align: -2px; }
+.web-source-icon img { width: 14px; height: 14px; object-fit: contain; border-radius: 3px; }
 
 .web-plan {
   width: 100%;
@@ -2997,7 +2999,10 @@ button:disabled {
 .composer-add-button:hover, .composer-add-button[aria-expanded="true"] { background: var(--surface-soft); }
 .composer .queue-mode { grid-column: 1 / -1; grid-row: 2; justify-self: start; margin: 0 14px 10px; }
 .composer.has-attachments .queue-mode { grid-row: 3; }
-.composer .composer-attachments { grid-column: 1 / -1; grid-row: 2; margin: 0 8px 8px; }
+.composer .composer-attachments { grid-column: 1 / -1; grid-row: 1; margin: 12px 8px 0; }
+.composer.has-attachments .composer-editor,
+.composer.has-attachments .composer-add-button,
+.composer.has-attachments .composer-actions { grid-row: 2; }
 
 .composer-attachments {
   display: flex;
@@ -3050,6 +3055,21 @@ button:disabled {
   color: var(--danger);
   font-size: 11px;
 }
+
+.composer-attachment { position: relative; display: flex; flex-direction: column; width: 100px; padding: 4px; border-radius: 14px; }
+.composer-attachment > span { max-width: 90px; }
+.composer-attachment > button:not(.attachment-thumbnail) { position: absolute; right: 0; top: 0; border-radius: 50%; padding: 5px; background: var(--surface); color: var(--ink); box-shadow: 0 1px 5px #0003; }
+.attachment-thumbnail { display: grid; place-items: center; overflow: hidden; padding: 0; width: 100%; height: 90px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface-soft); color: var(--muted); cursor: zoom-in; }
+.attachment-thumbnail img { width: 100%; height: 100%; object-fit: cover; }
+.attachment-thumbnail span { padding: 8px; font-size: 12px; }
+.attachment-upload-status { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 12px; }
+.user-message-attachments { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 8px; margin-bottom: 10px; }
+.user-message-attachments .attachment-thumbnail { width: min(240px, 65vw); height: 180px; }
+.attachment-lightbox { position: fixed; inset: 0; z-index: 1000; display: grid; place-items: center; padding: 24px; background: #000b; }
+.attachment-lightbox > div { position: relative; max-width: 95vw; color: white; text-align: center; }
+.attachment-lightbox img { display: block; max-width: 90vw; max-height: 80dvh; object-fit: contain; border-radius: 12px; }
+.attachment-lightbox button { position: absolute; right: 0; top: -40px; display: grid; place-items: center; border: 0; border-radius: 50%; background: white; color: #222; padding: 6px; cursor: pointer; }
+.attachment-lightbox p { margin: 8px 0 0; overflow-wrap: anywhere; }
 
 .composer-tools,
 .composer-actions {

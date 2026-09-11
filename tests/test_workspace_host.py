@@ -40,7 +40,7 @@ from lumen.application import (
     WorkspaceHost,
 )
 from lumen.application.run_lock import WorkspaceRunLock
-from lumen.attachments import AttachmentStore
+from lumen.attachments import AttachmentRef, AttachmentStore
 from lumen.config import LimitsConfig
 from lumen.context import ArtifactStore
 from lumen.plan import EvidenceKind, EvidenceReceipt, PlanState, PlanStep, StepStatus
@@ -223,6 +223,7 @@ async def test_workspace_host_sends_image_artifacts_without_persisting_base64(
 ) -> None:
     image_bytes = b"\x89PNG\r\n\x1a\n" + b"lumen-image-payload"
     received_images: list[list[BinaryContent]] = []
+    continue_response = asyncio.Event()
 
     async def stream(messages: list[ModelMessage], _info: AgentInfo):  # type: ignore[no-untyped-def]
         call_images: list[BinaryContent] = []
@@ -237,6 +238,8 @@ async def test_workspace_host_sends_image_artifacts_without_persisting_base64(
                 )
         received_images.append(call_images)
         yield "image received"
+        await continue_response.wait()
+        yield " incrementally"
 
     artifact_store = ArtifactStore(tmp_path / "artifacts")
     runtime = AgentRuntime(
@@ -261,6 +264,14 @@ async def test_workspace_host_sends_image_artifacts_without_persisting_base64(
             )
         )
         attachment = stored.data["attachment"]
+        from lumen.application.events import event_from_payload, event_payload
+        from lumen.events import RunStarted, TimelineEventRecord
+
+        started_event = RunStarted("image", (AttachmentRef.model_validate(attachment),))
+        event_name, payload = event_payload(started_event)
+        assert event_from_payload(event_name, payload) == started_event
+        assert TimelineEventRecord.from_event(started_event, sequence=1).to_event() == started_event
+        assert event_from_payload("run.started", {"prompt": "old"}) == RunStarted("old")
         started = await host.dispatch(
             StartRun(
                 created.session_id,
@@ -269,7 +280,19 @@ async def test_workspace_host_sends_image_artifacts_without_persisting_base64(
                 attachments=(attachment,),
             )
         )
-        _ = [event async for event in host.subscribe(started.run_id)]
+        events = host.subscribe(started.run_id)
+        async with asyncio.timeout(5):
+            async for event in events:
+                if event.type == "run.started":
+                    assert event.data["attachments"] == [attachment]
+                if event.type == "assistant.delta":
+                    assert event.data["text"] == "image received"
+                    assert not continue_response.is_set()
+                    break
+        continue_response.set()
+        remaining = [event async for event in events]
+        assert any(event.type == "assistant.delta" for event in remaining)
+        assert remaining[-1].type == "run.completed"
         follow_up = await host.dispatch(
             StartRun(created.session_id, "Use the same image context.", "image-follow-up")
         )

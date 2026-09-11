@@ -37,7 +37,7 @@ def test_qwen_explicit_thinking_choice_is_preserved(settings: dict[str, Any]) ->
 @pytest.mark.parametrize("model_id", [
     "anthropic:claude-sonnet-4-6", "anthropic:qwen3.8-max-preview",
     "anthropic:qwen3.8-2.4t-a95b", "openai:qwen3.8-max", "test",
-    "openai:deepseek-v4-flash", "openai:deepseek-v4-pro",
+    "openai:deepseek-flash",
 ])
 def test_unknown_or_other_protocol_models_keep_upstream_defaults(model_id: str) -> None:
     assert ModelSettingsConfig(id=model_id).settings == {}

@@ -10,6 +10,7 @@ vi.mock('../lib/api/client', () => ({
   exchangeLaunchToken: vi.fn().mockResolvedValue(undefined),
   subscribeRun: vi.fn(() => () => {}),
   lumenApi: {
+    readAttachment: vi.fn(async () => new Blob()),
     bootstrap: vi.fn(), listSessions: vi.fn(), createSession: vi.fn(), session: vi.fn(),
     updateSessionSettings: vi.fn(), updateWorkspaceSettings: vi.fn(), startRun: vi.fn(),
     forkSession: vi.fn(), renameSession: vi.fn(), cancelRun: vi.fn(), invokeSkill: vi.fn(), invokePrompt: vi.fn(),
@@ -183,7 +184,7 @@ describe('plan mode review and ordinary progress', () => {
     expect(lumenApi.reviewPlan).toHaveBeenCalledExactlyOnceWith('source', 'approve', 3, expect.any(String), '')
     await act(async () => { resolve({ runId: 'approved-run', sessionId: 'source', status: 'started' }) })
     expect(subscribeRun).toHaveBeenCalledWith('approved-run', expect.any(Function), expect.any(Function))
-    expect(button('直接执行')).toBeDefined()
+    expect(container.querySelector('.composer-plan-indicator')).toBeNull()
   })
 
   it('keeps feedback on rejection failure and sends it with the reviewed revision', async () => {
@@ -202,11 +203,11 @@ describe('plan mode review and ordinary progress', () => {
     expect(lumenApi.reviewPlan).toHaveBeenCalledWith('source', 'reject', 3, expect.any(String), '先覆盖键盘操作')
     expect(input.value).toBe('先覆盖键盘操作')
     expect(container.textContent).toContain('版本已改变，请刷新')
-    expect(button('先规划')).toBeDefined()
+    expect(container.querySelector('.composer-plan-indicator')?.textContent).toContain('Plan')
     vi.mocked(lumenApi.reviewPlan).mockResolvedValueOnce({ runId: 'replanning-run', sessionId: 'source', status: 'started' })
     await click(button('发送意见并重新规划'))
     expect(subscribeRun).toHaveBeenCalledWith('replanning-run', expect.any(Function), expect.any(Function))
-    expect(button('先规划')).toBeDefined()
+    expect(container.querySelector('.composer-plan-indicator')?.textContent).toContain('Plan')
   })
 
   it('does not attach an old review response after navigating to another task', async () => {
@@ -256,7 +257,7 @@ describe('settings editing', () => {
   beforeEach(() => {
     configuration = {
       revision: 'r1', targetPath: '/test/.lumen/agent.web.yaml', editable: true, editReason: null,
-      exclusive: false, sources: [], warnings: [], defaultModel: 'model-a',
+      exclusive: false, sources: [], warnings: [], defaultModel: 'model-a', activeModel: 'model-a',
       mcpServers: [{ name: 'exa', enabled: true, source: null }],
       models: ['model-a', 'model-b'].map((name) => ({
         name, id: `openai:${name}`, api: 'responses', baseUrl: null, apiKeyEnv: null,
@@ -304,13 +305,13 @@ describe('settings editing', () => {
     expect(document.querySelector('.settings-inline-error')?.textContent).toContain('配置已经更新')
     expect(document.querySelector<HTMLInputElement>('input[placeholder="例如 openai:qwen3"]')?.value).toBe('openai:updated')
     vi.mocked(lumenApi.upsertModelConfiguration).mockResolvedValue({
-      ...configuration, status: 'saved', revision: 'r2', restartRequired: true,
+      ...configuration, status: 'saved', revision: 'r2', restartRequired: false,
       models: configuration.models.map((model) => model.name === 'model-a' ? { ...model, id: 'openai:updated' } : model),
     })
     await act(async () => { document.querySelector('.model-form')!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })) })
     expect(lumenApi.upsertModelConfiguration).toHaveBeenLastCalledWith('model-a', expect.objectContaining({expectedRevision: 'r1', id: 'openai:updated', setDefault: true}))
     expect(button('已保存').disabled).toBe(true)
-    expect(document.querySelector('.settings-notice.is-success')?.textContent).toContain('配置已保存')
+    expect(document.querySelector('.settings-notice.is-success')?.textContent).toContain('配置已生效')
   })
 
   it('keeps configuration read-only while a task is running', async () => {
@@ -334,7 +335,7 @@ describe('settings editing', () => {
     }))
     await editModelId('openai:gpt-5.6')
     vi.mocked(lumenApi.upsertModelConfiguration).mockResolvedValue({
-      ...configuration, status: 'saved', revision: 'r2', restartRequired: true,
+      ...configuration, status: 'saved', revision: 'r2', restartRequired: false,
     })
     await act(async () => { document.querySelector('.model-form')!.dispatchEvent(
       new Event('submit', { bubbles: true, cancelable: true }),
@@ -357,7 +358,7 @@ describe('settings editing', () => {
       nativeSearch.dispatchEvent(new Event('change', { bubbles: true }))
     })
     vi.mocked(lumenApi.upsertModelConfiguration).mockResolvedValue({
-      ...configuration, status: 'saved', revision: 'r2', restartRequired: true,
+      ...configuration, status: 'saved', revision: 'r2', restartRequired: false,
       models: configuration.models.map((model) => ({
         ...model,
         nativeWebSearch: { mode: 'disabled', search_context_size: 'medium' },
@@ -483,6 +484,21 @@ describe('asynchronous conversation titles', () => {
 })
 
 describe('sidebar navigation', () => {
+  it('keeps the Kimi brand after selecting an OpenAI-compatible model', async () => {
+    workspace.availableModels = ['model-a', 'kimi-k3']
+    workspace.modelId = 'openai:proxy-model'
+    await mount()
+    await click(button('模型：model-a'))
+    const option = Array.from(document.querySelectorAll<HTMLElement>('[role="option"]'))
+      .find((node) => node.querySelector('strong')?.textContent === 'kimi-k3')!
+    const kimiIcon = option.querySelector('svg')!.innerHTML
+    await click(option)
+    expect(button('模型：kimi-k3').querySelector('svg')!.innerHTML).toBe(kimiIcon)
+    await click(button('模型：kimi-k3'))
+    const selected = document.querySelector('[role="option"][aria-selected="true"]')!
+    expect(selected.querySelector('svg')!.innerHTML).toBe(kimiIcon)
+  })
+
   function qwenReasoning(): NonNullable<Bootstrap['reasoning']> {
     return { requested: null, effective: null, source: 'provider_default', mapping: 'provider_default',
       supported_levels: ['provider_default', 'off', 'low', 'medium', 'high', 'xhigh', 'max'],
@@ -805,6 +821,20 @@ describe('session approval mode interactions', () => {
     expect(container.querySelector<HTMLDivElement>('.turn-activity-list')?.hidden).toBe(false)
   })
 
+  it('toggles Plan with /plan without running a task', async () => {
+    await mount()
+    expect(container.querySelector('[aria-label^="工作方式"]')).toBeNull()
+    await type('/plan')
+    await click(button('发送消息'))
+    expect(lumenApi.updateSessionSettings).toHaveBeenLastCalledWith('session-1', { collaborationMode: 'plan' })
+    expect(container.querySelector('.composer-plan-indicator')?.textContent).toContain('Plan')
+    expect(lumenApi.startRun).not.toHaveBeenCalled()
+    await type('/plan')
+    await click(button('发送消息'))
+    expect(lumenApi.updateSessionSettings).toHaveBeenLastCalledWith('session-1', { collaborationMode: 'default' })
+    expect(container.querySelector('.composer-plan-indicator')).toBeNull()
+  })
+
   it('keeps confirmed modes across workspace refreshes and restores each Session separately', async () => {
     await mount()
     await type('保留我的任务草稿')
@@ -813,18 +843,17 @@ describe('session approval mode interactions', () => {
     await click(button('确认开启'))
     expect(button('审批模式：自动执行')).toBeDefined()
     expect(document.querySelector('.auto-confirm-dialog')).toBeNull()
-    await choose('工作方式：直接执行', '先规划')
     await choose('模型：model-a', 'model-b') // Refreshes bootstrap, whose defaults stay manual/default.
     expect(button('审批模式：自动执行')).toBeDefined()
-    expect(button('工作方式：先规划')).toBeDefined()
+    expect(container.querySelector('[aria-label^="工作方式"]')).toBeNull()
     expect(document.querySelector('textarea')?.value).toBe('保留我的任务草稿')
     expect(lumenApi.startRun).not.toHaveBeenCalled()
     await click(button('新建任务'))
     expect(button('审批模式：每次确认')).toBeDefined()
-    expect(button('工作方式：直接执行')).toBeDefined()
+    expect(container.querySelector('.composer-plan-indicator')).toBeNull()
     await click(button('session-1'))
     expect(button('审批模式：自动执行')).toBeDefined()
-    expect(button('工作方式：先规划')).toBeDefined()
+    expect(container.querySelector('[aria-label^="工作方式"]')).toBeNull()
   })
 
   it('allows cancellation and prevents duplicate submissions while confirmation is pending', async () => {

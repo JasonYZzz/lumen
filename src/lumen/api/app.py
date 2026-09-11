@@ -86,6 +86,7 @@ from lumen.files import search_files
 from .schemas import (
     AgentActionBody,
     ApprovalBody,
+    AttachmentBody,
     ChildRunActionBody,
     ConfigurationRevisionBody,
     ControlBody,
@@ -149,6 +150,7 @@ def _camel_configuration(raw: dict[str, Any]) -> dict[str, Any]:
         "sources": raw["sources"],
         "warnings": raw["warnings"],
         "defaultModel": raw["default_model"],
+        **({"activeModel": raw["active_model"]} if "active_model" in raw else {}),
         "models": [
             {
                 "name": model["name"],
@@ -475,6 +477,14 @@ def create_web_app(
             "filename": attachment["filename"],
             "byteSize": attachment["byte_size"],
         }
+
+    @app.post("/api/v1/attachments/content", response_class=Response)
+    async def read_attachment(body: AttachmentBody) -> Response:
+        content, media_type = await host.read_attachment(body.model_dump())
+        return Response(content, media_type=media_type, headers={
+            "Cache-Control": "private, no-store",
+            "X-Content-Type-Options": "nosniff",
+        })
 
     @app.post("/api/v1/sessions/{session_id}/live", status_code=201)
     async def start_live(session_id: str, body: StartLiveBody) -> dict[str, Any]:

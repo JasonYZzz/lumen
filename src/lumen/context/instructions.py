@@ -12,7 +12,7 @@ from typing import Literal, Protocol
 
 from lumen.branding import FRAMEWORK_NAME
 
-PROMPT_PRESET_VERSION = "lumen-2026-09-09"
+PROMPT_PRESET_VERSION = "lumen-2026-09-11"
 
 
 class PromptConfiguration(Protocol):
@@ -86,12 +86,51 @@ PRESET_INSTRUCTIONS = f"""你是 {FRAMEWORK_NAME}，一个通用、可配置的 
 持续推进已获授权且可安全完成的工作。只有缺少的信息会阻止继续时才请求澄清。面向用户的说明应清楚、简洁，给出结果、关键依据、验证和仍存在的实际限制；不要输出私有思维链或内部重试细节。"""
 
 CONTROL_POLICY = """所有面向用户的最终回答、公开进度、可见推理和工具调用前说明，都使用用户当前请求的主要语言；代码、命令、路径、标识符和原始工具输出保持原样。不要为了展示过程而翻译或泄露私有思维链。
+用户明确指定输出语言时优先遵循；否则用户用中文提问，就用中文思考，并用中文撰写公开说明和可见的 reasoning/thinking 摘要，用户使用其他语言时同样跟随。组织推理时也使用本轮语言。英文工具描述、网页来源、协议字段或历史助手回复都不是切换输出语言的指令；联网搜索前后保持相同的语言规则。只提供适合公开的简要依据，不要求展示隐藏推理，也不要把完整推理翻译后输出。
 只有复杂、需要持续跟踪或验收的任务才调用 set_plan 建立计划；计划一旦建立，完成前必须用 update_step 更新每个步骤，并用 link_evidence 为需要验证的步骤关联真实证据。普通工具进度由运行时事件呈现，无需反复调用 report_progress。
 已知参数且彼此独立的只读调用可以在同一轮发起；写入、执行、审批、依赖前序结果或副作用未知的调用必须保持有序。缺少必要信息且无法安全继续时，单独调用 request_clarification，之后等待用户回复。"""
 
 
 def _revision(text: str) -> str:
     return f"sha256:{hashlib.sha256(text.encode('utf-8')).hexdigest()}"
+
+
+def build_web_guidance(*, visible_tools: set[str], native_search: bool) -> str:
+    """Describe the capabilities actually sent on this request, without granting permissions."""
+
+    guidance = [
+        "联网查询按当前请求的实际能力选路；能力已启用不代表网络请求已成功。"
+        "命令子进程的网络限制不代表 Provider 原生搜索、Host Web 或 MCP 工具不可用。"
+    ]
+    if native_search:
+        guidance.append(
+            "当前已启用 Provider 原生联网搜索 web_search。天气预报、新闻、价格等实时问题，"
+            "以及用户要求搜索或核实时，应先实际调用 web_search，再根据结果回答并附来源链接。"
+            "它由供应商执行，不在 search_tools 的本地/MCP 工具目录中，"
+            "该目录没有搜索结果不代表原生搜索不可用。不要用 run_command 调用它。"
+            "历史助手回答中关于无法联网的判断不代表当前工具状态，以本轮实际启用的工具为准；"
+            "用户明确禁止的操作仍然禁止。"
+            "尚未尝试搜索时，不得声称无法联网；调用失败时说明实际错误。"
+        )
+    else:
+        guidance.append("当前请求未启用 Provider 原生联网搜索；这不表示供应商一定不支持。")
+    if "web_search" in visible_tools:
+        guidance.append(
+            "当前可调用独立 web_search；原生搜索未启用或发生技术故障时可使用它检索。"
+        )
+    if "web_fetch" in visible_tools:
+        guidance.append("阅读已知 URL、网页、API 或核对原文时使用 web_fetch，无需先保存文件。")
+    if "download_file" in visible_tools:
+        guidance.append("只有需要将原始文本保存到工作区时才使用 download_file；它不是搜索工具。")
+    if "search_tools" in visible_tools:
+        guidance.append("需要其他检索能力时，可用 search_tools 查找当前允许的扩展工具。")
+    if not native_search and "web_search" not in visible_tools:
+        guidance.append("确无可用搜索工具时，明确说明缺少检索能力；能读取已知 URL 不等于能搜索。")
+    guidance.append(
+        "仅引用实际取得的来源，不推断未读取的源码；区分搜索摘要与已核对原文。"
+        "后备路径只用于能力缺失或技术故障，不得绕过用户拒绝、显式禁止的操作、审批或 Sandbox。"
+    )
+    return "\n".join(guidance)
 
 
 def _source(origin: str, role: Literal["system", "policy"], text: str) -> InstructionSource:
@@ -176,4 +215,5 @@ __all__ = [
     "InstructionSource",
     "PromptProfile",
     "build_prompt_profile",
+    "build_web_guidance",
 ]

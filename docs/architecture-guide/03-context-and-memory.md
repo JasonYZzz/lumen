@@ -15,6 +15,9 @@ Provider request manifest 将 SYSTEM、POLICY 和 CAPABILITY_CATALOG 计入稳�
 Runtime 还会从协作模式包装后的真实用户正文识别本轮主要语言，将语言要求写入每次请求的
 `runtime_context`；所有 prompt mode 都保留的 control policy 同时要求可见推理、工具调用前说明、
 公开进度和最终回答跟随该语言。Provider 原生私有推理保持原始协议内容，不做事后翻译。
+语言规则优先遵循用户明确指定的语言；英文工具描述、搜索来源和历史回复不改变当前输出语言。
+可见 reasoning/thinking 摘要受同一规则约束，但 Provider 的原生推理语言不能由 Harness 硬性保证，
+不能通过事后翻译隐藏推理或伪造摘要来掩盖这一限制。
 每个 request receipt 还保留内置 preset、控制 policy、能力条件提示、项目追加文件或子 Agent
 角色 profile 各自的 origin、revision、token 估算和内容 digest；正文仍只存在于运行时配置或
 ArtifactStore，不复制进 Session journal。
@@ -38,20 +41,22 @@ ArtifactStore，不复制进 Session journal。
 1. Agent instructions
 2. 当前 Loop 最终可见的 function-tool definitions
 3. SystemPromptPart: <session-policy-context>
-4. canonical active history
-5. UserPromptPart: <context-data>
+4. UserPromptPart: <context-data>
+5. canonical active history
 6. current user prompt
 ```
 
 前两项不是普通历史消息：instructions 由 `AgentRuntime` 管理，工具定义来自 `CapabilityGateway` 的有序有效能力目录。后三至五项由 `ContextEngine.prepare` 形成 `provider_history`；第六项在真正的请求边界追加，steer/follow-up 也必须先追加再生成 manifest。Provider 可以在传输层合并相邻 user request，但不会改变 Lumen 的 canonical history 边界。
+
+请求中刷新工具、记忆或任务资料，以及同轮压缩时，瞬时 context-data 始终置于 canonical history 之前，仍使用低信任的 UserPromptPart。不得在当前问题或工具结果之后追加资料消息，否则 Provider 可能将背景资料误认为最新用户请求；持久历史及工具调用/结果的相对顺序保持不变。
 
 ```mermaid
 flowchart LR
   I["Agent instructions"] --> P["Loop request builder"]
   T["Final ordered tool definitions"] --> P
   SP["System: session-policy-context"] --> P
-  H["Canonical active history"] --> P
   UD["User: context-data"] --> P
+  H["Canonical active history"] --> P
   U["Current user input"] --> P
   P --> D["Frozen ModelDriverRequest"]
   D --> W
@@ -150,7 +155,7 @@ Memory index、recalled memory 与 retrieved context 分别计费和限额，报
 4. 未知模型的 80k conservative fallback。
 
 内置 profile：GPT-5.6 Sol/Terra/Luna 使用 1,050,000 window、128,000 max output 和 `o200k_base`；
-Qwen3.8 Max/Flash 使用 1,000,000 / 131,072 和 conservative-CJK；DeepSeek V4 Pro 使用
+Qwen3.8 Max/Flash 使用 1,000,000 / 131,072 和 conservative-CJK；DeepSeek Flash 使用
 1,000,000 / 384,000 和 conservative-CJK；Kimi K3、GLM-5.2 使用 1,000,000 window，输出上限由模型
 配置覆盖。自定义 `base_url` 不参与 profile 选择。
 

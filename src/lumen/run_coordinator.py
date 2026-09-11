@@ -242,7 +242,7 @@ class RunCoordinator:
             nonlocal terminal_event
             visible_event: RunEvent = event
             if isinstance(event, RunStarted):
-                visible_event = RunStarted(run_input.display_text)
+                visible_event = RunStarted(run_input.display_text, run_input.attachments)
             if isinstance(visible_event, RunCompleted | RunWaitingForUser | RunFailed | RunCancelled):
                 if terminal_event is not None:
                     raise RuntimeError(

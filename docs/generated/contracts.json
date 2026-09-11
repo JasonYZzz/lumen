@@ -2835,10 +2835,11 @@
     "authority": "lumen.provider_catalog",
     "generated_matrix": "docs/generated/provider-reasoning.md",
     "profiles": [
-      "deepseek-v4-responses",
-      "deepseek-v4-chat",
-      "deepseek-v4-anthropic",
+      "deepseek-flash-responses",
+      "deepseek-flash-chat",
+      "deepseek-flash-anthropic",
       "bailian-qwen38",
+      "bailian-qwen38-responses",
       "bailian-deepseek-glm",
       "kimi-coding-openai",
       "kimi-coding-anthropic",
@@ -2848,7 +2849,7 @@
       "openai-gpt56-luna",
       "openai-gpt6-astra"
     ],
-    "revision": "2026-09-09.2"
+    "revision": "2026-09-11.2"
   },
   "run_events": {
     "$defs": {
@@ -2940,6 +2941,47 @@
           "risk"
         ],
         "title": "ApprovalRequest",
+        "type": "object"
+      },
+      "AttachmentRef": {
+        "additionalProperties": false,
+        "description": "Provider-neutral reference to one immutable user attachment.",
+        "properties": {
+          "artifact_ref": {
+            "pattern": "^sha256:[0-9a-f]{64}$",
+            "title": "Artifact Ref",
+            "type": "string"
+          },
+          "byte_size": {
+            "maximum": 20971520,
+            "minimum": 1,
+            "title": "Byte Size",
+            "type": "integer"
+          },
+          "filename": {
+            "maxLength": 255,
+            "minLength": 1,
+            "title": "Filename",
+            "type": "string"
+          },
+          "kind": {
+            "const": "image",
+            "default": "image",
+            "title": "Kind",
+            "type": "string"
+          },
+          "media_type": {
+            "title": "Media Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "artifact_ref",
+          "media_type",
+          "filename",
+          "byte_size"
+        ],
+        "title": "AttachmentRef",
         "type": "object"
       },
       "ClarificationRequested": {
@@ -3466,6 +3508,14 @@
       },
       "RunStarted": {
         "properties": {
+          "attachments": {
+            "default": [],
+            "items": {
+              "$ref": "#/$defs/AttachmentRef"
+            },
+            "title": "Attachments",
+            "type": "array"
+          },
           "prompt": {
             "title": "Prompt",
             "type": "string"

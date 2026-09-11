@@ -137,12 +137,13 @@ def test_audit_snapshot_never_contains_unrelated_settings() -> None:
 
 
 @pytest.mark.parametrize(("model_id", "base_url", "api"), [
-    ("openai:deepseek-v4-flash", "https://api.deepseek.com", "responses"),
-    ("openai:deepseek-v4-pro", "https://api.deepseek.com", "chat"),
-    ("anthropic:deepseek-v4-pro", "https://api.deepseek.com/anthropic", None),
+    ("openai:deepseek-flash", "https://api.deepseek.com", "responses"),
     ("anthropic:qwen3.8-max", "https://example.cn-beijing.maas.aliyuncs.com/apps/anthropic", None),
     ("anthropic:qwen3.8-flash", "https://example.cn-beijing.maas.aliyuncs.com/apps/anthropic", None),
-    ("anthropic:deepseek-v4-pro", "https://example.cn-beijing.maas.aliyuncs.com/apps/anthropic", None),
+    ("openai:qwen3.8-max",
+     "https://example.cn-beijing.maas.aliyuncs.com/api/v2/apps/protocols/compatible-mode/v1", "responses"),
+    ("openai:qwen3.8-flash",
+     "https://example.cn-beijing.maas.aliyuncs.com/api/v2/apps/protocols/compatible-mode/v1", "responses"),
     ("openai:k3", "https://api.kimi.com/coding/v1", "responses"),
     ("anthropic:k3", "https://api.kimi.com/coding", None),
     ("openai:kimi-k3", "https://api.moonshot.cn/v1", "chat"),
@@ -207,7 +208,7 @@ async def test_compatible_provider_controls_reach_real_sdk_http_body(
 def test_capabilities_require_model_and_endpoint_and_keep_defaults_implicit() -> None:
     for config in (
         ModelSettingsConfig(id="anthropic:qwen3.8-max"),
-        ModelSettingsConfig(id="openai:deepseek-v4-flash", base_url="https://other.example"),
+        ModelSettingsConfig(id="openai:deepseek-flash", base_url="https://other.example"),
         ModelSettingsConfig(id="anthropic:unknown", base_url="https://api.anthropic.com"),
     ):
         selection = resolve_reasoning(config)
@@ -215,7 +216,7 @@ def test_capabilities_require_model_and_endpoint_and_keep_defaults_implicit() ->
         assert selection.capability_status == "unknown"
     disabled = ModelSettingsConfig(id="openai:custom-model", reasoning_levels=())
     assert resolve_reasoning(disabled).capability_status == "unsupported"
-    config = ModelSettingsConfig(id="openai:deepseek-v4-flash", base_url="https://api.deepseek.com")
+    config = ModelSettingsConfig(id="openai:deepseek-flash", base_url="https://api.deepseek.com")
     assert resolve_reasoning(config).parameters.settings() == {}
     assert resolve_reasoning(config, Level.MINIMAL).effective is Level.LOW
     with pytest.raises(ValueError, match="unsupported"):
@@ -414,7 +415,7 @@ async def test_default_orchestrator_runs_three_children_with_ordered_spawns(tmp_
 
 
 @pytest.mark.parametrize("mode", ["default", "plan"])
-@pytest.mark.parametrize("model_name", ["gpt-6-astra", "deepseek-v4-flash"])
+@pytest.mark.parametrize("model_name", ["gpt-6-astra", "deepseek-flash"])
 async def test_host_freezes_effort_on_wire_and_refuses_changes_during_run(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mode: Literal["default", "plan"], model_name: str,
 ) -> None:
@@ -436,7 +437,7 @@ async def test_host_freezes_effort_on_wire_and_refuses_changes_during_run(
 
         monkeypatch.setattr("lumen.resources.build_model", fake_model)
         resources = manager(tmp_path)
-        if model_name == "deepseek-v4-flash":
+        if model_name == "deepseek-flash":
             resources.active_model_config().id = f"openai:{model_name}"
             resources.active_model_config().base_url = "https://api.deepseek.com"
         async with opened_host(resources) as host:

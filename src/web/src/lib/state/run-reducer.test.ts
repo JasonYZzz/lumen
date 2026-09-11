@@ -28,13 +28,16 @@ describe('runReducer', () => {
     expect(accepted.pendingClarification).toBeNull()
   })
   it('replaces an active snapshot suffix when replaying the same run from its first event', () => {
+    const attachments = [{ artifactRef: `sha256:${'a'.repeat(64)}`, kind: 'image' as const,
+      mediaType: 'image/png', filename: 'old.png', byteSize: 10 }]
     const restored = { ...initialRunState, timeline: [
       { id: 'prefix', kind: 'user' as const, text: 'prefix', turnIndex: 0, interactionId: 'old' },
-      { id: 'restored', kind: 'user' as const, text: 'current', turnIndex: 1, interactionId: 'run-1' },
+      { id: 'restored', kind: 'user' as const, text: 'current', turnIndex: 1, interactionId: 'run-1', attachments },
       { id: 'partial', kind: 'assistant' as const, text: 'already streamed' },
     ] }
     const state = runReducer(restored, { type: 'event', event: event('run.started', { prompt: 'current' }) })
     expect(state.timeline.map((item) => item.text)).toEqual(['prefix', 'current'])
+    expect(state.timeline[1].attachments).toEqual(attachments)
   })
   it('keeps turn identities distinct when each run restarts its event sequence', () => {
     let state = runReducer(initialRunState, { type: 'event', event: event('run.started', { prompt: 'first' }) })

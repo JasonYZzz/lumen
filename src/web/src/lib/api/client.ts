@@ -69,6 +69,14 @@ export async function exchangeLaunchToken() {
 }
 
 export const lumenApi = {
+  readAttachment: async (attachment: AttachmentRef, signal?: AbortSignal): Promise<Blob> => {
+    const response = await fetch(`${apiBaseUrl}/api/v1/attachments/content`, {
+      method: 'POST', credentials: 'include', signal,
+      headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(attachment),
+    })
+    if (!response.ok) throw new Error(`图片读取失败 (${response.status})`)
+    return response.blob()
+  },
   readDocument: async (path: string, signal?: AbortSignal): Promise<Blob> => {
     const response = await fetch(`${apiBaseUrl}/api/v1/files/content?path=${encodeURIComponent(path)}`, { credentials: 'include', signal })
     if (!response.ok) {

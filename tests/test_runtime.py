@@ -1,4 +1,5 @@
 import asyncio
+import hashlib
 import json
 from collections.abc import AsyncGenerator, AsyncIterator, Sequence
 from contextlib import asynccontextmanager
@@ -783,13 +784,18 @@ async def test_runtime_can_select_lumen_agent_loop_for_text_only_execution() -> 
     assert projected_assistant_text(events) == "native answer"
 
 
-async def test_runtime_freezes_native_search_in_request_manifest() -> None:
+@pytest.mark.parametrize("native_search", [False, True])
+@pytest.mark.parametrize("with_context", [False, True])
+async def test_runtime_freezes_native_search_in_request_manifest(
+    tmp_path: Path, native_search: bool, with_context: bool,
+) -> None:
     async def unused_model(_messages: list[ModelMessage], _info: AgentInfo) -> AsyncIterator[str]:
         raise AssertionError("PydanticAI Agent loop must not execute")
         yield "unreachable"
 
     model = FunctionModel(stream_function=unused_model)
     driver = _LumenTextDriver()
+    native_tools = (ModelNativeTool(kind="web_search", search_context_size="high"),) if native_search else ()
     runtime = AgentRuntime(
         model=model,
         tools=[],
@@ -798,7 +804,10 @@ async def test_runtime_freezes_native_search_in_request_manifest() -> None:
         limits=LimitsConfig(),
         tool_metadata={},
         model_driver=driver,
-        native_tools=(ModelNativeTool(kind="web_search", search_context_size="high"),),
+        native_tools=native_tools,
+        context_engine=ContextEngine(
+            config=ContextConfig(), model=model, artifact_root=str(tmp_path / "artifacts"),
+        ) if with_context else None,
     )
 
     async def emit(_event: RunEvent) -> None:
@@ -811,12 +820,16 @@ async def test_runtime_freezes_native_search_in_request_manifest() -> None:
 
     request = driver.requests[0]
     manifest = outcome.request_receipts[0].input_manifest
-    assert request.native_tools == (
-        ModelNativeTool(kind="web_search", search_context_size="high"),
-    )
+    assert request.native_tools == native_tools
     assert manifest is not None
-    assert manifest.tool_count == len(request.tools) + 1
-    assert "web_search" in outcome.request_receipts[0].visible_tools
+    assert manifest.tool_count == len(request.tools) + len(native_tools)
+    assert ("web_search" in outcome.request_receipts[0].visible_tools) is native_search
+    assert ("当前已启用 Provider 原生联网搜索" in request.instructions) is native_search
+    assert ("当前请求未启用 Provider 原生联网搜索" in request.instructions) is not native_search
+    assert "当前可调用独立 web_search" not in request.instructions
+    assert manifest.instructions_digest == "sha256:" + hashlib.sha256(
+        json.dumps(request.instructions, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
 
 
 async def test_runtime_lumen_loop_executes_gateway_tools_and_commits_full_trajectory(

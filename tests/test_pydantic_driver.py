@@ -123,7 +123,7 @@ async def test_responses_driver_serializes_provider_native_web_search() -> None:
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:
         model = OpenAIResponsesModel(
-            "deepseek-v4-flash",
+            "deepseek-flash",
             provider=OpenAIProvider(openai_client=AsyncOpenAI(api_key="test", http_client=client)),
         )
         await _collect(
@@ -175,6 +175,9 @@ async def test_kimi_responses_native_search_omits_unsupported_context_size(
         )
 
     assert bodies[0]["tools"] == [{"type": "web_search"}]
+    assert bodies[0]["input"] == [
+        {"role": "user", "content": [{"type": "input_text", "text": "hello"}]}
+    ]
 
 
 async def test_anthropic_driver_serializes_provider_native_web_search() -> None:
@@ -252,7 +255,7 @@ async def test_native_tool_argument_deltas_never_enter_local_function_stream() -
             ),
             PartEndEvent(index=0, part=call),
         ],
-        ModelResponse(parts=[call], model_name="deepseek-v4-flash", finish_reason="stop"),
+        ModelResponse(parts=[call], model_name="deepseek-flash", finish_reason="stop"),
     )
 
     events = [event async for event in _PydanticDriverStream(projected).events]

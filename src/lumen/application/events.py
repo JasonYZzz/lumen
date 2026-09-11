@@ -86,6 +86,8 @@ def event_payload(event: RunEvent) -> tuple[str, dict[str, Any]]:
     if isinstance(event, TextRetracted):
         return name, {"characters": event.characters}
     data = asdict(event)
+    if isinstance(event, RunStarted):
+        data["attachments"] = [item.model_dump(mode="json") for item in event.attachments]
     if isinstance(event, PlanCreated | PlanUpdated | PlanReviewPending):
         data["plan"] = event.plan.model_dump(mode="json")
     if isinstance(event, ToolApprovalPending):
@@ -115,6 +117,12 @@ def event_from_payload(name: str, payload: dict[str, Any]) -> RunEvent:
     data = dict(payload)
     data.pop("presentation", None)
     data.pop("presentations", None)
+    if event_type is RunStarted:
+        from lumen.attachments import AttachmentRef
+
+        data["attachments"] = tuple(
+            AttachmentRef.model_validate(item) for item in data.get("attachments", [])
+        )
     if event_type in {PlanCreated, PlanUpdated, PlanReviewPending}:
         data["plan"] = PlanState.model_validate(data["plan"])
     elif event_type is ToolApprovalBatchPending:

@@ -782,7 +782,9 @@ class ContextEngine:
             )
         policy_message = self._policy_message(assembled.blocks)
         context_data_message = self._context_data_message(assembled.blocks)
-        provider_messages = [*policy_message, *active_history, *context_data_message]
+        # Background data stays low-trust, but must precede the conversation:
+        # a refreshed trailing user message can otherwise supersede the task.
+        provider_messages = [*policy_message, *context_data_message, *active_history]
         provisional_snapshot = self.snapshot_request(
             session_id=request.session.id,
             model_step=0,
@@ -878,8 +880,8 @@ class ContextEngine:
             )
             current = [
                 *self._policy_message(assembled.blocks),
-                *canonical_current,
                 *self._context_data_message(assembled.blocks),
+                *canonical_current,
             ]
             snapshot = self.snapshot_request(
                 session_id=session_id,
@@ -956,7 +958,7 @@ class ContextEngine:
             active: list[ModelMessage] | None = None
             provider: list[ModelMessage] = []
             if tail_source == [objective]:
-                candidate_provider = [*policy, prefix, objective, *data]
+                candidate_provider = [*policy, *data, prefix, objective]
                 if self._counter.count_messages(candidate_provider).tokens < snapshot.messages_tokens:
                     active, provider = [prefix, objective], candidate_provider
             for index, message in enumerate(tail_source):
@@ -965,7 +967,7 @@ class ContextEngine:
                 candidate = [prefix, objective, *tail_source[index:]]
                 if validate_active_history(candidate):
                     continue
-                candidate_provider = [*policy, *candidate, *data]
+                candidate_provider = [*policy, *data, *candidate]
                 candidate_snapshot = self.snapshot_request(
                     session_id=session_id, model_step=model_step, messages=candidate_provider,
                     instructions=instructions, tool_schemas=tool_schemas,
@@ -1910,9 +1912,13 @@ class ContextEngine:
                 if snapshot.total_tokens <= snapshot.hard_limit_tokens:
                     return current, snapshot
         canonical_count = len(envelope.canonical_history)
-        policy_count = 1 if current and _transient_kind(current[0]) == "session-policy-context" else 0
-        canonical = current[policy_count : policy_count + canonical_count]
-        suffix = current[policy_count + canonical_count :]
+        transient_count = 0
+        for message in current:
+            if _transient_kind(message) is None:
+                break
+            transient_count += 1
+        canonical = current[transient_count : transient_count + canonical_count]
+        suffix = current[transient_count + canonical_count :]
         candidate_starts = [0]
         for index, message in enumerate(canonical):
             if not isinstance(message, ModelRequest):
@@ -1925,7 +1931,7 @@ class ContextEngine:
             retained = canonical[start:]
             if retained and validate_active_history(retained):
                 continue
-            candidate = [*current[:policy_count], *retained, *suffix]
+            candidate = [*current[:transient_count], *retained, *suffix]
             candidate_snapshot = self.snapshot_request(
                 session_id=session_id,
                 model_step=model_step,

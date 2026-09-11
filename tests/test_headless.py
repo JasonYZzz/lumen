@@ -55,6 +55,14 @@ class LocalResources:
     def available_models(self) -> list[str]:
         return ["test"]
 
+    async def apply_model_configuration(
+        self,
+        agent: Any,
+        *,
+        active_model_name: str | None = None,
+    ) -> None:
+        del agent, active_model_name
+
     def mcp_summary(self) -> list[dict[str, object]]:
         return []
 

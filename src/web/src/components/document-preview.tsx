@@ -6,6 +6,7 @@ import { lumenApi } from '../lib/api/client'
 import type { TimelineEntry } from '../lib/api/types'
 import { MarkdownMessage } from './markdown-message'
 import { useModalFocus } from './use-modal-focus'
+import { WebLink } from './web-link'
 
 const extensions = /\.(md|markdown|txt|html?|json|csv|tsv|log|py|tsx?|jsx?|css|ya?ml|pdf|png|jpe?g|webp|gif|svg|docx|xlsx|pptx)$/i
 const MAX_TABLE_ROWS = 500
@@ -315,7 +316,7 @@ export function DocumentLink({ href, children }: { href: string; children: React
   const context = useContext(Documents)
   const path = context && documentPath(href, context.workspace, context.base)
   return path ? <button type="button" className="document-link" onClick={() => context!.open(path)}><FileText size={15} aria-hidden="true" />{children}</button>
-    : <a href={href}>{children}</a>
+    : <WebLink href={href}>{children}</WebLink>
 }
 
 export function DocumentCode({ children, className }: { children?: ReactNode; className?: string }) {

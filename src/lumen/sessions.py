@@ -414,7 +414,7 @@ class SessionRepository:
             status="running",
             plan=plan,
             timeline_events=[
-                TimelineEventRecord.from_event(RunStarted(user_input), sequence=1)
+                TimelineEventRecord.from_event(RunStarted(user_input, tuple(attachments)), sequence=1)
             ],
             interaction_id=interaction_id,
             attachments=attachments,

@@ -156,6 +156,12 @@ class WorkspaceResources(Protocol):
     def active_model_config(self) -> Any: ...
     def active_model_name(self) -> str: ...
     def available_models(self) -> list[str]: ...
+    async def apply_model_configuration(
+        self,
+        agent: Any,
+        *,
+        active_model_name: str | None = None,
+    ) -> None: ...
     def mcp_summary(self) -> list[dict[str, object]]: ...
     def context_source_summary(self, session_id: str) -> list[dict[str, str]]: ...
     def mcp_prompt_summary(self) -> list[dict[str, object]]: ...
@@ -288,6 +294,15 @@ class WorkspaceHost:
         except (OSError, ValueError) as error:
             raise InvalidStateError("Document unavailable: check its path, type and 20 MiB limit") from error
 
+    async def read_attachment(self, value: dict[str, Any]) -> tuple[bytes, str]:
+        """Read validated image bytes without exposing arbitrary artifacts to clients."""
+        try:
+            attachment = AttachmentRef.model_validate(value)
+            content = await asyncio.to_thread(self._attachment_store.read, attachment)
+        except ValueError as error:
+            raise InvalidStateError(str(error)) from error
+        return content, attachment.media_type
+
     @overload
     async def dispatch(self, command: CreateSession) -> SessionCreated: ...
 
@@ -412,56 +427,94 @@ class WorkspaceHost:
                 raise InvalidStateError(str(error)) from error
             return CommandAcknowledged("ok", {"reasoning": selection.model_dump(mode="json")})
         if isinstance(command, GetConfiguration):
-            return CommandAcknowledged("ok", self.resources.configuration.inspect().as_dict())
+            return CommandAcknowledged(
+                "ok",
+                {
+                    **self.resources.configuration.inspect().as_dict(),
+                    "active_model": self.resources.active_model_name(),
+                },
+            )
         if isinstance(command, GetInstructions):
             return CommandAcknowledged("ok", self.resources.instructions_report())
         if isinstance(command, UpsertModelConfiguration):
-            self._require_configuration_edit_safe()
-            try:
-                snapshot = self.resources.configuration.upsert_model(
-                    expected_revision=command.expected_revision,
-                    name=command.name,
-                    definition=command.definition,
-                    set_default=command.set_default,
-                )
-            except ConfigurationConflictError as error:
-                raise ConfigurationConflictHostError(str(error)) from error
-            except ConfigurationEditError as error:
-                raise InvalidStateError(str(error)) from error
+            async with self._state_lock:
+                self._require_configuration_edit_safe()
+                try:
+                    snapshot = self.resources.configuration.upsert_model(
+                        expected_revision=command.expected_revision,
+                        name=command.name,
+                        definition=command.definition,
+                        set_default=command.set_default,
+                    )
+                    agent = self.resources.configuration.resolved_agent()
+                    registry = agent.model_registry()
+                    current = self.resources.active_model_name()
+                    active_model = (
+                        command.name
+                        if command.set_default
+                        else current if current in registry else agent.default_model_name()
+                    )
+                    await self.resources.apply_model_configuration(
+                        agent,
+                        active_model_name=active_model,
+                    )
+                except ConfigurationConflictError as error:
+                    raise ConfigurationConflictHostError(str(error)) from error
+                except ConfigurationEditError as error:
+                    raise InvalidStateError(str(error)) from error
             return CommandAcknowledged(
                 "saved",
-                {**snapshot.as_dict(), "restart_required": True},
+                {
+                    **snapshot.as_dict(),
+                    "active_model": self.resources.active_model_name(),
+                    "restart_required": False,
+                },
             )
         if isinstance(command, SetMcpServerEnabled):
-            self._require_configuration_edit_safe()
-            try:
-                snapshot = self.resources.configuration.set_mcp_server_enabled(
-                    expected_revision=command.expected_revision,
-                    name=command.name,
-                    enabled=command.enabled,
-                )
-            except ConfigurationConflictError as error:
-                raise ConfigurationConflictHostError(str(error)) from error
-            except ConfigurationEditError as error:
-                raise InvalidStateError(str(error)) from error
+            async with self._state_lock:
+                self._require_configuration_edit_safe()
+                try:
+                    snapshot = self.resources.configuration.set_mcp_server_enabled(
+                        expected_revision=command.expected_revision,
+                        name=command.name,
+                        enabled=command.enabled,
+                    )
+                except ConfigurationConflictError as error:
+                    raise ConfigurationConflictHostError(str(error)) from error
+                except ConfigurationEditError as error:
+                    raise InvalidStateError(str(error)) from error
             return CommandAcknowledged(
                 "saved",
                 {**snapshot.as_dict(), "restart_required": True},
             )
         if isinstance(command, DeleteModelConfiguration):
-            self._require_configuration_edit_safe()
-            try:
-                snapshot = self.resources.configuration.remove_model(
-                    expected_revision=command.expected_revision,
-                    name=command.name,
-                )
-            except ConfigurationConflictError as error:
-                raise ConfigurationConflictHostError(str(error)) from error
-            except ConfigurationEditError as error:
-                raise InvalidStateError(str(error)) from error
+            async with self._state_lock:
+                self._require_configuration_edit_safe()
+                try:
+                    snapshot = self.resources.configuration.remove_model(
+                        expected_revision=command.expected_revision,
+                        name=command.name,
+                    )
+                    agent = self.resources.configuration.resolved_agent()
+                    registry = agent.model_registry()
+                    current = self.resources.active_model_name()
+                    await self.resources.apply_model_configuration(
+                        agent,
+                        active_model_name=(
+                            current if current in registry else agent.default_model_name()
+                        ),
+                    )
+                except ConfigurationConflictError as error:
+                    raise ConfigurationConflictHostError(str(error)) from error
+                except ConfigurationEditError as error:
+                    raise InvalidStateError(str(error)) from error
             return CommandAcknowledged(
                 "saved",
-                {**snapshot.as_dict(), "restart_required": True},
+                {
+                    **snapshot.as_dict(),
+                    "active_model": self.resources.active_model_name(),
+                    "restart_required": False,
+                },
             )
         if isinstance(command, ListSessions):
             return self._list_sessions(include_archived=command.include_archived)
@@ -674,10 +727,10 @@ class WorkspaceHost:
         return await self._context_control(command)
 
     def _require_configuration_edit_safe(self) -> None:
-        if self._active_run_id is not None:
+        if self._active_run_id is not None or self._live_execution_id is not None:
             raise WorkspaceBusyError(
-                "cannot edit model configuration while an agent run is active",
-                details={"run_id": self._active_run_id},
+                "cannot edit model configuration while an agent execution is active",
+                details={"run_id": self._active_run_id or self._live_execution_id},
             )
 
     def _bootstrap(self) -> WorkspaceBootstrap:
