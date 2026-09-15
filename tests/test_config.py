@@ -401,6 +401,44 @@ def test_native_web_search_defaults_to_auto_and_rejects_openai_chat_force() -> N
         )
 
 
+def test_web_search_config_validates_provider_specific_fields() -> None:
+    from pydantic import ValidationError
+
+    from lumen.config import WebSearchConfig
+
+    searxng = WebSearchConfig(provider="searxng", base_url="http://127.0.0.1:8080")
+    assert searxng.api_key_env is None
+    # searxng requires base_url.
+    with pytest.raises(ValidationError, match="base_url"):
+        WebSearchConfig(provider="searxng")
+    # tavily/brave still require api_key_env.
+    with pytest.raises(ValidationError, match="api_key_env"):
+        WebSearchConfig(provider="tavily")
+    with pytest.raises(ValidationError, match="api_key_env"):
+        WebSearchConfig(provider="brave")
+    # searxng-only fields are rejected for commercial providers.
+    with pytest.raises(ValidationError, match="base_url"):
+        WebSearchConfig(provider="brave", api_key_env="BRAVE_KEY", base_url="http://x")
+    with pytest.raises(ValidationError, match="engines"):
+        WebSearchConfig(provider="tavily", api_key_env="TAVILY_KEY", engines=["duckduckgo"])
+    with pytest.raises(ValidationError, match="language"):
+        WebSearchConfig(provider="brave", api_key_env="BRAVE_KEY", language="all")
+    # An explicit but empty engines list is rejected.
+    with pytest.raises(ValidationError, match="engines"):
+        WebSearchConfig(provider="searxng", base_url="http://127.0.0.1:8080", engines=[])
+
+
+def test_web_tools_fetch_strategy_defaults_to_auto_and_validates() -> None:
+    from pydantic import ValidationError
+
+    from lumen.config import WebToolsConfig
+
+    assert WebToolsConfig().fetch_strategy == "auto"
+    assert WebToolsConfig(fetch_strategy="http_only").fetch_strategy == "http_only"
+    with pytest.raises(ValidationError):
+        WebToolsConfig(fetch_strategy="browser_first")  # type: ignore[arg-type]
+
+
 def test_mcp_activation_policy_rejects_unknown_server(tmp_path: Path) -> None:
     enabled = load_yaml(
         tmp_path,

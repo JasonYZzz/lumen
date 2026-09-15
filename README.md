@@ -95,8 +95,8 @@ flowchart LR
   已核对 fingerprint 的 HTTPS/SSH remote；禁用 repository hook、fsmonitor、credential helper、代理、
   重定向、自动维护与其他 protocol，SSH 仅使用已有 agent 和 known_hosts。需认证的 HTTPS push
   当前不调用系统 credential helper，应使用 SSH agent。只有该调用获得网络能力，始终要求显式审批。
-- `web_fetch(url, start_char=1, max_chars=20000)`：读取网页、API、JSON 或 RSS/XML 的默认工具，不写工作区。HTML 转为保留链接的 plain text，结构化文本原样返回，支持按 `next_start_char` 翻页；请求携带明确的 Accept/User-Agent，对 408/425/429/5xx 和传输故障最多尝试 3 次并遵守数值型 `Retry-After`。响应按流式 2 MiB 上限停止读取。SSRF 防护：DNS 解析后拒绝 loopback/私网/链路本地地址，重定向逐跳重新校验。`Risk=external`（默认需审批），`EffectKind=observe`；当前未声明并发策略，按 exclusive 执行。
-- `web_search(query)`：需在 `tools.web.search` 配置 provider（`tavily` 或 `brave`）与 `api_key_env` 后才会注册；返回 `title — url — snippet` 行。
+- `web_fetch(url, start_char=1, max_chars=20000)`：读取网页、API、JSON 或 RSS/XML 的默认工具，不写工作区。HTML 经分层策略链处理：① HTTP 快速路径——安装 `web` extra（Trafilatura）时优先输出带链接的 Markdown 正文与 title/author/date/sitename 元数据；② 可选浏览器渲染层——安装 `browser` extra（Crawl4AI）且 `tools.web.fetch_strategy: auto`（默认）时，JS 空壳/正文不足/抽取失败的页面交由真实浏览器渲染后输出 Markdown；③ 任一前级不可用或失败时回退到纯文本剥标签，行为不劣于无扩展安装。`fetch_strategy`/`fallback_reason` 字段记录实际路径（`fast`/`browser`/`text_fallback`；原因 `extract_failed`/`thin_content`/`js_shell`/`blocked`），`fetch_strategy: http_only` 可整体关闭浏览器层。浏览器层渲染前校验目标 URL，并通过 `before_goto` hook 与请求拦截对每次导航和子请求重新执行公共主机校验（SSRF）；浏览器实例为进程级懒加载单例，随 Host 关闭释放。结果是结构化分页对象（`content`、`start_char`/`end_char`/`has_more`/`next_start_char`/`total_chars`/`truncated`），支持按 `next_start_char` 翻页；请求携带明确的 Accept/User-Agent，对 408/425/429/5xx 和传输故障最多尝试 3 次并遵守数值型 `Retry-After`。响应按流式 2 MiB 上限停止读取。SSRF 防护：DNS 解析后拒绝 loopback/私网/链路本地地址，重定向逐跳重新校验。`Risk=external`（默认需审批），`EffectKind=observe`；当前未声明并发策略，按 exclusive 执行。
+- `web_search(query)`：需在 `tools.web.search` 配置 provider（`tavily`、`brave` 或自托管 `searxng`）后才会注册；商业 provider 需要 `api_key_env`，SearXNG 只需 `base_url`（可选 `api_key_env` 用于反代认证）。返回结构化结果：ranked `results`（title/url/snippet，可选 ISO 8601 `published` 与 `score`）、可选综合 `answer`（仅 Tavily）以及 `engine_errors` 引擎诊断。SearXNG 的 `base_url` 视为操作者信任目标，跳过公共主机 SSRF 校验（仅此端点）。
 - `download_file(url, path, overwrite=False, sha256=None)`：仅用于把已知原始 URL 的完整 UTF-8 文件保存到工作区；读取网页、API 或 RSS 应使用 `web_fetch`。它不经模型转写或 HTML 提取，仅返回路径、字节数和 SHA-256；与 `web_fetch` 使用相同的请求标识和瞬时故障重试，并继续流式限制下载大小、拒绝二进制、HTML、哈希不符和路径逃逸，最后原子发布并通过 TaskWorkspace journal 验证。`Risk=external`、`EffectKind=mutation`，默认需审批，Plan 模式不允许执行；需加入 `tools.builtins` 显式启用。
 - 文件工具及命令 cwd 受 `--cwd` 工作区约束，禁止路径逃逸；Web 工具访问公共 URL，使用独立的网络与审批约束。
 - `install_skill(source, path=None, ref=None, name=None, scope="project", overwrite=False)`：从 GitHub 或工作区本地目录安装完整 Skill，包括二进制资源、脚本可执行标记和空目录。自动解析默认分支并固定 commit，目录发布后验证全部内容，返回简短回执；安装后当前运行即可通过 `list_skills` / `load_skill` 发现与加载。需在 `tools.builtins` 显式启用；与其他写工具共用审批，Plan 模式不可执行。
@@ -121,13 +121,20 @@ tools:
   web:
     fetch_timeout_seconds: 20
     fetch_max_bytes: 2097152
+    fetch_strategy: auto           # auto | http_only（关闭浏览器渲染层）
     # search:                        # 配置后才会注册 web_search
-    #   provider: tavily
+    #   provider: tavily             # tavily | brave | searxng
     #   api_key_env: TAVILY_API_KEY
     #   max_results: 8
+    # SearXNG 自托管示例（无需 API key）：
+    # search:
+    #   provider: searxng
+    #   base_url: http://127.0.0.1:8080
+    #   engines: [duckduckgo, brave, bing, baidu]
+    #   language: all
 ```
 
-网页能力按用途分三层：已核对支持的 Responses/Anthropic provider 可使用模型原生 `web_search`；需要独立搜索结果时可配置 Tavily/Brave `web_search` 或外部 MCP；已有 URL 的静态 HTML/API/RSS 内容使用内置 `web_fetch`。需要登录、点击、执行 JavaScript 或处理反爬挑战的页面不由 `web_fetch` 冒充支持，应连接受控 Browser MCP。实现与 Codex、Claude Code、Pi 的公开能力对照见 [网页检索能力审计](docs/research/2026-09-10-web-retrieval-capability-audit.md)。
+网页能力按用途分三层：已核对支持的 Responses/Anthropic provider 可使用模型原生 `web_search`；需要独立搜索结果时可配置 Tavily/Brave/SearXNG `web_search` 或外部 MCP；已有 URL 的静态 HTML/API/RSS 内容使用内置 `web_fetch`。SearXNG 部署要点（operator checklist）：`settings.yml` 的 `search.formats` 加入 `json`（否则 JSON API 返回 403）、保持 `limiter`/`public_instance` 关闭、绑定 localhost 或经反代认证、推荐 pin 引擎 `duckduckgo`/`brave`/`bing`/`baidu`（Google 仅 best-effort，服务器 IP 常被封锁）。浏览器渲染层通过 `pip install lumen-agent[browser]` 安装，并需单独执行 `crawl4ai-setup` 下载浏览器二进制（数百 MB）；它只覆盖「JS 渲染后才能读到正文」的页面——不承诺绕过 Cloudflare 等风控挑战（上游 issue #1757 仍未解决）、不提供登录/点击/滚动等浏览器自动化（此类需求仍应连接受控 Browser MCP）、微信公众号等限流站点为 best-effort。实现与 Codex、Claude Code、Pi 的公开能力对照见 [网页检索能力审计](docs/research/2026-09-10-web-retrieval-capability-audit.md)。
 
 命令执行同时经过审批策略和 OS 沙箱。默认 `workspace_write`：macOS 使用 Seatbelt、Linux 使用 bubblewrap，网络关闭，隔离 `HOME/TMPDIR`，环境变量按 allowlist 构建；适配器缺失时 fail closed。只有显式配置 `sandbox.mode: disabled` 才放弃隔离。
 

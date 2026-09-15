@@ -20,7 +20,7 @@
 | `/context` 与实际 provider 请求不一致 | `run_diagnostics.py`、`agent_loop/loop.py`（request manifest） | `context/types.py`、`run_coordinator.py`、`sessions.py` |
 | 重开/切换模型后工具或 listener 重复 | `lifecycle.py` | `resources.py`、`tools/registry.py`、`tools/gateway.py` |
 | CLI/TUI/Web 能力清单不一致 | `resources.py`（`capabilities_report`） | `application/host.py`、`api/app.py`、`ui/slash_handlers.py` |
-| Web 抓取被拒绝或搜索未注册 | `tools/web.py` | `resources.py`、`config.py`、DNS/redirect SSRF 校验 |
+| Web 抓取被拒绝或搜索未注册 | `tools/web/`（`fetch.py`、`search/`） | `resources.py`、`config.py`、DNS/redirect SSRF 校验 |
 | Live 语音连接、工具或恢复异常 | `live/manager.py` | `live/router.py`、`live/protocol.py`、Provider Adapter、`tools/gateway.py`、Web media client |
 | 长期记忆污染 | `context/memory/manager.py` | `extraction.py`、`redaction.py`、`records.py` |
 | 子 Agent 行为异常 | `agents/orchestrator.py` | `agents/runtime_factory.py`、`resources.py`、`sessions.py` |

@@ -1,157 +1,99 @@
 # Lumen Repository Guide
 
-本文件适用于整个仓库。子目录若新增更具体的 `AGENTS.md`，以离目标文件最近的规则为准。
+适用于全仓库；子目录规则就近生效。下文审批、Plan、多 Agent 约束描述 **Lumen 产品运行时**，不代表开发助手当前的工具或权限。
 
-## 项目定位
+## 工作约定
 
-Lumen 是通用、可配置的 Agent framework。模型 provider 是可替换实现；Lumen 自己拥有 Session、上下文、工具、审批、Sandbox、工作对象和多 Agent 生命周期。
+Lumen 是通用、可配置的 Agent framework：Provider 可替换，运行时语义由 Lumen 拥有。发行包 `lumen-agent`，Python 包与 CLI `lumen`；Python 3.11–3.13，以 `pyproject.toml` 为准。
 
-当前 Python 支持范围是 3.11–3.13。发行包名是 `lumen-agent`，Python 包与 CLI 命令均为 `lumen`。
+- 完成请求范围内的实现、文档和验证，修复本次改动造成的失败；本地编辑、生成物更新、相关测试无需逐步确认。缺少关键决策或权限时说明阻塞，继续可独立完成的部分。
+- 保留无关的 dirty/untracked 文件。使用补丁修改；未经授权不提交、推送、发布或覆盖外部工作区。
+- 用 `rg` 按任务检索源码和测试。源码、契约测试、schema 定义运行行为；Accepted 架构决策定义意图，README/commands 描述用户行为，plans/research 不证明实现。改动同步更新受影响文档。
+- 本文件只保留项目约束、定位入口和完成条件；专项细节按需加载，新增规则需有失败或契约依据。维护原则参考 [OpenAI 官方文章](https://developers.openai.com/blog/rethinking-skills-and-prompts-for-gpt-6-astra)。
 
-## 事实来源与优先级
+## 架构与源码入口
 
-1. 源码、契约测试和当前 schema 是运行行为的最高事实来源。
-2. `docs/architecture-guide/` 中标记 Accepted 的决策记录描述当前架构和不变量。
-3. `README.md`、`docs/commands.md` 描述用户可见行为。
-4. `docs/plans/` 是历史计划，不代表功能已经实现。
-5. `docs/research/` 是分析材料，不是实现规范；若与 Accepted 决策或源码冲突，不据此改代码。
+依赖主线：客户端 Adapter → `WorkspaceHost` → `RunCoordinator` → `AgentRuntime` → Context / Loop / Gateway。客户端通过 Host command/event Interface 工作，不直接修改 Runtime、Plan、TaskWorkspace 或 AgentOrchestrator 内部状态。
 
-文档与实现发生漂移时，应在同一修改中更新文档。不要为了让测试通过而保留已被新架构替代的第二套状态权威。
+| 修改涉及 | 权威与入口 |
+|---|---|
+| Session actor、run、审批、客户端契约 | `application/host.py`：WorkspaceHost |
+| 单 Session turn、恢复、交互队列 | `run_coordinator.py`：RunCoordinator |
+| turn 外壳、Context prepare/commit、公开事件、partial outcome | `runtime.py`：AgentRuntime |
+| 主模型请求、工具批次、重试、取消、终止候选 | `agent_loop/loop.py`：LumenAgentLoop；`completion.py` 提供完成判定 |
+| Provider 翻译与资源生命周期 | `agent_loop/driver.py`：ModelDriver；`agent_loop/pydantic_driver.py`：低层 PydanticAI Adapter |
+| 工具校验、审批、Hook、幂等、Effect | `tools/gateway.py`：CapabilityGateway；声明/注册在 `tools/spec.py`、`tools/registry.py` |
+| 上下文与压缩 | `context/engine.py`：ContextEngine |
+| canonical history 与大载荷 | `sessions.py`：SessionRepository；`context/artifacts.py`：ArtifactStore |
+| 工作对象、snapshot、mutation、验证和恢复 | `work_products/workspace.py`：TaskWorkspace |
+| Agent 生命周期与隔离执行 | `agents/orchestrator.py`：AgentOrchestrator；`agents/runtime_factory.py`：NativeAgentRuntimeFactory |
+| 装配与释放 | `resources.py`、`lifecycle.py`：RegistrationScope 只拥有注册和后台任务生命周期 |
 
-## 核心 deep modules 与依赖方向
+表中 Python 路径相对于 `src/lumen/`。更细的问题定位见 [源码导航](docs/architecture-guide/08-code-navigation.md)。
 
-- `WorkspaceHost`（`src/lumen/application/host.py`）是 TUI、Web、headless 共享的应用层 seam，拥有 Session actor、run、审批与客户端命令契约。
-- `RunCoordinator`（`src/lumen/run_coordinator.py`）拥有单 Session 的 turn、恢复和交互队列协调。
-- `AgentRuntime`（`src/lumen/runtime.py`）拥有单 Agent 模型/工具 loop、provider 事件翻译与 completion gate。
-- `ContextEngine`（`src/lumen/context/`）是上下文 prepare/commit/control 的唯一 seam；完整历史仍由 Session journal 持久化。
-- `TaskWorkspace`（`src/lumen/work_products/`）拥有工作对象、snapshot、effect journal、局部修改、验证和恢复。
-- `AgentOrchestrator`（`src/lumen/agents/orchestrator.py`）是 Agent Thread、调度、消息、恢复、证据与完成门禁的唯一权威。
-- `AgentRuntimeFactory`（`src/lumen/agents/runtime_factory.py`）创建权限收窄、上下文隔离的 child runtime，并管理 worktree 结果。
-- `ToolRegistry`、MCP toolset、Hook 是能力 seam；Skill 是领域流程指令，不拥有运行时状态。
-- `SessionRepository`（`src/lumen/sessions.py`）只追加持久事实，不执行调度。
+按改动查阅，无需整套加载：
 
-依赖应由客户端 Adapter → Host → Coordinator/Runtime → Context/Tools/Session。TUI 和 Web 不应直接修改 Runtime、Plan、TaskWorkspace 或 AgentOrchestrator 的内部状态。新行为优先扩展已有深 Module 的 Interface，不在每个入口复制逻辑。
+- Loop、Provider、完成和重试：[单一 Loop 权威](docs/architecture-guide/13-native-agent-loop-migration.md)、[长任务恢复](docs/architecture-guide/14-long-running-recovery.md)。
+- 工具、Sandbox、MCP、Skill：[工具与安全](docs/architecture-guide/04-tools-permissions-security.md)、[MCP 与 Skills](docs/architecture-guide/09-mcp-and-skills.md)。
+- Agent / Live / Provider 目录：[原生多 Agent](docs/architecture-guide/10-native-multi-agent-runtime.md)、[实时语音](docs/architecture-guide/11-realtime-voice-runtime.md)、[Provider 目录](docs/architecture-guide/15-provider-catalog.md)。
 
-使用以下术语：Module、Interface、Implementation、Seam、Adapter、Depth、Leverage、Locality。不要用含糊的“组件/服务/边界”代替它们。
+## 实现约束
 
-## 设计与清理规则
+### 权威、Interface 与兼容
 
-- 一个状态概念只能有一个运行时权威。兼容层必须是指向新权威的薄 Adapter，不能保留第二套调度、持久化或恢复实现。
-- 一个 Adapter 往往意味着假设性的 seam；只有确实存在两个实现或明确替换需求时才增加公开 Interface。
-- 对新抽象使用 deletion test：删除后复杂度若消失，它是 pass-through；删除后复杂度会散落到多个调用点，它才有深度。
-- 不为“未来可能需要”添加字段、Hook、策略类、转发 Module 或第二套 DTO。持久化审计字段和已批准计划要求除外。
-- 不按行数拆分 Module。先减少调用者必须理解的 Interface，再把复杂 Implementation 留在最有 locality 的位置。
-- 删除代码前必须给出至少一种证据：零生产引用、被同一权威完全替代、不可达分支、重复实现或契约已删除。框架反射入口不能仅凭文本引用判断。
-- Textual action/event/compose 方法、FastAPI route handler、Typer command、Pydantic validator、序列化字段和 Pydantic AI capability callback 可能由框架反射调用；Vulture 的低置信度结果不是删除依据。
-- 删除死实现时同步删除只验证该死实现的测试；保留或新增针对公开 Interface/兼容 Adapter 的契约测试。
-- 保留当前 dirty worktree 中与任务无关的用户修改，不做 `git reset --hard`、`git checkout --` 或批量覆盖。
+- 每个状态只有一个运行时权威；兼容 Adapter 只投影到该权威，并说明删除条件。Skill 不拥有运行时状态，SessionRepository 不执行调度。
+- 扩展已有深 Module；有第二个真实 Implementation 或明确替换需求才增加公开抽象。删除后复杂度不会散落到调用者的转发层应消除。不按行数拆 Module，不为假设需求加字段/Hook/策略。
+- 使用 Module、Interface、Implementation、Seam、Adapter、Depth、Leverage、Locality 描述设计。注入外部依赖；异步路径不阻塞 I/O，复用执行/Sandbox Seam，取消/超时清理 stream、task、进程树。
+- Python 使用 `from __future__ import annotations`、严格 Pyright 和 Ruff（行宽 110）。外部/持久化输入使用严格 Pydantic 契约，通常 `extra="forbid"`；领域状态优先 `StrEnum`。
+- 删除需有零生产引用、权威替代、不可达或契约删除证据。Textual/FastAPI/Typer/Pydantic/capability 的反射入口不能仅凭文本引用或 Vulture 删除。同步删除死实现专属测试，保留公开/兼容契约测试。
+- 主 turn 不再运行 PydanticAI `Agent` graph；无工具的摘要/提取仍可使用它，不应一并删除。
 
-## 关键不变量
+### 持久化、恢复与完成
 
-### 长任务恢复：2026-09-04 踩坑记忆
+- Session 是 append-only journal。当前 schema v11，v1–v10 必须可加载且不改写；升级只追加 `schema_upgrade`。配置 schema v2，v1 只在内存迁移并警告，不自动重写用户配置。
+- 大载荷进入内容寻址 ArtifactStore，journal 留引用和有界摘要。压缩保留 raw history，以绝对 `source_end` 去覆盖前缀；未持久化 checkpoint 不作持久父节点，瞬时 Skill/Memory/MCP 内容不重复入历史。
+- 主模型重试只由 Loop 管理；默认无次数/请求总时限硬墙，显式预算有效。可撤回候选文字但保留已完成工具，不执行半截参数或透明重放未知外部/原生工具动作。故障分类、心跳与恢复矩阵按长任务恢复文档验证，覆盖自动重连和 Session 重载。
+- 普通问答不创建 Work Product，正文按需读。mutation 记录 prepared/applied/verified/failed/rolled_back；selector 多候选拒绝，局部修改验证目标变化、非目标不变。
+- 完成门禁阻止未验证 mutation、strict 模式未处理 unknown effect、未结束/未送达/失败未处理 Agent、待审批/导入、冲突及缺失 evidence。Coordinator 持久化后才发布 terminal，每个 run 最多一个。
 
-- 排查中断先区分请求/工具预算、模型空闲、显式总时限、Provider 配额与 context overflow；不能用调大次数修复流式总时限，也不能统一包装成 usage limit。
-- 正常长任务默认没有请求数、工具数或模型总时限硬墙；显式预算仍有效。空闲计时应识别传输数据与 SSE 心跳，不能把持续生成误杀。
-- 原生 Loop 是主模型重试唯一权威；可见候选文字可撤回后重试，已完成工具批次保留，半截工具参数及未知外部动作不得重放。
-- ContextEngine 在请求间执行同轮压缩；中间 checkpoint 未持久化时不能成为持久父节点。Session 按绝对 source_end 去掉已覆盖前缀，保留完整 raw history。
-- 恢复验证至少区分自动重连与失败后 Session 重载，并验证工具只执行一次、usage 不漏计、文本撤回跨 thinking 分段且按 Unicode 字符计数。
-- 文档同步同时检查 Markdown 与 Atlas 首页手写图解；重建 content.generated.js 不会修正 index.html 中的旧结论。最新说明见 `docs/architecture-guide/14-long-running-recovery.md`，历史证据见 `docs/research/2026-09-04-run-resilience-upgrade.md`。
+### 工具与权限
 
-### Session 与上下文
+- `Risk` 控制审批，`EffectKind` 控制副作用追踪与验证，`ToolConcurrency` 控制调用并发；三者分开声明。调用时仅显式 `PARALLEL_SAFE` 可并行，`EXCLUSIVE` 是 barrier。
+- 本地/MCP 工具经 Gateway；canonical output 派生模型文字和客户端展示，post Hook 不改 canonical output/Effect。工具与 UI 不自行写 timeline。Provider 原生工具属于 ModelDriverRequest，不属于 `search_tools` 目录。
+- MCP/插件未声明副作用默认 unknown。Lumen Plan 只信任 Contract 的 `Risk=read`，不猜命令 basename；Git 检查用 `git_status` / `git_diff`。
+- Lumen Git stage/commit/push 由根 Host 的结构化 Interface 持有：stage 不执行仓库 content filter；commit/push 为 `Risk=confirm`，每次新审批，auto、记忆规则和 child 均不能放宽。
+- 文件经 workspace 路径解析，拒绝 `..`、绝对路径/符号链接逃逸。Sandbox 与审批正交，`workspace_write` fail closed。`run_command` 只提供 execution receipt，不代表捕获全部文件副作用。
+- command Hook 使用 SandboxRunner，启动或沙箱失败即拒绝；Python Hook/Plugin 是显式信任的 Host 进程内代码。secret、API key、个人数据和完整凭据不进入日志、Session、fixture、diff 或 Artifact 摘要。
+- Lumen child 深度最多一，工具为父有效集合 ∩ 角色 allow-list ∩ workspace mode，无多 Agent 控制工具；角色/Skill 不扩大权限。explorer 共享只读，default/worker 写独立 worktree；校验父 Session 所有权，spawn 幂等。
+- worktree 导入检查基线、父 dirty path 和三方冲突，并验证导入。`LegacyChildRunAdapter` 只投影到 AgentOrchestrator；Session fork 不复制运行中执行，未完成 Agent 记录 `not_carried`。
 
-- Session 是 append-only journal。修改历史事实要追加新 record，不原地改写旧 record。
-- 当前 Session schema 是 v11；v1–v10 必须可加载，且加载不能重写历史文件。旧会话首次写入高版本 record 时只追加 `schema_upgrade`，不改写 header。
-- 大正文、transcript、diff 和结果载荷进入内容寻址 ArtifactStore；Session 只保存引用和有界摘要。
-- compaction 不能丢弃 canonical history，也不能把瞬时 Skill/Memory/MCP 内容重复写入历史。
-- 配置 schema 是 v2。v1 仅在内存中迁移并警告，不自动改写可能含凭据和注释的用户文件。
+## 验证与生成物
 
-### 工具、副作用与安全
+根目录安装：`uv sync --frozen --all-groups`；Web：`pnpm --dir src/web install --frozen-lockfile`。CI 使用 Node 22/pnpm 10；升级依赖同步 lockfile。
 
-- `Risk` 决定审批；`EffectKind` 决定状态追踪、并发和验证。不要合并这两个概念。
-- 未声明的 MCP/插件副作用默认 `unknown`；未知外部动作不能在恢复时自动重放。
-- 文件访问必须经过 workspace 路径解析，拒绝 `..`、绝对路径逃逸和符号链接逃逸。
-- `run_command` 只能声明 execution receipt，不能声称完整捕获任意命令产生的文件副作用。
-- Plan 模式只信任 Capability Contract 的 `Risk=read`；不得按 `rg`、`cat`、`git diff` 等 argv
-  basename 猜测命令只读。Git 检查使用结构化 `git_status` / `git_diff`。
-- Git stage/commit/push 由根 Host 的结构化 Interface 持有；stage 不执行 repository content filter，
-  commit/push 使用 `Risk=confirm`，
-  每次都要新审批，不能被 auto、session/project rule 或 child Agent 放宽。
-- Sandbox 与审批正交。`workspace_write` 必须 fail closed；角色、Skill 或子 Agent 不能扩大父级权限。
-- command Hook 必须复用项目 SandboxRunner 并在启动/沙箱失败时拒绝；Python Hook/Plugin 是操作者
-  明确信任的 Host 进程内代码，不得描述为受子进程 OS sandbox 保护。
-- 不把 secret、API key、个人数据或完整凭据写入日志、Session、测试 fixture、diff 或 Artifact 摘要。
+先最小回归，再按风险扩展；通过后不无故重复。纯 Markdown 修改检查事实、链接、diff 及受影响生成物，无需全套测试/构建。
 
-### TaskWorkspace
+| 改动范围 | 验证要求 |
+|---|---|
+| Python | `uv run ruff check .`、`uv run pyright`、相关 pytest |
+| Host / schema / API | 加跑 `uv run pytest tests/test_workspace_host.py tests/test_web_api.py`，检查受影响 Default、Plan、TUI、Web、headless 共用契约及 OpenAPI |
+| 配置 / Session / Runtime / Loop / Context / TaskWorkspace / Agent 生命周期 | 最小回归后运行 `uv run pytest` 全量 |
+| TUI | 相关交互测试和 `tests/test_tui_snapshots.py`；仅预期视觉变化更新 snapshot |
+| Web | `pnpm --dir src/web test`、`pnpm --dir src/web typecheck`、`pnpm --dir src/web build` |
+| Provider / SDK | 目录、reasoning、models、Driver/Loop 请求级测试；HTTP MockTransport 验证实际参数，见 Provider 目录文档 |
+| 打包 / 入口 | `uv build`；在隔离环境安装生成 wheel，执行 `lumen --version` / `lumen --check-config`，发布验收执行两者 |
 
-- 普通问答不创建 Work Product；正文按需读取，不常驻注入上下文。
-- mutation 使用 `prepared → applied → verified/failed → rolled_back` journal。
-- 多候选 selector 必须安全失败，不能猜目标。
-- 文本/结构化局部修改必须验证目标已变化、非目标区域/路径不变。
-- 未验证 mutation 或 strict 模式下未处理的 unknown effect 必须阻止完成声明。
+生成物只通过命令更新，不手工编辑；改到其事实来源时同步更新并检查：
 
-### 多 Agent
+| 生成物 | 更新命令 | 新鲜度检查 |
+|---|---|---|
+| `docs/generated/contracts.json` | `uv run python -m lumen.contracts --write` | `uv run python -m lumen.contracts --check` |
+| `src/web/openapi.json`、`src/web/src/lib/api/schema.generated.ts` | `pnpm --dir src/web api:schema` | `pnpm --dir src/web api:schema:check` |
+| `docs/generated/provider-reasoning.md` | `uv run python scripts/export_provider_catalog.py` | 同命令加 `--check` |
+| `docs/architecture-guide/content.generated.js` | `uv run python scripts/build_architecture_atlas.py` | 同命令加 `--check` |
 
-- V1 最大深度为一；child runtime 不获得多 Agent 控制工具。
-- 子 Agent 工具 = 父轮次有效工具 ∩ 角色 allow-list ∩ workspace mode 允许工具。角色只能收窄能力。
-- explorer 共享工作区只读；default/worker 写入独立 Git worktree。
-- AgentOrchestrator 是唯一生命周期权威。旧 child 工具和 Host 命令只能通过 `LegacyChildRunAdapter` 投影到原生 Agent Thread。
-- Agent ID 必须按父 Session 校验所有权；spawn 重放必须幂等。
-- 活动、未送达结果、未处理失败、待审批、待导入、冲突、缺失 evidence 或未验证导入都会阻止根 Agent 完成。
-- worktree 导入前检查基线、父工作区 dirty path 和三方冲突；不得覆盖用户未提交修改。
-- fork 不复制运行中的执行；未完成 Agent 在新 Session 中记录 `not_carried`。
+`api:schema:check` 会重新生成文件并与 Git 比较；已修改的 schema 会显示差异，需检查是否为预期。架构文档改动同时核对 Atlas `index.html` 手写图解，重建 content 不会修正它。
 
-## 代码规范
+`src/web/out/` 不入 Git。发布先构建 Web，再 `uv build`，否则 wheel 可能不含静态资源；`lumen web` 优先用内置 `api/static/`，源码运行也需前端构建。任意目录安装用 `python3 /absolute/path/to/lumen/scripts/install_editable.py`；`uv tool install --editable .` 须在仓库根目录。
 
-- Python 使用 `from __future__ import annotations`、严格 Pyright 类型和 Ruff 规则；行宽 110。
-- 对持久化/外部输入使用 Pydantic strict models（通常 `extra="forbid"`）；领域状态优先 `StrEnum`，避免散落的裸字符串。
-- 异步路径不得调用阻塞 I/O；确需子进程时使用已有执行/Sandbox seam，并正确处理取消、超时和进程树。
-- 接受依赖，不在深 Module 内隐藏创建不可替换的外部依赖；测试和调用者应穿过同一个 Interface。
-- 返回结构化结果并追加类型化事件；不要让工具或 UI 直接写 timeline。
-- 公共行为变更必须覆盖 Default、Plan、TUI、Web、headless 中受影响的共同契约，避免入口分叉。
-- 兼容逻辑要写清弃用对象、权威对象和删除条件；不要用永久性的 `legacy` 分支掩盖新旧双轨。
-- 使用 `rg` / `rg --files` 检索。修改文件使用补丁，避免无关格式化和机械性全仓改写。
-
-## 本地开发与验证
-
-在仓库根目录运行：
-
-```bash
-uv sync
-uv run ruff check .
-uv run pyright
-uv run python -m lumen.contracts --check
-uv run python scripts/build_architecture_atlas.py --check
-uv run pytest
-pnpm --dir src/web test
-pnpm --dir src/web typecheck
-pnpm --dir src/web build
-uv build
-```
-
-从任意目录安装当前 checkout：
-
-```bash
-python3 /absolute/path/to/lumen/scripts/install_editable.py
-```
-
-直接执行 `uv tool install --editable .` 时，`.` 必须是 Lumen 仓库根目录。
-
-验证按风险分层：
-
-1. 先运行修改 Module 的最小回归测试。
-2. Python 修改至少运行 Ruff、Pyright 和相关 pytest。
-3. Host/schema/API 修改运行 `tests/test_workspace_host.py`、`tests/test_web_api.py`，并检查 OpenAPI 生成物。
-4. TUI 修改运行相关交互测试与 snapshot；只有预期视觉变化才更新 snapshot。
-5. Web 修改运行 Vitest、TypeScript typecheck 和 Next build。
-6. 配置、Session、Runtime、TaskWorkspace 或 Agent 生命周期修改完成后运行全量 pytest。
-7. 打包/入口修改运行 `uv build`，并从生成 wheel 执行至少一次 `lumen --version` 或 `--check-config`。
-
-`src/web/openapi.json` 和 `src/web/src/lib/api/schema.generated.ts` 是生成物，纳入版本控制以让 CI 校验与源 schema 一致；只通过对应生成命令更新，不手工编辑。`src/web/out/` 是 Next.js 静态导出产物，不纳入版本控制：CI 在 `uv build` 前运行 `pnpm --dir src/web build` 重新生成，`lumen web` 优先使用 wheel 内置的 `api/static/`；从源码运行 Web UI 前需先本地构建前端。
-
-## 变更交付检查
-
-- 说明根因或设计依据，不只列修改步骤。
-- 列出删除内容及“为什么可删”的生产引用/权威证据。
-- 明确保留了哪些兼容、安全和恢复路径。
-- 报告实际运行的测试、静态检查与构建结果；不要把“工具调用成功”描述成任务验证成功。
-- 不在未经用户授权时提交、推送、发布或覆盖外部工作区。
+交付说明行为变化、依据和实际验证；删除时给证据及保留的兼容/安全/恢复路径。说明未运行项与阻塞；fixture/MockTransport/构建不代表真实 Provider 或性能验收。完整 CI 见 `.github/workflows/ci.yml`。

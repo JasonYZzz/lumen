@@ -127,11 +127,24 @@ tools:
     # Per-attempt timeout. Static fetch/download retries transient 408/425/429/5xx failures 3 times.
     fetch_timeout_seconds: 20
     fetch_max_bytes: 2097152
+    # auto: HTML pages the HTTP fast path cannot read (JS shells) may be rendered by the
+    # optional browser tier (requires `pip install lumen-agent[browser]` + `crawl4ai-setup`;
+    # silently skipped when not installed). http_only disables the browser tier.
+    fetch_strategy: auto
     # web_search is only registered when a provider + API key env are set.
     # search:
-    #   provider: tavily          # tavily | brave
+    #   provider: tavily          # tavily | brave | searxng
     #   api_key_env: TAVILY_API_KEY
     #   max_results: 8
+    # Self-hosted SearXNG needs no API key; its base_url is operator-trusted
+    # and skips the public-host SSRF check, so bind the instance to localhost.
+    # search:
+    #   provider: searxng
+    #   base_url: http://127.0.0.1:8080
+    #   # api_key_env: SEARXNG_TOKEN        # optional, for reverse-proxy auth
+    #   max_results: 8
+    #   engines: [duckduckgo, brave, bing, baidu]  # pin known-good engines
+    #   language: all
 
 # Native session-scoped depth-one Agent Threads. Explicit user/project/Skill
 # instructions require delegation; otherwise the root Agent delegates only

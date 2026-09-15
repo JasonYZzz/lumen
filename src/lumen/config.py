@@ -309,14 +309,46 @@ class HookConfig(StrictModel):
 
 
 class WebSearchConfig(StrictModel):
-    provider: Literal["tavily", "brave"]
-    api_key_env: str
+    provider: Literal["tavily", "brave", "searxng"]
+    #: Required for tavily/brave; optional for searxng (reverse-proxy auth).
+    api_key_env: str | None = None
     max_results: int = Field(default=8, ge=1, le=20)
+    #: SearXNG only: explicit config is treated as operator trust, so the
+    #: usual public-host SSRF check is skipped for this endpoint alone.
+    base_url: str | None = None
+    #: SearXNG only: pin known-good engines so a broken engine cannot drag
+    #: down every query.
+    engines: list[str] | None = None
+    #: SearXNG only: passed through as the ``language`` query parameter.
+    language: str | None = None
+
+    @model_validator(mode="after")
+    def validate_provider_fields(self) -> WebSearchConfig:
+        if self.provider == "searxng":
+            if not self.base_url:
+                raise ValueError("searxng search requires tools.web.search.base_url")
+        else:
+            if not self.api_key_env:
+                raise ValueError(
+                    f"tools.web.search.api_key_env is required for provider '{self.provider}'"
+                )
+            for field_name in ("base_url", "engines", "language"):
+                if getattr(self, field_name) is not None:
+                    raise ValueError(
+                        f"tools.web.search.{field_name} is only valid for provider 'searxng'"
+                    )
+        if self.engines is not None and not self.engines:
+            raise ValueError("tools.web.search.engines must not be empty when set")
+        return self
 
 
 class WebToolsConfig(StrictModel):
     fetch_timeout_seconds: float = Field(default=20.0, gt=0)
     fetch_max_bytes: int = Field(default=2 * 1024 * 1024, ge=1024)
+    #: ``auto`` allows the optional browser tier (crawl4ai, ``browser`` extra)
+    #: to render JS pages the HTTP fast path cannot read; ``http_only``
+    #: disables it entirely.
+    fetch_strategy: Literal["auto", "http_only"] = "auto"
     search: WebSearchConfig | None = None
 
 

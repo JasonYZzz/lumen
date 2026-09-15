@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 from pydantic_ai.messages import (
@@ -76,6 +77,46 @@ def test_reduction_preserves_tool_pairing(tmp_path: Path) -> None:
     store = _store(tmp_path)
     history = _history_with_big_output()
     result = reduce_tool_outputs(history, store, keep_recent_full=0)
+    assert validate_active_history(result.messages) == []
+
+
+def test_structured_dict_output_receipts_as_json_success(tmp_path: Path) -> None:
+    """Canonical dict outputs render as JSON and keep the success status.
+
+    Error-marker substrings inside structured content (for example a
+    ``"engine_errors"`` key) must not flip the receipt to ``error`` — the
+    substring heuristic applies to text outputs only.
+    """
+
+    store = _store(tmp_path)
+    content = {
+        "query": "lumen agent",
+        "provider": "searxng",
+        "results": [
+            {"title": f"T{index}", "url": f"https://e{index}.example", "snippet": "s" * 100}
+            for index in range(4)
+        ],
+        "engine_errors": [],
+    }
+    history = [
+        ModelRequest(parts=[UserPromptPart(content="search the web")]),
+        ModelResponse(parts=[ToolCallPart(tool_name="web_search", args={}, tool_call_id="c1")]),
+        ModelRequest(
+            parts=[ToolReturnPart(tool_name="web_search", content=content, tool_call_id="c1")]
+        ),
+    ]
+    result = reduce_tool_outputs(history, store, keep_recent_full=0)
+
+    assert result.reduced == 1
+    receipt = result.receipts[0]
+    assert receipt.status == "success"
+    assert "failed" not in receipt.summary
+    # Head/tail render JSON, not a Python repr.
+    assert receipt.head.startswith('{"query":')
+    assert receipt.artifact_ref is not None
+    body = store.read(receipt.artifact_ref)
+    assert body is not None
+    assert json.loads(body) == content
     assert validate_active_history(result.messages) == []
 
 

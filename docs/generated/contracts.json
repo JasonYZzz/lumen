@@ -2581,8 +2581,55 @@
         "additionalProperties": false,
         "properties": {
           "api_key_env": {
-            "title": "Api Key Env",
-            "type": "string"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Api Key Env"
+          },
+          "base_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Base Url"
+          },
+          "engines": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Engines"
+          },
+          "language": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Language"
           },
           "max_results": {
             "default": 8,
@@ -2594,15 +2641,15 @@
           "provider": {
             "enum": [
               "tavily",
-              "brave"
+              "brave",
+              "searxng"
             ],
             "title": "Provider",
             "type": "string"
           }
         },
         "required": [
-          "provider",
-          "api_key_env"
+          "provider"
         ],
         "title": "WebSearchConfig",
         "type": "object"
@@ -2615,6 +2662,15 @@
             "minimum": 1024,
             "title": "Fetch Max Bytes",
             "type": "integer"
+          },
+          "fetch_strategy": {
+            "default": "auto",
+            "enum": [
+              "auto",
+              "http_only"
+            ],
+            "title": "Fetch Strategy",
+            "type": "string"
           },
           "fetch_timeout_seconds": {
             "default": 20.0,

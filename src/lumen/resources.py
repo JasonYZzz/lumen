@@ -83,6 +83,7 @@ from lumen.tools.registry import (
 )
 from lumen.tools.spec import EffectKind, Risk, ToolSpec
 from lumen.tools.web import build_download_file_spec, build_web_fetch_spec, build_web_search_spec
+from lumen.tools.web.browser import close_browser
 from lumen.tools.workspace import WorkspaceViolation
 from lumen.trust import canonical_project_identity
 from lumen.work_products import TaskWorkspace
@@ -261,6 +262,7 @@ class ResourceManager:
                 build_web_fetch_spec(
                     timeout=config.tools.web.fetch_timeout_seconds,
                     max_bytes=config.tools.web.fetch_max_bytes,
+                    browser_enabled=config.tools.web.fetch_strategy == "auto",
                 ),
                 build_download_file_spec(
                     self.workspace,
@@ -1117,6 +1119,10 @@ class ResourceManager:
         self._stack = stack
         resource_scope = RegistrationScope("resources")
         self._resource_scope = resource_scope
+        # The Crawl4AI browser singleton is created lazily on first web_fetch
+        # render; close it with the host's resource lifetime. A no-op when
+        # the browser tier was never used or crawl4ai is not installed.
+        resource_scope.add_disposer(close_browser, label="web-browser")
         known_names = set(self.registry.entries) | RESERVED_TOOL_NAMES
         try:
             for bundle in self.mcp_bundles:

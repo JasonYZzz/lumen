@@ -114,6 +114,19 @@ User-Agent，对 408、425、429、500、502、503、504 和传输故障做最�
 交互、JavaScript 渲染或反爬挑战时必须使用显式 Browser MCP；内置 HTTP Adapter 不宣称具备浏览器
 执行能力。
 
+> **修订（2026-09-14）**：2026-09-10 审计（[网页检索能力审计](../research/2026-09-10-web-retrieval-capability-audit.md)）
+> 的「浏览器运行时不进内置工具」结论按 [web-search-upgrade 计划](../plans/2026-09-14-web-search-upgrade.md) 正式修订。
+> 当时前提是「内置 fetch 只做 HTTP 文本读取」；现在 `web_fetch` 升级为分层策略链——HTTP 快速路径
+> （Trafilatura 正文抽取）→ 可选浏览器渲染层（Crawl4AI 惰性依赖，未安装或渲染失败时
+> 降级回现有剥标签路径，行为不劣于现状）。SSRF 逐跳校验、审批矩阵与分页契约不变。
+>
+> **浏览器层已实现（Phase 2）**：Crawl4AI 为进程级懒加载 `AsyncWebCrawler` 单例（手动
+> `start()`/`close()`），随 ResourceManager 的 resource scope 关闭释放；`tools.web.fetch_strategy: http_only`
+> 可整体关闭。SDK 无内建 SSRF 防护，由本层强制执行三点：渲染前 `validate_public_url` 校验目标、
+> `before_goto` hook 对每次顶层导航重新做公共主机校验、`on_page_context_created` 挂 `context.route`
+> 拦截所有子请求（覆盖浏览器内 302 到内网）。残余风险为校验与连接之间的 DNS rebinding（TOCTOU）
+> 及上游 hook 覆盖盲区；Cloudflare 等强风控不在承诺范围（`success=False` 直接降级，不重试）。
+
 ## 4.5 Hook 链
 
 Hook 支持 command adapter 与 Python adapter，事件包括：

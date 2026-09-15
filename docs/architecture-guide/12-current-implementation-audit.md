@@ -19,7 +19,7 @@
 - 工具契约与展示：`tools/spec.py`、`tools/presentation.py`、`tools/registry.py`、`tools/gateway.py`；
 - 生命周期与观测：`lifecycle.py`、`resources.py`、`contracts.py`；
 - 离线 Atlas：`scripts/build_architecture_atlas.py`、`content.generated.js`、`document-inspector.js`；
-- 安全：`tools/workspace.py`、`tools/web.py`、`sandbox.py`、`trust.py`；
+- 安全：`tools/workspace.py`、`tools/web/`、`sandbox.py`、`trust.py`；
 - 契约：`tests/test_workspace_host.py`、`test_sessions.py`、`test_runtime.py`、`test_lumen_agent_loop.py`、
   `test_capability_gateway.py`、`test_delegation.py`、`test_timeline.py`、`test_resources.py`、
   `test_web_api.py` 与 Web reducer tests；contract catalog 由 `python -m lumen.contracts --check` 校验。

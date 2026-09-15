@@ -135,7 +135,7 @@ async def test_download_retries_transient_upstream_failures(tmp_path: Path) -> N
     assert calls[0].headers["user-agent"].startswith("Mozilla/5.0")
 
 
-def test_web_fetch_retries_and_keeps_page_links() -> None:
+async def test_web_fetch_retries_and_keeps_page_links() -> None:
     calls: list[httpx.Request] = []
 
     def respond(request: httpx.Request) -> httpx.Response:
@@ -155,16 +155,18 @@ def test_web_fetch_retries_and_keeps_page_links() -> None:
         retry_backoff_seconds=0,
     )
     assert spec.description is not None and "优先使用本工具" in spec.description
-    result = spec.function("https://example.com/start")
+    result = await spec.function("https://example.com/start")
 
-    assert result["content"] == "Read the docs (https://example.com/docs)."
-    assert result["url"] == "https://example.com/start"
+    assert result.content == "Read the docs (https://example.com/docs)."
+    assert result.url == "https://example.com/start"
+    assert result.fetch_strategy == "text_fallback"
+    assert result.fallback_reason == "extract_failed"
     assert len(calls) == 2
     assert calls[0].headers["accept"].startswith("text/html")
     assert calls[0].headers["user-agent"].startswith("Mozilla/5.0")
 
 
-def test_web_fetch_stops_reading_at_the_byte_limit() -> None:
+async def test_web_fetch_stops_reading_at_the_byte_limit() -> None:
     spec = build_web_fetch_spec(
         max_bytes=8,
         host_guard=lambda _: True,
@@ -178,14 +180,14 @@ def test_web_fetch_stops_reading_at_the_byte_limit() -> None:
         ),
     )
 
-    result = spec.function("https://example.com/data")
+    result = await spec.function("https://example.com/data")
 
-    assert result["content"] == "01234567"
-    assert result["truncated"] is True
-    assert result["total_chars"] is None
+    assert result.content == "01234567"
+    assert result.truncated is True
+    assert result.total_chars is None
 
 
-def test_web_fetch_explains_exhausted_transient_retries() -> None:
+async def test_web_fetch_explains_exhausted_transient_retries() -> None:
     calls = 0
 
     def respond(request: httpx.Request) -> httpx.Response:
@@ -200,7 +202,7 @@ def test_web_fetch_explains_exhausted_transient_retries() -> None:
     )
 
     with pytest.raises(RuntimeError, match=r"failed after 3 attempts.*504 Gateway Timeout"):
-        spec.function("https://example.com/data")
+        await spec.function("https://example.com/data")
     assert calls == 3
 
 

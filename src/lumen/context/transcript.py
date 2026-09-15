@@ -18,9 +18,10 @@ an error pattern (extractive reduction, plan §9.2 step 4).
 from __future__ import annotations
 
 import hashlib
-from collections.abc import Sequence
+import json
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, cast
 
 from pydantic_ai.messages import (
     ModelMessage,
@@ -48,17 +49,27 @@ class ReductionResult:
     reduced: int
 
 
-def _text(content: object) -> bytes:
-    """Render a ToolReturnPart content to bytes for hashing/sizing/receipt."""
+def _text(content: Any) -> bytes:
+    """Render a ToolReturnPart content to bytes for hashing/sizing/receipt.
+
+    Structured content (canonical dict/list tool outputs) is serialized as
+    JSON rather than a Python ``repr`` so receipts stay deterministic and
+    model-readable; anything else falls back to ``str``.
+    """
 
     if isinstance(content, str):
         return content.encode("utf-8")
     if content is None:
         return b""
+    if isinstance(content, (Mapping, list, tuple)):
+        try:
+            return json.dumps(content, ensure_ascii=False, default=str).encode("utf-8")
+        except (TypeError, ValueError):  # pragma: no cover - defensive for exotic keys
+            pass
     try:
-        return str(content).encode("utf-8")
+        return str(cast(Any, content)).encode("utf-8")
     except Exception:  # pragma: no cover - defensive for exotic content
-        return repr(content).encode("utf-8")
+        return repr(cast(Any, content)).encode("utf-8")
 
 
 def _first_error_line(body: bytes) -> str:
@@ -298,9 +309,15 @@ def _duplicate_receipt(part: ToolReturnPart, digest: str, status: str) -> tuple[
 
 
 def _looks_like_error(part: ToolReturnPart) -> bool:
-    """Heuristic: a tool return whose content carries an error marker."""
+    """Heuristic: a *text* tool return whose content carries an error marker.
 
-    text = _text(part.content).decode("utf-8", errors="replace").lower()
+    Structured (dict/list) content is a validated canonical success — marker
+    substrings such as an ``"engine_errors"`` key must not reclassify it.
+    """
+
+    if not isinstance(part.content, str):
+        return False
+    text = part.content.lower()
     return any(marker in text for marker in _ERROR_LINE_PREFIXES)
 
 

@@ -10,6 +10,7 @@ readme = "README.md"
 requires-python = ">=3.11,<3.14"
 dependencies = [
   "fastapi>=0.115,<1",
+  "httpx>=0.27,<1",
   "pydantic>=2.11",
   "pydantic-ai-slim[anthropic,google,mcp,openai]>=2.1.0",
   "pyyaml>=6.0.2",
@@ -24,8 +25,19 @@ dependencies = [
 tokenizers = [
   "tiktoken>=0.7,<1",
 ]
+# Trafilatura article extraction: the web_fetch fast path. Without it
+# web_fetch silently falls back to the stdlib plain-text extractor.
+web = [
+  "trafilatura>=2.1",
+]
+# Phase 2 browser tier (Crawl4AI) for JS-rendered pages. Declared now so the
+# browser phase does not touch packaging; nothing imports crawl4ai yet.
+# Pinned >=0.9.3 for the PDF-path SSRF fix; browser binaries need a separate
+# crawl4ai-setup download.
+browser = [
+  "crawl4ai>=0.9.3",
+]
 live = [
-  "httpx>=0.27,<1",
   "websockets>=14,<17",
 ]
 
@@ -75,7 +87,7 @@ select = ["E", "F", "I", "UP", "B", "ASYNC", "RUF"]
 
 [tool.pyright]
 include = ["src", "tests"]
-exclude = [".venv", "pi", "posting"]
+exclude = [".venv", "pi", "posting", "**/node_modules"]
 pythonVersion = "3.11"
 typeCheckingMode = "strict"
 reportMissingTypeStubs = false
