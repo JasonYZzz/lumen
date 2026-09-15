@@ -96,7 +96,7 @@ agent:
     tool_calls: null
     output_limit_retries: 3    # only an implicit max_tokens may grow automatically
     # No total_tokens cap — ContextEngine uses the active model profile and
-    # ratio policy for automatic compaction. See README "运行限制" section.
+    # ratio policy for automatic compaction. See docs/architecture-guide/14-long-running-recovery.md.
     tool_timeout_seconds: 60
     model_stream_idle_timeout_seconds: 300  # resets on incoming stream data
     model_request_timeout_seconds: null     # optional absolute deadline

@@ -1,0 +1,2040 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>主流 Agent 外部接入方案研究报告 · Pi / DeepSeek Harness / Codex / Claude</title>
+<style>
+  :root{
+    --bg:#f7f8fa;
+    --surface:#ffffff;
+    --surface-2:#f2f4f7;
+    --border:#e3e6ea;
+    --border-strong:#d0d5dc;
+    --text:#1a1d21;
+    --text-2:#4a5158;
+    --text-3:#79828c;
+    --accent:#2f6fed;
+    --accent-soft:#eaf1fe;
+    --dsh:#c0392b;
+    --dsh-soft:#fdecea;
+    --ok:#12805c;
+    --ok-soft:#e6f5ef;
+    --warn:#b7791f;
+    --warn-soft:#fdf6e3;
+    --code-bg:#f4f6f8;
+    --mono:"SF Mono",ui-monospace,Menlo,Consolas,monospace;
+  }
+  *{box-sizing:border-box;}
+  html{-webkit-text-size-adjust:100%;}
+  body{
+    margin:0;background:var(--bg);color:var(--text);
+    font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;
+    font-size:15px;line-height:1.75;
+  }
+  .wrap{max-width:1080px;margin:0 auto;padding:0 28px 80px;}
+  header.hero{
+    background:linear-gradient(135deg,#1d2430 0%,#2b3648 55%,#3a2a2a 100%);
+    color:#fff;padding:56px 28px 48px;margin-bottom:0;
+  }
+  header.hero .inner{max-width:1080px;margin:0 auto;}
+  header.hero .kicker{
+    font-size:12px;letter-spacing:.18em;text-transform:uppercase;
+    color:#8fa3bf;font-weight:600;margin-bottom:14px;
+  }
+  header.hero h1{
+    font-size:30px;line-height:1.35;margin:0 0 14px;font-weight:700;letter-spacing:-.01em;
+  }
+  header.hero h1 em{font-style:normal;color:#ffb4a8;border-bottom:2px solid rgba(255,180,168,.45);}
+  header.hero p.lede{margin:0;color:#c3cddb;font-size:15px;max-width:820px;}
+  .meta-bar{
+    display:flex;flex-wrap:wrap;gap:24px;margin-top:26px;padding-top:20px;
+    border-top:1px solid rgba(255,255,255,.14);font-size:13px;color:#9fadc0;
+  }
+  .meta-bar b{color:#e8eef7;font-weight:600;}
+
+  section{margin-top:44px;}
+  h2{
+    font-size:21px;margin:0 0 18px;padding-bottom:10px;font-weight:700;
+    border-bottom:2px solid var(--border-strong);letter-spacing:-.01em;
+  }
+  h2 .num{
+    display:inline-block;min-width:34px;color:var(--accent);font-variant-numeric:tabular-nums;
+  }
+  h3{font-size:17px;margin:30px 0 12px;font-weight:700;color:#2a3038;}
+  h4{font-size:15px;margin:22px 0 10px;font-weight:700;color:#3a4149;}
+  p{margin:0 0 08px;}
+  p+p{margin-top:10px;}
+  ul,ol{margin:8px 0 8px;padding-left:22px;}
+  li{margin:5px 0;}
+  code{
+    font-family:var(--mono);font-size:12.5px;background:var(--code-bg);
+    padding:1.5px 5px;border-radius:4px;color:#8a3a2a;border:1px solid #e8ebee;
+  }
+  pre{
+    background:#1f2530;color:#dde5ef;padding:16px 18px;border-radius:10px;
+    overflow-x:auto;font-family:var(--mono);font-size:12.5px;line-height:1.65;margin:14px 0;
+  }
+  pre code{background:none;border:none;color:inherit;padding:0;}
+
+  .tldr{
+    background:var(--surface);border:1px solid var(--border);border-left:4px solid var(--dsh);
+    border-radius:10px;padding:22px 24px;margin-top:-28px;position:relative;z-index:2;
+    box-shadow:0 4px 24px rgba(20,30,50,.06);
+  }
+  .tldr h3{margin-top:0;color:var(--dsh);font-size:16px;}
+  .tldr ol{margin-bottom:0;}
+
+  .grid{display:grid;gap:16px;}
+  .grid.c2{grid-template-columns:repeat(auto-fit,minmax(320px,1fr));}
+  .grid.c3{grid-template-columns:repeat(auto-fit,minmax(240px,1fr));}
+
+  .card{
+    background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:18px 20px;
+  }
+  .card h4{margin-top:0;display:flex;align-items:center;gap:8px;}
+  .card .tag{
+    font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;
+    padding:2px 7px;border-radius:5px;background:var(--surface-2);color:var(--text-3);
+  }
+  .card.accent{border-left:3px solid var(--accent);}
+  .card.dsh{border-left:3px solid var(--dsh);background:#fffbfa;}
+  .card.ok{border-left:3px solid var(--ok);}
+  .card.warn{border-left:3px solid var(--warn);}
+
+  table{width:100%;border-collapse:collapse;margin:16px 0;font-size:13.5px;background:var(--surface);}
+  th,td{border:1px solid var(--border);padding:9px 12px;text-align:left;vertical-align:top;}
+  th{background:var(--surface-2);font-weight:700;font-size:13px;color:#333b44;white-space:nowrap;}
+  tbody tr:nth-child(even){background:#fafbfc;}
+  td code{font-size:12px;}
+  .tbl-tight td,.tbl-tight th{padding:7px 10px;font-size:13px;}
+
+  .pill{
+    display:inline-block;font-size:11.5px;font-weight:600;padding:2px 8px;border-radius:20px;
+    background:var(--accent-soft);color:var(--accent);border:1px solid #d3e2fd;white-space:nowrap;
+  }
+  .pill.red{background:var(--dsh-soft);color:var(--dsh);border-color:#f6d5d0;}
+  .pill.green{background:var(--ok-soft);color:var(--ok);border-color:#c9e9dd;}
+  .pill.grey{background:var(--surface-2);color:var(--text-3);border-color:var(--border);}
+  .pill.amber{background:var(--warn-soft);color:var(--warn);border-color:#f0e0b4;}
+
+  .quote{
+    border-left:3px solid var(--border-strong);padding:2px 0 2px 16px;margin:14px 0;
+    color:var(--text-2);font-style:italic;
+  }
+  .callout{
+    background:var(--warn-soft);border:1px solid #f0e0b4;border-radius:8px;padding:14px 18px;margin:16px 0;
+    font-size:14px;
+  }
+  .callout.red{background:var(--dsh-soft);border-color:#f6d5d0;}
+  .callout.blue{background:var(--accent-soft);border-color:#d3e2fd;}
+  .callout.green{background:var(--ok-soft);border-color:#c9e9dd;}
+  .callout b{color:#2a3038;}
+  .callout .lbl{display:block;font-weight:700;margin-bottom:4px;font-size:13px;letter-spacing:.02em;}
+
+  figure{margin:22px 0;background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:18px;}
+  figure svg{display:block;width:100%;height:auto;}
+  figcaption{font-size:12.5px;color:var(--text-3);margin-top:12px;text-align:center;}
+
+  .src-list{font-size:13px;line-height:1.9;color:var(--text-2);}
+  .src-list li{margin:6px 0;word-break:break-all;}
+  .src-list a{color:var(--accent);text-decoration:none;border-bottom:1px solid #cfe0fc;}
+  .src-list a:hover{border-bottom-color:var(--accent);}
+
+  .kbd{font-family:var(--mono);font-size:12px;background:var(--surface-2);border:1px solid var(--border-strong);
+       border-bottom-width:2px;border-radius:4px;padding:1px 6px;}
+
+  hr.sep{border:none;border-top:1px dashed var(--border-strong);margin:34px 0;}
+
+  .steal li{margin:10px 0;}
+  .steal b{color:var(--dsh);}
+
+  @media print{
+    body{background:#fff;font-size:12px;}
+    header.hero{background:#1d2430 !important;-webkit-print-color-adjust:exact;print-color-adjust:exact;}
+    .card,figure,table,.tldr{break-inside:avoid;}
+    section{break-inside:auto;}
+  }
+</style>
+</head>
+<body>
+
+<header class="hero">
+  <div class="inner">
+    <div class="kicker">Research Report · Agent Harness Interoperability</div>
+    <h1>主流 Agent 的外部 Agent 接入方案设计<br><em>Pi Agent · DeepSeek Harness · Codex · Claude Code</em></h1>
+    <p class="lede">
+      本报告拆解四套主流 Agent 运行时"如何把外部 Agent 接进来、如何把自己接出去"的工程设计。
+      两个重点对象：
+      <b>Pi Agent</b>（极简内核 + 原语而非功能）与 <b>DeepSeek Harness</b>（<code>ctx.subagents</code> 能力缝、
+      静态能力协商、生命周期与权限边界），并在第 4 章做正面对撞分析。
+    </p>
+    <div class="meta-bar">
+      <span><b>报告日期</b>　2026-09-11</span>
+      <span><b>资料截止</b>　2026-09-11</span>
+      <span><b>研究对象</b>　Pi Agent / DeepSeek Harness / OpenAI Codex / Claude Code + MCP·ACP·A2A</span>
+      <span><b>形态</b>　桌面研究（公开文档、源码结构分析与二手技术长文）</span>
+    </div>
+  </div>
+</header>
+
+<div class="wrap">
+
+<div class="tldr">
+  <h3>一页结论（TL;DR）</h3>
+  <ol>
+    <li><b>"外部 Agent 接入"其实有四种不同语义</b>，混谈是绝大多数讨论失焦的根因：接外部<b>工具</b>（MCP）、接外部<b>Agent</b>（委派 / subagent provider）、<b>被</b>外部接入（自身作为 server / SDK）、接外部<b>宿主</b>（IDE / ACP）。四家各自站在不同层，不能简单比"谁更强"。</li>
+    <li><b>接入位置决定一切。</b>Pi 把外部 Agent <b>伪装成一个"模型"</b>（provider 层），最轻最巧；DSH 把它做成<b>一等的能力缝</b>（subagent 层），最重最完备；Codex 走<b>双向 MCP</b>（既是 client 又是 server）；Claude Code 走 <b>SDK + hooks + subagents</b>，把自己变成可编程组件。</li>
+    <li><b>Pi 的洞察是"原语而非功能"。</b>六个刻意不内建的能力（MCP / 子代理 / 权限弹窗 / Plan mode / 内置 Todo / 后台 bash）全部给出替代路径。其中最值得拿走的一条原则是：<b>被拿掉的多半是"把状态藏在工具内部"的功能——状态应该落在你看得见、能版控、换工具也还在的文件里。</b>这不只是省 token，而是决定出事时你能不能自己查。</li>
+    <li><b>Pi 对外接与对内接用了两套机制。</b>对外：provider bridge 把外部 Agent 注册成一个 provider（伪装成模型）；对内：委派<b>不进内核</b>，由第三方包 <code>pi-subagents</code> 用 Extension 实现，公开接口刻意只有「一个工具 + 一个命令」。<b>Pi 把"要不要有子代理"重新定义成可安装、可替换、可自己写的问题。</b></li>
+    <li><b>最值得借鉴的接入契约是 DSH 的 <code>ctx.subagents</code>。</b>它不是"能不能调 Claude Code"这种功能点，而是一套可复用的<b>委派契约</b>：命名注册表 + 静态能力描述符 + <span class="pill red">fail loud</span> 的能力协商 + 显式的上下文继承语义 + 一次性/可继续双生命周期 + 分级停止阶梯。</li>
+    <li><b>两条被验证过的"反直觉"设计</b>：① 依赖策略——DSH 不查 <code>PATH</code>、provider 自带依赖（版本确定性 &gt; 顺从用户环境），Pi 则用精确 pin + <code>min-release-age=2</code> + shrinkwrap 把供应链风险压到可审计白名单；② 权限策略——DSH 认证原生透传、只覆盖<b>一个</b>旋钮（<code>permissionMode</code>），且高风险 provider <b>默认 <code>disabled: true</code> 且不进 shipped bundle</b>；Pi 则明确承认 packages 以完整系统权限运行、没有沙箱。两种回答都指向同一句话：<b>能力越开放，默认值越不能友好。</b></li>
+    <li><b>Pi 与 DSH 的本质差异是"继续运行的权力放在哪里"</b>：Pi 把它集中在<b>当前循环 + 三个宿主回调</b>（steering / follow-up / shouldStopAfterTurn）；DSH 把它分散给<b>模型 finish、工具结果、inbox、生命周期 hook、外围持久状态机</b>并用只追加日志协调。<b>复杂度没有消失，只是落在不同层。</b>（详见第 4 章）</li>
+    <li><b>一个真实的缺口案例</b>：AgentRQ 插件暴露出 DSH <b>不透传 MCP server 的 Instructions</b>，导致模型"有工具但没有契约"，只能由插件自己在 system-prompt 里补。这提醒我们：<b>能力接入 ≠ 契约接入</b>，软约束的传递路径必须被显式设计。</li>
+    <li><b>对本项目（dongbi-agent-harness / AgentLoop v2）的适用性</b>：DSH 的 subagent seam 是当前公开材料中<b>最接近"生产级外部 Agent 接入规范"</b>的样本；Pi 的会话树、状态外置、供应链清单与双层循环三个回调则是<b>成本最低、最容易先落地</b>的借鉴对象。建议按"注册表 → 能力协商 → 生命周期/取消 → 权限与默认开关"四步走（见第 7 章）。</li>
+  </ol>
+</div>
+
+<section>
+  <h2><span class="num">0</span>研究范围与方法</h2>
+  <p>
+    本报告回答一个问题：<b>当一个 Agent 运行时需要"接入另一个 Agent"时，工程上应该怎么设计？</b>
+    这里的"接入"包括两个方向——往外接（把外部 Agent 当作我的子能力）和往外被接（让我自己能被别的系统当子能力用）。
+  </p>
+  <p>选取四个样本的理由：</p>
+  <div class="grid c2">
+    <div class="card dsh">
+      <h4>Pi Agent <span class="tag">重点对象</span></h4>
+      <p>极简内核（4 个工具、约 300 词 system prompt、一棵会话树），主张 <b>Primitives, Not Features</b>。
+      对外用 <b>provider bridge</b> 把外部 Agent 接成"模型"，对内把委派做成<b>可选第三方包</b>。是"最少代码表达最多设计判断"的样本。</p>
+    </div>
+    <div class="card dsh">
+      <h4>DeepSeek Harness <span class="tag">重点对象</span></h4>
+      <p>MIT 开源、Node.js、开发者预览。以 Cordis"一切皆插件"为底座，把外部 Agent 做成一等 <b>能力缝（capability seam）</b>。当前公开材料中最系统的委派权限设计。</p>
+    </div>
+    <div class="card accent">
+      <h4>OpenAI Codex <span class="tag">协议双向</span></h4>
+      <p>唯一同时提供<b>成熟 MCP client + 官方 MCP server 模式</b>的产品。<code>codex mcp-server</code> 暴露 <code>codex</code> / <code>codex-reply</code> 两个工具，用 <code>threadId</code> 跨进程续会话。</p>
+    </div>
+    <div class="card accent">
+      <h4>Claude Code <span class="tag">可编程组件</span></h4>
+      <p>Agent SDK（Python/TS）把整个 Harness 变成可嵌入库：<code>query()</code> + hooks + subagents + MCP + Skills，并原生支持 ACP，是"被接入"最成熟的样本。</p>
+    </div>
+  </div>
+  <div class="callout">
+    <span class="lbl">方法说明与证据边界</span>
+    研究方法为公开资料桌面研究：官方文档与 npm/GitHub 包说明、第三方技术长文与源码结构分析、社区插件 README。
+    <b>未能运行代码验证</b>：DSH 仍处 Developer Preview（<code>dsh-v0.1.1-rc.1</code> / <code>0.1.0-rc.x</code>），官方明确警告会有破坏性变更；Pi 迭代同样快（<code>pi-subagents</code> 数周内从 0.28 走到 0.67）。
+    部分细节（如子代理 provider 的确切调用签名）在公开材料中未固定，报告中已逐处标注不确定性。所有来源 URL 与访问日期见附录。
+  </div>
+</section>
+
+<section>
+  <h2><span class="num">1</span>坐标系：先把"接入"这个词拆开</h2>
+  <p>
+    讨论"Pi / DSH / Codex / Claude 的接入方案"时，最常见的错误是把四种完全不同的东西放进同一张表比较。
+    先把语义分层，后面的对比才有意义。
+  </p>
+
+  <figure>
+    <svg viewBox="0 0 1000 470" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="外部 Agent 接入的四层语义模型">
+      <defs>
+        <marker id="ar" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto">
+          <path d="M0,0 L7,3 L0,6 z" fill="#79828c"/>
+        </marker>
+        <marker id="arR" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto">
+          <path d="M0,0 L7,3 L0,6 z" fill="#c0392b"/>
+        </marker>
+      </defs>
+
+      <!-- L3 -->
+      <rect x="20" y="18" width="960" height="88" rx="10" fill="#ffffff" stroke="#d0d5dc" stroke-width="1.4"/>
+      <rect x="20" y="18" width="7" height="88" rx="3" fill="#79828c"/>
+      <text x="44" y="46" font-family="-apple-system,PingFang SC" font-size="15" font-weight="700" fill="#1a1d21">L3　宿主层　Host / IDE</text>
+      <text x="44" y="70" font-family="-apple-system,PingFang SC" font-size="13" fill="#4a5158">"谁在驱动这个 Agent"：IDE 插件、编辑器内置面板、CI 流水线、上层 Harness</text>
+      <text x="44" y="91" font-family="-apple-system,PingFang SC" font-size="12.5" fill="#2f6fed">协议：ACP（Zed 主导，agent↔editor）　·　样本：Pi 的 RPC 入口、Claude Code 的 ACP 支持</text>
+
+      <!-- L2 -->
+      <rect x="20" y="120" width="960" height="92" rx="10" fill="#fffbfa" stroke="#e8b5ad" stroke-width="1.6"/>
+      <rect x="20" y="120" width="7" height="92" rx="3" fill="#c0392b"/>
+      <text x="44" y="148" font-family="-apple-system,PingFang SC" font-size="15" font-weight="700" fill="#c0392b">L2　Agent 委派层　Agent → Agent　★ 本报告重点</text>
+      <text x="44" y="172" font-family="-apple-system,PingFang SC" font-size="13" fill="#4a5158">"我能不能把任务交给另一个 Agent 干，并拿回结果"：subagent provider、delegation、handoff</text>
+      <text x="44" y="194" font-family="-apple-system,PingFang SC" font-size="12.5" fill="#c0392b">样本：DSH 的 ctx.subagents 六 provider　·　Pi 的 provider bridge　·　codex-as-mcp</text>
+
+      <!-- L1 -->
+      <rect x="20" y="226" width="960" height="88" rx="10" fill="#ffffff" stroke="#d0d5dc" stroke-width="1.4"/>
+      <rect x="20" y="226" width="7" height="88" rx="3" fill="#2f6fed"/>
+      <text x="44" y="254" font-family="-apple-system,PingFang SC" font-size="15" font-weight="700" fill="#1a1d21">L1　工具 / 上下文层　Agent → Tool / Data</text>
+      <text x="44" y="278" font-family="-apple-system,PingFang SC" font-size="13" fill="#4a5158">"我能不能用外部能力"：MCP 工具发现、Skill 说明书、AGENTS.md / CLAUDE.md 上下文注入</text>
+      <text x="44" y="299" font-family="-apple-system,PingFang SC" font-size="12.5" fill="#2f6fed">协议：MCP（stdio + Streamable HTTP）　·　四家全部支持</text>
+
+      <!-- L0 -->
+      <rect x="20" y="328" width="960" height="80" rx="10" fill="#ffffff" stroke="#d0d5dc" stroke-width="1.4"/>
+      <rect x="20" y="328" width="7" height="80" rx="3" fill="#12805c"/>
+      <text x="44" y="356" font-family="-apple-system,PingFang SC" font-size="15" font-weight="700" fill="#1a1d21">L0　模型适配层　Agent → Model</text>
+      <text x="44" y="380" font-family="-apple-system,PingFang SC" font-size="13" fill="#4a5158">"这个 Agent 用哪个大脑"：provider adapter、OpenAI/Anthropic 兼容端点、自定义网关</text>
+      <text x="44" y="399" font-family="-apple-system,PingFang SC" font-size="12.5" fill="#12805c">四家全部开放　·　DSH 目录覆盖 Anthropic / OpenAI / Bedrock / Azure / Gemini / 自建兼容网关</text>
+
+      <!-- side labels -->
+      <text x="888" y="52" font-family="-apple-system" font-size="11.5" font-weight="700" fill="#79828c">被接入 ↗</text>
+      <text x="888" y="368" font-family="-apple-system" font-size="11.5" font-weight="700" fill="#79828c">往外接 ↘</text>
+
+      <!-- connector arrow -->
+      <line x1="14" y1="418" x2="14" y2="34" stroke="#c0392b" stroke-width="2" marker-end="url(#arR)" opacity="0.5"/>
+      <text x="0" y="238" font-family="-apple-system" font-size="11.5" fill="#79828c" transform="rotate(-90 8,238)">抽象层级升高</text>
+    </svg>
+    <figcaption>图 1　外部 Agent 接入的四层语义模型。越往上，被接对象越"重"（从一段工具描述 → 一个完整 Agent 进程）。</figcaption>
+  </figure>
+
+  <h3>四个关键判断</h3>
+  <ul>
+    <li><b>Pi 站在 L0/L1 之间，但两个方向都占。</b>对外，它不接"外部 Agent"，它接"外部 Agent 的模型"——把外部 CLI 用 <code>registerProvider</code> 注册成 provider，让外部 Agent 在 Pi 里表现为一个可选模型。这是<b>抽象层级上最取巧的一招</b>：拿到了外部 Agent 的能力，却不用实现委派协议。对内，它把"委派"整体让给第三方 Extension 包（<code>pi-subagents</code>），内核不表态。而在 L3，它的 <b>RPC / SDK 两个入口</b>又使它自己成为最容易被别人接入的一方。<b>Pi 的策略是：在每一层都只提供最小可用接口，把选择权交出去。</b></li>
+    <li><b>DSH 站在 L2，而且是唯一把 L2 做成"可替换能力缝"的。</b>它的 <code>ctx.subagents</code> 与 <code>ctx.llm</code>、<code>ctx.tools</code>、<code>ctx.sandbox</code> 是同一级别的服务。"把任务交给 Claude Code"和"换一个沙箱后端"在架构上是同一件事。</li>
+    <li><b>Codex 的特殊性在于"双向"。</b>它既是 L1 的消费者（MCP client），又是 L2 的提供者（<code>codex mcp-server</code>）。它是被 DSH 当作 <code>subagent-codex</code> 接入的对象——因为它提供了稳定的 app-server 协议。</li>
+    <li><b>Claude Code 的重心在"被接入"。</b>Agent SDK 让任何系统都能把它 <code>query()</code> 起来；ACP 支持让它能塞进任何编辑器。<b>它的接入方案本质是"把自己做成标准零件"</b>，而不是"去接别人"。</li>
+  </ul>
+</section>
+
+<section>
+  <h2><span class="num">2</span>协议底座：MCP / ACP / A2A 的分工</h2>
+  <p>
+    四家的接入设计都建立在这三个协议之上。它们不是竞争关系，而是<b>纵向互补的三层</b>——这一点在 2026 年已被广泛接受，
+    但工程落地时仍经常被混用。
+  </p>
+
+  <table class="tbl-tight">
+    <thead>
+      <tr><th>协议</th><th>连接什么</th><th>主导方</th><th>传输</th><th>2026-09 状态</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><b>MCP</b><br>Model Context Protocol</td>
+        <td>Agent ↔ 工具 / 数据（纵向）</td>
+        <td>Anthropic（现由 Linux Foundation AAIF 托管）</td>
+        <td>JSON-RPC 2.0 over <b>stdio</b> + <b>Streamable HTTP</b></td>
+        <td><span class="pill green">事实标准</span> 2026-05 已索引 10,000+ 公共 server</td>
+      </tr>
+      <tr>
+        <td><b>ACP</b><br>Agent Client Protocol</td>
+        <td>编辑器 / IDE ↔ 编码 Agent（斜向）</td>
+        <td>Zed Industries（JetBrains 联合开发）</td>
+        <td>JSON-RPC 2.0 over stdio（HTTP/WebSocket 远程仍在推进）</td>
+        <td><span class="pill green">v1 稳定</span> <span class="pill amber">v2 为 draft</span> 37+ agent、50+ 注册表条目</td>
+      </tr>
+      <tr>
+        <td><b>A2A</b><br>Agent-to-Agent</td>
+        <td>Agent ↔ Agent（横向，跨组织）</td>
+        <td>Google（Linux Foundation AAIF）</td>
+        <td>HTTP + SSE，Agent Cards 描述能力</td>
+        <td><span class="pill grey">在跟踪</span> Codex 侧仍是 open feature request，尚未成为编码 Agent 的默认路径</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="callout blue">
+    <span class="lbl">必须注意：ACP ≠ IBM BeeAI 的 "Agent Communication Protocol"</span>
+    两者都缩写为 ACP，但完全无关。IBM BeeAI 的 ACP 是 agent↔agent 消息协议；Zed 的 ACP 是 editor↔agent。
+    公开报道经常把两者混淆——读资料时务必用<b>主导方</b>而不是缩写来消歧。
+  </div>
+
+  <h3>2.1 ACP v2 的一个信号：能力在"重新分层"</h3>
+  <p>
+    ACP v2（2026-07-20 发布为 draft，artifact <code>schema-v2.0.0-alpha.3</code>）做了一件很值得琢磨的事：
+    <b>彻底移除了 client 侧的 filesystem 与 terminal 表面</b>——<code>clientCapabilities.fs</code>、<code>clientCapabilities.terminal</code>、
+    <code>fs/read_text_file</code>、<code>fs/write_text_file</code> 以及全部 5 个 <code>terminal/*</code> 方法都被删除。
+    官方给出的理由是：<b>采用率低，且 Agent 更倾向于使用自己的沙箱</b>；如果 client 仍想提供这些能力，<b>应该改为向 Agent 暴露一个 MCP server</b>。
+  </p>
+  <p>
+    这个决定背后的判断是：<b>"Agent 该在谁的沙箱里跑"这个问题的答案变了</b>。v1 假设宿主提供执行环境，v2 假设 Agent 自带执行环境。
+    这正是 Pi 那套桥接扩展（auto-allow 宿主 fs/terminal）会面临的边界问题，也是 DSH 选择"自带依赖、原生认证、只覆盖 permissionMode"的同源逻辑。
+  </p>
+
+  <figure>
+    <svg viewBox="0 0 1000 300" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="MCP ACP A2A 三层分工与能力归属变化">
+      <defs>
+        <marker id="a2" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto">
+          <path d="M0,0 L7,3 L0,6 z" fill="#4a5158"/>
+        </marker>
+      </defs>
+
+      <!-- left: v1 -->
+      <text x="30" y="28" font-family="-apple-system,PingFang SC" font-size="13.5" font-weight="700" fill="#4a5158">ACP v1（稳定）：宿主提供执行环境</text>
+      <rect x="30" y="42" width="210" height="54" rx="8" fill="#eaf1fe" stroke="#c3d8fa"/>
+      <text x="135" y="66" font-family="-apple-system,PingFang SC" font-size="13" font-weight="600" fill="#2f6fed" text-anchor="middle">Editor / IDE</text>
+      <text x="135" y="84" font-family="-apple-system,PingFang SC" font-size="11.5" fill="#4a5158" text-anchor="middle">fs + terminal 能力</text>
+
+      <line x1="135" y1="96" x2="135" y2="128" stroke="#4a5158" stroke-width="1.6" marker-end="url(#a2)"/>
+      <text x="145" y="117" font-family="-apple-system" font-size="11" fill="#79828c">ACP</text>
+
+      <rect x="30" y="130" width="210" height="54" rx="8" fill="#ffffff" stroke="#d0d5dc"/>
+      <text x="135" y="154" font-family="-apple-system,PingFang SC" font-size="13" font-weight="600" fill="#1a1d21" text-anchor="middle">Coding Agent</text>
+      <text x="135" y="172" font-family="-apple-system,PingFang SC" font-size="11.5" fill="#79828c" text-anchor="middle">用宿主的 fs / 终端</text>
+
+      <rect x="30" y="200" width="210" height="46" rx="8" fill="#f2f4f7" stroke="#e3e6ea" stroke-dasharray="4 3"/>
+      <text x="135" y="228" font-family="-apple-system,PingFang SC" font-size="12" fill="#79828c" text-anchor="middle">MCP：agent ↔ tool</text>
+
+      <!-- arrow -->
+      <text x="278" y="150" font-family="-apple-system" font-size="26" fill="#c0392b">→</text>
+
+      <!-- right: v2 -->
+      <text x="330" y="28" font-family="-apple-system,PingFang SC" font-size="13.5" font-weight="700" fill="#c0392b">ACP v2（draft）：Agent 自带执行环境</text>
+      <rect x="330" y="42" width="210" height="54" rx="8" fill="#f2f4f7" stroke="#e3e6ea"/>
+      <text x="435" y="66" font-family="-apple-system,PingFang SC" font-size="13" font-weight="600" fill="#79828c" text-anchor="middle">Editor / IDE</text>
+      <text x="435" y="84" font-family="-apple-system,PingFang SC" font-size="11.5" fill="#c0392b" text-anchor="middle">fs / terminal 表面被删除</text>
+
+      <line x1="435" y1="96" x2="435" y2="128" stroke="#4a5158" stroke-width="1.6" marker-end="url(#a2)"/>
+      <text x="445" y="117" font-family="-apple-system" font-size="11" fill="#79828c">ACP（收窄）</text>
+
+      <rect x="330" y="130" width="210" height="54" rx="8" fill="#fffbfa" stroke="#e8b5ad"/>
+      <text x="435" y="154" font-family="-apple-system,PingFang SC" font-size="13" font-weight="600" fill="#c0392b" text-anchor="middle">Coding Agent</text>
+      <text x="435" y="172" font-family="-apple-system,PingFang SC" font-size="11.5" fill="#4a5158" text-anchor="middle">自带沙箱与执行世界</text>
+
+      <rect x="330" y="200" width="210" height="46" rx="8" fill="#e6f5ef" stroke="#c9e9dd"/>
+      <text x="435" y="220" font-family="-apple-system,PingFang SC" font-size="12" font-weight="600" fill="#12805c" text-anchor="middle">client 想提供能力？</text>
+      <text x="435" y="237" font-family="-apple-system,PingFang SC" font-size="11.5" fill="#12805c" text-anchor="middle">改为向 Agent 暴露 MCP server</text>
+
+      <!-- right note -->
+      <rect x="600" y="60" width="370" height="180" rx="10" fill="#ffffff" stroke="#e3e6ea"/>
+      <text x="622" y="88" font-family="-apple-system,PingFang SC" font-size="13.5" font-weight="700" fill="#1a1d21">这次调整告诉我们什么</text>
+      <text x="622" y="114" font-family="-apple-system,PingFang SC" font-size="12.5" fill="#4a5158">1　"能力该挂在谁身上"是设计变量，不是常量</text>
+      <text x="622" y="136" font-family="-apple-system,PingFang SC" font-size="12.5" fill="#4a5158">2　协议层要允许"能力收敛"——v2 主动缩小自己的</text>
+      <text x="622" y="154" font-family="-apple-system,PingFang SC" font-size="12.5" fill="#4a5158">　　职责范围，是成熟而非退步</text>
+      <text x="622" y="178" font-family="-apple-system,PingFang SC" font-size="12.5" fill="#4a5158">3　v1 保持不变，v2 需版本协商 + feature flag 并行</text>
+      <text x="622" y="196" font-family="-apple-system,PingFang SC" font-size="12.5" fill="#4a5158">　　支持——"新旧并列"是协议演进的正确姿势</text>
+      <text x="622" y="222" font-family="-apple-system,PingFang SC" font-size="12.5" fill="#c0392b">4　删除的能力有了明确去处：下沉为 MCP server</text>
+    </svg>
+    <figcaption>图 2　ACP 从 v1 到 v2 的能力归属变化：宿主让位，Agent 自带执行世界，被删掉的能力改由 MCP 承接。</figcaption>
+  </figure>
+</section>
+
+<section>
+  <h2><span class="num">3</span>四家方案逐一拆解</h2>
+  <p>
+    本章逐一拆解四家在"接入"这件事上的具体设计。其中 <b>3.1 Pi Agent</b> 与 <b>3.2 DeepSeek Harness</b> 是本报告的两个重点对象——
+    它们恰好代表了两个极端：前者用最少的内核表达最多的设计判断，后者用最完备的契约把"接外部 Agent"变成可替换的一等能力。
+    两者的正面对撞放在第 4 章。
+  </p>
+</section>
+
+<hr class="sep">
+
+<section>
+  <h2><span class="num">3.1</span>Pi Agent：极简内核 + "原语而非功能" <span class="pill red">重点</span></h2>
+  <p>
+    Pi（<code>@earendil-works/pi-coding-agent</code>，MIT）是四个样本中唯一的<b>减法派</b>。
+    GitHub 95.9k stars / 11.9k forks（2026-08-23 数据），但它的官方介绍读起来像一份"功能缺失清单"：
+    <b>没有 MCP、没有子智能体、没有 Plan Mode、没有内置 Todo、没有权限弹窗、没有后台 bash</b>。
+  </p>
+  <p>
+    它的设计主张一句话就能说完：<b>Primitives, Not Features（提供原语，而非功能）</b>——
+    "与其内建所有功能然后让你关掉不要的，不如给你原语自己组"。
+    内核只有三块：<b>四个工具（<code>read</code> / <code>write</code> / <code>edit</code> / <code>bash</code>）、一条循环、一棵会话树</b>；
+    system prompt 控制在<b>约 300 词</b>（对比商业 Agent 动辄数千词、数十个预置工具）。
+  </p>
+  <div class="callout blue">
+    <span class="lbl">为什么"极短 system prompt"是一个工程决策，而不是审美</span>
+    它同时买到三件事：① prompt cache 命中率最高；② 每轮 token 消耗最低；
+    ③ <b>省下的上下文预算留给真正的 context engineering</b>——决定什么进 context window、怎么管理它。
+    Pi 为此提供的抓手是：<code>AGENTS.md</code>（启动时从 <code>~/.pi/agent/</code>、父目录、当前目录加载）、
+    <code>SYSTEM.md</code>（按项目替换或追加默认 system prompt）、自动压缩、可扩展的 compaction 实现、按需加载的 Skills。
+    <b>Pi 的第一个可迁移结论是：把"固定占位"压到最小，把"可管理"放到最大。</b>
+  </div>
+
+  <h4>3.1.1　设计主张：六项"刻意不做"与官方给出的替代路径</h4>
+  <p>Pi 把"不做什么"列得比"做什么"更清楚，每一项都附上替代方案。这张表本身就是它的设计宣言：</p>
+  <table class="tbl-tight">
+    <thead><tr><th style="width:16%">刻意不内建</th><th style="width:34%">官方理由</th><th>替代路径</th></tr></thead>
+    <tbody>
+      <tr><td><b>MCP</b></td><td>工具描述会长久占用上下文，而多数任务用不到</td><td>把工具写成<b>带 README 的 CLI</b>（走 Skills 让模型读 README 后用 bash 调用）；或装 <code>pi-mcp-adapter</code></td></tr>
+      <tr><td><b>子代理</b></td><td>编排方式在不同团队差异极大，不该由工具强绑一种</td><td>用 <b>tmux</b> 开多个 pi instance；或装 <code>pi-subagents</code>；或自己写 extension</td></tr>
+      <tr><td><b>权限弹窗</b></td><td>不假设你要哪一种安全模型</td><td>放进<b>容器</b>隔离；或写一个符合自己环境的确认流程 extension</td></tr>
+      <tr><td><b>Plan mode</b></td><td>不强迫所有人采用同一套规划仪式</td><td>把计划写成 <code>plan.md</code>；或用 prompt template / extension</td></tr>
+      <tr><td><b>内置 Todo</b></td><td>状态放在对话里容易让模型混淆</td><td>用 <code>TODO.md</code>——跨 session 依然还在</td></tr>
+      <tr><td><b>后台 bash</b></td><td>后台任务不易观察</td><td>用 <b>tmux</b>：看得见，也能直接介入</td></tr>
+    </tbody>
+  </table>
+  <div class="callout red">
+    <span class="lbl">这张表里藏着最值得从 Pi 拿走的一条原则</span>
+    被拿掉的功能有一个共同特征：<b>它们都是"把状态藏在工具内部"的功能</b>——
+    plan mode 的状态、todo 的状态、子代理的内部脉络，全都在工具里。
+    Pi 的主张是：<b>状态应该落在你看得见、能版控、换工具也还在的文件里。</b>
+    这不只是省 token，而是决定了出事时<b>你能不能自己查</b>。
+    <br><br>
+    把它与 Everything Claude Code（214k stars，打包数百个现成命令与 agent）对照最清楚：
+    <b>Pi 从空开始让你填，ECC 从满开始让你删</b>——对同一个问题的两种相反回答，没有绝对优劣，但选错会很难受。
+  </div>
+
+  <h4>3.1.2　分层架构与四个运行模式：四种"被接入"的方式</h4>
+  <p>Pi 由四层包组成，上层依赖下层；你平时敲的 <code>pi</code> 命令只是最上层的入口：</p>
+  <table class="tbl-tight">
+    <thead><tr><th style="width:26%">层</th><th>职责</th></tr></thead>
+    <tbody>
+      <tr><td><b>AI 抽象层</b><br><code>pi-ai</code></td><td>多 provider 统一流式 API、模型注册表、凭证解析、跨 provider 上下文归一化</td></tr>
+      <tr><td><b>Agent 核心层</b><br><code>pi-agent-core</code></td><td>有状态的 <code>Agent</code> 类与 <code>agentLoop</code>，管理 turn 生命周期（模型调用 + 工具执行），发出 <code>AgentEvent</code> 流；<code>AgentHarness</code> 提供持久编排层</td></tr>
+      <tr><td><b>编码 Agent 层</b><br><code>pi-coding-agent</code></td><td><code>AgentSession</code> 高层协调器：持久会话、会话树分支、内建工具、事件订阅、模型管理</td></tr>
+      <tr><td><b>接口层</b><br><code>pi-tui</code> / RPC / Print</td><td>TUI 用差分渲染；RPC 模式用 JSON-RPC 2.0 over stdin/stdout 支持无头嵌入</td></tr>
+    </tbody>
+  </table>
+
+  <p>四个运行模式，本质上是<b>同一内核的四张脸</b>，也决定了它能被谁接、怎么接：</p>
+  <table class="tbl-tight">
+    <thead><tr><th style="width:16%">模式</th><th style="width:34%">入口</th><th>适用 / 接入含义</th></tr></thead>
+    <tbody>
+      <tr><td><b>Interactive</b></td><td>TUI 直接对话</td><td>完整产品形态；头部显示已加载的 AGENTS.md、模板、Skills、extensions，底部状态栏显示 cwd / 会话名 / token（↑入 ↓出 R缓存读 W缓存写 CH命中率）/ 成本 / 模型</td></tr>
+      <tr><td><b>Print</b></td><td><code>pi -p "query"</code></td><td>跑一次即返回，供脚本与 CI；<b>还会把管道 stdin 合并进初始 prompt</b>（<code>cat README.md | pi -p "总结这段"</code>）</td></tr>
+      <tr><td><b>JSON</b></td><td><code>pi --mode json</code></td><td>把每个会话事件输出为 JSONL：首行是 session header，之后是 <code>agent_start</code> / <code>turn_start</code> / <code>message_start</code> / <code>tool_execution_start</code> 等生命周期事件与流式增量。适合脚本化消费与可观测性</td></tr>
+      <tr><td><b>RPC</b></td><td><code>pi --mode rpc</code></td><td>stdin/stdout 上的 JSONL 协议，<b>为"非 Node 进程"集成而设计</b>——这是它作为构件被别的 Harness 长期驱动的主通道</td></tr>
+      <tr><td><b>SDK</b></td><td><code>createAgentSession()</code> + <code>ModelRuntime</code> + <code>SessionManager</code></td><td>把 Pi 嵌进自己的应用（<code>SessionManager.inMemory()</code> 可做纯内存会话）；官方点名 OpenClaw 是真实世界集成案例</td></tr>
+    </tbody>
+  </table>
+  <p>
+    Pi 官网把这条路讲得很直白：<b>"如果你需要命令、工具、provider、workflow 或 UI 调整，直接让 Pi 去建"</b>——
+    改完 <code>/reload</code> 继续用。它还提供一个极其朴素的组合接口：
+    <b>给模型一份 README，再让它通过 bash 运行本机程序</b>。
+    演示里面向上层 Waku Agent 拉起 Pi，本质上就是这么做的：外层 Harness 负责记忆、网关、评测和循环工程，Pi 只负责它最擅长的 Coding 任务。
+  </p>
+  <div class="callout">
+    <span class="lbl">一个容易忽略的信任边界设计</span>
+    项目级资源（<code>AGENTS.md</code> 等）在<b>非交互模式</b>（<code>-p</code>、<code>--mode json</code>、<code>--mode rpc</code>）下<b>默认被忽略</b>——
+    不弹提示、直接不用，需要时用 <code>--approve</code> 单次放行；交互模式下用 <code>/trust</code> 手动记录决定。
+    这是"无人值守默认保守"的一个干净实现：<b>自动化场景不继承仓库里可能被投毒的指令文件。</b>
+  </div>
+
+  <h4>3.1.3　会话是一棵树，不是一条聊天记录</h4>
+  <ul>
+    <li><b>存储形式</b>：会话自动保存到 <code>~/.pi/agent/sessions/</code>，按工作目录分组；每个会话是一个 <b>JSONL 文件</b>，每条记录带 <code>id</code> 与 <code>parentId</code>，因此天然构成<b>分支树</b>——所有分支在同一个文件里，不需要多个文件。</li>
+    <li><b>导航</b>：<code>/tree</code> 跳转到任意历史节点并从那里继续（当前位置是 active leaf）；<code>/fork</code> 从历史用户消息开出一个<b>新会话文件</b>；<code>/clone</code> 把当前活跃分支复制成新会话。</li>
+    <li><b>分支摘要</b>：当 <code>/tree</code> 从一个分支切到另一个分支时，Pi 可以<b>把被放弃的分支总结后附加到新位置</b>，从而保留重要上下文而不重放整条分支。可选：不总结 / 用默认提示总结 / 用自定义关注点总结。</li>
+    <li><b>其他能力</b>：<code>/compact [prompt]</code> 压缩、<code>/export</code> 导出 HTML、<code>/share</code> 上传为私有 GitHub gist 并生成可渲染的分享链接；过滤模式 default / no-tools / user-only / labeled-only / all，<span class="kbd">Shift+L</span> 给条目打书签。</li>
+    <li><b>会话文件里装什么</b>：消息条目、模型变更、思考等级变更、标签、压缩记录、分支摘要，以及扩展写入的条目。</li>
+  </ul>
+  <div class="quote">
+    Pi 最值得带走的一句设计判断：<b>"历史不是负担，而是可以重新进入的工作树。"</b>
+    对 Coding 尤其自然——一次尝试失败，不必抹掉全部历史，回到分岔点保留旧路径、再试另一种实现。
+    它更像一种面向 Agent 会话的<b>轻量版本控制</b>，而不是只能不断向下滚动的聊天窗口。
+  </div>
+
+  <h4>3.1.4　扩展体系：五级杠杆，以及一条必须说清的安全事实</h4>
+  <table class="tbl-tight">
+    <thead><tr><th style="width:18%">杠杆</th><th style="width:30%">形态</th><th>能力边界</th></tr></thead>
+    <tbody>
+      <tr><td><b>Extension</b></td><td>TypeScript 模块</td><td>注册工具（或<b>完全替换内建工具</b>）、slash 命令、键盘快捷键、事件处理器（<code>pi.on("tool_call", ...)</code>）、以及整个 TUI 组件。<b>社区已经用它做出来</b>：子代理、plan mode、权限门禁、路径保护、自定义编辑器、状态栏 / 头部 / 底部 / overlay、Git checkpoint 与自动提交、SSH 与沙箱化执行、MCP 集成——甚至有人实现了 DOOM 用来等任务时玩</td></tr>
+      <tr><td><b>Skill</b></td><td>Markdown 能力包（遵循 Agent Skills 标准）</td><td>按需加载的"程序性记忆"：告诉模型面对某类任务该遵循什么步骤、读什么资料、用什么标准检查结果。<b>重点是渐进式披露不破坏 prompt cache</b>。可用 <code>/skill:name</code> 手动调用，或由模型依 description 自动选择</td></tr>
+      <tr><td><b>Prompt template</b></td><td>Markdown 模板文件</td><td>可复用提示词，编辑器里输入 <code>/name</code> 自动展开，支持 <code>{{focus}}</code> 这类占位</td></tr>
+      <tr><td><b>Theme</b></td><td>TUI 主题</td><td>纯展示层</td></tr>
+      <tr><td><b>Pi Package</b></td><td>把上面四者打包</td><td><code>pi install npm:@foo/pi-tools</code> / <code>pi install git:github.com/user/repo@v1</code>（可锁定版本）；<code>pi list</code> / <code>pi update --all</code> / <code>pi config</code> 管理。加 <code>-l</code> 装到项目层（写进 <code>.pi/settings.json</code>，可随 repo 共享给团队）</td></tr>
+    </tbody>
+  </table>
+  <p>
+    需要注意 Extension API 的<b>形态</b>：它同时提供 <code>registerProvider</code>、<code>registerTool</code>、<code>registerCommand</code>、
+    <code>on()</code>、快捷键与 UI 组件——也就是说，<b>扩展点和内核处在同一个抽象层级</b>。
+    这就是为什么"让 Pi 帮你写一个扩展"是一条真实可行的路径，而不是宣传话术。
+  </p>
+  <div class="callout red">
+    <span class="lbl">安全事实（官方口径，必须转述）</span>
+    <b>Pi packages 以完整系统权限运行</b>——Extension 会执行任意代码，Skill 也能指示模型执行任意指令。
+    它和 VS Code 插件不同，<b>没有沙箱</b>。
+    官方文档原话是"安装前认真看一眼来源"，而社区整理者的补充更直接：<b>"热门"不等于"审核过"。</b>
+    这是在接入设计里必须写进文档的一句话：<b>能力越开放，默认值越不能友好。</b>
+  </div>
+
+  <h4>3.1.5　对内接：委派是"可选包"，不是内核能力</h4>
+  <p>
+    这是 Pi 与 DSH 最鲜明的对照点，也是理解两者哲学差异的最佳切口：
+  </p>
+  <table class="tbl-tight">
+    <thead><tr><th style="width:22%"></th><th style="width:39%">Pi</th><th>DeepSeek Harness</th></tr></thead>
+    <tbody>
+      <tr><td><b>子代理的归属</b></td><td>内核<b>明确不做</b>；由社区包 <code>pi-subagents</code>（周下载约 75K）用 Extension 实现</td><td>内核 seam：<code>ctx.subagents</code>，六个官方 provider 一等公民</td></tr>
+      <tr><td><b>公开接口面</b></td><td>刻意很小：<b>一个工具 <code>subagent</code> + 一个命令 <code>/subagents</code></b></td><td>一组服务 + 一组工具（<code>subagent</code> / <code>subagent-control</code>）+ 控制工具（<code>send_message</code> / <code>interrupt_agent</code> / <code>list_agents</code>）</td></tr>
+      <tr><td><b>默认行为</b></td><td>安装后<b>不会</b>自动启动后台 reviewer；只是给了 Pi 一个委派工具。想让每次都审查，就写进 prompt 或项目指令</td><td>外部 provider 默认 <code>disabled: true</code>，装进 profile 并重启前不启动任何进程</td></tr>
+    </tbody>
+  </table>
+
+  <p><code>pi-subagents</code> 的工程细节里有几处直接可抄的设计：</p>
+  <ul>
+    <li><b>内建角色分工</b>（用自然语言即可调用，不必先学配置）：<code>scout</code> 快速代码侦察（相关文件、入口、数据流、风险、下个 agent 该从哪儿开始）／<code>researcher</code> 带来源的文档调研／<code>evidence-auditor</code> <b>独立核验研究结论是否真的被来源支持</b>／<code>planner</code> 只读规划／<code>worker</code> 实现（会验证，遇到未批准的决策<b>升级而不是猜</b>）／<code>reviewer</code> 审查／<code>oracle</code> 行动前第二意见（挑战假设、<b>不改代码</b>）／<code>delegate</code> 轻量通用。
+    官方经验法则：<b>理解代码前用 scout，信外部事实前用 researcher，大改动前用 planner，实现用 worker，检查用 reviewer，决策本身有风险时用 oracle。</b></li>
+    <li><b>统一的后台执行机制</b>：<b>没有另一套前台执行实现</b>——默认的同步调用也是启动 detached runner、等这一次 run、返回完整结果。前台 run 在对话里流式显示，后台 run 在独立进程里继续跑、可稍后查看。</li>
+    <li><b>等待是工具的一个 action，不是新工具</b>：<code>subagent({ action: "wait" })</code>；语义上有讲究——无 id 快照当前会话的活动 run，默认在<b>第一个完成或需要注意</b>时返回；<code>all: true</code> 等全部；<code>id</code> 精确匹配或唯一前缀；无活动匹配立即返回；<b>没有编排超时</b>；取消父级 turn 只停等待、不停 detached runner。
+    官方明确反对反模式：<b>"不要写 sleep 循环或反复轮询状态来等待。"</b></li>
+    <li><b>三层独立的有界性</b>：<code>maxSubagentSpawnsPerRun</code> 限制一棵 run tree 的<b>累计逻辑子代</b>（默认 64），它与"活跃并发上限"和"session 级累计 spawn 预算"是三个<b>彼此独立</b>的维度。这种"把不同的限制拆成不同的旋钮、而不是合成一个数字"的做法值得照搬。</li>
+    <li><b>可观测性内建</b>：TUI 编辑器下方有常驻 <code>FleetView</code>；<code>/subagents-fleet</code> 打开实时检查器，可浏览子代、读 transcript、<b>steer 运行中的子代</b>、停止 run；<code>/subagents-doctor</code> 自检配置是否正确。</li>
+    <li><b>并行隔离</b>：<code>worktree</code> 字段可把并行任务放进 git worktree 隔离；<code>context: "fresh" | "fork"</code> 显式选择子代是否继承父级上下文——<b>注意这与 DSH 的 <code>inheritsParentContext</code> 是同一个问题的两种命名</b>。</li>
+  </ul>
+  <div class="callout green">
+    <span class="lbl">Pi 在这件事上的真正洞察</span>
+    Pi 把"要不要有子代理"从<b>内核必须回答的问题</b>，重新定义成<b>一个可以安装、可以替换、可以自己写的问题</b>。
+    代价必须一起说清：编排语义（多个扩展共同 follow-up 时怎么合并、进程恢复后回调里的临时状态怎么重建、预算与 Goal 由谁持有）会落在<b>宿主和包作者</b>身上。
+    如果不同扩展分别定义 Goal、Plan 和审批流程，<b>结束语义会逐渐碎片化</b>。
+    这不是缺陷陈述，而是选型判据：<b>Pi 适合"单次 invocation 生命周期清晰、宿主已有自己的持久化层"的场景。</b>
+  </div>
+  <p>
+    另外还有一条更轻的路线可以顺带记住：社区还有 <code>pi-mcp-adapter</code>（读 <code>.mcp.json</code> 把 MCP server 接进 Pi，支持惰性连接与工具元数据缓存）、
+    <code>pi-web-access</code>（网页访问，供 researcher 子代理使用），以及用 NATS 把 Pi 与 Claude Code 连起来互发消息的 <code>bridge-harness</code>。
+    <b>Pi 的"没有 MCP"从来不是"不能有 MCP"，而是"不由内核替你决定"。</b>
+  </p>
+
+  <h4>3.1.6　对外接：provider bridge —— 把外部 Agent 伪装成"一个模型"</h4>
+  <p>
+    社区（如 <code>pi-omniagent-extensions</code>）给出的方案非常统一：写一个 <b>provider bridge 扩展</b>，
+    让外部 Agent（Cursor / Codex / Claude Code / Rovo Dev）的模型出现在 Pi 的 <code>/model</code> 选择器里。
+    选中后，Pi 把对话路由给外部 Agent，流式取回回复，渲染成一条正常的 assistant 消息。
+  </p>
+
+  <table class="tbl-tight">
+    <thead><tr><th>扩展</th><th>桥接对象</th><th>底层命令</th><th>传输</th><th>协议</th></tr></thead>
+    <tbody>
+      <tr><td><code>cursor-acp.ts</code></td><td>Cursor Agent</td><td><code>cursor-agent acp</code></td><td>stdio (NDJSON)</td><td>ACP（手写 JSON-RPC）</td></tr>
+      <tr><td><code>codex-app-server.ts</code></td><td>OpenAI Codex</td><td><code>codex app-server</code></td><td>stdio (NDJSON)</td><td>Codex app-server JSON-RPC</td></tr>
+      <tr><td><code>claude-code-acp.ts</code></td><td>Claude Code</td><td><code>@agentclientprotocol/claude-agent-acp</code></td><td>stdio (NDJSON)</td><td>ACP（官方 SDK）</td></tr>
+      <tr><td><code>rovo-acp.ts</code></td><td>Atlassian Rovo Dev</td><td><code>rovo acp</code></td><td>stdio (NDJSON)</td><td>ACP（手写 JSON-RPC）</td></tr>
+    </tbody>
+  </table>
+
+  <p>四个扩展结构完全一致，理解一个就理解全部。核心构件：</p>
+  <ul>
+    <li><code>registerProvider(PROVIDER, {...})</code>：注册一个 Pi provider，其 <code>models</code> 数组让外部模型可被选择；<code>streamSimple</code> 回调是 Pi 启动一轮 turn 的入口。</li>
+    <li><b>JSON-RPC 客户端</b>（<code>AcpProcess</code> / <code>CodexAppServer</code>）：spawn 外部 CLI 为子进程，通过 stdin/stdout 走换行分隔 JSON，处理请求/响应关联、通知、以及<b>服务端发起的请求</b>。</li>
+    <li><b>Bridge 单例</b>：持有一个长期存活的外部会话/线程，绑定到当前 Pi 会话 + 工作目录，用 <code>runExclusive()</code>（promise 链）串行化 turn，保证两次 prompt 不重叠。</li>
+    <li><code>stream*Provider</code>：把外部 Agent 的流式事件翻译成 Pi 的 assistant-message 事件流（<code>start</code> → <code>text_start/text_delta/thinking_*</code> → <code>text_end</code> → <code>done</code>）。</li>
+  </ul>
+
+  <div class="callout blue">
+    <span class="lbl">关键细节：桥是双向的</span>
+    扩展是外部 Agent 的<b>客户端</b>，同时外部 Agent 又是 Pi 的<b>客户端</b>。当 Agent 想读文件、写文件、跑终端命令、申请权限时，
+    它会向扩展发一条 JSON-RPC 请求，由扩展用 Node 的 <code>fs</code> 和 <code>child_process</code> 代为完成。
+    这就是"选中这个模型后，外部 Agent 能真的在你仓库里干活"的原因。
+    ACP 扩展处理的回调包括 <code>fs/read_text_file</code>、<code>fs/write_text_file</code>、<code>session/request_permission</code>
+    以及完整的终端生命周期（<code>terminal/create</code>、<code>output</code>、<code>wait_for_exit</code>、<code>kill</code>、<code>release</code>）。
+    <b>注意：权限默认自动放行</b>（<code>*_AUTO_ALLOW != "false"</code>，Codex 亦自动接受审批），即 Agent 可无提示地修改工作区。
+  </div>
+
+  <h4>3.1.7　上下文桥接：bootstrap + 增量 + 压缩重置</h4>
+  <p>外部 Agent 有自己的会话历史，扩展只能发"新的东西"。这套记账逻辑值得借鉴：</p>
+  <ul>
+    <li><b>首轮 → <code>bootstrapPrompt</code></b>：Pi 的 system prompt + 一条"bridge note"（告知 Agent 它正被 Pi 驱动）+ 把完整对话渲染成文本。</li>
+    <li><b>后续轮 → <code>incrementalPrompt</code></b>：只发上次之后的消息增量。</li>
+    <li><b><code>sentMessageCount</code></b>：记录有多少 Pi 消息已转发，避免重复。</li>
+    <li><b>压缩事件 <code>session_compact</code></b>：外部会话重置，下一轮重新 bootstrap 全量上下文。</li>
+  </ul>
+
+  <h4>3.1.8　Agent Loop 的结束语义：双层循环 + 三个回调</h4>
+  <p>
+    Pi 的 <code>runLoop()</code> 使用内外两层循环，与 DSH 的五层边界（模型请求 / step / turn / driver activity / 长期工作流）形成清晰对照：
+  </p>
+  <ul>
+    <li><b>内层条件</b>：<code>hasMoreToolCalls || pendingMessages.length &gt; 0</code> —— 处理<b>工具回访</b>与 <b>steering</b>。</li>
+    <li><b>外层</b>：内层耗尽后调用 <code>getFollowUpMessages()</code>；有 follow-up 就设为 pending 重新进入内层，没有则发出 <code>agent_end</code>。</li>
+    <li><b>一次内层迭代</b>：<code>prepareNextTurn</code> → 处理 pending steering → 调用模型 → 执行工具 → 发出 <code>turn_end</code> → <code>shouldStopAfterTurn</code> → 拉取新的 steering。</li>
+  </ul>
+  <p>Pi 只暴露<b>三个高杠杆控制点</b>，其余交给宿主：</p>
+  <table class="tbl-tight">
+    <thead><tr><th style="width:30%">回调</th><th>职责</th><th>与 DSH 的对应</th></tr></thead>
+    <tbody>
+      <tr><td><code>getSteeringMessages()</code></td><td>当前 activity 内的即时干预（Enter 发送的 steering 会在<b>当前工具执行完后</b>投递，并中断剩余工具）</td><td>DSH 的 <code>next-step</code> inbox</td></tr>
+      <tr><td><code>getFollowUpMessages()</code></td><td>Agent <b>自然收口之后</b>的补充工作（<span class="kbd">Alt+Enter</span> 发送的 follow-up 会等 Agent 停下才投递）</td><td>DSH 的 <code>next-turn</code> inbox + Goal Driver</td></tr>
+      <tr><td><code>shouldStopAfterTurn()</code></td><td>宿主级截停点</td><td>DSH 的 <code>agent/turn-stopping</code> hook + Plan/审批层</td></tr>
+    </tbody>
+  </table>
+  <p>几处值得对照的实现选择：</p>
+  <ul>
+    <li><b>超长输出的恢复哲学不同</b>：<code>stopReason === "length"</code> 且消息含工具调用时，Pi 会给<b>所有</b>工具生成错误结果（说明参数可能被截断、<b>没有实际执行</b>）并交回模型，让它在下一 turn 重发完整调用；
+    DSH 则整轮以 <code>max-tokens</code> 收口（且该 reason 具有<b>粘性</b>），把"是否继续"交给外部策略。
+    前者倾向在当前 invocation 内自我修复，后者保留清晰的 durable turn reason。<b>有写操作的 Agent 更适合后者</b>——达到输出上限本身意味着模型状态不完整，自动延续可能重复前一批操作。</li>
+    <li><b>工具收口是 AND 聚合</b>：<code>finalizedCalls.length &gt; 0 &amp;&amp; finalizedCalls.every(r =&gt; r.result.terminate === true)</code>。
+    只有非空批次中<b>每个</b> finalized result 都带 <code>terminate: true</code>，整批才终止。
+    对比 DSH 的 <code>concludesTurn</code> 是 <b>OR 聚合</b>（任一权威工具即可宣布收口，再用 <code>next-step</code> 上下文缓和其侵略性）。
+    <b>选 OR 还是 AND，取决于 terminate 的业务含义</b>：若它表示"任一工具发现全局终止条件"，OR 合理；若表示"当前工具不需要模型处理自己的结果"，AND 更稳妥。</li>
+    <li><b>并行执行、顺序提交</b>：Pi 的并行工具用 <code>Promise.all</code> 保留输入数组顺序，最终 tool result message 按原调用顺序发出；DSH 的调度器维护 <code>nextToStart</code> / <code>committed</code> / <code>slots</code> 做 <code>commitReady()</code>。
+    <b>两套系统都接受并行执行带来的延迟收益，同时拒绝让完成时序污染模型上下文。</b></li>
+    <li><b>原因体系的粒度不同</b>：Pi 主要保留 assistant message 的 <code>stopReason</code>（<code>stop</code> / <code>length</code> / <code>toolUse</code> / <code>error</code> / <code>aborted</code>），更接近"最后一次模型调用的结束事实"，利于分析<b>模型行为</b>；
+    DSH 的 <code>TurnEndReason</code> 六态（<code>completed</code> / <code>blocked</code> / <code>max-tokens</code> / <code>aborted</code> / <code>error</code> / <code>interrupted</code>）聚合了多 step turn 的结果，利于分析<b>任务执行</b>。生产系统通常两类数据都需要。</li>
+  </ul>
+  <div class="quote">
+    Pi 在这件事上的自我定位很清楚：<b>它提供一个"小而可组合的运行时"，没有承诺统一的长期任务协议。</b>
+    复杂度被交给宿主——多个扩展共同提供 follow-up 时需要上层决定合并方式；进程恢复后回调内部的临时状态如何重建，也由应用实现。
+  </div>
+
+  <h4>3.1.9　供应链安全：一个被严重低估的工程样本</h4>
+  <p>
+    Pi 在"极简"之外还做了一件很少被提及、但极其可复制的事：<b>把依赖供应链安全做成了一份清单</b>。
+    对任何要"安装第三方 Agent 包"的系统，这套措施可以直接照搬：
+  </p>
+  <table class="tbl-tight">
+    <thead><tr><th style="width:26%">措施</th><th>具体做法</th></tr></thead>
+    <tbody>
+      <tr><td><b>精确版本锁定</b></td><td>所有直接外部依赖 pin 到精确版本（<code>save-exact=true</code>）；只有内部 workspace 包使用 range 版本</td></tr>
+      <tr><td><b>最小发布年龄</b></td><td><code>.npmrc</code> 设 <code>min-release-age=2</code>，<b>避开当天发布的依赖</b>——这是防投毒（typosquatting / 账号接管后快速发版）最便宜的一招</td></tr>
+      <tr><td><b>lockfile 作为唯一事实源</b></td><td>pre-commit hook <b>阻止</b>意外改动 <code>package-lock.json</code>（需要 <code>PI_ALLOW_LOCKFILE_CHANGE=1</code> 才能显式覆盖）</td></tr>
+      <tr><td><b>Shrinkwrap</b></td><td>发布的 CLI 包带 <code>npm-shrinkwrap.json</code>，为 npm 用户<b>锁死传递依赖</b></td></tr>
+      <tr><td><b>CI 审计</b></td><td>定期执行 <code>npm audit --omit=dev</code> 与 <code>npm audit signatures --omit=dev</code>（后者校验包签名）</td></tr>
+      <tr><td><b>生命周期脚本白名单</b></td><td>对 install script 使用显式 allowlist；官方安装命令本身也带 <code>--ignore-scripts</code>，并说明正常安装并不需要 install 脚本</td></tr>
+    </tbody>
+  </table>
+  <div class="callout green">
+    <span class="lbl">为什么这段和"外部 Agent 接入"直接相关</span>
+    因为<b>接入外部 Agent 本质上就是引入一条不可信代码执行链</b>。
+    当我们的 Harness 允许"装一个包就多一种外部 Agent 能力"时，Pi 这套清单就是我们需要的默认护栏。
+    DSH 用另一种方式回答同一个问题：<b>不自带依赖就是不引入风险</b>——它把 provider 需要的 SDK 直接打进包里，
+    并在 workspace 层为这些平台二进制单独开放供应链例外，等于<b>把风险集中到可审计的白名单上</b>。
+    两条路都成立，但都必须显式设计。
+  </div>
+
+  <h4>3.1.10　Pi 的边界与代价</h4>
+  <div class="callout red">
+    <span class="lbl">必须一起看的四点代价</span>
+    ① <b>开箱能力弱于 Claude Code / DSH</b>：装好就用的完整体验是有代价的，Pi 需要你花时间配置才达到理想状态；
+    ② <b>能力被"扁平化"（在对接外部 Agent 时）</b>：外部 Agent 在 Pi 眼中只是一个"模型"，Pi 无法约束它的工具、深度、人设；
+    ③ <b>安全边界被转移</b>：无沙箱、无权限弹窗、packages 全权限、桥接扩展默认 auto-allow，<b>"没有权限弹窗"不等于更安全</b>；
+    ④ <b>上下文重放成本</b>：每次 bootstrap 都把全量对话塞进一个可能更贵的模型。
+    <br><br>
+    Pi 的哲学是<b>"不替你隐藏边界"</b>——极简不是没有边界，而是不替你隐藏边界。代价是这些边界必须由你自己画。
+    用官方的话收尾：<b>Adapt Pi to your workflows, not the other way around.</b>
+  </div>
+</section>
+
+<hr class="sep">
+
+<section>
+  <h2><span class="num">3.2</span>DeepSeek Harness：把外部 Agent 做成一等能力缝 <span class="pill red">重点</span></h2>
+
+  <p>
+    DSH（<code>@deepseek-ai/dsh</code>，<code>npx @deepseek-ai/dsh web</code> 一条命令启动）于 2026-08-13 以 MIT 协议开源，属 Developer Preview。
+    它的自我定位不是"DeepSeek 版 Claude Code"，而是一套<b>关于 Harness 应该如何组织的答案</b>。
+    规模上：<b>226 个 npm 包、23.6 万行源码、21.7 万行测试、215 篇文档、1372 篇决策记录、52 件工具</b>；
+    对外仓库只保留一个压缩后的 commit，内部 PR 编号已到 2519。这种"高成本组织方式"本身就是一个信号：
+    DeepSeek 希望<b>模型适配器、工具、存储、沙箱、Agent Loop 甚至 UI 都能独立替换</b>。
+  </p>
+
+  <h3>3.2.1　底座：Cordis 与"一切皆插件"</h3>
+  <p>
+    DSH 的底座是 Cordis（由 Koishi 机器人框架作者 Shigma 开发，被 DSH 以 vendor 方式引入）。
+    它的核心主张是"<b>没有特权内核可打补丁</b>"——一个运行中的 dsh 实例，就是<b>一棵从配置组合出来的插件树</b>。
+  </p>
+
+  <h4>五条必须记住的原则</h4>
+  <table class="tbl-tight">
+    <thead><tr><th>原则</th><th>含义</th><th>对"接外部 Agent"的意义</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><b>插件即服务</b></td>
+        <td>插件可以是带 <code>apply(ctx)</code> 的函数、对象，或 <code>Service</code> 子类</td>
+        <td>接一个新后端 = 挂一个插件，不 fork 主仓</td>
+      </tr>
+      <tr>
+        <td><b>上下文是服务容器</b></td>
+        <td>服务占据稳定的 <code>ctx.&lt;key&gt;</code>（<code>ctx.tools</code> / <code>ctx.llm</code> / <code>ctx.sessions</code> / <code>ctx.subagents</code>）</td>
+        <td>插件靠 <b>key 查找</b>而非 import 具体实现 —— 依赖倒置</td>
+      </tr>
+      <tr>
+        <td><b>用 inject 声明依赖</b></td>
+        <td><code>export const inject = ['tools']</code>；loader 等依赖就绪再执行，加载顺序由依赖图决定</td>
+        <td>不需要手工编排启动序列；上游消失自动卸载、恢复自动重载</td>
+      </tr>
+      <tr>
+        <td><b>类型化事件通信</b></td>
+        <td>5 种分发模式：<code>emit</code> / <code>waterfall</code> / <code>parallel</code> / <code>serial</code> / <code>bail</code></td>
+        <td>拦截、改写、短路都有明确语义，不用"约定俗成"</td>
+      </tr>
+      <tr>
+        <td><b>注册即可逆副作用</b></td>
+        <td>工具 schema、prompt 段、适配器、监听器全部通过 <code>ctx.effect()</code> / <code>ctx.on()</code> 安装，卸载时自动逆序回滚</td>
+        <td>热插拔不会"旧工具还挂着、监听器越叠越多"</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="callout">
+    <span class="lbl">为什么"可逆副作用"是敢开放 UI/Loop/存储的前提</span>
+    如果注册不可逆，那么"允许第三方替换 Agent Loop"就等于允许内存泄漏和行为漂移。
+    Cordis 用<b>类型系统 + effect 回滚</b>把"插件可以被拔掉"变成一条可验证的性质，
+    这才撑得起"连 agent loop 都能换"的承诺。这是 DSH 整套可扩展性设计的地基，也是最容易被低估的一点。
+  </div>
+
+  <h4>组装层：一个 dsh 进程是怎么拼出来的</h4>
+  <p>DSH 启动时不加载一份巨大的固定配置，而是按顺序叠加若干层（<b>后层覆盖前层</b>）：</p>
+  <pre><code>1. Bundle 列表（按 dsh.profile.bundles 声明顺序加载，先放 dsh-base）
+2. Profile（web / headless / tui）—— 决定产品入口
+3. Profile 自己的 cordis.patch.yml
+4. 用户目录级 $DSH_HOME/cordis.patch.yml
+5. 本次命令行传入的 --patch（按 argv 顺序）
+
+# 查看本机实际组合出的插件树
+dsh --profile web --dump-config</code></pre>
+
+  <h4>能力缝（Capability Seam）：替换的真正单位</h4>
+  <p>
+    DSH 里"可替换的单位"不是工具，而是 <b>seam</b>。一条能力被拆成三个角色，
+    官方态度很硬：<b>"单独一个角色不构成缝；增加一种能力意味着三个角色都要设计。"</b>
+  </p>
+  <table class="tbl-tight">
+    <thead><tr><th>角色</th><th>职责</th><th>落盘场景的例子</th></tr></thead>
+    <tbody>
+      <tr><td><b>Service Definition</b></td><td>定义接口与共同词汇，<b>不含实现</b></td><td><code>dsh-spill</code> 定义存储契约</td></tr>
+      <tr><td><b>Service Provider</b></td><td>提供某一种具体后端</td><td><code>dsh-spill-local</code> 把内容写到本地文件</td></tr>
+      <tr><td><b>Consumer</b></td><td>把能力交给模型，通常表现为工具或策略</td><td><code>dsh-spill-policy</code> 判断哪些工具结果需要转存</td></tr>
+    </tbody>
+  </table>
+  <p>
+    这样拆包是为了控制<b>发布边界</b>：第三方想替换存储后端，只需依赖定义包，不必把整棵插件树带进项目。
+    压缩、沙箱、子 Agent、代码运行时、Skill 全部沿用同一套切法。
+  </p>
+  <div class="callout green">
+    <span class="lbl">共享执行世界：seam 相比"独立工具"的实际收益</span>
+    filesystem 与 subprocess 这类 provider 可以共享<b>同一个执行世界</b>。把 sandbox provider 切到远程环境时，
+    Bash、PTY、LSP 会<b>一起迁移</b>，而不需要分别 fork 出 Remote Bash、Remote PTY、Remote LSP。
+    本地演示时这个差异可以忽略；一旦要接远程沙箱、容器或集群，它立刻变成决定性优势。
+  </div>
+</section>
+
+<section>
+  <h3>3.2.2　核心：<code>ctx.subagents</code> —— 接外部 Agent 的能力缝 <span class="pill red">重点中的重点</span></h3>
+
+  <p>
+    DSH 接外部 Agent 的机制全部收敛在一个服务上：<code>ctx.subagents</code>。
+    它是一个<b>按名称注册的注册表（named-provider registry）</b>，与 <code>ctx.llm</code>、<code>ctx.tools</code> 同级。
+    官方文档里藏着最关键的一句设计判断：
+  </p>
+  <div class="quote">
+    "多数能力缝同一时刻只有一个活跃实现（例如 ShellExecutor 通常由一个 provider 支撑）。<b>Subagents 不同：<code>ctx.subagents</code> 明确是一个注册表</b>，
+    可以同时注册多个 provider，由调用方按任务选择委派给哪一个。"
+  </div>
+  <p>
+    这就是 DSH 与其他三家最本质的区别：<b>它不认为"选哪个外部 Agent"是配置项，而是认为它是一次调用级别的决策。</b>
+  </p>
+
+  <h4>六个官方 provider</h4>
+  <table class="tbl-tight">
+    <thead><tr><th>Provider 包</th><th>子进程形态</th><th>父上下文继承</th><th>本地可选控制</th><th>续接</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><code>subagent-spawn-in-process</code></td>
+        <td>同进程新建 agent 会话</td>
+        <td><span class="pill grey">否</span>（仅继承 cwd 与模型，不继承对话）</td>
+        <td>schema / depth / toolFilter / persona</td>
+        <td><span class="pill green">provider 支持</span></td>
+      </tr>
+      <tr>
+        <td><code>subagent-fork-in-process</code></td>
+        <td>同进程 fork</td>
+        <td><span class="pill green">是</span>（仅注入父级"平衡的已完成轮次前缀"）</td>
+        <td>同上四项</td>
+        <td>已实现，但 shipped 工具保持一次性</td>
+      </tr>
+      <tr>
+        <td><code>subagent-dsh-sdk</code></td>
+        <td>独立 dsh runtime，stdio JSON-RPC</td>
+        <td><span class="pill grey">否</span>（子 <code>cordis.yml</code> 自持策略）</td>
+        <td><span class="pill red">不支持</span></td>
+        <td>一次性</td>
+      </tr>
+      <tr>
+        <td><code>subagent-acp</code></td>
+        <td>外部 ACP server 子进程</td>
+        <td>否；不支持的请求<b>报错而非降级</b></td>
+        <td><span class="pill red">不支持</span></td>
+        <td>一次性（ACP cancel 后 EOF/SIGTERM/SIGKILL）</td>
+      </tr>
+      <tr>
+        <td><code>subagent-codex</code></td>
+        <td>包内自带 Codex 进程（app-server --stdio）</td>
+        <td>否；临时 thread、单轮</td>
+        <td>否；仅原生 Profile permission mode</td>
+        <td>一次性（中断 turn 后 join 进程树，<b>无回滚</b>）</td>
+      </tr>
+      <tr>
+        <td><code>subagent-claude-code</code></td>
+        <td>Agent SDK query + CLI 进程</td>
+        <td>否；<code>inheritsParentContext: false</code></td>
+        <td>否；仅原生 <code>permissionMode</code></td>
+        <td>一次性（Abort query + 终止进程树，<b>无回滚</b>）</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <figure>
+    <svg viewBox="0 0 1000 430" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="DSH ctx.subagents 委派链路与能力协商">
+      <defs>
+        <marker id="a3" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto">
+          <path d="M0,0 L7,3 L0,6 z" fill="#4a5158"/>
+        </marker>
+        <marker id="a3r" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto">
+          <path d="M0,0 L7,3 L0,6 z" fill="#c0392b"/>
+        </marker>
+      </defs>
+
+      <!-- model side -->
+      <rect x="24" y="30" width="190" height="70" rx="9" fill="#ffffff" stroke="#d0d5dc"/>
+      <text x="119" y="56" font-family="-apple-system,PingFang SC" font-size="13" font-weight="700" fill="#1a1d21" text-anchor="middle">模型</text>
+      <text x="119" y="78" font-family="-apple-system,PingFang SC" font-size="11.5" fill="#4a5158" text-anchor="middle">subagent({ task, preset })</text>
+
+      <line x1="214" y1="65" x2="262" y2="65" stroke="#4a5158" stroke-width="1.6" marker-end="url(#a3)"/>
+      <text x="238" y="56" font-family="-apple-system" font-size="10.5" fill="#79828c" text-anchor="middle">tool call</text>
+
+      <!-- consumer -->
+      <rect x="264" y="30" width="200" height="70" rx="9" fill="#eaf1fe" stroke="#c3d8fa"/>
+      <text x="364" y="54" font-family="-apple-system,PingFang SC" font-size="12.5" font-weight="700" fill="#2f6fed" text-anchor="middle">Consumer</text>
+      <text x="364" y="74" font-family="-apple-system" font-size="11.5" fill="#4a5158" text-anchor="middle">dsh-tool-subagent</text>
+      <text x="364" y="90" font-family="-apple-system" font-size="11.5" fill="#4a5158" text-anchor="middle">dsh-tool-subagent-control</text>
+
+      <line x1="464" y1="65" x2="514" y2="65" stroke="#4a5158" stroke-width="1.6" marker-end="url(#a3)"/>
+
+      <!-- registry -->
+      <rect x="516" y="24" width="230" height="82" rx="9" fill="#fffbfa" stroke="#e8b5ad" stroke-width="1.8"/>
+      <text x="631" y="50" font-family="-apple-system,PingFang SC" font-size="13.5" font-weight="700" fill="#c0392b" text-anchor="middle">ctx.subagents</text>
+      <text x="631" y="70" font-family="-apple-system,PingFang SC" font-size="11.5" fill="#4a5158" text-anchor="middle">命名 provider 注册表</text>
+      <text x="631" y="90" font-family="-apple-system,PingFang SC" font-size="11.5" fill="#4a5158" text-anchor="middle">静态能力描述符</text>
+
+      <!-- six providers -->
+      <g font-family="-apple-system,PingFang SC" font-size="11.5">
+        <rect x="516" y="132" width="230" height="30" rx="6" fill="#f2f4f7" stroke="#e3e6ea"/>
+        <text x="631" y="152" fill="#4a5158" text-anchor="middle">spawn / fork（同进程）</text>
+
+        <rect x="516" y="170" width="230" height="30" rx="6" fill="#f2f4f7" stroke="#e3e6ea"/>
+        <text x="631" y="190" fill="#4a5158" text-anchor="middle">dsh-sdk（对等 Harness）</text>
+
+        <rect x="516" y="208" width="230" height="30" rx="6" fill="#fdecea" stroke="#f6d5d0"/>
+        <text x="631" y="228" fill="#c0392b" text-anchor="middle">acp（任意 ACP agent）</text>
+
+        <rect x="516" y="246" width="230" height="30" rx="6" fill="#fdecea" stroke="#f6d5d0"/>
+        <text x="631" y="266" fill="#c0392b" text-anchor="middle">codex（app-server 协议）</text>
+
+        <rect x="516" y="284" width="230" height="30" rx="6" fill="#fdecea" stroke="#f6d5d0"/>
+        <text x="631" y="304" fill="#c0392b" text-anchor="middle">claude-code（Agent SDK）</text>
+      </g>
+
+      <!-- capability negotiation box -->
+      <rect x="784" y="24" width="192" height="290" rx="9" fill="#ffffff" stroke="#d0d5dc"/>
+      <text x="880" y="50" font-family="-apple-system,PingFang SC" font-size="12.5" font-weight="700" fill="#1a1d21" text-anchor="middle">能力协商</text>
+      <line x1="800" y1="60" x2="960" y2="60" stroke="#e3e6ea"/>
+      <g font-family="-apple-system,PingFang SC" font-size="11.5" fill="#4a5158">
+        <text x="800" y="82">agentOptions</text>
+        <text x="800" y="104">outputSchema</text>
+        <text x="800" y="126">depthLimit</text>
+        <text x="800" y="148">toolFilter</text>
+        <text x="800" y="170">persona</text>
+      </g>
+      <line x1="800" y1="184" x2="960" y2="184" stroke="#e3e6ea"/>
+      <text x="800" y="206" font-family="-apple-system,PingFang SC" font-size="11.5" fill="#4a5158">请求不具备的能力 →</text>
+      <rect x="800" y="216" width="160" height="42" rx="6" fill="#fdecea" stroke="#f6d5d0"/>
+      <text x="880" y="234" font-family="-apple-system" font-size="11" font-weight="700" fill="#c0392b" text-anchor="middle">SubagentError</text>
+      <text x="880" y="250" font-family="-apple-system" font-size="10.5" font-weight="700" fill="#c0392b" text-anchor="middle">UNSUPPORTED_CAPABILITY</text>
+      <text x="800" y="280" font-family="-apple-system,PingFang SC" font-size="11" fill="#12805c">✓ 报错，不静默降级</text>
+
+      <!-- error arrow -->
+      <line x1="746" y1="65" x2="784" y2="65" stroke="#c0392b" stroke-width="1.4" stroke-dasharray="4 3" marker-end="url(#a3r)"/>
+
+      <!-- bottom note -->
+      <rect x="24" y="348" width="952" height="60" rx="9" fill="#f2f4f7" stroke="#e3e6ea"/>
+      <text x="46" y="372" font-family="-apple-system,PingFang SC" font-size="12.5" fill="#4a5158">
+        默认 <tspan font-weight="700" fill="#c0392b">disabled: true</tspan>（不进 shipped bundle）　·　自带依赖、<tspan font-weight="700">不查 PATH</tspan>　·　认证原生透传、只覆盖 permissionMode　·　委派血缘 parentSession / delegationDepth 独立追踪
+      </text>
+      <text x="46" y="394" font-family="-apple-system,PingFang SC" font-size="12.5" fill="#79828c">
+        停止阶梯（协作式）：ACP cancel → EOF 宽限 → SIGTERM → SIGKILL；Codex / Claude Code 为中断 turn 后 join 进程树，<tspan font-weight="700" fill="#c0392b">不提供回滚</tspan>
+      </text>
+    </svg>
+    <figcaption>图 3　DSH 的委派链路：模型 → Consumer 工具 → ctx.subagents 注册表 → 具体 provider → 外部 Agent 进程。能力协商在启动传输前完成，不满足即拒绝。</figcaption>
+  </figure>
+
+  <h4>① 静态能力描述符：五个 flag 定义"这个 provider 能做什么"</h4>
+  <pre><code>interface SubagentCapabilities {
+  readonly agentOptions: boolean   // 能否强制外部 agent 的模型选项
+  readonly outputSchema: boolean   // 能否返回结构化输出（而非自由文本）
+  readonly depthLimit: boolean     // 能否限制子 agent 继续委派的层数
+  readonly toolFilter: boolean     // 能否限定子 agent 可见的工具面
+  readonly persona: boolean        // 能否覆盖子 agent 的 system persona
+}</code></pre>
+  <p>
+    能力发现是<b>静态</b>的——在 provider 启动前就已确定，而不是运行时试探。
+    这带来一个高频"困惑点"，也是 DSH 设计上最值得抄的一处：<b>同样一个 <code>agentOptions</code> 参数，行为完全不同</b>——
+    进程内 provider 会把它"合并到父 Agent 选项之上"，而 ACP / Codex / Claude Code 三家会<b>在启动传输前直接拒绝</b>。
+    官方解释是：<b>"你无法把模型选项强加到别人的产品上。"</b>
+  </p>
+  <div class="callout red">
+    <span class="lbl">这是设计，不是 bug</span>
+    <code>UNSUPPORTED_CAPABILITY</code> 的行为选择是"<b>报错，而不是静默近似</b>"。
+    官方措辞是：那些 provider"拒绝本地可选控制，而不是悄悄做个近似"。
+    对上层自动化来说，这个选择意味着：<b>你不能假设 <code>outputSchema</code> 全局可用</b>，
+    编写依赖结构化输出的编排逻辑时必须捕获异常分支。这比"看起来能用、结果格式悄悄变了"要安全得多。
+  </div>
+
+  <h4>② <code>inheritsParentContext</code>：一个字段解决一类系统性误解</h4>
+  <p>这是整套设计里我认为最精妙的一处语义契约。官方对它的定义刻意窄化：</p>
+  <div class="quote">
+    "<code>inheritsParentContext</code> <b>只意味着对话播种</b>。它不意味着子 agent 继承了父级的工具、权限决策或授权。"
+  </div>
+  <p>
+    同理，工具过滤也只是改变了子 agent 注册的工具面，<b>它不是"操作系统或外部账号边界已被包含"的证明</b>。
+    这两句话说清楚了多 Agent 系统里最容易被想当然的两件事：<b>上下文继承 ≠ 权限继承</b>，<b>工具过滤 ≠ 安全隔离</b>。
+  </p>
+  <p>各 provider 的实际语义：</p>
+  <ul>
+    <li><b>fork</b>：注入父级"平衡的已完成轮次前缀"作为对话种子。<b>但不能假设正在进行的父级 turn 被复制了。</b></li>
+    <li><b>spawn</b>：从零开始，只接收委派任务描述。</li>
+    <li><b>acp / codex / claude-code</b>：外部 provider 报告 <code>inheritsParentContext: false</code>，收到的是一个<b>独立文本任务 + 父会话工作目录，别无其他</b>。</li>
+  </ul>
+  <div class="callout">
+    <span class="lbl">直接推论：每次外部委派都是冷启动</span>
+    "任务文本必须自己携带子 agent 需要的一切"，而委派的成本 = <b>在更贵的模型上重建上下文的成本</b>。
+    这是把外部 Agent 当作子能力时最现实的约束，也是为什么"该不该委派给 Claude Code"本质上是一道<b>采购/经济学问题</b>而非纯技术问题。
+  </div>
+
+  <h4>③ 双生命周期：一次性 vs 可继续</h4>
+  <table class="tbl-tight">
+    <thead><tr><th></th><th>一次性（One-shot）</th><th>可继续（Continuable）</th></tr></thead>
+    <tbody>
+      <tr><td><b>生命周期</b></td><td>单轮跑完即返回结果，由调用方通过 <code>SubagentRun</code> 句柄持有</td><td>建立跨多轮的持久会话，由 <code>SubagentContinuationManager</code> 管理</td></tr>
+      <tr><td><b>适用</b></td><td>父级下一步立即依赖这个结果</td><td>子 agent 后续还需要 FIFO 补充指令</td></tr>
+      <tr><td><b>控制手段</b></td><td>—</td><td><code>send_message</code>（入队下一轮，<b>从不打断当前轮</b>）、<code>interrupt_agent</code>（仅停当前轮，保留排队消息，已发布的子代继续运行）</td></tr>
+      <tr><td><b>重要语义</b></td><td>四个可选能力（outputSchema / depthLimit / toolFilter / persona）必须由 provider 显式声明支持</td><td>"一个 listed as ready 的 storage-only 子 agent 是<b>可恢复</b>的，不是等着被收集的完成结果"</td></tr>
+    </tbody>
+  </table>
+
+  <h4>④ 停止阶梯与"无回滚"：把不可逆性写进文档</h4>
+  <p>每个 provider 的终止策略都是显式声明的一串降级动作：</p>
+  <ul>
+    <li><b>ACP</b>：ACP cancel → EOF 宽限 → SIGTERM → SIGKILL（协作式 teardown ladder）</li>
+    <li><b>Codex</b>：中断 turn，然后 join 进程树；<b>no rollback</b></li>
+    <li><b>Claude Code</b>：Abort query 并终止进程树；<b>no rollback</b></li>
+    <li><b>dsh-sdk</b>：协议 shutdown → EOF → 进程终止</li>
+  </ul>
+  <p>
+    把"没有回滚"这四个字明确写进能力矩阵，是非常成熟的做法。
+    外部 Agent 可能已经产生了不可逆副作用（改了文件、发了请求、产生了费用），
+    <b>此时"重试"的不是一次函数调用，而是整个副作用序列</b>——文档必须让调用方知道这一点。
+  </p>
+
+  <h4>⑤ 三条被验证过的"反直觉"设计</h4>
+  <table class="tbl-tight">
+    <thead><tr><th>设计</th><th>做法</th><th>为什么反直觉 / 为什么对</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><b>不查 PATH</b></td>
+        <td>各 provider 包自带依赖（<code>subagent-claude-code</code> 打包官方 Claude Agent SDK，<code>subagent-codex</code> 打包 <code>@openai/codex</code>），启动自带的平台 payload。<b>不检查 PATH、不做平台选择、不回退到宿主的 CLI。</b></td>
+        <td>直觉认为"用用户装好的更省事"，但那会引入<b>不可控的版本漂移</b>。装插件即装 CLI，用户只需要提供登录。<code>pnpm-workspace.yaml</code> 甚至为这两家 SDK 的平台二进制单独开了供应链策略例外。</td>
+      </tr>
+      <tr>
+        <td><b>认证原生透传</b></td>
+        <td>Claude Code 读取用户/项目/本地设置（相对于父会话工作目录），DSH <b>既不复制这些文件，也不创建登录状态</b>。它<b>只覆盖一个东西</b>：<code>permissionMode</code>。</td>
+        <td>"统一管理凭证"看起来更干净，但会让被委派 Agent 以"另一个身份"运行，破坏用户的心理模型。让委派 Agent 以<b>你本人、你的账号、你现有配置</b>运行，是最小惊讶原则。</td>
+      </tr>
+      <tr>
+        <td><b>默认关闭</b></td>
+        <td>两个外部产品 provider 都不在任何 shipped bundle 里，preset 工具行带 <code>disabled: true</code>，注释写着"Production dsh does not install these optional providers"。它们是<b>惰性 provider</b>：装进 profile 并重启前不启动任何进程。</td>
+        <td>可扩展性越强，默认值越要保守。<b>安全默认 &gt; 开箱可用</b>，尤其当能力是"以你的身份调用一个能改你文件的昂贵模型"时。</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h4>⑥ 权限旋钮：<code>permissionMode</code> 的五档</h4>
+  <table class="tbl-tight">
+    <thead><tr><th>模式</th><th>语义</th><th>适用</th></tr></thead>
+    <tbody>
+      <tr><td><code>dontAsk</code></td><td>拒绝一切未预先授权的操作（最严格）</td><td>无人值守、CI</td></tr>
+      <tr><td><code>acceptEdits</code></td><td>接受文件编辑</td><td>常规委派</td></tr>
+      <tr><td><code>auto</code></td><td>自动</td><td>—</td></tr>
+      <tr><td><code>bypassPermissions</code></td><td>设置 SDK 的危险确认标志，跳过权限检查</td><td>一次性容器</td></tr>
+      <tr><td><b><code>plan</code></b></td><td><b>让 Claude Code 跑原生规划模式：拒绝执行审批，把 <code>ExitPlanMode</code> 加入 SDK 的 disallowed tools（防止原生设置预先批准"跳回执行"），只把完成的 plan 作为答案返回。</b></td><td><b>"拿到昂贵模型的判断力，但不给它你的文件系统"</b></td></tr>
+    </tbody>
+  </table>
+  <p>
+    <code>plan</code> 这个模式是整套设计里最漂亮的一处：
+    <b>它用一次配置完成了一次"能力降维"——把一个全权 Agent 降级成一个只读顾问。</b>
+    注意它还堵住了"原生设置预先批准跳回执行"这条侧门，说明设计者认真想过 <b>配置优先级被绕过</b> 的攻击面。
+  </p>
+
+  <h4>⑦ 血缘与作用域正交</h4>
+  <p>
+    子 Agent 不继承父级的 agent-scope（隔离"哪个 agent 能看到哪些工具/提示/变量"的机制）。
+    <b>作用域隔离</b>与<b>委派血缘</b>是两个独立系统：血缘通过 <code>parentSession</code> 与 <code>delegationDepth</code> 字段单独追踪。
+    每个子 Agent 拿到的是"<b>新的扁平作用域，而非继承父级注册</b>"。
+  </p>
+  <p>
+    这个正交设计避免了"用作用域树兼职表示血缘"导致的两种错误：
+    要么血缘信息被作用域继承语义污染，要么为了保留血缘被迫继承不该继承的工具。
+  </p>
+
+  <h4>⑧ 三种委派形态的边界：Subagent / Job / Workflow</h4>
+  <p>
+    DSH 刻意不把三件事合并——这是"可靠多 Agent 系统不该塌缩"的三个关注点：
+  </p>
+  <ul>
+    <li><b>Subagent provider</b> → 创建并拥有一个子执行边界</li>
+    <li><b>Job registry</b> → 把一个后台运行暴露给它的所属父级（本地 Job 注册表默认<b>每个精确 owner 最多 10 个运行中 + 停止中的 Job</b>，超出直接拒绝；<b>不排队、不抢占</b>）</li>
+    <li><b>Workflow engine</b> → 协调大量有界子调用并返回<b>一个 JSON 值</b></li>
+  </ul>
+  <div class="callout red">
+    <span class="lbl">两条重要的安全澄清</span>
+    ① Workflow 的 worker <b>不是安全沙箱</b>；② Workflow 的运行<b>在进程重启后无法恢复</b>。
+    另外 <b>Ralph</b>（面向不可变目标的迭代循环）的每一轮都是<b>全新子会话</b>，既不继承父级也不继承任何前序子 agent 的对话，
+    跨越轮次的只有共享工作区 + 一份有界 handoff（status / summary / evidence / next steps / blockers）。
+    <b>上下文永不被污染，代价是记忆必须落在文件里。</b>
+  </div>
+</section>
+
+<section>
+  <h3>3.2.3　其他接入面：MCP / ACP / Hooks / 上下文文件</h3>
+  <table>
+    <thead><tr><th>接入面</th><th>机制</th><th>关键细节（可借鉴点）</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><b>MCP client</b><br><code>dsh-mcp-client</code></td>
+        <td>通过配置声明 servers，客户端发现后 <code>ctx.tools.register()</code>，工具名形如 <code>mcp__server__tool</code></td>
+        <td><b>连接监督器</b>：传输层关闭时指数退避自动重连（默认 10 次，500ms → 30s，约 2.5 分钟）；重连后<b>重新发现工具并原子替换</b>；连接稳定超过 <code>maxDelayMs</code> 后<b>重置重试预算</b>，因此偶发崩溃可以无限恢复。</td>
+      </tr>
+      <tr>
+        <td><b>ACP</b></td>
+        <td>既作为 client 侧支持，也通过 <code>subagent-acp</code> 把<b>任意 ACP 兼容 agent</b> 接入为子代理</td>
+        <td>这是 DSH 生态位最宽的一处：不需要为每个外部 Agent 写适配器，只要它讲 ACP。</td>
+      </tr>
+      <tr>
+        <td><b>Hooks 桥接</b><br><code>hooks-claude-code</code> / <code>hooks-codex</code></td>
+        <td>让外部产品<b>已有的 <code>hooks.json</code></b> 在 dsh 自己的拦截点上运行</td>
+        <td>官方定位很诚实：README 称这是"<b>兼容路径，而不是更好的设计</b>"。迁移成本近乎为零，但不应作为长期形态。</td>
+      </tr>
+      <tr>
+        <td><b>上下文文件</b></td>
+        <td>可读取 <code>AGENTS.md</code> 与 <code>CLAUDE.md</code></td>
+        <td>把"项目约定"做成<b>可打开、可阅读、可修改的明文文件</b>，而不是藏在产品内部的规则。Pi 也走同一条路（<code>AGENTS.md</code>）。</td>
+      </tr>
+      <tr>
+        <td><b>自我改写</b><br><code>packages/extensions</code></td>
+        <td>运行中的 Agent 可以检查自己的插件图，并挂载/卸载<b>模型自己写的</b>插件（7 个工具：<code>cordis_inspect_*</code> / <code>cordis_define</code> / <code>cordis_run</code> / <code>cordis_stop</code> / <code>cordis_undefine</code>）</td>
+        <td>实现上不是新机制，就是内核本身：host 半边在 <code>node:vm</code> 里作为 async 函数体求值，返回的插件挂为内部 <code>cordis-dynamic</code> 组的子节点；停止就是 <code>fiber.dispose()</code>。<b>因为没有 shipped bundle 挂载 <code>tool-cordis</code>，它只能通过 overlay 或 cordis preset 启用</b>，而该 preset 的说明写着"把这个会话当作 shell 访问来对待"。</td>
+      </tr>
+    </tbody>
+  </table>
+</section>
+
+<section>
+  <h3>3.2.4　一个真实的缺口案例：能力接入 ≠ 契约接入</h3>
+  <p>
+    AgentRQ 为 DSH 写的委派插件，暴露了一个所有"接外部 Agent"设计都该校验的问题。
+    AgentRQ 的 MCP server 把协作规则作为 <b>server 级 Instructions</b> 下发——
+    Claude Code 和 Gemini 会自动读取这些 Instructions，<b>但 DSH 不会把 MCP server 的 Instructions 暴露给模型</b>。
+    结果是：模型有了工具，却没有工具背后的契约（"人类是远程的、只能看到 <code>reply</code> 发出去的内容、开工前必须先 <code>updateTaskStatus</code>"）。
+  </p>
+  <p>插件的解法是自己在 system-prompt 里补一段契约：</p>
+  <pre><code>You are connected to an AgentRQ workspace through the mcp__agentrq__* tools.
+The human you work with is REMOTE: they see only what you send with mcp__agentrq__reply.
+Your terminal output, your files, and your reasoning are invisible to them.
+
+Start: when you pick up a task, call mcp__agentrq__updateTaskStatus with
+       ongoing before doing anything else ...
+Finish: send a summary of every change, then set the status to completed.
+Use blocked when you are stuck and need the human.</code></pre>
+  <p>
+    这带来两条可迁移的经验：
+  </p>
+  <ul>
+    <li><b>工具名必须由命名空间生成，不能硬编码。</b>该插件 section 里每个工具名都从 bridge 配置的 namespace 生成——
+    <b>"改 bridge 名字时，指引与实际注册的工具不会漂移"</b>。这是一条很硬的工程约束。</li>
+    <li><b>软契约（Instructions / 行为约定）需要一个显式的传递通道。</b>如果宿主不转发，就必须由接入方自己补。
+    <b>在接入设计里，"哪些元信息会被传给模型"必须被列为验收项</b>，而不是默认协议会处理。</li>
+  </ul>
+  <div class="callout blue">
+    <span class="lbl">还有一个架构级取舍值得注意：一个 profile 服务一个工作区</span>
+    AgentRQ 的答案是"架构上解决，而不是加配置开关"——
+    <b>每个 DSH profile 只服务一个工作区，endpoint 固定在那个 profile 自己的 <code>cordis.patch.yml</code> 里</b>。
+    切换工作区就是切换 profile，<b>不存在一个共享环境变量被误设、导致 A 工作区的会话打到 B 任务队列</b>的可能。
+    另外 <code>scope: single-agent</code> 默认值解决了"Web UI 每开一个 tab 就建一个 root agent、导致任务被投递三次"的问题。
+  </div>
+</section>
+
+<section>
+  <h3>3.2.5　DSH 的边界：本地优先带来的约束</h3>
+  <p>DSH 的产品边界非常明确，且直接决定了它的架构选择：<b>面向单用户、以一个工作目录为根、用户自带 API key、通过 CLI / Web UI / ACP / JSON-RPC SDK 使用</b>；暂时不负责计费，也没有先处理多租户与云端托管。</p>
+  <p>这套边界让一条核心不变式得以成立：</p>
+  <div class="quote">
+    <b>"模型可见的内容，必须已经被记录。"</b>任何进入模型请求的内容，都必须能够从 SessionEvent 日志重建。
+    系统要增加一种新的模型输入，就要先增加对应的事件类型。
+  </div>
+  <p>这条不变式很美，但报告里明确点出了它在多租户下的失效边界：</p>
+  <ul>
+    <li>本地工具场景：用户持有所有数据，"模型可见 = 已记录"很容易成立。</li>
+    <li><b>多租户 SaaS 场景</b>：用户消息和工具结果属于租户，而 <b>Skill 正文属于平台</b>——Skill 需要进入模型请求，但不能写进租户数据库、也不能随会话导出被用户带走。
+    于是数据库只保存 Skill id，模型回放时再从平台注册表加载正文。</li>
+  </ul>
+  <div class="callout">
+    <span class="lbl">结论</span>
+    这不是对事件日志的否定，而是<b>数据所有权带来的边界</b>。
+    对本地逻辑与多租户逻辑必须分开设计：<b>模型请求视图与持久化记录，有时必须分离</b>。
+    如果我们的 Harness 未来要做多租户，这一条要提前规划，不能事后补。
+  </div>
+</section>
+
+<hr class="sep">
+
+<section>
+  <h2><span class="num">3.3</span>OpenAI Codex：唯一的"双向 MCP"</h2>
+
+  <p>
+    Codex 的特殊价值在于它<b>同时站在 L1 的两端</b>：既作为 MCP client 消费外部工具，又作为 MCP server 被外部系统编排。
+    这使它成为 DSH 的 <code>subagent-codex</code> 能存在的前提。
+  </p>
+
+  <h3>3.3.1　作为 MCP client（往外接）</h3>
+  <table class="tbl-tight">
+    <thead><tr><th>维度</th><th>细节</th></tr></thead>
+    <tbody>
+      <tr><td><b>配置位置</b></td><td><code>~/.codex/config.toml</code> 的 <code>[mcp_servers.&lt;name&gt;]</code> 表；也可用项目级 <code>.codex/config.toml</code>（<b>仅对被标记为 trusted 的项目加载</b>）</td></tr>
+      <tr><td><b>传输</b></td><td><b>stdio</b>（本地进程）+ <b>Streamable HTTP</b>（远程 URL，支持 bearer token 或 OAuth）。<b>注意：不支持旧版 HTTP+SSE 独立传输</b>——2025 规范修订后 SSE 已成为 Streamable HTTP 内部的可选流式模式</td></tr>
+      <tr><td><b>CLI 管理</b></td><td><code>codex mcp add / list / get / remove / login / logout</code>，TUI 内用 <code>/mcp</code> 查看当前会话活跃 server。CLI 子命令仍标注为 experimental，<b>config 路径才是稳定用法</b></td></tr>
+      <tr><td><b>工具白名单</b></td><td><code>enabled_tools = [...]</code>（allowlist，先应用）与 <code>disabled_tools = [...]</code>（denylist，后应用）<b>可以阻止 agent 调用破坏性操作</b>——在 CI 或高权限沙箱下是关键</td></tr>
+      <tr><td><b>生命周期</b></td><td><code>enabled</code>（无需删除即可禁用）、<code>required</code>（该 server 无法初始化则 Codex 启动失败）、<code>startup_timeout_sec</code>（默认 10）、<code>tool_timeout_sec</code>（默认 60）</td></tr>
+      <tr><td><b>OAuth</b></td><td><code>codex mcp login figma</code> 打开浏览器完成 OAuth，token 缓存并自动刷新；<code>mcp_oauth_callback_port</code> / <code>mcp_oauth_callback_url</code> 用于非 localhost 环境（SSH 隧道、远程 devbox）</td></tr>
+      <tr><td><b>一个易被忽略的行为</b></td><td>Codex <b>可能把 MCP server 在初始化时返回的 instructions 当作 server 级指引</b>，与该 server 的工具一起使用。因此维护 server 时应保持这段指引简洁自洽</td></tr>
+    </tbody>
+  </table>
+
+  <h3>3.3.2　作为 MCP server（被接入）</h3>
+  <p>一行命令把自己变成可被编排的节点：</p>
+  <pre><code>codex mcp-server          # 以 stdio 方式启动为 MCP server
+# 继承全局 ~/.codex/config.toml 设置；下游 client 关闭连接时终止
+# 调试：npx @modelcontextprotocol/inspector codex mcp-server</code></pre>
+  <p>对外只暴露<b>两个工具</b>，这个克制的设计值得注意：</p>
+  <table class="tbl-tight">
+    <thead><tr><th>工具</th><th>参数</th><th>说明</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><code>codex()</code><br><span class="pill">开始会话</span></td>
+        <td><code>prompt</code>（必填）、<code>approval-policy</code>、<code>sandbox</code>、<code>model</code>、<code>base-instructions</code>、<code>cwd</code>、<code>config</code></td>
+        <td>发起一个新的 Codex 会话。响应中 <code>structuredContent.threadId</code> 是续会话句柄</td>
+      </tr>
+      <tr>
+        <td><code>codex-reply()</code><br><span class="pill">继续会话</span></td>
+        <td><code>prompt</code>（必填）、<code>threadId</code>（必填，来自上一次响应）</td>
+        <td>继续既有会话。<b>两工具设计意味着 Codex 跨多个 agent turn 保持存活——不必每次付冷启动开销</b></td>
+      </tr>
+    </tbody>
+  </table>
+  <p>
+    关键设计点：<b>把 <code>approval-policy</code> 与 <code>sandbox</code> 做成"每次调用的参数"而不是"进程级配置"</b>。
+    调用方（上层编排器）因此可以按任务逐次收放权限：<code>read-only</code> / <code>workspace-write</code> / <code>danger-full-access</code>，
+    <code>untrusted</code> / <code>on-request</code> / <code>never</code>。这与 DSH"策略随调用携带，而不是固定在 provider 上"的思路完全同源——
+    同一个瞬间，bash 可以 readonly，而子 agent 的状态目录保持可写。
+  </p>
+  <div class="callout green">
+    <span class="lbl">为什么需要走进程外边界</span>
+    Codex CLI 原生 subagents（<code>config.toml</code> 里的 <code>[agents]</code>）已经支持并行，但它们<b>运行在同一个 Codex 进程内、共享同一套沙箱策略，且受 <code>agents.max_depth</code>（默认 1）限制</b>。
+    当需求是①跨语言编排（Python 编排器委派 Codex 写 TS）、②带门禁的交接（PM agent 验证产物存在后才放行下一个 agent）、
+    ③异构模型（规划用 GPT-5、实现用 GPT-5.5、快速 lint 用 o4-mini）、④统一 tracing 时，
+    <b>MCP server 才是正确的抽象</b>。
+  </div>
+  <p>
+    生态侧还有 <code>codex-as-mcp</code> 这类社区 server，向 MCP client（Claude Code、Cursor 等）暴露
+    <code>spawn_agent(prompt)</code> 与 <code>spawn_agents_parallel(agents)</code> 两个工具，底层执行
+    <code>codex exec --cd ... --skip-git-repo-check --full-auto "..."</code>。
+    其 README 有一句诚实的安全提示值得引用：<b>"<code>--full-auto</code> 意味着 agent 可以在该目录运行命令并编辑文件。只在你信任的仓库中使用。"</b>
+  </p>
+  <p>
+    协议侧，Codex 原生支持 MCP；ACP 由社区项目 <code>codex-acp</code>（Rust 实现的适配器）桥接，
+    自 2026-01 ACP Agent Registry 上线后，Codex 已在 JetBrains 与 Zed 中通过注册表可安装；
+    A2A 在 Codex 侧仍是 open feature request。
+  </p>
+</section>
+
+<hr class="sep">
+
+<section>
+  <h2><span class="num">3.4</span>Claude Code：把自己做成标准零件</h2>
+
+  <p>
+    Claude Code 的接入哲学与 DSH 相反——它不做"接别人"的框架，而是<b>把自己彻底组件化</b>，让任何系统都能把它接进去。
+    四个扩展点构成了完整的"被接入面"。
+  </p>
+
+  <table>
+    <thead><tr><th>扩展点</th><th>接口</th><th>要点</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><b>Agent SDK</b></td>
+        <td>Python <code>claude-agent-sdk</code> / TS <code>@anthropic-ai/claude-agent-sdk</code>；<code>query()</code> + <code>ClaudeAgentOptions</code></td>
+        <td>提供与 Claude Code 相同的工具、Agent 循环与上下文管理能力。会话以 <b>JSONL 文件持久化在磁盘</b>，通过 <code>session_id</code> / <code>resume</code> 跨进程重启续接——这使长流程流水线可行</td>
+      </tr>
+      <tr>
+        <td><b>Hooks</b></td>
+        <td><code>PreToolUse</code> / <code>PostToolUse</code> / <code>Stop</code> / <code>SessionStart</code> / <code>SessionEnd</code> / <code>UserPromptSubmit</code></td>
+        <td>在生命周期节点运行自定义代码。<code>PreToolUse</code> 返回 <code>deny</code> 可完全阻止工具调用——生产环境的审计、成本控制、合规检查都靠它。SDK 用 <code>HookMatcher</code> 正则匹配工具（如 <code>"Edit|Write"</code>）</td>
+      </tr>
+      <tr>
+        <td><b>Subagents</b></td>
+        <td><code>agents={"name": AgentDefinition(description, prompt, tools, model)}</code></td>
+        <td>每个子 agent 有<b>独立上下文窗口、工具集与 system prompt</b>；主 agent 通过 <code>Agent</code> 工具（Python SDK 里是 <code>Task</code>）触发委派，<b>必须在 <code>allowed_tools</code> 里包含它</b>。子 agent 的消息带 <code>parent_tool_use_id</code>，可追踪来源</td>
+      </tr>
+      <tr>
+        <td><b>MCP</b></td>
+        <td><code>mcp_servers</code> 支持本地 stdio（作子进程）与远程 Streamable HTTP / SSE；也支持<b>进程内 SDK MCP server</b>（<code>create_sdk_mcp_server</code>）</td>
+        <td>工具命名规范 <code>mcp__&lt;server&gt;__&lt;tool&gt;</code>。SDK MCP server 与外部 server 可混用。<b>SDK 下 MCP 工具必须在 <code>allowed_tools</code> 显式列出</b>（如 <code>mcp__github</code>）</td>
+      </tr>
+      <tr>
+        <td><b>Skills</b></td>
+        <td><code>.claude/skills/*/SKILL.md</code>（项目）与 <code>~/.claude/skills/*/SKILL.md</code>（用户）</td>
+        <td>基于文件系统，<b>必须显式启用</b>：SDK 下需设 <code>setting_sources=["user","project"]</code>，否则即使 <code>Skill</code> 在 <code>allowed_tools</code> 里也不会被发现——这是官方点名的常见错误</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h4>权限模型的表达方式</h4>
+  <p>SDK 用三层组合表达权限，比单一开关更细致：</p>
+  <ul>
+    <li><code>allowed_tools</code>：只列出的工具可用，<b>省略某个工具即等于封禁</b>；完全不传则 agent 只能推理、无任何工具</li>
+    <li><code>blocked_tools</code>：即使已在 allowlist 中也可显式封禁</li>
+    <li><code>PreToolUse</code> hook：细粒度审批逻辑，可返回 <code>permissionDecision: "deny"</code> 与理由</li>
+  </ul>
+  <p>生产建议是"<b>把 <code>allowed_tools</code> 设成最小必要集，再用 hooks 叠加细粒度逻辑</b>"。</p>
+
+  <h4>它在被接入侧的定位</h4>
+  <p>
+    Claude Code 通过官方 ACP 桥（<code>@agentclientprotocol/claude-agent-acp</code>）进入 ACP 生态，
+    在 Zed 里以 <code>@zed-industries/claude-acp</code> 安装、首次使用时自动安装并通过 <code>/login</code> 认证；
+    在 JetBrains 里通过 ACP Agent Registry 安装。
+    同时它也是 DSH 的 <code>subagent-claude-code</code> 所接入的对象——<b>DSH 通过 Claude 官方的 Agent SDK 拉起一个真实的 Claude Code CLI 子进程</b>。
+  </p>
+  <div class="callout blue">
+    <span class="lbl">一个值得记住的生态事实</span>
+    Claude Code 与 DSH <b>不是互斥关系</b>。
+    在 DSH 架构下，外层循环跑开源模型，只在真正值回票价的少数任务上委派给 Claude Code，
+    并且所有这些轨迹都被收进同一份 session log。<b>"三个产品抢一个机器上的位置"的叙事是不准确的——其中两个可以被当作另一个的子程序。</b>
+  </div>
+</section>
+
+<hr class="sep">
+
+<section>
+  <h2><span class="num">4</span>Pi × DSH：两种 Harness 哲学的正面对撞 <span class="pill red">双重点对比</span></h2>
+
+  <p>
+    把 Pi 和 DSH 放在一起看，价值远大于分别看。两家都常被贴上"极简"标签，但它们对"复杂度应该放在哪里"给出了<b>相反</b>的答案：
+  </p>
+  <ul>
+    <li><b>Pi 的极简发生在内核</b>：内核小到只剩四个工具、一条循环、一棵会话树，其余能力<b>以可安装的外挂形式生长</b>。</li>
+    <li><b>DSH 的极简发生在"内核的不可替换性"</b>：它可以有 226 个包，但<b>没有一个特权核心</b>；代价是每条能力接缝都要求 Service Definition / Provider / Consumer 三件套齐全。</li>
+  </ul>
+  <p>所以更准确的描述是：<b>Pi 是"少而开放"，DSH 是"多而对称"。</b>下面的对照不评判优劣，只定位边界。</p>
+
+  <h3>4.1　一句话定位</h3>
+  <div class="grid c2">
+    <div class="card accent">
+      <h4>Pi Agent</h4>
+      <p><b>可嵌入的 Agent 执行内核。</b>目标是把"一次 prompt 驱动的工具循环"做到最小、可读、可组合。
+      Sessions、Goals、Plan、子代理、审批——<b>全部是宿主或第三方包的事</b>，内核不承诺统一的长期任务协议。</p>
+    </div>
+    <div class="card dsh">
+      <h4>DeepSeek Harness</h4>
+      <p><b>事件溯源的 Agent Runtime。</b>目标是让所有长期语义都在内核里闭合、可恢复、可审计。
+      Goal、Plan、子代理、权限、沙箱、压缩——<b>都要有明确的生命周期与事件表达</b>。</p>
+    </div>
+  </div>
+
+  <h3>4.2　结构对照</h3>
+  <table>
+    <thead><tr><th style="width:16%">维度</th><th style="width:42%">Pi Agent</th><th>DeepSeek Harness</th></tr></thead>
+    <tbody>
+      <tr><td><b>扩展单位</b></td><td>Extension（TypeScript 模块）+ Skill + Prompt template + Theme → 打包为 <b>Pi Package</b></td><td>Plugin（Cordis 节点）→ 组合为 <b>Bundle / Profile</b>，用 patch 层叠加</td></tr>
+      <tr><td><b>能力可替换性</b></td><td>开放但<b>非对称</b>：Extension 与内核同层，可替换内建工具；但没有统一的"接缝三角色"规范</td><td><b>对称</b>：每条能力都必须拆成 Definition / Provider / Consumer 三件套，官方明确"单独一个角色不构成缝"</td></tr>
+      <tr><td><b>谁来定义委派</b></td><td>第三方包 <code>pi-subagents</code>（可选安装）</td><td>内核 seam <code>ctx.subagents</code>（六 provider，外部默认 <code>disabled</code>）</td></tr>
+      <tr><td><b>状态观</b></td><td><b>状态落在文件</b>：<code>TODO.md</code>、<code>plan.md</code>、会话树 JSONL——看得见、能版控、换工具也还在</td><td><b>状态落在只追加事件日志</b>：模型可见 ⟺ 已记录；resume / fork / replay / transcripts / telemetry 全部从同一事件流派生</td></tr>
+      <tr><td><b>历史模型</b></td><td>JSONL <b>树</b>（每条带 <code>id</code> / <code>parentId</code>），可就地跳转分支、可生成分支摘要，全部分支在同一文件</td><td><b>只追加</b> SessionEvent 序列；fork = 截取一段日志前缀；压缩 = 用替换标记遮蔽旧消息 + 摘要作为新消息放回</td></tr>
+      <tr><td><b>循环层级</b></td><td>双层 <code>runLoop</code>（内层工具/steering，外层 follow-up）+ 3 个回调</td><td>五层边界：模型请求 → step → turn → driver activity → 长期工作流</td></tr>
+      <tr><td><b>谁能"让循环继续"</b></td><td>宿主回调 + pending 队列；<b>扩展无需理解持久 inbox</b></td><td><b>inbox 数据驱动</b>：继续执行必须产出可消费的消息，最终判定依赖队列状态而非插件注册顺序</td></tr>
+      <tr><td><b>停止钩子语义</b></td><td><code>shouldStopAfterTurn()</code> 提供宿主级截停点</td><td><code>agent/turn-stopping</code> 没有布尔返回值——想继续就<b>往 <code>next-step</code> 写消息</b>，从而消除多插件布尔合并问题</td></tr>
+      <tr><td><b>工具收口</b></td><td><code>terminate</code> <b>AND 聚合</b>：整批 finalized result 全为 <code>true</code> 才终止（更保守，避免一个工具吞掉其他工具结果）</td><td><code>concludesTurn</code> <b>OR 聚合</b>：任一权威工具即可宣布收口，再用 <code>next-step</code> 上下文缓和其侵略性</td></tr>
+      <tr><td><b>超长输出处理</b></td><td>给所有工具生成错误结果（参数可能被截断、未执行）交回模型，倾向<b>当前 invocation 内自我修复</b></td><td>整轮以 <code>max-tokens</code> 收口且该 reason 具<b>粘性</b>，把"是否继续"交给外部策略</td></tr>
+      <tr><td><b>崩溃恢复语义</b></td><td>依赖宿主持久化层</td><td><code>interrupted</code> 由恢复层产生，与 <code>aborted</code> <b>分开</b>——"生命周期突然消失"与"收到取消请求并有机会清理"含义不同</td></tr>
+      <tr><td><b>授权续行</b></td><td>由宿主决定</td><td>Goal <b>phase</b>（active/complete/blocked/paused）与进程内 <b>activation</b>（armed/disarmed）分离；<b>恢复后默认 disarmed</b>，需人类再次授权（fail-closed）</td></tr>
+      <tr><td><b>沙箱</b></td><td>无。官方建议用容器自理；packages 以完整系统权限运行</td><td>Landlock / Seatbelt / Windows ACL；<b>fail closed</b>（沙箱建不起来就不执行）；<code>confine(argv, policy)</code> + 运行时 probe，并要求策略随调用携带</td></tr>
+      <tr><td><b>供应链策略</b></td><td>精确 pin + <code>min-release-age=2</code> + shrinkwrap + lockfile guard + 签名审计 + 脚本白名单</td><td>依赖自带（不查 PATH）+ workspace 层为平台二进制开供应链例外</td></tr>
+      <tr><td><b>插件开发门槛</b></td><td><b>低</b>：回调式，几个 method 即可上手</td><td><b>高</b>：需要理解 inbox target、turn 边界、wakeup 语义；"再跑一次"要构造 <code>UserMessage</code> 并写入正确队列</td></tr>
+      <tr><td><b>生态规模</b></td><td>Extension 示例 50+，Pi Package 走 npm / git 分发，第三方包下载量可达周 75K 量级</td><td>约 300 个社区插件（beta 期数天内），官方推荐用统一 GitHub topic 发现</td></tr>
+    </tbody>
+  </table>
+
+  <h3>4.3　"继续运行的权力"放在哪里</h3>
+  <p>
+    这张图是本章的落点。两家最本质的差异不在功能清单，而在<b>谁有权决定"再跑一轮"</b>。
+  </p>
+
+  <figure>
+    <svg viewBox="0 0 1000 430" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Pi 与 DSH 的继续运行权力分布对比">
+      <defs>
+        <marker id="a5" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto">
+          <path d="M0,0 L7,3 L0,6 z" fill="#4a5158"/>
+        </marker>
+        <marker id="a5b" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto">
+          <path d="M0,0 L7,3 L0,6 z" fill="#2f6fed"/>
+        </marker>
+        <marker id="a5r" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto">
+          <path d="M0,0 L7,3 L0,6 z" fill="#c0392b"/>
+        </marker>
+      </defs>
+
+      <!-- ===== LEFT: Pi ===== -->
+      <text x="20" y="24" font-family="-apple-system,PingFang SC" font-size="14" font-weight="700" fill="#2f6fed">Pi：权力集中在「当前循环 + 三个宿主回调」</text>
+      <rect x="20" y="36" width="450" height="252" rx="10" fill="#f7fafe" stroke="#c3d8fa" stroke-width="1.5"/>
+
+      <g font-family="-apple-system,PingFang SC">
+        <rect x="36" y="52" width="130" height="46" rx="7" fill="#eaf1fe" stroke="#c3d8fa"/>
+        <text x="101" y="72" font-size="11.5" font-weight="600" fill="#2f6fed" text-anchor="middle">getSteering</text>
+        <text x="101" y="88" font-size="11" fill="#4a5158" text-anchor="middle">当前轮即时干预</text>
+
+        <rect x="180" y="52" width="130" height="46" rx="7" fill="#eaf1fe" stroke="#c3d8fa"/>
+        <text x="245" y="72" font-size="11.5" font-weight="600" fill="#2f6fed" text-anchor="middle">getFollowUp</text>
+        <text x="245" y="88" font-size="11" fill="#4a5158" text-anchor="middle">收口后补充工作</text>
+
+        <rect x="324" y="52" width="130" height="46" rx="7" fill="#eaf1fe" stroke="#c3d8fa"/>
+        <text x="389" y="72" font-size="11.5" font-weight="600" fill="#2f6fed" text-anchor="middle">shouldStop</text>
+        <text x="389" y="88" font-size="11" fill="#4a5158" text-anchor="middle">AfterTurn 宿主截停</text>
+      </g>
+
+      <line x1="101" y1="98" x2="101" y2="126" stroke="#2f6fed" stroke-width="1.5" marker-end="url(#a5b)"/>
+      <line x1="245" y1="98" x2="245" y2="126" stroke="#2f6fed" stroke-width="1.5" marker-end="url(#a5b)"/>
+      <line x1="389" y1="98" x2="389" y2="126" stroke="#2f6fed" stroke-width="1.5" marker-end="url(#a5b)"/>
+
+      <rect x="36" y="128" width="418" height="60" rx="8" fill="#ffffff" stroke="#2f6fed" stroke-width="1.8"/>
+      <text x="245" y="150" font-family="-apple-system,PingFang SC" font-size="13.5" font-weight="700" fill="#1a1d21" text-anchor="middle">runLoop()</text>
+      <text x="245" y="170" font-family="-apple-system,PingFang SC" font-size="11.5" fill="#4a5158" text-anchor="middle">内层：hasMoreToolCalls || pendingMessages &gt; 0　·　外层：follow-up</text>
+      <text x="245" y="183" font-family="-apple-system,PingFang SC" font-size="11" fill="#79828c" text-anchor="middle">复杂度交给宿主；不承诺统一的长期任务协议</text>
+
+      <rect x="36" y="202" width="418" height="72" rx="8" fill="#ffffff" stroke="#d0d5dc" stroke-dasharray="5 3"/>
+      <text x="52" y="224" font-family="-apple-system,PingFang SC" font-size="12" font-weight="700" fill="#4a5158">状态落在文件（可查、可版控、换工具还在）</text>
+      <text x="52" y="244" font-family="-apple-system,PingFang SC" font-size="11.5" fill="#4a5158">TODO.md　·　plan.md　·　会话树 JSONL（id / parentId）</text>
+      <text x="52" y="263" font-family="-apple-system,PingFang SC" font-size="11.5" fill="#c0392b">代价：无沙箱、无权限弹窗、packages 全权限</text>
+
+      <!-- ===== RIGHT: DSH ===== -->
+      <text x="530" y="24" font-family="-apple-system,PingFang SC" font-size="14" font-weight="700" fill="#c0392b">DSH：权力分散到五个控制面，由事件日志协调</text>
+      <rect x="530" y="36" width="450" height="252" rx="10" fill="#fffbfa" stroke="#e8b5ad" stroke-width="1.5"/>
+
+      <g font-family="-apple-system,PingFang SC" font-size="11.5">
+        <rect x="544" y="52" width="196" height="30" rx="6" fill="#ffffff" stroke="#d0d5dc"/>
+        <text x="558" y="71" fill="#4a5158">模型 finish（step 层）</text>
+
+        <rect x="544" y="88" width="196" height="30" rx="6" fill="#ffffff" stroke="#d0d5dc"/>
+        <text x="558" y="107" fill="#4a5158">工具结果 concludesTurn</text>
+
+        <rect x="544" y="124" width="196" height="30" rx="6" fill="#fdecea" stroke="#f6d5d0"/>
+        <text x="558" y="143" fill="#c0392b">inbox：next-step / next-turn</text>
+
+        <rect x="544" y="160" width="196" height="30" rx="6" fill="#fdecea" stroke="#f6d5d0"/>
+        <text x="558" y="179" fill="#c0392b">agent/turn-stopping hook</text>
+
+        <rect x="544" y="196" width="196" height="30" rx="6" fill="#fdecea" stroke="#f6d5d0"/>
+        <text x="558" y="215" fill="#c0392b">Goal Driver（外围状态机）</text>
+
+        <rect x="544" y="232" width="196" height="30" rx="6" fill="#ffffff" stroke="#d0d5dc"/>
+        <text x="558" y="251" fill="#4a5158">Persisted 恢复层（crash repair）</text>
+      </g>
+
+      <line x1="740" y1="67" x2="790" y2="67" stroke="#4a5158" stroke-width="1.3" marker-end="url(#a5)"/>
+      <line x1="740" y1="103" x2="790" y2="103" stroke="#4a5158" stroke-width="1.3" marker-end="url(#a5)"/>
+      <line x1="740" y1="139" x2="790" y2="139" stroke="#c0392b" stroke-width="1.5" marker-end="url(#a5r)"/>
+      <line x1="740" y1="175" x2="790" y2="175" stroke="#c0392b" stroke-width="1.5" marker-end="url(#a5r)"/>
+      <line x1="740" y1="211" x2="790" y2="211" stroke="#c0392b" stroke-width="1.5" marker-end="url(#a5r)"/>
+      <line x1="740" y1="247" x2="790" y2="247" stroke="#4a5158" stroke-width="1.3" marker-end="url(#a5)"/>
+
+      <rect x="792" y="52" width="172" height="210" rx="8" fill="#f2f4f7" stroke="#d0d5dc" stroke-width="1.6"/>
+      <text x="878" y="80" font-family="-apple-system,PingFang SC" font-size="12" font-weight="700" fill="#1a1d21" text-anchor="middle">SessionEvent</text>
+      <text x="878" y="98" font-family="-apple-system,PingFang SC" font-size="12" font-weight="700" fill="#1a1d21" text-anchor="middle">只追加日志</text>
+      <line x1="808" y1="112" x2="948" y2="112" stroke="#d0d5dc"/>
+      <g font-family="-apple-system,PingFang SC" font-size="11" fill="#4a5158">
+        <text x="806" y="134">resume / fork / replay</text>
+        <text x="806" y="154">transcripts / telemetry</text>
+        <text x="806" y="174">surface projection</text>
+        <text x="806" y="194">crash repair</text>
+      </g>
+      <text x="806" y="222" font-family="-apple-system,PingFang SC" font-size="11" fill="#c0392b">模型可见 ⟺ 已记录</text>
+      <text x="806" y="242" font-family="-apple-system,PingFang SC" font-size="11" fill="#12805c">但多租户下需分离视图</text>
+
+      <!-- bottom note -->
+      <rect x="20" y="306" width="960" height="104" rx="9" fill="#f2f4f7" stroke="#e3e6ea"/>
+      <text x="42" y="332" font-family="-apple-system,PingFang SC" font-size="13" font-weight="700" fill="#1a1d21">共同点：两者的"结束"都不是单一布尔值，而是可以被消费的数据</text>
+      <text x="42" y="358" font-family="-apple-system,PingFang SC" font-size="12.5" fill="#4a5158">Pi：turn_end（模型 + 工具批次）→ agent_end（当前 invocation）；assistant stopReason 描述模型调用</text>
+      <text x="42" y="380" font-family="-apple-system,PingFang SC" font-size="12.5" fill="#4a5158">DSH：step / turn / activity / 长期目标 四层各自闭合，且 idle 被明确声明为<tspan font-weight="700">不能</tspan>充当长期完成信号</text>
+      <text x="42" y="400" font-family="-apple-system,PingFang SC" font-size="12.5" fill="#c0392b">成熟度判据：日志能否解释"它为什么继续、谁允许它继续、恢复后应不应该继续"</text>
+    </svg>
+    <figcaption>图 4　"继续运行的权力"分布：Pi 集中在一个循环与三个回调；DSH 分散到五个控制面并由只追加日志协调。</figcaption>
+  </figure>
+
+  <h3>4.4　对"外部 Agent 接入"的直接推论</h3>
+  <p>把两家哲学落到本报告的主题上，差异会变得非常具体：</p>
+  <table class="tbl-tight">
+    <thead><tr><th style="width:20%">维度</th><th style="width:40%">走 Pi 的路（provider 层）</th><th>走 DSH 的路（subagent 层）</th></tr></thead>
+    <tbody>
+      <tr><td><b>接入入口</b></td><td>把外部 Agent 伪装成一个模型 provider</td><td>把外部 Agent 注册成一个命名 subagent provider</td></tr>
+      <tr><td><b>能约束外部 Agent 吗</b></td><td><b>不能</b>。只发一个 task 文本 + bridge note，其余全由对方决定</td><td><b>部分能</b>。5 个能力 flag 静态协商，不满足即报错；但外部 provider 一律拒绝 <code>agentOptions</code></td></tr>
+      <tr><td><b>上下文怎么传</b></td><td>bootstrap 全量 + 增量 + 压缩时重置；外部 Agent 自己持有历史</td><td>显式 <code>inheritsParentContext</code>；外部 provider 一律 <code>false</code>，即冷启动</td></tr>
+      <tr><td><b>失败/不支持怎么表达</b></td><td>由扩展自己定义（无统一语义）</td><td><code>UNSUPPORTED_CAPABILITY</code> 报错 + 能力矩阵里明写 "no rollback"</td></tr>
+      <tr><td><b>新增一家的成本</b></td><td><b>低</b>：写一个 extension，处理 JSON-RPC 与事件翻译</td><td><b>高</b>：写一个 provider 包，声明能力、实现停止阶梯、纳入日志语义</td></tr>
+      <tr><td><b>生态位宽</b></td><td>靠社区逐个写桥（Cursor / Codex / Claude Code / Rovo 四个）</td><td>靠协议 <b>ACP</b> 一次覆盖（任何 ACP 兼容 agent 可直接接入）</td></tr>
+      <tr><td><b>适合的接入目标</b></td><td>少量、固定、你熟悉的外部 Agent；强调"接得上、看得懂"</td><td>多家、可能变动、需要统一权限与审计；强调"接得稳、查得清"</td></tr>
+    </tbody>
+  </table>
+  <div class="callout blue">
+    <span class="lbl">两条路并不互斥</span>
+    Pi 提供 RPC 与 SDK 两个稳定入口，因此它<b>完全可以成为被 DSH 接入的一方</b>；
+    社区已有用 NATS 把 Pi 与 Claude Code 连起来互发消息的 <code>bridge-harness</code> 方案，也演示过上层的 Waku Agent 用 Delegate Task 拉起 Pi 的 CLI。
+    <b>换句话说：Pi 更适合当"零件"，DSH 更适合当"装配厂"。</b>
+  </div>
+
+  <h3>4.5　选型判据（不是"谁更好"）</h3>
+  <div class="grid c2">
+    <div class="card accent">
+      <h4>Pi 的结构更适合</h4>
+      <ul>
+        <li>单次 invocation 的生命周期清晰，不需要跨进程恢复</li>
+        <li>宿主<b>已经拥有自己的持久化层</b>与状态管理</li>
+        <li>扩展数量有限（尚未出现多插件同时 steering）</li>
+        <li>工作流由应用统一控制，不需要内核协议保证</li>
+        <li>目标是快速接入多模型与工具</li>
+        <li>对 session event vocabulary 没有强约束</li>
+      </ul>
+    </div>
+    <div class="card dsh">
+      <h4>DSH 的分层更适合</h4>
+      <ul>
+        <li>会话需要<b>跨进程恢复</b></li>
+        <li>Agent 拥有<b>高风险工具</b>（写入、发布、付费）</li>
+        <li>多个插件会<b>同时 steering</b>，需要确定性的合并规则</li>
+        <li>需要长期 Goal 与<b>预算控制</b></li>
+        <li>日志需要审计与 replay</li>
+        <li>Plan、审批与执行必须跨边界保持一致</li>
+        <li>子 Agent 与父 Agent 存在<b>取消传播</b></li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="callout red">
+    <span class="lbl">本章最重要的一句话</span>
+    <b>复杂度没有消失，只是落在不同层。</b>
+    如果业务开始增加 Goal、审批、自动 follow-up、并发工具策略、恢复与预算，Pi 的宿主会<b>逐步补齐类似机制</b>——
+    这时再回头换框架，成本远高于一开始就选对分层。
+    所以选型时不应比较"Agent Loop 有多少行"，而要问：<b>我的系统准备把"继续运行的权力"放在哪里？</b>
+  </div>
+</section>
+
+<hr class="sep">
+
+<section>
+  <h2><span class="num">5</span>横向对比矩阵</h2>
+
+  <table>
+    <thead>
+      <tr>
+        <th style="width:15%">维度</th>
+        <th style="width:19%">Pi Agent</th>
+        <th style="width:26%">DeepSeek Harness</th>
+        <th style="width:20%">OpenAI Codex</th>
+        <th style="width:20%">Claude Code</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><b>接外部 Agent 的位置</b></td>
+        <td>L0/L1：<b>伪装成 provider（模型）</b>；对内委派另由第三方包 <code>pi-subagents</code> 实现</td>
+        <td><b>L2：一等能力缝（subagent）</b></td>
+        <td>L2：以 MCP server 形式对外暴露</td>
+        <td>L2：以 Agent SDK 形式对外暴露</td>
+      </tr>
+      <tr>
+        <td><b>接外部 Agent 的入口</b></td>
+        <td><code>registerProvider(name, { api, streamSimple })</code>，写在 Extension 里</td>
+        <td><b>命名注册表 <code>ctx.subagents</code>，多 provider 共存，按任务选择</b></td>
+        <td><code>config.toml</code> 的 <code>[mcp_servers.*]</code>；外部系统通过 MCP 发现 2 个工具</td>
+        <td><code>agents={...}</code> 字典；或经 ACP/MCP 被发现</td>
+      </tr>
+      <tr>
+        <td><b>协议 / 传输</b></td>
+        <td>桥接侧 JSON-RPC over stdio（NDJSON）；自身对外提供 <b>TUI / Print / JSON / RPC / SDK</b> 五个入口</td>
+        <td><b>多样性最大：进程内 / stdio JSON-RPC（dsh-sdk）/ ACP / Codex app-server / Agent SDK</b></td>
+        <td>MCP（stdio + Streamable HTTP）；ACP 由社区桥接</td>
+        <td>Agent SDK（进程内库）+ ACP（官方桥）</td>
+      </tr>
+      <tr>
+        <td><b>能力协商</b></td>
+        <td><span class="pill grey">无</span> —— 外部 Agent 被扁平化成模型</td>
+        <td><span class="pill red">显式</span> 5 个 flag，不支持则 <code>UNSUPPORTED_CAPABILITY</code></td>
+        <td>参数级：<code>approval-policy</code> / <code>sandbox</code> / <code>model</code> 每次调用可覆盖</td>
+        <td>参数级：<code>allowed_tools</code> / <code>blocked_tools</code> / <code>permission_mode</code></td>
+      </tr>
+      <tr>
+        <td><b>上下文继承语义</b></td>
+        <td>bootstrap 全量 + 增量 + 压缩重置；<b>外部 agent 全量持有历史</b>；<code>pi-subagents</code> 侧用 <code>context: "fresh" | "fork"</code> 显式选择</td>
+        <td><b>显式字段 <code>inheritsParentContext</code>，且明确"只意味着对话播种"</b></td>
+        <td><code>threadId</code> 续会话（服务端持有历史）</td>
+        <td><code>session_id</code> resume，JSONL 落盘</td>
+      </tr>
+      <tr>
+        <td><b>状态与历史模型</b></td>
+        <td>会话是 <b>JSONL 树</b>（<code>id</code>/<code>parentId</code>），所有分支在同一文件；可就地 <code>/tree</code> 跳转、可生成分支摘要；状态倾向<b>外置到文件</b>（TODO.md / plan.md）</td>
+        <td><b>只追加 SessionEvent 日志</b>；fork = 截取日志前缀，压缩 = 遮蔽旧消息 + 摘要回填；<b>模型可见 ⟺ 已记录</b></td>
+        <td><code>threadId</code> 由服务端持有</td>
+        <td>JSONL 落盘 + <code>session_id</code> resume</td>
+      </tr>
+      <tr>
+        <td><b>谁决定循环继续</b></td>
+        <td><b>宿主回调 + pending 队列</b>：<code>getSteeringMessages</code> / <code>getFollowUpMessages</code> / <code>shouldStopAfterTurn</code></td>
+        <td><b>inbox 数据驱动</b>：继续执行必须产出可消费消息；<code>turn-stopping</code> <b>没有布尔返回值</b>，从而消除多插件合并问题</td>
+        <td>调用方通过 <code>codex-reply</code> 显式续；<code>approval-policy</code> 每次调用可覆盖</td>
+        <td><code>query</code> / <code>resume</code> 由调用方驱动；hooks 可在生命周期节点干预</td>
+      </tr>
+      <tr>
+        <td><b>生命周期</b></td>
+        <td>桥接侧 Bridge 单例 + <code>runExclusive()</code> 串行化；内核侧<b>双层 <code>runLoop</code></b>（内层工具/steering，外层 follow-up）</td>
+        <td><b>两态：one-shot（<code>SubagentRun</code> 句柄）/ continuable（FIFO 队列）</b></td>
+        <td>两工具：<code>codex()</code> 开始 + <code>codex-reply()</code> 续</td>
+        <td>会话 + <code>resume</code>；子 agent 有独立上下文窗口</td>
+      </tr>
+      <tr>
+        <td><b>取消 / 停止</b></td>
+        <td>依赖子进程终止（未强调阶梯）</td>
+        <td><b>分级：ACP cancel → EOF 宽限 → SIGTERM → SIGKILL；并声明"no rollback"</b></td>
+        <td>中断 turn 后 join 进程树</td>
+        <td>Abort query + 终止进程树</td>
+      </tr>
+      <tr>
+        <td><b>依赖与版本</b></td>
+        <td>桥接侧依赖宿主 PATH 上的外部 CLI；但自身依赖链<b>精确 pin + <code>min-release-age=2</code> + shrinkwrap + lockfile guard</b></td>
+        <td><b>包内自带依赖，不查 PATH、不做平台回退</b></td>
+        <td>自带（<code>npm i -g @openai/codex</code>）</td>
+        <td>SDK 自带，但外部委派场景由接入方打包</td>
+      </tr>
+      <tr>
+        <td><b>认证处理</b></td>
+        <td>沿用外部 CLI 自己的登录态</td>
+        <td><b>原生透传，不复制配置文件、不创建登录态；只覆盖 <code>permissionMode</code></b></td>
+        <td>OAuth 内建（<code>codex mcp login</code>）+ bearer env var</td>
+        <td>原生 settings；SDK 场景由接入方提供登录</td>
+      </tr>
+      <tr>
+        <td><b>默认安全姿态</b></td>
+        <td>无权限弹窗；桥接扩展默认 auto-allow；<b>packages 以完整系统权限运行、无沙箱</b>；非交互模式默认忽略项目级指令（需 <code>--approve</code>）</td>
+        <td><b>高危 provider 默认 <code>disabled: true</code> + 不进 shipped bundle；生效需显式安装并重启</b></td>
+        <td><code>enabled_tools</code> 白名单；项目级配置仅对 trusted 项目加载</td>
+        <td>最小 allowlist + PreToolUse hook 组合</td>
+      </tr>
+      <tr>
+        <td><b>沙箱 / 隔离</b></td>
+        <td>无（自己上容器）</td>
+        <td>Landlock / Seatbelt / Windows ACL；<b>fail closed</b>；<code>confine(argv, policy)</code> + 运行时 probe</td>
+        <td><code>read-only</code> / <code>workspace-write</code> / <code>danger-full-access</code></td>
+        <td>permission mode + hook 拦截</td>
+      </tr>
+      <tr>
+        <td><b>最值得抄的一点</b></td>
+        <td>把外部 Agent 抽象成"模型"的最小代价路径；<b>状态外置到文件 + 会话树可分支 + 供应链清单</b></td>
+        <td><b>把"接外部 Agent"做成可替换 seam 的完整范式</b></td>
+        <td>threadId 句柄 + 每次调用携带权限策略</td>
+        <td>hooks 生命周期钩子作为策略注入点</td>
+      </tr>
+    </tbody>
+  </table>
+</section>
+
+<section>
+  <h2><span class="num">6</span>可借鉴清单：16 条具体设计</h2>
+  <p>以下从四家方案中提炼出可直接迁移的设计条目，按"抽象 → 契约 → 生命周期 → 边界"排序。</p>
+
+  <div class="grid c2">
+    <div class="card dsh">
+      <h4>1. 把"外部 Agent"抽象成 seam，而不是特例分支 <span class="tag">抽象</span></h4>
+      <p>不要写 <code>if (isClaudeCode) {...} else if (isCodex) {...}</code>。定义"委派"的 Service Definition，让每家实现一个 Provider，
+      调用方只面向 seam。<b>判据：新增一个外部 Agent 时，是否只加一个包而不改核心代码。</b></p>
+    </div>
+    <div class="card dsh">
+      <h4>2. 用注册表而非单例 <span class="tag">抽象</span></h4>
+      <p>多数能力缝只允许一个活跃实现，但"委派给谁"是<b>调用级别的决策</b>。把 subagent 做成命名注册表，允许多 provider 共存，
+      由任务特性选择。这也让"局部替换"成为可能——某类任务走 A，另一类走 B。</p>
+    </div>
+    <div class="card dsh">
+      <h4>3. 静态能力描述符 + fail loud <span class="tag">契约</span></h4>
+      <p>让 provider 在<b>启动前</b>声明它能做什么。调用方请求了不具备的能力时<b>直接报错</b>，
+      而不是静默降级。<b>"看起来能用但结果悄悄变了"是分布式系统里最难排查的一类故障。</b></p>
+    </div>
+    <div class="card dsh">
+      <h4>4. 为"继承"这类词写严格的语义契约 <span class="tag">契约</span></h4>
+      <p><code>inheritsParentContext</code> 只在文档里被定义为"<b>对话播种</b>"，并额外声明"不代表工具、权限决策或授权的继承"。
+      给易被误解的字段配一条<b>否定式定义</b>，比只写肯定式定义有效得多。</p>
+    </div>
+    <div class="card dsh">
+      <h4>5. 区分"上下文"与"权限"两条继承链 <span class="tag">契约</span></h4>
+      <p>上下文可以继承，权限默认不继承。<b>工具过滤改变的是工具面，不是 OS 或账号边界</b>——
+      这条要写进文档，否则使用者会把它当沙箱用。</p>
+    </div>
+    <div class="card dsh">
+      <h4>6. 血缘与作用域正交 <span class="tag">契约</span></h4>
+      <p>用 <code>parentSession</code> / <code>delegationDepth</code> 独立追踪委派链，不要用作用域树兼职表示血缘。
+      子 Agent 拿<b>新的扁平作用域</b>，避免"为了保留血缘而被迫继承不该继承的工具"。</p>
+    </div>
+    <div class="card dsh">
+      <h4>7. 双生命周期 + 显式的续接语义 <span class="tag">生命周期</span></h4>
+      <p>one-shot（立即返回结果，父级阻塞等待）与 continuable（持久会话，FIFO 补指令）要分开建模。
+      并明确：<code>send_message</code> 是<b>入队下一轮、从不打断当前轮</b>；<code>interrupt</code> 只停当前轮、保留队列。</p>
+    </div>
+    <div class="card dsh">
+      <h4>8. 分级停止阶梯 + 诚实地声明"无回滚" <span class="tag">生命周期</span></h4>
+      <p>协作式 teardown：协议 cancel → EOF 宽限 → SIGTERM → SIGKILL。
+      并且明确告诉调用方：外部 Agent 可能已产生不可逆副作用，<b>中断不等于撤销</b>。</p>
+    </div>
+    <div class="card dsh">
+      <h4>9. 依赖自带，不查 PATH <span class="tag">边界</span></h4>
+      <p>让每个 provider 打包它需要的 SDK 与平台二进制，不检查、不回退宿主的 CLI。
+      <b>换来的是版本确定性与可复现性</b>——在"把任务交给另一个 Agent"这种长链路里，这一点比省事重要得多。</p>
+    </div>
+    <div class="card dsh">
+      <h4>10. 认证原生透传，只覆盖一个旋钮 <span class="tag">边界</span></h4>
+      <p>不复制用户配置、不创建登录态，让被委派 Agent 以<b>用户本人身份与账号</b>运行。
+      只覆盖<b>一个</b>与安全直接相关的配置（如 <code>permissionMode</code>），其余一律不碰。最小惊讶原则。</p>
+    </div>
+    <div class="card dsh">
+      <h4>11. 提供"降维"模式：只读顾问 <span class="tag">边界</span></h4>
+      <p><code>plan</code> 模式是范本：让昂贵的全权 Agent 跑原生规划模式，拒绝执行审批，
+      并<b>把"跳回执行"的入口从原生设置里禁用掉</b>，只返回 plan。
+      <b>"拿到判断力，但不给它文件系统。"</b></p>
+    </div>
+    <div class="card dsh">
+      <h4>12. 软契约要有显式传递通道 <span class="tag">边界</span></h4>
+      <p>MCP Instructions 这类"行为约定"不会自动到达所有宿主模型。
+      <b>接入设计里必须列出"哪些元信息会传给模型"作为验收项</b>；同时把所有暴露的工具名从配置命名空间生成，避免指引与实现漂移。</p>
+    </div>
+    <div class="card accent">
+      <h4>13. 状态落在文件里，而不是工具内部 <span class="tag">抽象 · Pi</span></h4>
+      <p>Pi 刻意不内建 Plan mode / Todo / 后台 bash，理由是这些功能<b>把状态藏进了工具内部</b>。
+      替代方案统一指向文件：<code>plan.md</code>、<code>TODO.md</code>、用 tmux 管后台进程。
+      <b>判据很简单：出问题时，这些状态你能不能自己打开看？换掉工具之后它还在不在？</b>
+      对我们要接入外部 Agent 的场景尤其重要——外部 Agent 的内部脉络本来就看不见，
+      <b>至少我们自己的编排状态不能再藏起来。</b></p>
+    </div>
+    <div class="card accent">
+      <h4>14. 会话应该是树，可回退、可分支、可分享 <span class="tag">生命周期 · Pi</span></h4>
+      <p>Pi 的会话是 JSONL <b>树</b>（每条带 <code>id</code> / <code>parentId</code>），所有分支在同一文件里；
+      <code>/tree</code> 就地跳转到任意历史节点继续，<code>/fork</code> 从历史消息开出新会话文件，
+      切换分支时还能<b>把被放弃的分支总结后附加到新位置</b>，避免重放整条分支。
+      对比 DSH 的"只追加日志 + fork 截取前缀"：两者都在回答同一个问题——
+      <b>失败尝试不应该污染后续上下文，但也不应该被抹掉。</b>多 Agent 编排里，"从某个分岔点重试一个委派"是高频需求，值得一开始就建模。</p>
+    </div>
+    <div class="card accent">
+      <h4>15. 把"委派"做成可安装的包，而不是内核承诺 <span class="tag">抽象 · Pi</span></h4>
+      <p>Pi 内核明确不做子代理，交给第三方包；该包的公开接口刻意只有<b>一个工具 + 一个命令</b>，
+      其余（专用角色、额外命令、提示模板）全部来自用户配置、项目或别的包。
+      <b>这给我们一个中间选项</b>：不确定某类委派该不该进内核时，先按"可选包 + 极小公开面"做，
+      等用法稳定了再考虑上收到内核。<b>接口小，是给未来的自己留退路。</b></p>
+    </div>
+    <div class="card accent">
+      <h4>16. 供应链要精确锁定 + 设"最小发布年龄" <span class="tag">边界 · Pi</span></h4>
+      <p>接入外部 Agent 本质上是<b>引入一条不可信代码执行链</b>。Pi 的清单可以直接照搬：
+      依赖精确 pin（<code>save-exact</code>）、<code>.npmrc</code> 设 <code>min-release-age=2</code>（避开当天发布的依赖，防投毒）、
+      lockfile 由 pre-commit hook 守护、发布包带 <code>npm-shrinkwrap.json</code> 锁死传递依赖、CI 跑 <code>npm audit</code> 与签名校验、install script 走白名单。
+      <b>对应 DSH 的另一条路是"依赖自带、不查 PATH"，把风险集中到可审计的白名单。</b>两条都要显式选一条，不能默认不管。</p>
+    </div>
+  </div>
+
+  <h3>6.1　反面清单：四个常见坑</h3>
+  <table class="tbl-tight">
+    <thead><tr><th>坑</th><th>表现</th><th>正确做法</th></tr></thead>
+    <tbody>
+      <tr><td><b>能力静默降级</b></td><td>请求结构化输出，provider 做不到就返回自由文本，调用方解析失败</td><td>静态能力声明 + <code>UNSUPPORTED_CAPABILITY</code> 报错</td></tr>
+      <tr><td><b>把工具过滤当沙箱</b></td><td>"我限了它的工具，所以它跑不出我的边界"</td><td>明确区分工具面限制与 OS/账号边界；沙箱要靠 Landlock / container 等真机制</td></tr>
+      <tr><td><b>假设上下文被继承了</b></td><td>子 Agent 变量丢失，或反过来以为在用父级权限</td><td>用显式标志位表达继承语义；外部委派按冷启动处理，任务文本自带全部必要信息</td></tr>
+      <tr><td><b>把可扩展性做成默认开启</b></td><td>高危能力开箱即用，用户不知道自己的账号已被暴露</td><td>默认 <code>disabled</code>、不进默认 bundle、启用需显式操作 + 重启</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<section>
+  <h2><span class="num">7</span>落地建议：给 dongbi-agent-harness / AgentLoop v2 的四步路线</h2>
+  <p>
+    结合本项目现状（AgentLoop v2 六阶段 V00–V54、已有 Harness 架构设计），建议按以下顺序引入外部 Agent 接入能力。
+    <b>顺序本身很重要</b>——先建契约再建实现，否则后期会被各家差异反复打补丁。
+  </p>
+
+  <figure>
+    <svg viewBox="0 0 1000 260" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="外部 Agent 接入能力建设四步路线">
+      <defs>
+        <marker id="a4" markerWidth="10" markerHeight="10" refX="8" refY="3.5" orient="auto">
+          <path d="M0,0 L9,3.5 L0,7 z" fill="#2f6fed"/>
+        </marker>
+      </defs>
+
+      <g font-family="-apple-system,PingFang SC">
+        <rect x="18" y="40" width="220" height="140" rx="10" fill="#eaf1fe" stroke="#c3d8fa" stroke-width="1.5"/>
+        <circle cx="44" cy="66" r="13" fill="#2f6fed"/>
+        <text x="44" y="71" font-size="13" font-weight="700" fill="#ffffff" text-anchor="middle">1</text>
+        <text x="66" y="71" font-size="14" font-weight="700" fill="#1a1d21">建契约</text>
+        <text x="36" y="100" font-size="12" fill="#4a5158">定义委派 Service Definition</text>
+        <text x="36" y="120" font-size="12" fill="#4a5158">subagent 注册表接口</text>
+        <text x="36" y="140" font-size="12" fill="#4a5158">5 个能力 flag 的类型定义</text>
+        <text x="36" y="162" font-size="12" fill="#c0392b">产出：接口包（不含实现）</text>
+
+        <line x1="238" y1="110" x2="262" y2="110" stroke="#2f6fed" stroke-width="2" marker-end="url(#a4)"/>
+
+        <rect x="264" y="40" width="220" height="140" rx="10" fill="#ffffff" stroke="#d0d5dc" stroke-width="1.5"/>
+        <circle cx="290" cy="66" r="13" fill="#2f6fed"/>
+        <text x="290" y="71" font-size="13" font-weight="700" fill="#ffffff" text-anchor="middle">2</text>
+        <text x="312" y="71" font-size="14" font-weight="700" fill="#1a1d21">先接自家的</text>
+        <text x="282" y="100" font-size="12" fill="#4a5158">in-process spawn / fork</text>
+        <text x="282" y="120" font-size="12" fill="#4a5158">验证能力协商与报错路径</text>
+        <text x="282" y="140" font-size="12" fill="#4a5158">把"不支持就报错"跑通</text>
+        <text x="282" y="162" font-size="12" fill="#12805c">产出：可用的内建 provider</text>
+
+        <line x1="484" y1="110" x2="508" y2="110" stroke="#2f6fed" stroke-width="2" marker-end="url(#a4)"/>
+
+        <rect x="510" y="40" width="220" height="140" rx="10" fill="#ffffff" stroke="#d0d5dc" stroke-width="1.5"/>
+        <circle cx="536" cy="66" r="13" fill="#2f6fed"/>
+        <text x="536" y="71" font-size="13" font-weight="700" fill="#ffffff" text-anchor="middle">3</text>
+        <text x="558" y="71" font-size="14" font-weight="700" fill="#1a1d21">接外部的</text>
+        <text x="528" y="100" font-size="12" fill="#4a5158">优先走 ACP（生态最宽）</text>
+        <text x="528" y="120" font-size="12" fill="#4a5158">再按需接 SDK 类（Claude/Codex）</text>
+        <text x="528" y="140" font-size="12" fill="#4a5158">自带依赖、认证透传</text>
+        <text x="528" y="162" font-size="12" fill="#c0392b">产出：1–2 个外部 provider</text>
+
+        <line x1="730" y1="110" x2="754" y2="110" stroke="#2f6fed" stroke-width="2" marker-end="url(#a4)"/>
+
+        <rect x="756" y="40" width="226" height="140" rx="10" fill="#fffbfa" stroke="#e8b5ad" stroke-width="1.5"/>
+        <circle cx="782" cy="66" r="13" fill="#c0392b"/>
+        <text x="782" y="71" font-size="13" font-weight="700" fill="#ffffff" text-anchor="middle">4</text>
+        <text x="804" y="71" font-size="14" font-weight="700" fill="#c0392b">收边界</text>
+        <text x="774" y="100" font-size="12" fill="#4a5158">默认 disabled + 不在默认 bundle</text>
+        <text x="774" y="120" font-size="12" fill="#4a5158">分级停止阶梯 + 声明无回滚</text>
+        <text x="774" y="140" font-size="12" fill="#4a5158">提供 plan 式只读降维模式</text>
+        <text x="774" y="162" font-size="12" fill="#c0392b">产出：安全默认 + 权限矩阵</text>
+      </g>
+
+      <text x="18" y="212" font-family="-apple-system,PingFang SC" font-size="12.5" fill="#4a5158">原则：<tspan font-weight="700" fill="#c0392b">先把"不能做什么"定义清楚，再定义"能做什么"。</tspan>四家方案里全部踩过这个顺序的反面。</text>
+      <text x="18" y="234" font-family="-apple-system,PingFang SC" font-size="12.5" fill="#4a5158">建议与 AgentLoop v2 的阶段对齐：第 1 步落在 V00–V1x 的接口定义阶段，第 3–4 步落在后续阶段，避免后期返工。</text>
+    </svg>
+    <figcaption>图 5　外部 Agent 接入能力的建设顺序：契约 → 内建实现 → 外部实现 → 边界收敛。</figcaption>
+  </figure>
+
+  <h3>7.1　具体落点建议</h3>
+  <table class="tbl-tight">
+    <thead><tr><th>步骤</th><th>交付物</th><th>验收标准</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><b>1　建契约</b></td>
+        <td>
+          <code>SubagentCapabilities</code> 类型（5 flag）；<br>
+          <code>SubagentProvider</code> 接口（<code>run()</code> / <code>capabilities</code> / <code>inheritsParentContext</code>）；<br>
+          <code>SubagentRuntime</code> 注册表服务（<code>register</code> / <code>resolve(name)</code> / <code>list()</code>）；<br>
+          <code>SubagentError</code> 错误族（含 <code>UNSUPPORTED_CAPABILITY</code>）
+        </td>
+        <td>注册一个 Fake provider，请求一个它未声明的能力，能稳定拿到 <code>UNSUPPORTED_CAPABILITY</code>，<b>且不产生任何副作用</b></td>
+      </tr>
+      <tr>
+        <td><b>2　接自家的</b></td>
+        <td>in-process <code>spawn</code> / <code>fork</code> 两个 provider；能力协商走通</td>
+        <td>fork 能正确注入父级已完成轮次前缀，且<b>能验证"父级进行中的 turn 未被复制"</b>；spawn 不继承对话</td>
+      </tr>
+      <tr>
+        <td><b>3　接外部的</b></td>
+        <td>先一个 ACP provider（覆盖面最广），再视需要接 SDK 类</td>
+        <td>外部 provider 声明 <code>inheritsParentContext: false</code>；带 <code>agentOptions</code> 的请求被拒绝而非忽略；依赖自带、不读 PATH；<b>认证沿用用户原生登录态</b></td>
+      </tr>
+      <tr>
+        <td><b>4　收边界</b></td>
+        <td>安全默认开关；停止阶梯；只读降维模式；委派血缘字段</td>
+        <td>默认配置下外部 provider <b>不启动任何进程</b>；取消能在 3 次信号内确定终止；<b>文档明确写出"中断不等于回滚"</b>；<code>parentSession</code> / <code>delegationDepth</code> 可从日志重建</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="callout green">
+    <span class="lbl">如果只做一件事</span>
+    先做第 1 步的 <b><code>SubagentCapabilities</code> + <code>UNSUPPORTED_CAPABILITY</code></b>。
+    理由：它成本最低、对现有代码侵入最小，却直接决定后续所有外部 provider 能否被安全地编排。
+    四家方案里，只有 DSH 做了这件事——而这恰好是它最难被模仿、也最值得借鉴的部分。
+  </div>
+
+  <h3>7.2　落地时先抄谁：一份分工建议</h3>
+  <p>
+    Pi 与 DSH 是两套不同重量的答案，不必二选一。结合本项目的实际阶段，建议按"哪一部分抄谁"来分工：
+  </p>
+  <table class="tbl-tight">
+    <thead><tr><th style="width:24%">要解决的问题</th><th style="width:38%">抄 Pi（成本低、见效快、可读）</th><th>抄 DSH（成本高、换来长期确定性）</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><b>运行状态放哪</b></td>
+        <td><b>先抄 Pi</b>：计划写 <code>plan.md</code>、待办写 <code>TODO.md</code>，让状态<b>可打开、可版控</b>。<b>这一步几乎零成本，且立刻提升可调试性</b></td>
+        <td>等到需要跨进程恢复时，再引入只追加事件日志与"模型可见 ⟺ 已记录"的不变式</td>
+      </tr>
+      <tr>
+        <td><b>会话模型</b></td>
+        <td><b>先抄 Pi</b>：JSONL + <code>id</code>/<code>parentId</code> 的树形会话，支持就地跳转与分支摘要。<b>"从某个分岔点重试一次委派"是多 Agent 场景的高频需求，早做早省事</b></td>
+        <td>需要 fork / replay / 审计导出时，再补"只追加日志 + 前缀截取"的语义</td>
+      </tr>
+      <tr>
+        <td><b>循环继续的控制权</b></td>
+        <td>若宿主已有自己的调度层：抄 Pi 的<b>三个回调</b>（steering / follow-up / stopAfterTurn），扩展作者上手成本最低</td>
+        <td><b>若会出现多插件同时 steering</b>：必须抄 DSH 的 <b>inbox 数据驱动</b>，否则布尔合并规则会失控</td>
+      </tr>
+      <tr>
+        <td><b>接入契约</b></td>
+        <td>—</td>
+        <td><b>直接抄 DSH</b>：能力描述符 + <code>UNSUPPORTED_CAPABILITY</code> + <code>inheritsParentContext</code> + 双生命周期 + 停止阶梯。这一层 Pi 没有对应设计</td>
+      </tr>
+      <tr>
+        <td><b>供应链与默认开关</b></td>
+        <td>抄 Pi 的清单：精确 pin、<code>min-release-age</code>、shrinkwrap、lockfile 守护</td>
+        <td>抄 DSH 的姿态：依赖自带、不查 PATH；高危能力默认 <code>disabled</code> 且不进默认包</td>
+      </tr>
+      <tr>
+        <td><b>扩展体系</b></td>
+        <td>抄 Pi 的<b>分级杠杆</b>：Skill（说明书）/ Extension（新工具）/ Package（可分发的组合），并保持公开接口尽量小</td>
+        <td>若要长期开放给第三方，再补 DSH 的<b>能力缝三件套</b>（Definition / Provider / Consumer）与可逆副作用（effect 回滚）</td>
+      </tr>
+    </tbody>
+  </table>
+  <div class="callout blue">
+    <span class="lbl">一个务实的结论</span>
+    <b>先把 Pi 的三样东西拿到手（状态外置、树形会话、三个回调），成本极低且立刻改善可调试性；
+    再把 DSH 的一件事做扎实（能力描述符 + fail loud），这一件决定了外部 Agent 能不能被安全编排。</b>
+    剩下的（事件日志、能力缝三件套、inbox）等到真的出现"跨进程恢复 / 多插件 steering / 高风险工具"这三类需求时再引入，
+    否则投入会超过收益——这本身就是 Pi 与 DSH 共同给出的判断：<b>复杂度没有消失，只是要放在对的那一层。</b>
+  </div>
+</section>
+
+<section>
+  <h2><span class="num">8</span>风险与未定项</h2>
+  <table class="tbl-tight">
+    <thead><tr><th>风险</th><th>说明</th><th>应对</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><b>DSH 仍是开发者预览</b></td>
+        <td>GitHub / npm 当前为 <code>dsh-v0.1.1-rc.1</code> 级别，<b>官方明确警告会出现破坏性变更</b>；SDK 示例默认 <code>danger-full-access</code>，文档警告只能在一次性代码副本或容器中运行</td>
+        <td>借鉴<b>设计模式</b>而非直接依赖；若要试用，锁定 Profile、包版本、provider 配置与 commit</td>
+      </tr>
+      <tr>
+        <td><b>能力不对称</b></td>
+        <td>ACP / Codex / Claude Code provider 拒绝 <code>agentOptions</code> 等本地控制；<code>outputSchema</code> 并非全局可用</td>
+        <td>编排逻辑必须捕获 <code>UNSUPPORTED_CAPABILITY</code> 分支；不要假设能力普遍存在</td>
+      </tr>
+      <tr>
+        <td><b>权限边界错觉</b></td>
+        <td>工具过滤 ≠ OS / 账号边界；<code>inheritsParentContext</code> ≠ 权限继承</td>
+        <td>把"隔离"与"限制"分成两个概念建模；沙箱靠真机制（Landlock / container）</td>
+      </tr>
+      <tr>
+        <td><b>委派的经济性</b></td>
+        <td>外部委派是冷启动，成本 = 在更贵模型上重建上下文的成本；且中断无回滚</td>
+        <td>只把少数高价值任务委派出去；任务文本自带完整上下文；文档化"无回滚"</td>
+      </tr>
+      <tr>
+        <td><b>协议分裂与演进</b></td>
+        <td>MCP / ACP / A2A 三层并存，且 ACP v2 为 draft（<code>schema-v2.0.0-alpha.3</code>），要求实现方 v1 + v2 并行支持并做版本协商</td>
+        <td>接入层做协议适配隔离；<b>版本协商在 initialize 阶段用 <code>protocolVersion</code> 完成，不要从库版本推断</b></td>
+      </tr>
+      <tr>
+        <td><b>供应链与平台二进制</b></td>
+        <td>自带依赖的方案需要在 workspace 层为平台二进制开放构建/供应链例外</td>
+        <td>提前规划依赖白名单与构建策略（pnpm ≥10 需在 profile 的 <code>pnpm-workspace.yaml</code> 里 allowBuilds）</td>
+      </tr>
+      <tr>
+        <td><b>第三方包的信任边界</b></td>
+        <td>Pi 生态的 packages/Extensions <b>以完整系统权限运行、无沙箱</b>；反过来，"热门"不等于"审核过"。接入方若允许装包即多一种外部 Agent 能力，等于开放了一条任意代码执行链</td>
+        <td>把供应链清单变成默认护栏（精确 pin / min-release-age / shrinkwrap / lockfile 守护 / 签名审计 / 脚本白名单）；或走 DSH 的"依赖自带 + 白名单例外"路线</td>
+      </tr>
+      <tr>
+        <td><b>本报告的未验证与时效性</b></td>
+        <td>DSH 处于 Developer Preview（<code>dsh-v0.1.1-rc.1</code> 级别，官方警告破坏性变更）；Pi 迭代同样快（<code>pi-subagents</code> 版本在数周内从 0.28 走到 0.67）。subagent provider 的确切调用签名在公开材料中未固定；本报告<b>未运行代码验证</b></td>
+        <td>动手前查 DSH 的 <code>docs/subsystems/subagent.md</code> 与 <code>packages/subagent/</code>、Pi 的 <code>pi.dev/docs/latest</code> 与 Extension 类型定义；锁版本后再评估</td>
+      </tr>
+    </tbody>
+  </table>
+</section>
+
+<section>
+  <h2><span class="num">9</span>附录：来源与访问日期</h2>
+  <p style="font-size:13px;color:var(--text-3)">全部来源访问日期：<b>2026-09-11</b>。DSH 与 Pi 相关细节来自官方文档、源码结构分析与第三方长文，<b>未能逐项运行验证</b>，已在正文中标注不确定性。Pi 部分为本轮重点扩充，共 12 项来源。</p>
+
+  <h4>DeepSeek Harness（重点对象）</h4>
+  <ol class="src-list">
+    <li>DeepSeek open sources an agent harness where everything is a plugin — The New Stack — <a href="https://thenewstack.io/deepseek-harness-open-source-plugins/">thenewstack.io/deepseek-harness-open-source-plugins/</a></li>
+    <li>DeepSeek Harness subagents, jobs, and workflows: delegate without losing ownership — IndieSeek — <a href="https://indieseek.co/blogs/deepseek-harness-subagents-jobs-workflows-delegation-guide">indieseek.co/blogs/deepseek-harness-subagents-jobs-workflows-delegation-guide</a></li>
+    <li>Analyzing DeepSeek Harness: How Do You Build an Agent Harness Where "Everything Is a Plugin"? — MartianLee's Dev Blog — <a href="https://martianlee.github.io/posts/2026-09-05-deepseek-harness-architecture">martianlee.github.io/posts/2026-09-05-deepseek-harness-architecture</a></li>
+    <li>DeepSeek Harness Review: Agent Loop &amp; Plugin Architecture — DeepInfra — <a href="https://deepinfra.com/blog/deepseek-harness-review">deepinfra.com/blog/deepseek-harness-review</a></li>
+    <li>Subagent Orchestration — DeepWiki（deepseek-ai/deepseek-harness）— <a href="https://deepwiki.com/deepseek-ai/deepseek-harness/3.4-subagent-orchestration">deepwiki.com/deepseek-ai/deepseek-harness/3.4-subagent-orchestration</a></li>
+    <li>DeepSeek-Harness Subagents: Delegate to Claude Code, Codex, and ACP — findharness — <a href="https://findharness.com/blog/deepseek-harness-subagents">findharness.com/blog/deepseek-harness-subagents</a></li>
+    <li>DeepSeek Harness Internals: Plugin Architecture, Cordis Events &amp; Agent Loops — BestHub — <a href="https://www.besthub.dev/articles/deepseek-harness-internals-plugin-architecture-cordis-events-agent-loops-b76a85b51c58">besthub.dev/articles/deepseek-harness-internals-...</a></li>
+    <li>What Is a DSH Plugin? The Complete 2026 Guide — allclaw — <a href="https://allclaw.org/blog/what-is-dshplugin">allclaw.org/blog/what-is-dshplugin</a></li>
+    <li>DeepSeek Harness (dsh) 插件开发教程 — DEV Community — <a href="https://dev.to/henry_lin_3ac6363747f45b4/deepseek-harness-dsh-cha-jian-kai-fa-jiao-cheng-4h6j">dev.to/henry_lin_.../deepseek-harness-dsh-cha-jian-kai-fa-jiao-cheng-4h6j</a></li>
+    <li>DeepSeek Harness 能"在运行中改写自己"，全靠这个叫 Cordis 的插件框架 — CSDN — <a href="https://deepseek.csdn.net/6a81cd97662f9a54cb9d89a2.html">deepseek.csdn.net/6a81cd97662f9a54cb9d89a2.html</a></li>
+    <li>DeepSeek Harness 高阶教程：从能力三层拆分到子代理编排的完整实战 — 博客园 — <a href="https://www.cnblogs.com/vibecodinghuanzhe/p/22889391">cnblogs.com/vibecodinghuanzhe/p/22889391</a></li>
+    <li>Delegate to DeepSeek Harness From Anywhere: the New AgentRQ Plugin — AgentRQ Blog — <a href="https://agentrq.com/blog/deepseek-harness-plugin">agentrq.com/blog/deepseek-harness-plugin</a></li>
+    <li>DeepSeek Harness Open-Source: Inside the V4 Pro Agent Platform — BestHub — <a href="https://www.besthub.dev/articles/deepseek-harness-open-source-inside-the-v4-pro-agent-platform-5fad5cde95e9">besthub.dev/articles/deepseek-harness-open-source-...</a></li>
+    <li>DeepSeek Harness enters agent market with 300 plugins, challenging Codex — Edgen — <a href="https://www.edgen.tech/vi/news/post/deepseek-harness-enters-agent-market-with-300-plugins-challenging-codex">edgen.tech/.../deepseek-harness-enters-agent-market-with-300-plugins-challenging-codex</a></li>
+  </ol>
+
+  <h4>Pi Agent</h4>
+  <ol class="src-list" start="15">
+    <li>How the Pi Agent Extensions Work — GitHub（sathish316/pi-omniagent-extensions）— <a href="https://github.com/sathish316/pi-omniagent-extensions/blob/main/HOW_IT_WORKS.md">github.com/sathish316/pi-omniagent-extensions/blob/main/HOW_IT_WORKS.md</a></li>
+    <li>Custom Providers（ProviderConfig / streamSimple 接口参考）— Pi 官方文档 — <a href="http://pi.dev/docs/latest/custom-provider">pi.dev/docs/latest/custom-provider</a></li>
+    <li>pi/packages/coding-agent/src/core/extensions/types.ts — GitHub（earendil-works/pi）— <a href="https://github.com/earendil-works/pi/blob/main/packages/coding-agent/src/core/extensions/types.ts">github.com/earendil-works/pi/blob/main/packages/coding-agent/src/core/extensions/types.ts</a></li>
+    <li>Pi Coding Agent 入门与社区玩法 — LYon's Blog — <a href="https://yindongliang.com/docs/Agents/CLI/pi-coding-agent-guide">yindongliang.com/docs/Agents/CLI/pi-coding-agent-guide</a></li>
+    <li>pi-models-access（DeepSeek 官方 API provider 扩展）— Pi 包页 — <a href="https://pi.dev/packages/pi-models-access">pi.dev/packages/pi-models-access</a></li>
+    <li>Pi 官网（Primitives not features / 四模式 / 上下文工程 / What we didn't build）— <a href="http://pi.dev/">pi.dev/</a></li>
+    <li>Sessions（JSONL 会话树、/tree /fork /clone、分支摘要、过滤模式）— Pi 官方文档 — <a href="http://pi.dev/docs/latest/tree">pi.dev/docs/latest/tree</a></li>
+    <li>Hands-On With Pi: Run Modes and JSONL Session Trees — Developers Digest — <a href="https://www.developersdigest.tech/blog/pi-hands-on-run-modes-session-trees-guide">developersdigest.tech/blog/pi-hands-on-run-modes-session-trees-guide</a></li>
+    <li>Core Architecture（分层：pi-ai / pi-agent-core / pi-coding-agent / 接口层）— DeepWiki（earendil-works/pi）— <a href="https://deepwiki.com/earendil-works/pi/2-core-architecture">deepwiki.com/earendil-works/pi/2-core-architecture</a></li>
+    <li>Pi Coding Agent: The Strength Is in What They Didn't Build — Pasquale Pillitteri — <a href="https://pasqualepillitteri.it/en/news/5649/pi-coding-agent-what-they-didnt-build">pasqualepillitteri.it/en/news/5649/pi-coding-agent-what-they-didnt-build</a></li>
+    <li>Open Source Project #151: Pi — Philosophy-Driven Minimal AI Coding Agent（六项刻意不做 + 供应链安全清单）— DEV Community — <a href="https://dev.to/wonderlab/open-source-project-151-pi-philosophy-driven-minimal-ai-coding-agent-86k-stars-30-llm-lab">dev.to/wonderlab/open-source-project-151-pi-...</a></li>
+    <li>pi-subagents（委派包：内建角色、detached runner、wait 语义、有界编排、FleetView）— Pi 包页 — <a href="https://pi.dev/packages/pi-subagents">pi.dev/packages/pi-subagents</a></li>
+    <li>pi-subagents（v0.67.0，Surface 与 wait 语义补充）— Socket.dev — <a href="https://socket.dev/npm/package/pi-subagents">socket.dev/npm/package/pi-subagents</a></li>
+    <li>認識 Pi Coding Agent（不内建 MCP/子代理/Plan mode 的原因与替代、packages 全权限警告）— 光輝咖碼 — <a href="https://kamadiam.com//pi-coding-agent">kamadiam.com//pi-coding-agent</a></li>
+    <li>Pi Coding Agent：極簡主義的開源終端機 Coding Harness — quidproquo — <a href="http://quidproquo.cc/posts/tech/2026-03-31-pi-coding-agent-minimal-terminal-harness">quidproquo.cc/posts/tech/2026-03-31-pi-coding-agent-minimal-terminal-harness</a></li>
+    <li>pi-proxy-router（registerProvider / streamSimple 覆盖 streaming 实现的实际用例）— Pi 包页 — <a href="https://pi.dev/packages/pi-proxy-router">pi.dev/packages/pi-proxy-router</a></li>
+  </ol>
+
+  <h4>OpenAI Codex</h4>
+  <ol class="src-list" start="20">
+    <li>MCP integration — wiring tools into Codex — Claw / aguidetocloud — <a href="https://claw.aguidetocloud.com/openai/codex-cli/mcp">claw.aguidetocloud.com/openai/codex-cli/mcp</a></li>
+    <li>Codex CLI as an MCP Server: Multi-Agent Orchestration with the OpenAI Agents SDK — Codex Knowledge Base — <a href="https://codex.danielvaughan.com/2026/05/10/codex-cli-agents-sdk-mcp-server-multi-agent-orchestration">codex.danielvaughan.com/2026/05/10/codex-cli-agents-sdk-mcp-server-multi-agent-orchestration</a></li>
+    <li>Agent Interoperability Protocols and Codex CLI: MCP, ACP, and A2A in Practice — Codex Knowledge Base — <a href="https://codex.danielvaughan.com/2026/05/01/codex-cli-agent-interoperability-protocols-mcp-acp-a2a/">codex.danielvaughan.com/2026/05/01/codex-cli-agent-interoperability-protocols-mcp-acp-a2a/</a></li>
+    <li>Codex CLI MCP: Setup + Best Servers (2026) — Tembo — <a href="https://www.tembo.io/blog/codex-cli-mcp">tembo.io/blog/codex-cli-mcp</a></li>
+    <li>codex-as-mcp（委托任务给 Codex CLI 子代理的 MCP server）— LobeHub — <a href="https://lobehub.com/ar/mcp/kky42-codex-as-mcp">lobehub.com/ar/mcp/kky42-codex-as-mcp</a></li>
+  </ol>
+
+  <h4>Claude Code / Agent SDK</h4>
+  <ol class="src-list" start="24">
+    <li>How to Use the Claude Code Agent SDK in 2026 — Fast.io — <a href="https://about.fast.io/resources/claude-code-api-sdk-guide">about.fast.io/resources/claude-code-api-sdk-guide</a></li>
+    <li>Claude Agent SDK: Build Custom AI Agents Programmatically — OpenTools — <a href="https://opentools.ai/resources/claude-code-agent-sdk">opentools.ai/resources/claude-code-agent-sdk</a></li>
+    <li>claude-agent-sdk-python（hooks / subagents / MCP / Skills 用法）— LobeHub — <a href="https://lobehub.com/ru/skills/waltersumbon-claude-agent-sdk-skill-claude-agent-sdk-python">lobehub.com/ru/skills/waltersumbon-claude-agent-sdk-skill-claude-agent-sdk-python</a></li>
+    <li>How to Build an AI Agent with Claude and the Anthropic SDK — zarifautomates — <a href="https://zarifautomates.com/blog/how-to-build-ai-agent-claude-sdk">zarifautomates.com/blog/how-to-build-ai-agent-claude-sdk</a></li>
+  </ol>
+
+  <h4>协议：MCP / ACP / A2A</h4>
+  <ol class="src-list" start="28">
+    <li>Agent Client Protocol — Editors to Coding Agents — Hivebook — <a href="https://www.hivebook.wiki/wiki/agent-client-protocol-acp-editors-to-coding-agents">hivebook.wiki/wiki/agent-client-protocol-acp-editors-to-coding-agents</a></li>
+    <li>Agent Client Protocol [What It Changes] — US Tech Automations — <a href="https://ustechautomations.com/resources/blog/agent-client-protocol-explained-what-it-changes">ustechautomations.com/resources/blog/agent-client-protocol-explained-what-it-changes</a></li>
+    <li>ACP Registry Is Live: Zed and JetBrains Just Did for AI Agents What LSP Did for Language Servers — Groundy — <a href="https://groundy.com/articles/acp-registry-is-live-zed-and-jetbrains-just-did-for-ai-agents-what-lsp-did-for/">groundy.com/articles/acp-registry-is-live-...</a></li>
+    <li>Agent Client Protocol (ACP) Documentation — The Daily Brief — <a href="https://www.beri.net/learning/agent-client-protocol">beri.net/learning/agent-client-protocol</a></li>
+    <li>Agent Client Protocol — 百度百科 — <a href="https://baike.baidu.com/item/Agent%20Client%20Protocol/67741138">baike.baidu.com/item/Agent Client Protocol/67741138</a></li>
+  </ol>
+
+  <h4>DeepSeek 官方 API 文档与模型接入</h4>
+  <ol class="src-list" start="33">
+    <li>首次调用 API / Integrate with Agent Tools — DeepSeek API Docs — <a href="https://api-docs.deepseek.com/zh-cn">api-docs.deepseek.com/zh-cn</a></li>
+    <li>Your First API Call — DeepSeek API Docs — <a href="https://api-docs.deepseek.com/">api-docs.deepseek.com/</a></li>
+    <li>DeepSeek 官方站点（V4-Pro 与 Codex integration 说明）— <a href="https://www.deepseek.com/en/">deepseek.com/en/</a></li>
+    <li>pi-deepseek-provider（DeepSeek V4 系列 provider 扩展）— npm — <a href="https://www.npmjs.com/package/pi-deepseek-provider">npmjs.com/package/pi-deepseek-provider</a></li>
+  </ol>
+
+  <hr class="sep">
+
+  <div class="callout">
+    <span class="lbl">引用与免责说明</span>
+    本报告为技术研究性质的桌面调研，不构成对任何产品安全性、性能或可用性的背书。
+    涉及 DSH 的表述基于 2026-08 至 2026-09 期间的公开资料；该项目处于 Developer Preview，<b>接口与行为可能已发生变化</b>。
+    任何接入实现前，请以官方仓库当前文档与源码为准。
+    ACP v2 为 draft 状态（<code>schema-v2.0.0-alpha.3</code>），生产环境应支持 v1 并通过版本协商处理 v2。
+  </div>
+
+</section>
+
+<footer style="margin-top:52px;padding-top:22px;border-top:1px solid var(--border);font-size:12.5px;color:var(--text-3);display:flex;justify-content:space-between;flex-wrap:wrap;gap:12px;">
+  <span>主流 Agent 外部接入方案研究报告 · Pi / DeepSeek Harness / Codex / Claude</span>
+  <span>2026-09-11 · 桌面研究 · 46 项来源</span>
+</footer>
+
+</div>
+</body>
+</html>
