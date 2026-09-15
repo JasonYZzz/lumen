@@ -23,6 +23,8 @@ from lumen.application import (
     QueueRunInput,
     RejectAgentImport,
     RejectPlan,
+    RunDirectCommand,
+    RunStartedResult,
     SendAgentMessage,
     SetApprovalMode,
     SetCollaborationMode,
@@ -235,6 +237,15 @@ class HostSessionAdapter:
             )
         )
         return await self._consume(started.run_id, emit, approve, approve_batch)
+
+    async def run_direct(self, argv: tuple[str, ...]) -> RunStartedResult:
+        """Start an explicit ``! argv`` command through the Host command channel."""
+
+        if self.session_id is None:
+            raise RuntimeError("no active session")
+        return await self.host.dispatch(
+            RunDirectCommand(self.session_id, argv, f"tui-direct-{uuid4()}")
+        )
 
     async def approve_plan(
         self,

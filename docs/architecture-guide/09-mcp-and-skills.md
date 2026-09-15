@@ -108,7 +108,7 @@ flowchart LR
     Validate --> Catalog["available_skills 精简目录"]
     Catalog --> Load["load_skill 或 /skill:name"]
     Load --> Snapshot["Session artifact snapshot"]
-    Snapshot --> Context["当前 session 每轮稳定重新注入"]
+    Snapshot --> Context["按预算整份重注入，未选中快照保留"]
 ```
 
 覆盖优先级为：
@@ -151,16 +151,33 @@ ResourceManager 是 Skill 发现的权威，安装完成、`list_skills`、按�
 
 Skill 不是启动时完整注入的 Prompt 文件集合。
 
-1. 启动阶段只把 `name`、`description`、`location` 放入 `<available_skills>`；
+1. 模型目录只把 `name`、`description` 放入 `<available_skills>`，独立计入 `CAPABILITY_CATALOG`；
 2. 模型根据 description 判断任务是否匹配；
 3. 匹配后调用 `load_skill(name)` 获取完整正文；
 4. 用户也可以使用 `/skill:<name>` 手动展开；
 5. 激活正文写入内容寻址 artifact，session state 保存 name/revision/source/ref；
-6. 后续请求仍受 `ACTIVE_SKILLS` zone cap 约束；
+6. 后续请求按完整正文选择驻留 Skill，不截断指令；最近激活的一份完整保留，较早的只整份装入；
 7. resume 恢复相同 artifact，不读取已变化的源文件；重新激活才更新 revision；
 8. `/skill unload <name>` 只影响当前 session，P0 不自动删除失去引用的 artifact。
 
 `disable-model-invocation: true` 的 Skill 不会出现在模型目录中，只允许用户手动调用。
+
+模型目录预算为 `min(window × 1%, 8000)` tokens，与工具 schema 和运行时事实分开计量。
+按当前输入中的名称、描述词项匹配和名称排序选择完整条目，超长条目不截断后伪装成完整描述。
+模型通过 `list_skills(query="...", offset=0, limit=20)` 搜索或分页浏览未展示条目；
+`limit` 范围为 1–50，响应包含 `total` 和 `next_offset`，manual-only 条目不进入模型检索。
+极小窗口连目录提示都放不下时，仍可通过工具说明发现 `list_skills`。
+
+`ACTIVE_SKILLS` 的 10% 是常规驻留目标。最近激活的 Skill 可以超过目标，但不能突破完整请求
+硬限制；确实无法容纳时 preflight 失败，不以部分指令继续执行。较早的正文在剩余目标和固定预算内
+整份装入；未装入的名称通过请求内提示与 `/context` 报告暴露，重新 `load_skill` 可再次选择。
+这只改变请求投影，不删除 Session 快照，也不根据模型推测新增任务生命周期状态。
+压缩和 resume 都从相同 Artifact 恢复完整选中正文。`/context` 的 complete 表示完整注入，
+不表示模型一定理解或遵守了指令。
+
+加载工具仍返回全文以兼容共享该工具的子 Agent 和无 Session 调用者；不会用加载回执承诺尚未
+接通的注入路径。激活时复用同一次解析的正文保存快照，避免再次扫描导致 revision 与返回正文不一致。
+引用资源只在需要时读取，沿用现有工具结果 Artifact 与历史压缩，不自动递归加载或执行脚本。
 
 ## 6. Skill 资源与脚本安全
 

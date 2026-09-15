@@ -4,7 +4,7 @@ import asyncio
 import mimetypes
 import re
 from collections import Counter
-from collections.abc import AsyncIterator, Generator
+from collections.abc import AsyncIterator, Awaitable, Callable, Generator
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
@@ -42,10 +42,12 @@ from lumen.events import (
     RunWaitingForUser,
     ToolApprovalBatchPending,
     ToolApprovalPending,
+    ToolCallFinished,
+    ToolCallStarted,
 )
 from lumen.files import expand_file_mentions
 from lumen.files.documents import read_workspace_document
-from lumen.interactive_queue import QueueMode
+from lumen.interactive_queue import QueuedMessage, QueueMode
 from lumen.live import LiveConnectRequest, LiveEvent
 from lumen.live.manager import LiveSessionManager
 from lumen.live.types import LiveConnectionState
@@ -57,7 +59,7 @@ from lumen.runtime import AgentRuntime, CompletionPolicy, ToolApproval
 from lumen.sessions import SessionData, SessionMetadata, SessionRepository
 from lumen.skills import expand_skill_for_message
 from lumen.timeline import RepositoryTimelineAdapter, TimelineStore
-from lumen.tools.gateway import CapabilityApproval
+from lumen.tools.gateway import CapabilityApproval, CapabilityInvocation
 from lumen.tools.workspace import Workspace
 from lumen.trust import ApprovalRuleStore
 
@@ -111,6 +113,7 @@ from .models import (
     RejectPlan,
     RenameSession,
     RetryRun,
+    RunDirectCommand,
     RunNotFoundError,
     RunStartedResult,
     SelectModel,
@@ -329,7 +332,10 @@ class WorkspaceHost:
 
     @overload
     async def dispatch(
-        self, command: StartRun | RetryRun | InvokeSkill | InvokePrompt | ApprovePlan | RejectPlan
+        self,
+        command: (
+            StartRun | RetryRun | InvokeSkill | InvokePrompt | ApprovePlan | RejectPlan | RunDirectCommand
+        ),
     ) -> RunStartedResult: ...
 
     @overload
@@ -528,6 +534,8 @@ class WorkspaceHost:
             return self._delete_session(command.session_id)
         if isinstance(command, StartRun):
             return await self._start_run(command)
+        if isinstance(command, RunDirectCommand):
+            return await self._start_direct_command(command)
         if isinstance(command, StartLiveSession):
             return await self._start_live_session(command)
         if isinstance(command, InterruptLiveSession):
@@ -1001,6 +1009,12 @@ class WorkspaceHost:
         async for event in record.journal.subscribe(after_sequence):
             yield event
 
+    def interactive_queue_snapshot(self) -> tuple[QueuedMessage, ...]:
+        """Read-only projection of the runtime-owned interactive queue."""
+
+        runtime = self.resources.runtime
+        return () if runtime is None else runtime.interactive_queue.snapshot()
+
     async def subscribe_live(
         self,
         live_session_id: str,
@@ -1250,6 +1264,181 @@ class WorkspaceHost:
                 raise
         return RunStartedResult(run_id, command.session_id)
 
+    async def _request_run_approval(
+        self,
+        actor: _SessionActor,
+        record: _RunRecord,
+        emit: Callable[[RunEvent], Awaitable[None]],
+        request: ApprovalRequest,
+    ) -> ToolApproval:
+        """Apply Host policy, then park the request until a client decides.
+
+        Policy-resolved requests never reach the event stream; only genuine
+        confirmations are journaled as ``ToolApprovalPending``.
+        """
+
+        decision = self._decide_request(actor, request)
+        if not decision.requires_confirmation:
+            return ToolApproval(decision.approved, decision.message)
+        loop = asyncio.get_running_loop()
+        future: asyncio.Future[ToolApproval] = loop.create_future()
+        record.approvals[request.call_id] = _PendingApproval(request, future)
+        await emit(
+            ToolApprovalPending(
+                request.call_id,
+                request.name,
+                request.args,
+                request.origin,
+                request.risk,
+            )
+        )
+        return await future
+
+    async def _start_direct_command(self, command: RunDirectCommand) -> RunStartedResult:
+        """Run an explicit ``! argv`` command as a tool-only run.
+
+        The execution crosses the same admission, approval policy, gateway and
+        effect ledger as a model-run tool call; the client only subscribes to
+        the resulting event stream and answers approvals.
+        """
+
+        argv = tuple(part for part in command.argv if part)
+        if not argv:
+            raise InvalidStateError("direct command requires at least one argument")
+        request_key = (command.session_id, command.client_request_id)
+        async with self._state_lock:
+            previous_id = self._requests.get(request_key)
+            if previous_id is not None:
+                previous = self._run(previous_id)
+                return RunStartedResult(previous.id, previous.session_id, previous.status)
+            if self._active_run_id is not None:
+                raise WorkspaceBusyError(
+                    "another agent run is active",
+                    details={"run_id": self._active_run_id},
+                )
+            if self._live_execution_id is not None:
+                raise WorkspaceBusyError(
+                    "a Live tool execution is active",
+                    details={"live_session_id": self._live_execution_id},
+                )
+            loaded = self._managed_session(command.session_id)
+            if loaded.catalog.archived_at is not None:
+                raise InvalidStateError("restore the archived Session before running a command")
+            actor = self._actor(command.session_id)
+            if actor.settings.collaboration_mode is CollaborationMode.PLAN:
+                raise InvalidStateError("direct shell is disabled in Plan mode")
+            if not self._workspace_run_lock.acquire():
+                raise WorkspaceBusyError("another Lumen process is running in this workspace")
+            try:
+                self._check_effect_recovery(command.session_id)
+                run_id = str(uuid4())
+                record = _RunRecord(
+                    id=run_id,
+                    session_id=command.session_id,
+                    client_request_id=command.client_request_id,
+                    journal=EventJournal(session_id=command.session_id, run_id=run_id),
+                )
+                self._runs[run_id] = record
+                self._requests[request_key] = run_id
+                self._active_run_id = run_id
+                actor.active_run_id = run_id
+                record.task = asyncio.create_task(
+                    self._execute_direct_command(actor, record, argv),
+                    name=f"lumen-direct-{run_id}",
+                )
+            except BaseException:
+                self._workspace_run_lock.release()
+                raise
+        return RunStartedResult(run_id, command.session_id)
+
+    async def _execute_direct_command(
+        self,
+        actor: _SessionActor,
+        record: _RunRecord,
+        argv: tuple[str, ...],
+    ) -> None:
+        terminal_seen = False
+
+        async def emit(event: RunEvent) -> None:
+            nonlocal terminal_seen
+            terminal_seen = terminal_seen or isinstance(event, RunCompleted | RunFailed | RunCancelled)
+            await record.journal.append(event)
+
+        async def approve(request: ApprovalRequest) -> ToolApproval:
+            return await self._request_run_approval(actor, record, emit, request)
+
+        gateway = getattr(self.resources, "capability_gateway", None)
+        descriptor = gateway.descriptor("run_command") if gateway is not None else None
+        call_id = f"direct-{uuid4().hex[:12]}"
+        started_at = asyncio.get_running_loop().time()
+        if descriptor is not None:
+            await emit(
+                ToolCallStarted(
+                    call_id,
+                    "run_command",
+                    {"argv": list(argv), "cwd": "."},
+                    origin=descriptor.origin,
+                    risk=descriptor.risk,
+                    started_at=started_at,
+                )
+            )
+        try:
+            if gateway is None or descriptor is None:
+                raise InvalidStateError("run_command capability is not available")
+            task_workspace = getattr(self.resources, "task_workspace", None)
+            if task_workspace is not None:
+                task_workspace.bind_session(record.session_id)
+            result = await gateway.invoke(
+                CapabilityInvocation(
+                    execution_id=record.id,
+                    provider_call_id=call_id,
+                    name="run_command",
+                    arguments={"argv": list(argv)},
+                ),
+                approve=approve,
+            )
+        except asyncio.CancelledError:
+            record.status = "cancelled"
+            if not terminal_seen:
+                await emit(RunCancelled())
+            raise
+        except Exception as error:
+            record.status = "failed"
+            if not terminal_seen:
+                await emit(RunFailed(f"{type(error).__name__}: {error}"))
+        else:
+            raw_output: object = result.output
+            exit_code: object = None
+            if isinstance(raw_output, dict):
+                exit_code = cast(dict[str, Any], raw_output).get("exit_code")
+            rendered = result.model_output or result.error or ""
+            await emit(
+                ToolCallFinished(
+                    call_id,
+                    "run_command",
+                    rendered,
+                    is_error=not result.succeeded or bool(exit_code),
+                    elapsed_seconds=(
+                        result.execution_seconds
+                        if result.execution_seconds is not None
+                        else max(0.0, asyncio.get_running_loop().time() - started_at)
+                    ),
+                    preview=rendered,
+                    exit_code=exit_code if isinstance(exit_code, int) else None,
+                    result_view=result.result_view,
+                )
+            )
+            record.status = "completed"
+            await emit(RunCompleted(rendered))
+        finally:
+            self._resolve_pending(record, approved=False, message="run ended")
+            actor.active_run_id = None
+            async with self._state_lock:
+                if self._active_run_id == record.id:
+                    self._active_run_id = None
+                    self._workspace_run_lock.release()
+            await record.journal.close()
+
     async def _execute(
         self,
         actor: _SessionActor,
@@ -1278,22 +1467,7 @@ class WorkspaceHost:
             await record.journal.append(event)
 
         async def approve(request: ApprovalRequest) -> ToolApproval:
-            decision = self._decide_request(actor, request)
-            if not decision.requires_confirmation:
-                return ToolApproval(decision.approved, decision.message)
-            loop = asyncio.get_running_loop()
-            future: asyncio.Future[ToolApproval] = loop.create_future()
-            record.approvals[request.call_id] = _PendingApproval(request, future)
-            await emit(
-                ToolApprovalPending(
-                    request.call_id,
-                    request.name,
-                    request.args,
-                    request.origin,
-                    request.risk,
-                )
-            )
-            return await future
+            return await self._request_run_approval(actor, record, emit, request)
 
         async def approve_batch(
             requests: tuple[ApprovalRequest, ...],

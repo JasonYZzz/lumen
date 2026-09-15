@@ -138,6 +138,7 @@ class ContextAssembler:
         policy: str = "",
         instruction_sources: Sequence[InstructionSource] = (),
         runtime_context: str = "",
+        skill_catalog: Sequence[dict[str, Any]] = (),
         prompt: str,
         tool_schemas: Sequence[dict[str, Any]],
         history: Sequence[ModelMessage],
@@ -169,9 +170,13 @@ class ContextAssembler:
         builder.add_memory(memory_index, recalled_memory)
         contextual_schemas = _contextual_tool_documents(tool_schemas, history)
         builder.add_capability_catalog(contextual_schemas)
-        builder.add_active_skills(active_skills)
+        builder.add_skill_catalog(skill_catalog, prompt, min(int(self.window_tokens * 0.01), 8_000))
         builder.add_task_state(task_state)
         builder.add_retrieved_context(retrieved_context)
+        builder.add_active_skills(
+            active_skills,
+            max(0, (self.hard_limit_tokens or self.window_tokens) - builder.fixed_tokens - output_reserve),
+        )
         builder.add_history(history, history_token_override)
         builder.add_output_reserve(output_reserve)
 
@@ -414,6 +419,42 @@ class _BlockBuilder:
             )
         )
 
+    def add_skill_catalog(self, skills: Sequence[dict[str, Any]], prompt: str, cap: int) -> None:
+        """Select whole metadata entries; hidden entries remain searchable."""
+        if not skills:
+            return
+        terms = set(prompt.casefold().split())
+        ranked = sorted(
+            skills,
+            key=lambda skill: (
+                -int(str(skill.get("name", "")).casefold() in prompt.casefold()),
+                -sum(term in str(skill.get("description", "")).casefold() for term in terms),
+                str(skill.get("name", "")),
+            ),
+        )
+        header = f"available_skills ({len(skills)} total); use list_skills to search or page."
+        lines = [header]
+        selected: list[str] = []
+        for skill in ranked:
+            name = str(skill.get("name", ""))
+            description = " ".join(str(skill.get("description", "")).split())
+            entry = f"- {name}: {description}"
+            if self.counter.count_text("\n".join([*lines, entry])).tokens <= cap:
+                lines.append(entry)
+                selected.append(name)
+        text = "\n".join(lines)
+        # Very small windows rely on the always-visible list_skills tool guidance.
+        if self.counter.count_text(text).tokens > cap:
+            return
+        self.add(self._block(
+            "skill-catalog", ContextZone.CAPABILITY_CATALOG, SourceKind.CAPABILITY,
+            "runtime:skill-catalog", self._revision(text),
+            ContextPayload(text=text, structured={
+                "selected": selected, "total": len(skills), "omitted": len(skills) - len(selected),
+            }),
+            self.counter.count_text(text).tokens, 85, RetentionPolicy.REINJECT, TrustLevel.SYSTEM,
+        ))
+
     def add_memory(self, index: str, recalled: str) -> None:
         if index:
             index = self._fit_text(index, self.caps.caps[ContextZone.MEMORY_INDEX])
@@ -464,21 +505,36 @@ class _BlockBuilder:
                 high = middle - 1
         return text[:low] + marker
 
-    def add_active_skills(self, skills: Sequence[dict[str, Any]]) -> None:
-        remaining = self.caps.caps[ContextZone.ACTIVE_SKILLS]
+    def add_active_skills(self, skills: Sequence[dict[str, Any]], available_tokens: int) -> None:
+        remaining = min(self.caps.caps[ContextZone.ACTIVE_SKILLS], available_tokens)
         selected: list[tuple[dict[str, Any], str]] = []
-        # ResourceManager exposes the working set in LRU order. Fill the zone
-        # newest-first, then restore stable source order for rendering.
+        omitted: list[str] = []
+        # Session snapshots are in activation order. The newest selection is
+        # complete even above the residency target; global preflight still owns
+        # the hard limit. Older snapshots enter only as whole instruction files.
         for skill in reversed(skills):
             body = str(skill.get("body", ""))
-            if not body or remaining <= 0:
+            if not body:
                 continue
-            fitted = self._fit_text(body, remaining)
-            tokens = self.counter.count_text(fitted).tokens
-            if not fitted or tokens <= 0:
+            tokens = self.counter.count_text(body).tokens
+            if selected and tokens > remaining:
+                omitted.append(str(skill.get("name", "unknown")))
                 continue
-            selected.append((skill, fitted))
+            selected.append((skill, body))
             remaining -= tokens
+        if omitted:
+            notice = (
+                f"{len(omitted)} saved Skills are not included in this request: "
+                + ", ".join(name[:64] for name in omitted[:10])
+                + ". Use load_skill by name before using an omitted Skill; snapshots remain saved."
+            )
+            self.add(self._block(
+                "skill-selection", ContextZone.RUNTIME_CONTEXT, SourceKind.RUNTIME,
+                "runtime:skill-selection", self._revision(notice),
+                ContextPayload(text=notice, structured={"omitted": omitted}),
+                self.counter.count_text(notice).tokens, 96,
+                RetentionPolicy.EPHEMERAL, TrustLevel.SYSTEM,
+            ))
         for skill, body in reversed(selected):
             name = str(skill.get("name", "unknown"))
             self.add(

@@ -97,6 +97,14 @@ class StartRun:
 
 
 @dataclass(frozen=True, slots=True)
+class RunDirectCommand:
+    session_id: str
+    argv: tuple[str, ...]
+    client_request_id: str
+    type: Literal["run_direct_command"] = "run_direct_command"
+
+
+@dataclass(frozen=True, slots=True)
 class CancelRun:
     run_id: str
     type: Literal["cancel_run"] = "cancel_run"
@@ -399,6 +407,7 @@ WorkspaceCommand: TypeAlias = (
     | SetSessionArchived
     | DeleteSession
     | StartRun
+    | RunDirectCommand
     | CancelRun
     | StartLiveSession
     | InterruptLiveSession

@@ -277,6 +277,7 @@ class RuntimeContextSnapshot:
     policy_instructions: str = ""
     instruction_sources: tuple[InstructionSource, ...] = ()
     runtime_context: str = ""
+    skill_catalog_documents: tuple[dict[str, Any], ...] = ()
     prompt_mode: str = "legacy"
     prompt_preset: str | None = None
     prompt_version: str = "legacy"
@@ -733,6 +734,7 @@ class ContextEngine:
             policy=request.runtime.policy_instructions,
             instruction_sources=request.runtime.instruction_sources,
             runtime_context=request.runtime.runtime_context,
+            skill_catalog=request.runtime.skill_catalog_documents,
             prompt=request.prompt,
             tool_schemas=request.runtime.tool_schema_documents,
             history=active_history,
@@ -769,6 +771,7 @@ class ContextEngine:
                 policy=request.runtime.policy_instructions,
                 instruction_sources=request.runtime.instruction_sources,
                 runtime_context=request.runtime.runtime_context,
+                skill_catalog=request.runtime.skill_catalog_documents,
                 prompt=request.prompt,
                 tool_schemas=request.runtime.tool_schema_documents,
                 history=active_history,
@@ -823,6 +826,7 @@ class ContextEngine:
         task: TaskSnapshot,
         emit: EventSink,
         runtime_context: str | None = None,
+        skill_catalog_documents: Sequence[dict[str, Any]] | None = None,
         active_skill_documents: Sequence[dict[str, Any]] | None = None,
         retrieved_context_documents: Sequence[dict[str, Any]] | None = None,
         work_product_documents: Sequence[dict[str, Any]] | None = None,
@@ -844,6 +848,10 @@ class ContextEngine:
                 request.runtime.runtime_context if runtime_context is None else runtime_context
             ),
             tool_schema_documents=tuple(tool_schemas),
+            skill_catalog_documents=(
+                request.runtime.skill_catalog_documents
+                if skill_catalog_documents is None else tuple(skill_catalog_documents)
+            ),
             active_skill_documents=(
                 request.runtime.active_skill_documents
                 if active_skill_documents is None
@@ -869,6 +877,7 @@ class ContextEngine:
                 policy=refreshed_runtime.policy_instructions,
                 instruction_sources=refreshed_runtime.instruction_sources,
                 runtime_context=refreshed_runtime.runtime_context,
+                skill_catalog=refreshed_runtime.skill_catalog_documents,
                 prompt=request.prompt,
                 tool_schemas=refreshed_runtime.tool_schema_documents,
                 history=canonical_current,
@@ -2076,10 +2085,23 @@ class ContextEngine:
                     {
                         "name": block.source.origin.removeprefix("skill:"),
                         "tokens": block.token_estimate,
+                        "revision": block.source.revision,
+                        "status": "included",
+                        "complete": True,
                     }
                     for block in envelope.blocks
                     if block.source.origin.startswith("skill:")
                 ],
+                "omitted_skills": [
+                    name
+                    for block in envelope.blocks
+                    if block.source.origin == "runtime:skill-selection"
+                    for name in (block.payload.structured or {}).get("omitted", [])
+                ],
+                "skill_catalog": next((
+                    {**(block.payload.structured or {}), "tokens": block.token_estimate}
+                    for block in envelope.blocks if block.source.origin == "runtime:skill-catalog"
+                ), dict[str, Any]()),
             },
         )
 

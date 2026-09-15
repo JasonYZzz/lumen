@@ -279,7 +279,7 @@
             <div class="zone z-memory"><b>MEMORY_<wbr>INDEX</b><small>长期记忆索引</small><em>每轮注入 · 4%</em></div>
             <div class="zone z-tools"><b>CAPABILITY_<wbr>CATALOG</b><small>工具与能力 Schema</small><em>每轮注入 · 8%</em></div>
             <div class="zone z-skill"><b>TASK_<wbr>STATE</b><small>计划、进度与任务状态</small><em>每轮注入 · 10%</em></div>
-            <div class="zone z-skill"><b>ACTIVE_<wbr>SKILLS</b><small>当前 Session 的 Skill 快照</small><em>每轮注入 · 10%</em></div>
+            <div class="zone z-skill"><b>ACTIVE_<wbr>SKILLS</b><small>整份选择 Session Skill 快照</small><em>驻留目标 · 10%</em></div>
             <div class="zone z-memory"><b>HISTORY_<wbr>SUMMARY</b><small>历史压缩 Checkpoint</small><em>摘要保留 · 5%</em></div>
             <div class="zone z-history"><b>RECENT_<wbr>HISTORY</b><small>安全边界后的近期消息</small><em>弹性预算 PINNED</em></div>
             <div class="zone z-memory"><b>RECALLED_<wbr>MEMORY</b><small>本轮召回的相关事实</small><em>临时注入 · 6%</em></div>
@@ -467,10 +467,10 @@
           <div class="knowledge-flow skill-flow">
             <div class="knowledge-step"><i>01</i><b>扫描技能目录</b><small>.lumen/skills · user · builtin</small></div><span>→</span>
             <div class="knowledge-step"><i>02</i><b>解析 SKILL.md</b><small>frontmatter + Markdown body</small></div><span>→</span>
-            <div class="knowledge-step"><i>03</i><b>注入精简 Catalog</b><small>name · description · location</small></div><span>→</span>
+            <div class="knowledge-step"><i>03</i><b>注入有界 Catalog</b><small>name · description · 可检索</small></div><span>→</span>
             <div class="knowledge-step"><i>04</i><b>按需激活</b><small>load_skill 或 /skill:name</small></div><span>→</span>
             <div class="knowledge-step"><i>05</i><b>保存 Artifact</b><small>0600 · content addressed</small></div><span>→</span>
-            <div class="knowledge-step"><i>06</i><b>Session 重注入</b><small>resume 同一 revision</small></div><span>→</span>
+            <div class="knowledge-step"><i>06</i><b>整份重注入</b><small>未选中保留 · resume 同一 revision</small></div><span>→</span>
             <div class="knowledge-step success"><i>07</i><b>读取资源 / 脚本</b><small>限定相对路径与声明清单</small></div>
           </div>
           <div class="skill-anatomy">

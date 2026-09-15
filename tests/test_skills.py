@@ -472,6 +472,43 @@ def test_model_skill_tool_refuses_manual_only_skill(tmp_path: Path) -> None:
         manager.registry.entries["read_skill_resource"].spec.function("manual", "SKILL.md")
 
 
+def test_model_skill_listing_is_searchable_paginated_and_hides_manual(tmp_path: Path) -> None:
+    from lumen.resources import ResourceManager
+
+    for name in ("alpha", "beta", "gamma"):
+        _write_skill(tmp_path / ".lumen" / "skills" / name, name=name)
+    _write_skill(tmp_path / ".lumen" / "skills" / "manual", name="manual", disable_model_invocation=True)
+    manager = ResourceManager(_config_with_skills(tmp_path), workspace=tmp_path)  # type: ignore[arg-type]
+    listing = manager.registry.entries["list_skills"].spec.function
+    first = listing(limit=2)
+    assert first["total"] == 3
+    assert first["next_offset"] == 2
+    second = listing(offset=first["next_offset"], limit=2)
+    assert second["next_offset"] is None
+    assert [item["name"] for item in first["skills"] + second["skills"]] == ["alpha", "beta", "gamma"]
+    assert listing(query="BETA")["skills"][0]["name"] == "beta"
+    assert listing(query="manual")["total"] == 0
+    with pytest.raises(ValueError):
+        listing(limit=100)
+    assert "available_skills" not in manager.runtime_context()
+
+
+def test_session_skill_load_saves_complete_snapshot(tmp_path: Path) -> None:
+    from lumen.resources import ResourceManager
+
+    body = "Full instruction. " * 1_000 + "Required final step."
+    _write_skill(tmp_path / ".lumen" / "skills" / "review", name="review", body=body)
+    manager = ResourceManager(_config_with_skills(tmp_path), workspace=tmp_path)  # type: ignore[arg-type]
+    session = manager.session_repository.create(agent_name="test", model_id="test")
+    manager.bind_session_context(session.id)
+    loader = manager.registry.entries["load_skill"].spec.function
+    rendered = loader("review")
+    assert "Required final step." in rendered
+    assert manager.active_skill_documents(session.id)[0]["body"] == body
+    loader("review")
+    assert len(manager.active_skill_documents(session.id)) == 1
+
+
 def test_model_skill_resource_refuses_manual_only_skill_when_reader_exists(tmp_path: Path) -> None:
     from lumen.resources import ResourceManager
 

@@ -32,7 +32,9 @@ def test_format_context_renders_zone_table_and_pressure() -> None:
                 "tokens": 21,
             }
         ],
-        skill_working_set=[{"name": "review", "tokens": 48}],
+        skill_working_set=[{"name": "review", "tokens": 48, "complete": True}],
+        omitted_skills=["older"],
+        skill_catalog={"selected": ["review"], "total": 20, "tokens": 42},
         estimated=False,
     )
     text = LumenApp.format_context_result(result)
@@ -42,6 +44,9 @@ def test_format_context_renders_zone_table_and_pressure() -> None:
     assert "MCP schemas: 7200" in text
     assert "filesystem_search: 21 tokens  [deferred]" in text
     assert "review: 48 tokens" in text
+    assert "[complete]" in text
+    assert "Skills not resident (snapshots saved): older" in text
+    assert "Skill catalog: 1/20 entries, 42 tokens" in text
     # Not estimated -> no estimation disclaimer.
     assert "estimated" not in text.lower() or "no known profile" not in text
 

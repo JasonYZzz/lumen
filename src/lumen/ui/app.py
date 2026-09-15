@@ -6,13 +6,11 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import re
 import shlex
 import subprocess
 import sys
 from typing import ClassVar, cast
-from uuid import uuid4
 
 from pydantic_ai.messages import ModelMessage
 from rich.text import Text
@@ -25,13 +23,13 @@ from textual.widgets import Static
 from textual.worker import Worker
 
 from lumen.application import ImportAttachmentPath, WorkspaceHost
-from lumen.approval import ApprovalMode, ApprovalPolicy
+from lumen.approval import ApprovalMode
 from lumen.attachments import AttachmentRef
 from lumen.branding import FRAMEWORK_NAME
 from lumen.collaboration import CollaborationMode, apply_collaboration_context
 from lumen.config import AppConfig
 from lumen.context import ContextSummary
-from lumen.events import ApprovalRequest, RunEvent, ToolCallFinished, ToolCallStarted, UsageUpdated
+from lumen.events import ApprovalRequest, RunEvent, UsageUpdated
 from lumen.interactive_queue import QueueLimitError, QueueMode
 from lumen.plan import PlanState
 from lumen.resources import ResourceManager
@@ -39,7 +37,6 @@ from lumen.run_coordinator import RunInput
 from lumen.runtime import ToolApproval
 from lumen.sessions import SessionMetadata
 from lumen.timeline import TimelineStore
-from lumen.tools.capability import build_capability_specs
 from lumen.tools.workspace import Workspace
 from lumen.ui.activity_indicator import RunActivityIndicator
 from lumen.ui.approval_controller import ApprovalControllerMixin
@@ -316,7 +313,6 @@ class LumenApp(
         # config but live-toggled via /mode or Shift+Tab.
         self._approval_mode = ApprovalMode.parse(config.permissions.default_mode)
         self._collaboration_mode = CollaborationMode(config.collaboration.default_mode)
-        self._approval_policy = ApprovalPolicy()
         self._assistant_stream: StreamingMarkdownController | None = None
         # One widget represents one logical assistant Markdown document.
         self._assistant_container: AssistantMarkdown | None = None
@@ -327,10 +323,6 @@ class LumenApp(
         # the scrolling transcript. Older turns retain their own plan panel.
         self._active_plan_panel: PlanPanel | None = None
         self._last_assistant_output = ""
-        # Session rules stay TUI-local; cross-session "always" rules are owned
-        # by the host's project ApprovalRuleStore, which auto-approves before
-        # an approval event ever reaches this UI.
-        self._session_approval_keys: set[str] = set()
         # Tool cards are mounted into the message timeline, keyed by call id so
         # multiple updates to one call render into a single card.
         self._tool_cards: dict[str, ToolCard] = {}
@@ -711,7 +703,12 @@ class LumenApp(
         return tuple(attachments)
 
     async def _handle_shell_input(self, text: str) -> None:
-        """Execute explicit ``! argv`` input through the same fail-closed OS sandbox."""
+        """Validate explicit ``! argv`` input, then hand it to the Host.
+
+        Execution, sandbox, approval and effect recording live behind the
+        ``RunDirectCommand`` channel; the guards below only give fast local
+        feedback before dispatch.
+        """
 
         if self._collaboration_mode is CollaborationMode.PLAN:
             await self._append_system("Direct shell is disabled in Plan mode.")
@@ -734,48 +731,19 @@ class LumenApp(
         )
 
     async def _run_direct_command(self, argv: list[str]) -> None:
-        call_id = f"shell-{uuid4().hex[:12]}"
-        started = asyncio.get_running_loop().time()
-        await self.render_event(
-            ToolCallStarted(
-                call_id,
-                "run_command",
-                {"argv": argv, "cwd": "."},
-                origin="user",
-                risk="execute",
-                started_at=started,
-            )
-        )
-        specs = build_capability_specs(
-            self.resources.workspace,
-            max_timeout=self.config.agent.limits.tool_timeout_seconds,
-            sandbox_config=self.config.sandbox,
-        )
-        command = next(spec.function for spec in specs if spec.name == "run_command")
+        """Dispatch ``! argv`` to the Host and render its event stream.
+
+        Admission (plan mode, busy, archived), approval policy and the effect
+        ledger are owned by ``WorkspaceHost``; the TUI only subscribes and
+        answers approval prompts, exactly like a model run.
+        """
+
         try:
-            result = await command(argv)  # type: ignore[misc]
-            rendered = json.dumps(result, ensure_ascii=False, indent=2)
-            is_error = bool(result.get("exit_code"))
-            exit_code = result.get("exit_code")
-            elapsed = float(result.get("elapsed_seconds", 0.0))
+            started = await self.coordinator.run_direct(tuple(argv))
         except Exception as error:
-            rendered = f"{type(error).__name__}: {error}"
-            is_error = True
-            exit_code = None
-            elapsed = max(0.0, asyncio.get_running_loop().time() - started)
-        await self.render_event(
-            ToolCallFinished(
-                call_id,
-                "run_command",
-                rendered,
-                preview=rendered,
-                is_error=is_error,
-                elapsed_seconds=elapsed,
-                exit_code=exit_code,
-            )
-        )
-        self.query_one(RunActivityIndicator).stop()
-        self.query_one("#status", Static).update(self._status("Ready"))
+            await self._append_system(f"Cannot run direct command: {error}")
+            return
+        await self._consume_started_run(started.run_id)
 
     def _record_history(self, text: str) -> None:
         """Append ``text`` to prompt history, capped at ``_HISTORY_MAX``.
@@ -935,8 +903,7 @@ class LumenApp(
             self.query_one("#prompt", PromptEditor).focus()
 
     def _refresh_interactive_queue(self) -> None:
-        runtime = self.resources.runtime
-        messages = runtime.interactive_queue.snapshot() if runtime is not None else ()
+        messages = self.workspace_host.interactive_queue_snapshot()
         self.query_one(InteractiveQueuePanel).update_messages(messages)
 
     async def action_safe_quit(self) -> None:

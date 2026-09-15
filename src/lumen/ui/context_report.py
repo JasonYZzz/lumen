@@ -50,7 +50,17 @@ def format_context_result(result: ContextControlResult) -> str:
     if skills:
         lines.append("Active skills:")
         for item in skills:
-            lines.append(f"  {item['name']}: {item['tokens']} tokens")
+            complete = " [complete]" if item.get("complete") else ""
+            lines.append(f"  {item['name']}: {item['tokens']} tokens{complete}")
+    omitted_skills = payload.get("omitted_skills", [])
+    if omitted_skills:
+        lines.append(f"Skills not resident (snapshots saved): {', '.join(omitted_skills)}")
+    catalog = payload.get("skill_catalog", {})
+    if catalog:
+        lines.append(
+            f"Skill catalog: {len(catalog.get('selected', []))}/{catalog.get('total', 0)} entries, "
+            f"{catalog.get('tokens', 0)} tokens; list_skills searches the full catalog"
+        )
     if payload.get("estimated"):
         lines.append("(model window estimated; no known profile for this provider)")
     checkpoint = payload.get("checkpoint")

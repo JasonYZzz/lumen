@@ -32,6 +32,7 @@ from lumen.application import (
     ListHooks,
     ListMcpPrompts,
     ListMcpResources,
+    ListSessions,
     SelectModel,
     SelectReasoning,
     SetContextSource,
@@ -476,11 +477,19 @@ class SlashHandlersMixin:
         await self._append_system(f"Switched to {target}.")
 
     async def _list_sessions(self: LumenApp) -> None:
-        """Render the stored session list (shared by ``/sessions`` and bare ``/resume``)."""
+        """Render the session list (shared by ``/sessions`` and bare ``/resume``).
 
-        sessions = self.resources.session_repository.list()
+        Goes through the Host's ``ListSessions`` projection so titles,
+        archived flags and tombstones match what the Web sidebar shows.
+        """
+
+        result = await self.workspace_host.dispatch(ListSessions(include_archived=True))
         await self._append_system(
-            "\n".join(f"{item.id}  {item.created_at}  {item.model_id}" for item in sessions)
+            "\n".join(
+                f"{item.session_id}  {item.created_at}  {item.model_id}  {item.title}"
+                + ("  [archived]" if item.archived else "")
+                for item in result.sessions
+            )
             or "No sessions found."
         )
 

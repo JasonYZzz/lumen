@@ -16,13 +16,13 @@ from __future__ import annotations
 
 import asyncio
 from collections import Counter
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING
 
 from textual import on
 from textual.message_pump import MessagePump
 from textual.widgets import Static
 
-from lumen.approval import ApprovalDecision, ApprovalMode, ApprovalPolicy
+from lumen.approval import ApprovalMode
 from lumen.collaboration import CollaborationMode
 from lumen.events import ApprovalRequest, ToolApprovalBatchPending, ToolApprovalPending
 from lumen.runtime import ToolApproval
@@ -45,29 +45,10 @@ class ApprovalControllerMixin(MessagePump):
     async def _await_inline_approval(self: LumenApp, request: ApprovalRequest) -> ToolApproval:
         """Allocate a future for ``request`` and await the card's decision.
 
-        Policy-resolved decisions skip the card. This covers both approvals in
-        accept-edits/auto and read-only denials in plan mode. Unknown remote
-        capabilities remain approval-gated outside plan mode.
+        The Host applies the approval policy (mode, plan collaboration,
+        session/always rules) before emitting ``ToolApprovalPending``; only
+        requests that genuinely require confirmation reach this callback.
         """
-
-        if (
-            self._collaboration_mode is not CollaborationMode.PLAN
-            and not ApprovalPolicy.requires_fresh_confirmation(request.risk)
-            and self._approval_scope_key(request) in self._session_approval_keys
-        ):
-            return ToolApproval(
-                approved=True,
-                message=(
-                    "auto-approved by the user's session rule "
-                    f"(mode={self._approval_mode.value}, decision_source=user_session)"
-                ),
-            )
-        policy_decision = self._decide_for_modes(request)
-        if not policy_decision.requires_confirmation:
-            return ToolApproval(
-                approved=policy_decision.approved,
-                message=policy_decision.message,
-            )
 
         loop = asyncio.get_running_loop()
         future: asyncio.Future[ToolApproval] = loop.create_future()
@@ -86,29 +67,13 @@ class ApprovalControllerMixin(MessagePump):
     async def _await_inline_approval_batch(
         self: LumenApp, requests: tuple[ApprovalRequest, ...]
     ) -> dict[str, ToolApproval]:
-        results: dict[str, ToolApproval] = {}
-        pending: list[ApprovalRequest] = []
+        waiters: list[asyncio.Future[ToolApproval]] = []
         for request in requests:
-            if (
-                self._collaboration_mode is not CollaborationMode.PLAN
-                and not ApprovalPolicy.requires_fresh_confirmation(request.risk)
-                and self._approval_scope_key(request) in self._session_approval_keys
-            ):
-                results[request.call_id] = ToolApproval(
-                    True,
-                    "auto-approved by the user's session rule "
-                    f"(mode={self._approval_mode.value}, decision_source=user_session)",
-                )
-                continue
-            policy_decision = self._decide_for_modes(request)
-            if not policy_decision.requires_confirmation:
-                results[request.call_id] = ToolApproval(policy_decision.approved, policy_decision.message)
-                continue
             future: asyncio.Future[ToolApproval] = asyncio.get_running_loop().create_future()
             self._approval_waiters[request.call_id] = future
-            pending.append(request)
-        if len(pending) == 1:
-            request = pending[0]
+            waiters.append(future)
+        if len(requests) == 1:
+            request = requests[0]
             await self._render_event(
                 ToolApprovalPending(
                     request.call_id,
@@ -118,66 +83,18 @@ class ApprovalControllerMixin(MessagePump):
                     request.risk,
                 )
             )
-        elif pending:
-            risks = Counter(request.risk for request in pending)
+        elif requests:
+            risks = Counter(request.risk for request in requests)
             summary = ", ".join(f"{count}x{risk}" for risk, count in sorted(risks.items()))
             await self._render_event(
                 ToolApprovalBatchPending(
-                    batch_id=f"batch-{pending[0].call_id}",
-                    requests=tuple(pending),
+                    batch_id=f"batch-{requests[0].call_id}",
+                    requests=requests,
                     risk_summary=summary,
                 )
             )
-        if pending:
-            decisions = await asyncio.gather(
-                *(self._approval_waiters[request.call_id] for request in pending)
-            )
-            results.update(
-                (request.call_id, decision) for request, decision in zip(pending, decisions, strict=True)
-            )
-        return results
-
-    @staticmethod
-    def _approval_scope_key(request: ApprovalRequest | ToolApprovalPending) -> str:
-        """Return the bounded capability remembered by an approval choice."""
-
-        if request.name == "run_command":
-            argv = request.args.get("argv")
-            items = cast(list[object], argv) if isinstance(argv, list) else []
-            executable = str(items[0]) if items else "<unknown>"
-            return f"{request.origin}:{request.name}:{executable}"
-        return f"{request.origin}:{request.name}"
-
-    def _should_auto_approve(self: LumenApp, risk: str, *, name: str = "", origin: str = "builtin") -> bool:
-        """Whether ``risk`` is auto-approved under the current mode.
-
-        ``manual`` mode short-circuits reads and sends risky calls to the panel.
-        ``auto`` mode short-circuits every known risk. The sole exception is
-        ``external_unknown``, the safe default for an MCP tool the operator has
-        not classified. This is the single choke point for local and MCP tools.
-        """
-
-        decision = self._decide_for_modes(
-            ApprovalRequest(call_id="policy-check", name=name, args={}, origin=origin, risk=risk)
-        )
-        return decision.approved and not decision.requires_confirmation
-
-    def _decide_for_modes(self: LumenApp, request: ApprovalRequest) -> ApprovalDecision:
-        if self._collaboration_mode is CollaborationMode.PLAN:
-            if ApprovalPolicy.is_read_only(request):
-                return ApprovalDecision(
-                    approved=True,
-                    requires_confirmation=False,
-                    source="collaboration_policy",
-                    message="allowed in plan collaboration mode",
-                )
-            return ApprovalDecision(
-                approved=False,
-                requires_confirmation=False,
-                source="collaboration_policy",
-                message="blocked in plan collaboration mode",
-            )
-        return self._approval_policy.decide(request, self._approval_mode)
+        decisions = await asyncio.gather(*waiters)
+        return dict(zip((request.call_id for request in requests), decisions, strict=True))
 
     def _resolve_all_pending_approvals(self: LumenApp, *, approved: bool, message: str) -> None:
         audit_message = f"{message} (mode={self._approval_mode.value}, decision_source=system)"
@@ -196,34 +113,17 @@ class ApprovalControllerMixin(MessagePump):
     @on(ApprovalPanel.Decision)
     def _handle_approval_decision(self: LumenApp, event: ApprovalPanel.Decision) -> None:
         panel = self.query_one(ApprovalPanel)
-        request = panel.active_request
         future = self._approval_waiters.pop(event.call_id, None)
         panel.resolve(event.call_id)
         if future is None or future.done():
             return
-        if (
-            event.scope != "once"
-            and request is not None
-            and request.call_id == event.call_id
-            and not ApprovalPolicy.requires_fresh_confirmation(request.risk)
-        ):
-            # Session-scoped convenience for this UI; the host journal records
-            # the same decision and owns persistent "always" rule storage.
-            self._session_approval_keys.add(self._approval_scope_key(request))
+        # The Host re-derives the effective scope (fresh-confirmation risks are
+        # clamped to "once") and owns session/always rule storage; the UI only
+        # relays the user's raw choice.
         action = "allowed" if event.approved else "denied"
-        effective_scope = (
-            "once"
-            if request is not None and ApprovalPolicy.requires_fresh_confirmation(request.risk)
-            else event.scope
-        )
-        source = {"session": "user_session", "always": "user_always"}.get(
-            effective_scope, "user"
-        )
-        message = (
-            f"The user {action} this tool call (mode={self._approval_mode.value}, decision_source={source})."
-        )
+        message = f"The user {action} this tool call (mode={self._approval_mode.value})."
         future.set_result(
-            ToolApproval(approved=event.approved, message=message, remember_scope=effective_scope)
+            ToolApproval(approved=event.approved, message=message, remember_scope=event.scope)
         )
         if panel.active_request is None:
             self.query_one("#prompt", PromptEditor).focus()

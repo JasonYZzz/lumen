@@ -238,6 +238,48 @@ def test_active_skill_working_set_keeps_most_recent_bodies_within_task_cap() -> 
     skills = [block for block in assembled.blocks if block.source.origin.startswith("skill:")]
     assert sum(block.token_estimate for block in skills) <= 100
     assert any(block.source.origin == "skill:new" for block in skills)
+    assert len(skills) == 1
+    assert skills[0].payload.text == "N" * 80
+    notice = next(block for block in assembled.blocks if block.id == "skill-selection")
+    assert notice.payload.structured == {"omitted": ["old"]}
+
+
+def test_selected_skill_borrows_budget_without_losing_tail() -> None:
+    assembler = _assembler(1_000, DeterministicTokenCounter(per_text_char=1.0), max_output=10)
+    body = "N" * 200 + "Mandatory final instruction."
+    assembled = assembler.assemble(
+        instructions="sys", prompt="p", tool_schemas=[], history=[],
+        active_skills=({"name": "large", "body": body, "revision": "r1"},),
+    )
+    block = next(block for block in assembled.blocks if block.id == "active-skill:large")
+    assert block.payload.text == body
+    assert block.token_estimate > 100
+    with pytest.raises(ContextBudgetExceeded):
+        assembler.assemble(
+            instructions="sys", prompt="p", tool_schemas=[], history=[],
+            active_skills=({"name": "huge", "body": "N" * 1_000},),
+        )
+
+
+def test_skill_catalog_selects_whole_relevant_entries_in_independent_budget() -> None:
+    assembler = _assembler(20_000, DeterministicTokenCounter(per_text_char=1.0))
+    catalog = [{"name": f"skill-{index}", "description": "D" * 60} for index in range(100)]
+    catalog.append({"name": "review", "description": "Review changes."})
+    assembled = assembler.assemble(
+        instructions="sys", prompt="review", tool_schemas=[], history=[],
+        runtime_context="runtime facts", skill_catalog=catalog,
+    )
+    block = next(block for block in assembled.blocks if block.id == "skill-catalog")
+    assert block.zone is ContextZone.CAPABILITY_CATALOG
+    assert block.token_estimate <= 200
+    assert "- review: Review changes." in (block.payload.text or "")
+    assert block.payload.structured is not None
+    assert block.payload.structured["omitted"] > 0
+    for name in block.payload.structured["selected"]:
+        entry = next(item for item in catalog if item["name"] == name)
+        assert f"- {name}: {entry['description']}" in (block.payload.text or "")
+    runtime = next(block for block in assembled.blocks if block.id == "runtime-context")
+    assert runtime.payload.text == "runtime facts"
 
 
 def test_recent_history_uses_override_when_provided() -> None:

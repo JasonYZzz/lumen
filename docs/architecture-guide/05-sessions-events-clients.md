@@ -163,7 +163,7 @@ CLI `lumen capabilities --json`、TUI `/context capabilities` 与 Web `GET /api/
 | 图片输入 | AttachmentRef + ArtifactStore + Runtime Adapter | 文件选择、拖放、剪贴板 | `@path`、粘贴图片路径 | **Core shared**；UI 获取方式不同 |
 | Responses / Chat 图片 wire format | `BinaryContent` provider boundary | 无协议分支 | 无协议分支 | **Core shared**；Responses=`input_image`，Chat=`image_url` |
 | Realtime voice | Live canonical Interface | WebRTC / WebSocket controls | 无 | **Web-only** |
-| 直接 `! command` | Sandbox / approval | 无 | PromptEditor shortcut | **TUI-only** |
+| 直接 `! command` | `RunDirectCommand` → Gateway（Sandbox / approval / effect 账本） | 无 | PromptEditor shortcut | **TUI-only** 入口；执行与审批权威在 Core |
 | 浏览器原生图片预览/裁剪 | 无 | 当前仅附件 chip | 无 | **Planned** |
 | 终端原生二进制剪贴板协议 | 无 | 不适用 | 终端通常只提供路径/文本 | **Unsupported**；使用图片路径 |
 

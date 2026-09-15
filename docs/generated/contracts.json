@@ -6065,6 +6065,38 @@
         "title": "RetryRun",
         "type": "object"
       },
+      "RunDirectCommand": {
+        "properties": {
+          "argv": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Argv",
+            "type": "array"
+          },
+          "client_request_id": {
+            "title": "Client Request Id",
+            "type": "string"
+          },
+          "session_id": {
+            "title": "Session Id",
+            "type": "string"
+          },
+          "type": {
+            "const": "run_direct_command",
+            "default": "run_direct_command",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "session_id",
+          "argv",
+          "client_request_id"
+        ],
+        "title": "RunDirectCommand",
+        "type": "object"
+      },
       "SelectModel": {
         "properties": {
           "model": {
@@ -6561,6 +6593,9 @@
       },
       {
         "$ref": "#/$defs/StartRun"
+      },
+      {
+        "$ref": "#/$defs/RunDirectCommand"
       },
       {
         "$ref": "#/$defs/CancelRun"

@@ -100,15 +100,34 @@ async def test_successful_foreground_run_does_not_mount_completion_toast(
         assert notifications == []
 
 
-async def test_auto_mode_does_not_prompt_for_classified_write_or_execute(tmp_path: Path) -> None:
+async def test_auto_mode_still_presents_approvals_the_host_forwards(tmp_path: Path) -> None:
+    """The TUI never auto-decides: policy lives in the Host, which simply does
+    not forward mode-approved requests. Any request that does reach the UI
+    mounts a card, regardless of the locally mirrored mode."""
+
     app = _app(tmp_path)
+    request = ApprovalRequest(
+        call_id="write-1",
+        name="write_file",
+        args={"path": "outputs/report.html"},
+        origin="builtin",
+        risk="write",
+    )
 
-    async with app.run_test():
+    async with app.run_test() as pilot:
         app.set_approval_mode("auto")
+        decision_task = app.run_worker(
+            app._await_inline_approval(request),  # type: ignore[reportPrivateUsage]
+            name="approval-test",
+        )
+        await pilot.pause()
 
-        assert app._should_auto_approve("write") is True  # type: ignore[reportPrivateUsage]
-        assert app._should_auto_approve("execute") is True  # type: ignore[reportPrivateUsage]
-        assert app._should_auto_approve("external_unknown") is False  # type: ignore[reportPrivateUsage]
+        assert not decision_task.is_finished
+        assert app.query_one(ApprovalPanel).pending_count == 1
+        app._resolve_all_pending_approvals(  # type: ignore[reportPrivateUsage]
+            approved=False, message="test cleanup"
+        )
+        await decision_task.wait()
 
 
 async def test_mode_switch_does_not_retroactively_resolve_visible_approval(

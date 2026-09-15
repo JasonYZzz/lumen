@@ -213,7 +213,8 @@ class ResourceManager:
                 )
         if config.agent.skills_enabled:
             self.registry.add(
-                ToolSpec(self.list_skills, risk=Risk.READ), origin="builtin:skills",
+                ToolSpec(self._list_model_skills, name="list_skills", risk=Risk.READ),
+                origin="builtin:skills",
             )
             self.registry.add(
                 ToolSpec(
@@ -785,6 +786,31 @@ class ResourceManager:
     def skill_catalog(self) -> str:
         return format_skills_for_prompt(self.skills)
 
+    def skill_catalog_documents(self) -> tuple[dict[str, object], ...]:
+        """Metadata only; ContextEngine owns the model-specific listing budget."""
+        return tuple(
+            {"name": skill.name, "description": skill.description}
+            for skill in self.skills if not skill.disable_model_invocation
+        )
+
+    def _list_model_skills(
+        self, query: str = "", offset: int = 0, limit: int = 20,
+    ) -> dict[str, object]:
+        """搜索可由模型加载的 Skill 名称和描述; 空 query 浏览目录, next_offset 翻页。"""
+        if offset < 0 or not 1 <= limit <= 50:
+            raise ValueError("offset must be non-negative and limit must be between 1 and 50")
+        self.refresh_skills()
+        terms = query.casefold().split()
+        matches = [
+            item for item in self.skill_catalog_documents()
+            if all(term in f"{item['name']} {item['description']}".casefold() for term in terms)
+        ]
+        end = min(offset + limit, len(matches))
+        return {
+            "skills": matches[offset:end], "total": len(matches),
+            "next_offset": end if end < len(matches) else None,
+        }
+
     def list_skills(self) -> list[dict[str, str | bool]]:
         """Refresh and list available skills, including newly installed skills without restarting."""
         self.refresh_skills()
@@ -806,7 +832,7 @@ class ResourceManager:
         skill = self.load_skill_by_name(name)
         if skill is None:
             raise FileNotFoundError(f"skill not found: {name}")
-        self.session_context.activate_skill(session_id, name)
+        self.session_context.activate_skill(session_id, name, skill=skill)
         return skill
 
     def _load_model_skill(self, name: str) -> str:
@@ -816,7 +842,7 @@ class ResourceManager:
         if skill is None or skill.disable_model_invocation:
             raise FileNotFoundError(f"model-invocable skill not found: {name}")
         if self._active_session_id is not None:
-            self.session_context.activate_skill(self._active_session_id, name)
+            self.session_context.activate_skill(self._active_session_id, name, skill=skill)
         return expand_skill_for_message(skill)
 
     def _read_artifact(self, ref: str, start: int = 0, max_chars: int = 8000) -> str:
@@ -1090,9 +1116,6 @@ class ResourceManager:
         if self.mcp_status:
             states = ", ".join(f"{name}={state}" for name, state in sorted(self.mcp_status.items()))
             sections.append(f"MCP 连接状态(仅表示当前快照): {states}")
-        catalog = self.skill_catalog()
-        if catalog:
-            sections.append(catalog)
         return "\n".join(sections)
 
     def instructions_report(self) -> dict[str, object]:
@@ -1402,6 +1425,7 @@ class ResourceManager:
                 system_instructions=self.system_instructions,
                 policy_instructions=self.policy_instructions,
                 runtime_context=self.runtime_context,
+                skill_catalog_documents=self.skill_catalog_documents,
                 prompt_mode=profile.mode,
                 prompt_preset=profile.preset,
                 prompt_version=profile.version,

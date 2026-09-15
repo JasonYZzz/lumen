@@ -30,7 +30,9 @@ from lumen.application import (
     ListSessions,
     RenameSession,
     RetryRun,
+    RunDirectCommand,
     SessionNotFoundError,
+    SetApprovalMode,
     SetCollaborationMode,
     SetSessionArchived,
     StartRun,
@@ -41,13 +43,15 @@ from lumen.application import (
 )
 from lumen.application.run_lock import WorkspaceRunLock
 from lumen.attachments import AttachmentRef, AttachmentStore
-from lumen.config import LimitsConfig
+from lumen.config import LimitsConfig, PermissionsConfig
 from lumen.context import ArtifactStore
 from lumen.plan import EvidenceKind, EvidenceReceipt, PlanState, PlanStep, StepStatus
 from lumen.runtime import AgentRuntime
 from lumen.sessions import SessionRepository
 from lumen.skills import Skill
-from lumen.tools.spec import EffectKind
+from lumen.tools.gateway import CapabilityGateway
+from lumen.tools.registry import PermissionPolicy, ToolRegistry
+from lumen.tools.spec import EffectKind, Risk, ToolSpec
 from lumen.trust import ApprovalRuleStore
 from lumen.work_products import EffectStatus, TaskWorkspace
 from lumen.work_products.types import EffectReceipt
@@ -74,6 +78,7 @@ class LocalResources:
         self.warnings: list[str] = []
         self.skills: list[object] = []
         self.task_workspace: TaskWorkspace | None = None
+        self.capability_gateway: CapabilityGateway | None = None
 
     async def open(self) -> LocalResources:
         return self
@@ -1636,3 +1641,181 @@ async def test_workspace_host_invokes_skills_and_routes_context_controls(tmp_pat
     assert turn.user_input == "/skill:review src/main.py"
     assert "Inspect the selected file carefully." in seen_prompts[-1]
     assert "src/main.py" in seen_prompts[-1]
+
+
+# ---------------------------------------------------------------------------
+# RunDirectCommand: explicit "!" shell execution through the Host
+# ---------------------------------------------------------------------------
+
+
+def _direct_gateway(
+    root: Path,
+    executions: list[str],
+    *,
+    effect_recorder: object = None,
+) -> CapabilityGateway:
+    async def run_command(argv: list[str]) -> dict[str, object]:
+        """Run argv directly without a shell."""
+        executions.append(" ".join(argv))
+        return {"exit_code": 0, "output": "ok", "elapsed_seconds": 0.01}
+
+    registry = ToolRegistry(root)
+    registry.add(
+        ToolSpec(
+            run_command,
+            name="run_command",
+            risk=Risk.EXECUTE,
+            effect_kind=EffectKind.EXECUTION,
+        ),
+        origin="builtin",
+    )
+    return CapabilityGateway(
+        registry,
+        PermissionPolicy(PermissionsConfig()),
+        default_timeout=30,
+        effect_recorder=effect_recorder,  # type: ignore[arg-type]
+    )
+
+
+async def test_host_direct_command_executes_through_gateway_under_auto_mode(
+    tmp_path: Path,
+) -> None:
+    executions: list[str] = []
+    resources = LocalResources(tmp_path, _runtime())
+    resources.capability_gateway = _direct_gateway(tmp_path, executions)
+    host = WorkspaceHost(resources)  # type: ignore[arg-type]
+    await host.open()
+    try:
+        session = await host.dispatch(CreateSession())
+        await host.dispatch(SetApprovalMode(session.session_id, "auto"))
+        started = await host.dispatch(
+            RunDirectCommand(session.session_id, ("echo", "hi"), "direct-1")
+        )
+        replayed = await host.dispatch(
+            RunDirectCommand(session.session_id, ("echo", "hi"), "direct-1")
+        )
+        events = [event async for event in host.subscribe(started.run_id)]
+    finally:
+        await host.close()
+
+    assert replayed.run_id == started.run_id
+    assert executions == ["echo hi"]
+    types = [event.type for event in events]
+    assert types[0] == "tool.started"
+    assert "tool.finished" in types
+    assert types[-1] == "run.completed"
+    # Auto mode is a Host policy decision: no approval prompt is forwarded.
+    assert "approval.pending" not in types
+    finished = next(event for event in events if event.type == "tool.finished")
+    assert finished.data["exit_code"] == 0
+    assert finished.data["is_error"] is False
+
+
+async def test_host_direct_command_waits_for_manual_approval(tmp_path: Path) -> None:
+    executions: list[str] = []
+    resources = LocalResources(tmp_path, _runtime())
+    resources.capability_gateway = _direct_gateway(tmp_path, executions)
+    host = WorkspaceHost(resources)  # type: ignore[arg-type]
+    await host.open()
+    try:
+        session = await host.dispatch(CreateSession())
+        started = await host.dispatch(
+            RunDirectCommand(session.session_id, ("make", "release"), "direct-approve")
+        )
+        with pytest.raises(WorkspaceBusyError):
+            await host.dispatch(StartRun(session.session_id, "busy", "busy-request"))
+        async for event in host.subscribe(started.run_id):
+            if event.type == "approval.pending":
+                assert event.data["name"] == "run_command"
+                assert event.data["args"] == {"argv": ["make", "release"]}
+                await host.dispatch(
+                    DecideApproval(started.run_id, str(event.data["call_id"]), True)
+                )
+    finally:
+        await host.close()
+
+    assert executions == ["make release"]
+
+
+async def test_host_direct_command_denied_by_user(tmp_path: Path) -> None:
+    executions: list[str] = []
+    resources = LocalResources(tmp_path, _runtime())
+    resources.capability_gateway = _direct_gateway(tmp_path, executions)
+    host = WorkspaceHost(resources)  # type: ignore[arg-type]
+    await host.open()
+    try:
+        session = await host.dispatch(CreateSession())
+        started = await host.dispatch(
+            RunDirectCommand(session.session_id, ("rm", "-rf", "build"), "direct-deny")
+        )
+        events: list[EventEnvelope] = []
+        async for event in host.subscribe(started.run_id):
+            events.append(event)
+            if event.type == "approval.pending":
+                await host.dispatch(
+                    DecideApproval(started.run_id, str(event.data["call_id"]), False)
+                )
+    finally:
+        await host.close()
+
+    assert executions == []
+    finished = next(event for event in events if event.type == "tool.finished")
+    assert finished.data["is_error"] is True
+    assert events[-1].type == "run.completed"
+
+
+async def test_host_direct_command_blocked_in_plan_mode(tmp_path: Path) -> None:
+    resources = LocalResources(tmp_path, _runtime())
+    host = WorkspaceHost(resources)  # type: ignore[arg-type]
+    await host.open()
+    try:
+        session = await host.dispatch(CreateSession())
+        await host.dispatch(SetCollaborationMode(session.session_id, "plan"))
+        with pytest.raises(InvalidStateError, match="Plan mode"):
+            await host.dispatch(RunDirectCommand(session.session_id, ("ls",), "direct-plan"))
+    finally:
+        await host.close()
+
+
+async def test_host_direct_command_requires_argv(tmp_path: Path) -> None:
+    resources = LocalResources(tmp_path, _runtime())
+    host = WorkspaceHost(resources)  # type: ignore[arg-type]
+    await host.open()
+    try:
+        session = await host.dispatch(CreateSession())
+        with pytest.raises(InvalidStateError, match="at least one argument"):
+            await host.dispatch(RunDirectCommand(session.session_id, (), "direct-empty"))
+    finally:
+        await host.close()
+
+
+async def test_host_direct_command_records_effect_receipt(tmp_path: Path) -> None:
+    executions: list[str] = []
+    resources = LocalResources(tmp_path, _runtime())
+    resources.task_workspace = TaskWorkspace(
+        tmp_path,
+        resources.artifact_store,
+        resources.session_repository,
+    )
+    resources.capability_gateway = _direct_gateway(
+        tmp_path,
+        executions,
+        effect_recorder=resources.task_workspace.record_tool_effect,
+    )
+    host = WorkspaceHost(resources)  # type: ignore[arg-type]
+    await host.open()
+    try:
+        session = await host.dispatch(CreateSession())
+        await host.dispatch(SetApprovalMode(session.session_id, "auto"))
+        started = await host.dispatch(
+            RunDirectCommand(session.session_id, ("echo", "hi"), "direct-effect")
+        )
+        _ = [event async for event in host.subscribe(started.run_id)]
+        effects = resources.session_repository.load(session.session_id).work_state.effects
+    finally:
+        await host.close()
+
+    assert executions == ["echo hi"]
+    assert len(effects) == 1
+    assert effects[0].operation == "run_command"
+    assert effects[0].status is EffectStatus.VERIFIED

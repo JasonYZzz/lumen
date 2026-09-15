@@ -169,6 +169,9 @@ def build_prompt_profile(
     if "load_skill" in visible_tools:
         guidance.append(
             "available_skills 是当前可用 Skill 目录；任务与说明匹配时，用 load_skill 按名称加载。"
+            "目录有预算限制，未列出不代表不可用；用 list_skills 搜索或分页浏览。"
+            "当前未注入的 Skill 必须重新加载后再使用；只按需读取正文直接引用的资源，"
+            "使用 read_skill_resource，不要递归加载全部参考文件。"
         )
     if {"open_work_product", "apply_work_product_change"}.intersection(visible_tools):
         guidance.append(

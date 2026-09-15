@@ -1,9 +1,10 @@
 """Approval mode tests.
 
-Validates the policy that decides whether a tool call mounts the Allow/Deny
-panel or short-circuits. Auto approves every explicitly classified risk;
-``external_unknown`` still prompts. Manual mode sends every risky tool through
-the panel.
+The approval policy itself (manual/accept-edits/auto, plan collaboration,
+session/always rules) is owned by ``WorkspaceHost`` and covered by
+``tests/test_approval.py`` and ``tests/test_workspace_host.py``. This file
+covers the TUI's remaining share: presenting pending approvals, mode switching,
+and the command gate.
 """
 
 from __future__ import annotations
@@ -19,7 +20,6 @@ from lumen.events import ApprovalRequest
 from lumen.plan import PlanState
 from lumen.resources import ResourceManager
 from lumen.ui.app import LumenApp
-from lumen.ui.approval_panel import ApprovalPanel
 from lumen.ui.choice_picker import ChoicePickerScreen
 
 
@@ -63,66 +63,8 @@ def _request(risk: str, call_id: str = "call-1") -> ApprovalRequest:
 
 
 # ---------------------------------------------------------------------------
-# Policy: _should_auto_approve
+# Presentation: _await_inline_approval
 # ---------------------------------------------------------------------------
-
-
-async def test_manual_mode_allows_reads_but_confirms_risky_actions(tmp_path: Path) -> None:
-    app = _make_app(tmp_path, default_mode="manual")
-    async with app.run_test() as pilot:
-        await pilot.pause()
-        assert app._should_auto_approve("read") is True  # type: ignore[reportPrivateUsage]
-        for risk in ("write", "execute", "external"):
-            assert app._should_auto_approve(risk) is False  # type: ignore[reportPrivateUsage]
-
-
-async def test_auto_mode_approves_all_classified_risks(tmp_path: Path) -> None:
-    app = _make_app(tmp_path, default_mode="auto")
-    async with app.run_test() as pilot:
-        await pilot.pause()
-        # Every classified risk short-circuits. MCP tools whose risk was never
-        # declared are external_unknown and must still confirm.
-        assert app._should_auto_approve("read") is True  # type: ignore[reportPrivateUsage]
-        assert app._should_auto_approve("external") is True  # type: ignore[reportPrivateUsage]
-        assert app._should_auto_approve("write") is True  # type: ignore[reportPrivateUsage]
-        assert app._should_auto_approve("execute") is True  # type: ignore[reportPrivateUsage]
-        assert app._should_auto_approve("external_unknown") is False  # type: ignore[reportPrivateUsage]
-
-
-# ---------------------------------------------------------------------------
-# Short-circuit: _await_inline_approval
-# ---------------------------------------------------------------------------
-
-
-async def test_auto_mode_short_circuits_read_no_card(tmp_path: Path) -> None:
-    """In auto mode, a read risk returns immediately without mounting a card."""
-
-    app = _make_app(tmp_path, default_mode="auto")
-    async with app.run_test() as pilot:
-        await pilot.pause()
-        decision = await app._await_inline_approval(_request("read"))  # type: ignore[reportPrivateUsage]
-        await pilot.pause()
-        assert decision.approved is True
-        assert "auto-approved" in decision.message
-        # No ToolApprovalPending event was rendered: the card should not have
-        # been mounted. We assert by checking that no widget has the
-        # is-pending class.
-        pending_cards = [c for c in app.query("ToolCard").results() if c.has_class("is-pending")]
-        assert pending_cards == []
-
-
-async def test_auto_mode_short_circuits_write_without_card(tmp_path: Path) -> None:
-    """Auto mode runs a classified write without mounting an approval card."""
-
-    app = _make_app(tmp_path, default_mode="auto")
-    async with app.run_test() as pilot:
-        await pilot.pause()
-        decision = await app._await_inline_approval(_request("write"))  # type: ignore[reportPrivateUsage]
-        await pilot.pause()
-        assert decision.approved is True
-        assert "auto-approved" in decision.message
-        pending_cards = [c for c in app.query("ToolCard").results() if c.has_class("is-pending")]
-        assert pending_cards == []
 
 
 async def test_manual_mode_mounts_card_for_risky_action(tmp_path: Path) -> None:
@@ -140,21 +82,6 @@ async def test_manual_mode_mounts_card_for_risky_action(tmp_path: Path) -> None:
         assert len(pending_cards) == 1
         app._resolve_all_pending_approvals(approved=False, message="test cleanup")  # type: ignore[reportPrivateUsage]
         await task
-
-
-async def test_manual_session_rule_skips_repeated_capability_prompt(tmp_path: Path) -> None:
-    app = _make_app(tmp_path, default_mode="manual")
-    async with app.run_test() as pilot:
-        first = asyncio.create_task(app._await_inline_approval(_request("write", "first")))  # type: ignore[reportPrivateUsage]
-        await pilot.pause()
-        await pilot.press("2")
-        await pilot.pause()
-        assert (await first).approved
-
-        second = await app._await_inline_approval(_request("write", "second"))  # type: ignore[reportPrivateUsage]
-        assert second.approved
-        assert "user_session" in second.message
-        assert app.query_one(ApprovalPanel).pending_count == 0
 
 
 # ---------------------------------------------------------------------------
@@ -213,32 +140,22 @@ async def test_ctrl_m_does_not_create_a_second_mode_cycle(tmp_path: Path) -> Non
 
 
 async def test_plan_mode_blocks_mutations_without_mounting_approval(tmp_path: Path) -> None:
+    """Plan-mode gating is Host-owned (``WorkspaceHost._decide_request``); the
+    TUI only presents requests the Host forwards, so a write request it does
+    receive still mounts a card even when the UI mirror says plan mode."""
+
     app = _make_app(tmp_path, collaboration_mode="plan")
     async with app.run_test() as pilot:
-        decision = await app._await_inline_approval(  # type: ignore[reportPrivateUsage]
-            _request("write")
-        )
+        task = asyncio.create_task(app._await_inline_approval(_request("write")))  # type: ignore[reportPrivateUsage]
+        await pilot.pause()
+        await asyncio.sleep(0)
         await pilot.pause()
 
-        assert decision.approved is False
-        assert "blocked in plan collaboration mode" in decision.message
-        assert list(app.query(".is-pending")) == []
-
-
-async def test_plan_mode_does_not_trust_read_only_command_names(tmp_path: Path) -> None:
-    app = _make_app(tmp_path, collaboration_mode="plan")
-    request = ApprovalRequest(
-        call_id="spoofed-read",
-        name="run_command",
-        args={"argv": ["rg"], "env": {"PATH": str(tmp_path)}},
-        origin="builtin",
-        risk="execute",
-    )
-    async with app.run_test():
-        decision = app._decide_for_modes(request)  # type: ignore[reportPrivateUsage]
-
-    assert decision.approved is False
-    assert decision.requires_confirmation is False
+        assert not task.done()
+        pending_cards = [c for c in app.query("ToolCard").results() if c.has_class("is-pending")]
+        assert len(pending_cards) == 1
+        app._resolve_all_pending_approvals(approved=False, message="test cleanup")  # type: ignore[reportPrivateUsage]
+        await task
 
 
 async def test_mode_context_tells_model_when_plan_starts_and_ends(tmp_path: Path) -> None:

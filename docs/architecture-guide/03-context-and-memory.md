@@ -133,7 +133,7 @@ turn 前缀，active history 只拼接未覆盖尾部，full history 仍保留�
 | `MEMORY_INDEX` | 有界长期记忆索引 | `durable` | reinject |
 | `CAPABILITY_CATALOG` | 当前工具 schema 与精简能力目录 | `system` | reinject |
 | `TASK_STATE` | Plan、阻塞步骤、恢复状态 | `system` | reinject |
-| `ACTIVE_SKILLS` | session 激活的 Skill snapshot | `policy` | reinject |
+| `ACTIVE_SKILLS` | 按预算整份选中的 session Skill snapshot | `policy` | reinject |
 | `HISTORY_SUMMARY` | 压缩摘要 | `recalled` | summarize |
 | `RECENT_HISTORY` | 安全切点后的近期消息 | `recalled` | pinned window |
 | `RECALLED_MEMORY` | 按本轮查询召回的记忆 | `recalled` | ephemeral |
@@ -323,6 +323,7 @@ Lumen 使用混合格式：native role/message 决定主要语义边界；浅层
 - 最大 pressure blocks；
 - capability 的 loaded/deferred 状态；
 - active Skill 工作集；
+- Skill 完整注入状态、未驻留名称，以及独立目录的展示数/总数和 token 成本；
 - `request_snapshot`：真实模型步骤号、分层 token、工具 digest、hard limit；
 - active model/profile、profile source、estimated fields；
 - tokenizer adapter 与 fallback reason；

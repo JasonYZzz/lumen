@@ -529,6 +529,43 @@ async def test_active_skill_body_is_reinjected_and_reported_but_not_committed() 
     assert "Review every changed line." not in canonical
 
 
+async def test_skill_loaded_during_turn_is_complete_after_refresh_and_compaction() -> None:
+    engine = _engine(soft_token_limit=1_000_000)
+    request = _request([])
+    initial = await engine.prepare(request, _no_emit)
+    body = "Required instruction. " * 2_000 + "MANDATORY TAIL"
+    documents = ({"name": "review", "body": body, "revision": "fixed-r1"},)
+    catalog = ({"name": "review", "description": "Review changes"},)
+    trajectory: list[ModelMessage] = [
+        ModelRequest(parts=[UserPromptPart(content="review")]),
+        ModelResponse(parts=[ToolCallPart("load_skill", {"name": "review"}, tool_call_id="skill-1")]),
+        ModelRequest(parts=[ToolReturnPart("load_skill", "loaded", tool_call_id="skill-1")]),
+    ]
+    updated, messages = await engine.prepare_step(
+        initial, [*initial.provider_history, *trajectory], trajectory,
+        session_id=request.session.id, model_step=2, instructions=request.runtime.instructions,
+        tool_schemas=[], output_reserve_tokens=1_000, task=request.task, emit=_no_emit,
+        active_skill_documents=documents, skill_catalog_documents=catalog,
+    )
+    block = next(block for block in updated.blocks if block.source.origin == "skill:review")
+    assert block.payload.text == body
+    rendered = "\n".join(str(getattr(part, "content", "")) for message in messages for part in message.parts)
+    assert rendered.count("MANDATORY TAIL") == 1
+    assert "<available_skills" in rendered
+    compacted, _ = await engine.prepare_step(
+        updated, messages, trajectory, session_id=request.session.id, model_step=3,
+        instructions=request.runtime.instructions, tool_schemas=[], output_reserve_tokens=1_000,
+        task=request.task, emit=_no_emit, force=True,
+        active_skill_documents=documents, skill_catalog_documents=catalog,
+    )
+    skill = next(block for block in compacted.blocks if block.source.origin == "skill:review")
+    assert skill.payload.text == body
+    assert skill.source.revision == "fixed-r1"
+    report = await engine.control(ContextReportCommand(), _no_emit)
+    assert report.payload["skill_working_set"][0]["complete"] is True
+    assert report.payload["skill_catalog"]["selected"] == ["review"]
+
+
 async def test_provider_history_separates_policy_history_and_untrusted_user_data() -> None:
     engine = _engine(soft_token_limit=1_000_000)
     history_message = ModelRequest(parts=[UserPromptPart(content="prior user turn")])

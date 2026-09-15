@@ -27,6 +27,12 @@ def render_session_policy_context(blocks: Sequence[ContextBlock]) -> str:
 
     lines = ['<session-policy-context version="1">']
     for block in blocks:
+        if block.source.origin == "runtime:skill-catalog" and block.payload.text:
+            lines.extend([
+                '  <available_skills trust="system" format="text">',
+                _text(block.payload.text),
+                "  </available_skills>",
+            ])
         if block.zone is ContextZone.RUNTIME_CONTEXT and block.payload.text:
             lines.extend(
                 [

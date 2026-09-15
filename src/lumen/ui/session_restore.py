@@ -80,7 +80,6 @@ class SessionRestoreMixin:
         # fields are set together before any render happens.
         self._last_compaction_summary = state.compaction_summary
         if previous_session_id != state.session.id:
-            self._session_approval_keys.clear()
             self._last_assistant_output = ""
             try:
                 self.query_one(PlanReviewPanel).hide()

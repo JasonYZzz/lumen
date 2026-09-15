@@ -683,13 +683,23 @@ def test_work_completion_gate_applies_without_an_approved_plan() -> None:
 
 
 async def test_real_request_snapshot_updates_for_each_model_step() -> None:
+    skill_documents: list[dict[str, object]] = []
+    catalog: list[dict[str, object]] = []
+
     def echo(value: str) -> str:
+        skill_documents.append({"name": "review", "body": "Complete review instruction.", "revision": "r1"})
+        catalog.append({"name": "review", "description": "Review changes"})
         return value
 
     async def model_function(messages: list[ModelMessage], _info: AgentInfo):  # type: ignore[no-untyped-def]
         if last_tool_return(messages) is None:
             yield {0: DeltaToolCall("echo", '{"value":"ok"}', tool_call_id="echo-1")}
         else:
+            rendered = "\n".join(
+                str(getattr(part, "content", "")) for message in messages for part in message.parts
+            )
+            assert "Complete review instruction." in rendered
+            assert "<available_skills" in rendered
             yield "done"
 
     model = FunctionModel(stream_function=model_function)
@@ -706,6 +716,8 @@ async def test_real_request_snapshot_updates_for_each_model_step() -> None:
         limits=LimitsConfig(),
         tool_metadata={"echo": {"origin": "test", "risk": "read"}},
         context_engine=engine,
+        skill_catalog_documents=lambda: catalog,
+        active_skill_documents=lambda _session_id: skill_documents,
     )
 
     async def emit(_event: RunEvent) -> None:

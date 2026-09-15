@@ -630,6 +630,7 @@ class AgentRuntime:
         system_instructions: str | None = None,
         policy_instructions: str = "",
         runtime_context: Callable[[], str] | None = None,
+        skill_catalog_documents: Callable[[], Sequence[dict[str, object]]] | None = None,
         prompt_mode: str = "legacy",
         prompt_preset: str | None = None,
         prompt_version: str = "legacy",
@@ -664,6 +665,7 @@ class AgentRuntime:
         # for them in the assembly budget (they're sent with every request).
         self._instructions = instructions
         self._runtime_context = runtime_context
+        self._skill_catalog_documents = skill_catalog_documents
         self.prompt_mode = prompt_mode
         self.prompt_preset = prompt_preset
         self.prompt_version = prompt_version
@@ -1262,6 +1264,9 @@ class AgentRuntime:
                     policy_instructions=self.policy_instructions,
                     instruction_sources=self.prompt_sources,
                     runtime_context=self._request_runtime_context(prompt),
+                    skill_catalog_documents=tuple(
+                        self._skill_catalog_documents() if self._skill_catalog_documents else ()
+                    ),
                     prompt_mode=self.prompt_mode,
                     prompt_preset=self.prompt_preset,
                     prompt_version=self.prompt_version,
@@ -1506,6 +1511,9 @@ class AgentRuntime:
                         session_id=resolved_session_id, model_step=model_step,
                         instructions=self._request_instructions(schemas), tool_schemas=request_schemas,
                         runtime_context=self._request_runtime_context(prompt),
+                        skill_catalog_documents=tuple(
+                            self._skill_catalog_documents() if self._skill_catalog_documents else ()
+                        ),
                         active_skill_documents=tuple(
                             dict(document)
                             for document in self._active_skill_documents(resolved_session_id)

@@ -33,10 +33,14 @@ class SessionContextManager:
     def load(self, session_id: str) -> SessionContextState:
         return self.repository.load(session_id).context_state
 
-    def activate_skill(self, session_id: str, name: str) -> SessionContextState:
-        skill = self.skill_loader(name)
+    def activate_skill(
+        self, session_id: str, name: str, *, skill: Skill | None = None,
+    ) -> SessionContextState:
+        skill = skill if skill is not None else self.skill_loader(name)
         if skill is None:
             raise FileNotFoundError(f"skill not found: {name}")
+        if skill.name != name:
+            raise ValueError("skill snapshot name does not match activation")
         now = datetime.now(UTC)
         revision = hashlib.sha256(skill.body.encode("utf-8")).hexdigest()
         artifact_ref = self.artifacts.store(skill.body)
