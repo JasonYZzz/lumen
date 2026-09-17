@@ -218,5 +218,8 @@ Git 需要读取其他 formula 的动态库，Seatbelt 只增加其已安装 lib
 prefix 或其 etc/var。StreamingMarkdownController.flush 同时回收等待期间重新安排的 timer，
 completion callback 按 task 身份幂等消费，防止 flush 后仍显示 pending 或旧 callback 清理新任务。
 CI 快照失败报告保留七天，并打印 snapshot details，跨环境差异不通过跳过快照或批量覆盖基线解决。
+报告确认现有 SVG 基线为 NO_COLOR 灰度模式，远程为彩色；快照 fixture 显式固定 NO_COLOR=1，
+不再继承开发机/runner 环境，不修改生产配色与已审核基线。Homebrew 读取根同时保留 opt symlink
+拼写与真实 lib 路径，允许 dyld 遍历必要祖先的 metadata，不增加 prefix 数据读取权限。
 Windows 的落盘/权限/路径等历史兼容性问题须单独依据真实 CI 验证，三平台 Pyright 不证明
 三平台全部运行时行为已经通过。

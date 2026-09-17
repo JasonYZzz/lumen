@@ -101,6 +101,9 @@ def test_tui_state_snapshot(
     theme: str,
     terminal_size: tuple[int, int],
 ) -> None:
+    # Existing SVG baselines are grayscale. Lock this explicitly instead of
+    # inheriting NO_COLOR from a developer's shell or the CI runner.
+    monkeypatch.setenv("NO_COLOR", "1")
     # User-global Skill catalogs must not leak into menu snapshots.
     monkeypatch.setattr(Path, "home", lambda: tmp_path / "home")
     app = _snapshot_app(tmp_path, skill_description=(

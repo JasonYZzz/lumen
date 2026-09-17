@@ -40,6 +40,10 @@ def test_homebrew_library_reads_do_not_grant_prefix_configuration(
     formula = tmp_path / "homebrew" / "Cellar" / "pcre2" / "1.0"
     library = formula / "lib"
     library.mkdir(parents=True)
+    opt = tmp_path / "homebrew" / "opt"
+    opt.mkdir()
+    (opt / "pcre2").symlink_to(formula, target_is_directory=True)
+    linked_library = opt / "pcre2" / "lib"
     private = tmp_path / "homebrew" / "etc"
     private.mkdir()
     real_glob = Path.glob
@@ -47,7 +51,7 @@ def test_homebrew_library_reads_do_not_grant_prefix_configuration(
     def formula_libraries(path: Path, pattern: str) -> Iterator[Path]:
         if path == Path("/opt/homebrew/opt"):
             assert pattern == "*/lib"
-            return iter([library])
+            return iter([linked_library])
         return real_glob(path, pattern)
 
     monkeypatch.setattr(Path, "glob", formula_libraries)
@@ -55,6 +59,7 @@ def test_homebrew_library_reads_do_not_grant_prefix_configuration(
     runner = SandboxRunner(workspace, SandboxConfig())
     roots = runner._read_roots([sys.executable], ())  # pyright: ignore[reportPrivateUsage]
     assert library in roots
+    assert linked_library in roots
     assert not any(private.is_relative_to(root) for root in roots)
 
 

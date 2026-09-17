@@ -124,7 +124,10 @@ class SandboxRunner:
         # configuration, private data, or arbitrary user files.
         if platform.system() == "Darwin":
             for prefix in (Path("/opt/homebrew"), Path("/usr/local")):
-                candidates.extend(library.resolve() for library in (prefix / "opt").glob("*/lib"))
+                for library in (prefix / "opt").glob("*/lib"):
+                    # dyld traverses the opt symlink before opening the real
+                    # library. Seatbelt also needs that spelling's ancestors.
+                    candidates.extend((library, library.resolve()))
         # Public runtime configuration, not all of /etc (which can hold secrets).
         # TLS clients read openssl.cnf even for offline commands such as curl -V.
         for value in (

@@ -91,6 +91,9 @@ Plan 只信任 Capability Contract 自己声明的 `Risk=read`。不再根据 `r
 
 命令还通过 `SandboxRunner` 执行：默认 `workspace_write` 在 macOS 使用 Seatbelt、Linux 使用 bubblewrap，隔离 `HOME`/临时目录、关闭网络并按 allow-list 构造环境；adapter 不可用时拒绝执行。`run_command` receipt 只证明命令执行，不声称捕获命令产生的全部文件副作用。
 
+macOS 上的 Homebrew executable 可读取已安装 formula 的动态库目录（`opt/*/lib` 的真实路径）；
+该例外不授予整个 Homebrew prefix，尤其不增加其 etc/var 中配置或私有数据的读取权限。
+
 Git mutation 不通过通用命令放宽 `.git`。可选 builtin `git_status`、`git_diff`、`git_stage`、
 `git_commit`、`git_push` 由 Host-owned `GitWorkspace` 实现：stage 只接受显式普通文件相对路径或删除，
 通过不执行 clean/process filter 的 plumbing 更新 index，目录和符号链接安全失败；commit
