@@ -71,18 +71,23 @@ import { LandingEntry } from './landing-entry'
 import { LiveVoiceControls } from './live-voice-controls'
 import { LumenLogo, LumenMark } from './lumen-logo'
 import { MarkdownMessage } from './markdown-message'
-import { PlanProgress, PlanProposal, PlanReview } from './plan-panel'
+import { ReportReadingButton } from './markdown-report'
+import { PlanPanel, PlanProgress, PlanProposal, PlanReview } from './plan-panel'
 import { ModelIcon } from './model-icon'
 import { DocumentProvider, DocumentResults } from './document-preview'
 import { SessionActionsMenu } from './session-actions-menu'
 import { SessionSearchDialog } from './session-search-dialog'
 import { ThinkingOrb } from './thinking-orb'
+import { ToolOutputDetails } from './tool-output'
+import { TurnSourcesProvider, TurnSourcesSummary } from './turn-sources'
 import { EMPTY_WORKSPACE_PROMPT } from '@/lib/copy'
 import { projectThinkingMarkup } from '@/lib/thinking-markup'
 import {
   activityMeta,
   activityDuration,
   activityTitle,
+  isRunningTool,
+  readableActivity,
   transcriptEventLabel,
   timelineNoteLabel,
   toolSourceLabel,
@@ -1578,10 +1583,13 @@ export function LumenApp() {
                   key={sessionId} plan={run.plan!} running={Boolean(run.runId)} stopping={stopping} />}
                 {run.queuedInputs.length > 0 && (
                   <div className="queued-inputs">
-                    {run.queuedInputs.map((item) => <span key={item.id}>{queueModeLabel(item.mode)} · {item.text}</span>)}
+                    {run.queuedInputs.map((item) => <span key={item.id}>已排队 · {queueModeLabel(item.mode)} · {item.text}</span>)}
                     <button type="button" onClick={() => void dequeueInputs()}>撤回到输入框</button>
                   </div>
                 )}
+                {run.inputFeedback && <p className="input-delivery-note" role="status">
+                  {run.inputFeedback.mode === 'steer' ? '已送达当前任务' : run.inputFeedback.mode === 'follow_up' ? '已送达下一轮' : '已送达任务'} · {run.inputFeedback.text}
+                </p>}
                 <Composer
                   value={input}
                   busy={Boolean(run.runId)}
@@ -2690,6 +2698,8 @@ export function ConversationTurn({
 }) {
   const presentation = turnPresentation(turn.response, turn.user?.text, active, clarificationAnswered)
   const liveToolId = currentLiveToolId(presentation, active)
+  const recordedPlan = turn.response.findLast((item) => item.kind === 'plan' && item.plan)?.plan
+  const answerText = presentation.foreground.filter((item) => item.kind === 'assistant').map((item) => item.text).join('\n\n')
   return (
     <section className="conversation-turn" data-turn-id={turn.id}>
       {turn.user && <UserMessage item={turn.user} onEdit={onEdit} editDisabled={editDisabled} />}
@@ -2701,7 +2711,11 @@ export function ConversationTurn({
             </span>
             <strong>Lumen</strong>
           </header>
+          <TurnSourcesProvider entries={turn.response} answer={answerText}>
           <div className="assistant-turn-body">
+            {presentation.activity.some((item) => item.pendingApproval) && <div className="turn-attention" aria-label="需要确认的操作">
+              {presentation.activity.filter((item) => item.pendingApproval).map((item) => <TimelineRow key={item.id} item={item} onApproval={onApproval} />)}
+            </div>}
             {presentation.activity.length > 0 && (
               <TurnActivity
                 active={active}
@@ -2720,7 +2734,13 @@ export function ConversationTurn({
             {active && !presentation.requiresAttention && !liveToolId
               && presentation.activity.length === 0 && <LiveThinkingIndicator />}
             {!active && <DocumentResults entries={turn.response} />}
+            {!active && <ReportReadingButton content={answerText} entries={turn.response} />}
+            {!active && <TurnSourcesSummary />}
+            {!active && recordedPlan && <details className="completed-plan"><summary>查看本轮计划</summary>
+              <PlanPanel plan={recordedPlan} />
+            </details>}
           </div>
+          </TurnSourcesProvider>
         </div>
       )}
     </section>
@@ -2757,23 +2777,20 @@ function TurnActivity({
   const phase = pendingCalls ? `approval:${pendingCalls}` : active ? 'running' : presentation.terminalStatus ?? 'completed'
   const shouldExpand = active || Boolean(pendingCalls)
     || !['completed', 'waiting_for_user', 'clarification_answered'].includes(phase)
-  const [expanded, setExpanded] = useState(shouldExpand)
+  const [manualExpanded, setManualExpanded] = useState<{ phase: string; expanded: boolean } | null>(null)
+  const attentionPhase = Boolean(pendingCalls) || ['failed', 'cancelled', 'interrupted'].includes(phase) ? phase : null
+  const expanded = attentionPhase && manualExpanded?.phase !== attentionPhase ? true : manualExpanded?.expanded ?? shouldExpand
   const contentId = useId()
   const summaryRef = useRef<HTMLButtonElement>(null)
   const contentRef = useRef<HTMLDivElement>(null)
   const duration = !active ? activityDuration(elapsedSeconds) : null
-  const liveActivityId = currentLiveToolId(presentation, active)
-    ?? (active && !presentation.requiresAttention
-      && ['commentary', 'thinking', 'progress'].includes(presentation.activity.at(-1)?.kind ?? '')
-      ? presentation.activity.at(-1)?.id ?? null
-      : null)
+  const reading = readableActivity(presentation.activity)
 
   useEffect(() => {
-    if (!shouldExpand && contentRef.current?.contains(document.activeElement)) {
+    if (!expanded && contentRef.current?.contains(document.activeElement)) {
       summaryRef.current?.focus({ preventScroll: true })
     }
-    setExpanded(shouldExpand)
-  }, [phase, shouldExpand])
+  }, [expanded])
 
   return (
     <section
@@ -2787,7 +2804,7 @@ function TurnActivity({
         aria-expanded={expanded}
         aria-controls={contentId}
         title={`${activityMeta(presentation)}${duration ? '；耗时包括本轮模型、工具执行及等待' : ''}`}
-        onClick={() => setExpanded((value) => !value)}
+        onClick={() => setManualExpanded({ phase: attentionPhase ?? 'normal', expanded: !expanded })}
       >
         <span className={`turn-activity-heading ${active ? 'is-live' : ''}`}>
           {active && <ThinkingOrb />}
@@ -2796,9 +2813,17 @@ function TurnActivity({
         <CaretDown size={15} className={expanded ? 'is-expanded' : ''} aria-hidden="true" />
       </button>
       <div className="turn-activity-list" id={contentId} ref={contentRef} hidden={!expanded}>
-        {presentation.activity.map((item) => (
-          <TimelineRow key={item.id} item={item} onApproval={onApproval} process live={item.id === liveActivityId} />
-        ))}
+        {reading.groups.map((group) => group.label ? <details className="activity-tool-group" key={group.id}>
+          <summary><FolderOpen size={16} aria-hidden="true" />{group.label}</summary>
+          {group.entries.map((item) => <TimelineRow key={item.id} item={item} onApproval={onApproval} process />)}
+        </details> : group.entries.filter((item) => !item.pendingApproval).map((item) => (
+          <TimelineRow key={item.id} item={item} onApproval={onApproval} process live={active && isRunningTool(item)} />
+        )))}
+        {reading.diagnostics.length > 0 && <details className="process-diagnostics">
+          <summary>原始思考与运行事件 <span>{reading.diagnostics.length}</span></summary>
+          <p className="process-diagnostics-note">按事件顺序展示思考和运行记录。</p>
+          {reading.diagnostics.map((item) => <TimelineRow key={item.id} item={item} onApproval={onApproval} />)}
+        </details>}
       </div>
     </section>
   )
@@ -2831,11 +2856,12 @@ function TimelineRow({
   }
   if (item.kind === 'tool') {
     const sourceLabel = toolSourceLabel(item)
+    const failed = item.isError || ['denied', 'error', 'failed'].includes(item.status ?? '')
     const compact = ['completed', 'ok', 'success'].includes(item.status ?? '')
       && !item.isError
       && !item.pendingApproval
     return (
-      <article className={`web-tool-card ${compact ? 'is-compact' : ''} ${live ? 'is-live' : ''} ${item.isError ? 'is-error' : ''} ${item.pendingApproval ? 'is-pending' : ''}`}>
+      <article className={`web-tool-card ${compact ? 'is-compact' : ''} ${live ? 'is-live' : ''} ${failed ? 'is-error' : ''} ${item.pendingApproval ? 'is-pending' : ''}`}>
         <button
           className="tool-summary"
           type="button"
@@ -2853,7 +2879,7 @@ function TimelineRow({
             </span>
             {!process && <small>{String(item.callView?.detail ?? toolTarget(item))}</small>}
           </span>
-          {(!process || item.pendingApproval || item.isError || item.status === 'denied') && <em className={`is-${item.status ?? 'idle'}`}>{toolStatus(item)}</em>}
+          {(!process || item.pendingApproval || failed) && <em className={`is-${item.status ?? 'idle'}`}>{toolStatus(item)}</em>}
           <CaretDown size={14} className={expanded ? 'is-expanded' : ''} aria-hidden="true" />
         </button>
         <div id={detailId} hidden={!expanded && !item.pendingApproval}>
@@ -2871,29 +2897,20 @@ function TimelineRow({
               )}
             </div>
           )}
-          {expanded && (
-            <div className="tool-detail">
-              {Object.keys(item.args ?? {}).length > 0 && (
-                <section><span>输入</span><pre>{JSON.stringify(item.args ?? {}, null, 2)}</pre></section>
-              )}
-              {(item.resultView?.full_text || item.result) && (
-                <section>
-                  <span>输出</span>
-                  <pre>{String(item.resultView?.full_text ?? item.result ?? '')}</pre>
-                </section>
-              )}
-              {sourceLabel && <p className="tool-source">来源：{sourceLabel}</p>}
-            </div>
-          )}
+          {expanded && <ToolOutputDetails item={item} />}
         </div>
-        {!expanded && (!process || item.isError) && (item.resultView?.preview || item.preview) && (
+        {!expanded && (!process || failed) && (item.resultView?.preview || item.preview) && (
           <p>{String(item.resultView?.preview ?? item.preview ?? '')}</p>
         )}
       </article>
     )
   }
   const isProcessText = process && ['progress', 'thinking', 'commentary'].includes(item.kind)
-  const label = isProcessText ? '' : timelineNoteLabel(item.kind)
+  const label = timelineNoteLabel(item.kind)
+  if (isProcessText && item.text.length > 500) return <details className="process-long-note">
+    <summary>{label} · {item.text.replace(/\s+/g, ' ').slice(0, 100)}…</summary>
+    <MarkdownMessage content={item.text} />
+  </details>
   return (
     <article className={`timeline-note is-${item.kind} ${isProcessText ? 'process-text' : ''} ${live ? 'is-live' : ''}`}>
       <div>
@@ -2923,8 +2940,9 @@ function ToolGlyph({ item }: { item: TimelineEntry }) {
 
 function toolStatus(item: TimelineEntry) {
   if (item.pendingApproval) return '等待审批'
-  if (item.status === 'running') return '运行中'
   if (item.status === 'denied') return '已拒绝'
+  if (item.isError || item.status === 'error' || item.status === 'failed') return '失败'
+  if (item.status === 'running') return '运行中'
   if (item.status === 'approved') return '已允许'
   if (item.status === 'completed' || item.status === 'ok' || item.status === 'success') {
     return item.isError ? '失败' : '完成'

@@ -5,7 +5,13 @@
 
 ## 决策
 
-Lumen 使用 Host 生命周期内稳定的 `AgentOrchestrator` 作为多 Agent 控制面，以 Session v10 append-only records 作为持久状态权威。模型可调用的 spawn、message、follow-up、wait、interrupt、list、close 工具保持为薄 Adapter；`NativeAgentRuntimeFactory` 为每个 child 创建独立 `ContextEngine`、`PydanticAIModelDriver` 与唯一的 `LumenAgentLoop` Runtime。child Gateway 严格收窄父能力，writable child 的本地工具重绑定到独立 worktree，MCP 只复用父级连接 Adapter，不共享执行结果或幂等状态。v10 增加 Session 推理选择与 child 推理快照；v9 由 Realtime `live_session` record 引入，不改变 v8 Agent record 的语义。
+Lumen 使用 Host 生命周期内稳定的 `AgentOrchestrator` 作为多 Agent 控制面，以 Session v11 append-only records 作为持久状态权威。模型可调用的 spawn、message、follow-up、wait、interrupt、list、close 工具保持为薄 Adapter；`NativeAgentRuntimeFactory` 为每个 child 创建独立 `ContextEngine`、`PydanticAIModelDriver` 与唯一的 `LumenAgentLoop` Runtime。child Gateway 严格收窄父能力，writable child 的本地工具重绑定到独立 worktree，MCP 只复用父级连接 Adapter，不共享执行结果或幂等状态。v10 增加 Session 推理选择与 child 推理快照，v11 引入 `history_rewind`；v9 由 Realtime `live_session` record 引入，不改变 v8 Agent record 的语义。
+
+child 的非自记录 Effect 使用同一 receipt ID 从 prepared 更新到结果；dispatch 后失败保留
+`reconciliation_required`，不能由最终正文掩盖。worktree 只为 `completed` execution 执行
+stage/commit 并转为待导入；failed、waiting 和 reconciliation 状态保留其工作区及原始结果，
+即使没有文件差异也不重新分类为 completed。执行结束先关闭独立 ContextEngine 的后台压缩，
+再释放 ModelDriver。
 
 V1 不引入 LangGraph。Lumen 已有 Session/EventJournal、RunCoordinator、TaskWorkspace、审批、ArtifactStore 和恢复协议；引入第二套 checkpoint/graph persistence 会产生双重状态权威。未来只有在单一 Agent 内确实需要可复用的确定性图执行、且能由 Session journal 统一提交时，才重新评估 LangGraph。
 

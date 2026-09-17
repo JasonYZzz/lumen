@@ -151,7 +151,7 @@ Realtime 保持独立 transport Adapter，但共享 Gateway、Effect 和 Complet
 - 只验证上述旧 graph 的 fixture 和测试。
 
 删除依据是同一模型—工具 Loop 权威已由 Lumen Implementation 完全替代且对应入口生产引用归零。保留
-`PydanticAIModelDriver`、PydanticAI Provider Adapter、Session v10 `ModelMessage`、有实际价值的
+`PydanticAIModelDriver`、PydanticAI Provider Adapter、Session v11 `ModelMessage`、有实际价值的
 ToolDefinition/schema Adapter、无工具的结构化摘要/提取 Adapter，以及 Provider/Session/公开 Interface
 契约测试。
 

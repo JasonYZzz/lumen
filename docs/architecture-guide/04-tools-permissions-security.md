@@ -73,7 +73,7 @@ Plan 只信任 Capability Contract 自己声明的 `Risk=read`。不再根据 `r
 等 argv basename 猜测只读性，因为工作区可执行文件可以伪装成同名程序。Git 检查通过
 结构化 `git_status` / `git_diff` 完成；通用 `run_command` 在 Plan 中一律拒绝。
 
-允许范围分三层：`once` 只放行当前调用，`session` 写入当前 `_SessionActor.approval_keys`，`always` 额外写入项目级 `ApprovalRuleStore`。永久规则保存在 `~/.lumen/state/approval-rules/<project-id>.json`，使用与 session 相同的有界 key（`origin:tool[:executable]`），不会回写可能含凭据和注释的 YAML 配置。
+允许范围分三层：`once` 只放行当前调用，`session` 写入当前 `_SessionActor.approval_keys`，`always` 额外写入项目级 `ApprovalRuleStore`。永久规则保存在 `~/.lumen/state/approval-rules/<project-id>.json`，不会回写可能含凭据和注释的 YAML 配置。普通工具使用 `origin:tool` key；`run_command` 使用 `origin:tool:sha256:<digest>`，绑定全部已校验参数（包括 argv、cwd 和 timeout）。规则不保存参数正文，不能由批准 `git status` 推导批准其他 Git 子命令或其他目录。旧 executable-wide key 保留在规则文件但不再匹配，必须重新审批。
 
 ## 4.4 工作区约束
 
@@ -181,10 +181,12 @@ Seatbelt 默认允许读取受限的公共 TLS 配置/证书、DNS 配置、已�
 Gateway 的既有 pre-invoke Interface，主 Runtime、派生 Gateway 与 Live 共用该判断。审批通过
 不能补足副作用契约；MCP `readOnlyHint` 或工具名称也不会隐式扩大已配置权限。
 
-非自记录的 mutation、external_action、unknown 调用在 dispatch 前追加 `prepared` receipt，
+非自记录的 mutation、external_action、unknown、execution 调用在 dispatch 前追加 `prepared` receipt，
 随后以同一 effect ID 追加结果。超时、取消及派发后异常保留 `reconciliation_required`，进程中断
 留下的 prepared 在恢复时同样进入对账；成功的 observe 不生成 effect。文件工具继续拥有自己的
-snapshot / apply / verify journal；run_command 仍只提供 execution receipt。
+snapshot / apply / verify journal；run_command 仍只提供 execution receipt，不证明全部文件副作用已验证。
+失败的 execution 即使来自没有 prepared/after snapshot 的旧记录，也会阻止 strict 完成声明；
+后续其他命令成功不能替代该调用的对账，只能通过既有 Host verification waiver 明确接受。
 
 `CompletionBlocker.model_recoverable` 明确恢复责任。普通计划/本地产物问题保留有界模型重试；
 无本地 work product 可验证的外部结果立即以 `completion_recovery_required` 停止完成声明，

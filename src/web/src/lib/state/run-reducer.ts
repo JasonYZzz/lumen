@@ -25,6 +25,7 @@ export interface RunState {
   usage: Record<string, unknown> | null
   pendingClarification: SessionSnapshot['pendingClarification']
   queuedInputs: Array<{ id: string; text: string; mode: string }>
+  inputFeedback: { id: string; text: string; mode: string } | null
   transcriptDensity: 'normal' | 'verbose'
   workProducts: Array<Record<string, unknown>>
   pendingEffects: Array<Record<string, unknown>>
@@ -44,6 +45,7 @@ export const initialRunState: RunState = {
   usage: null,
   pendingClarification: null,
   queuedInputs: [],
+  inputFeedback: null,
   transcriptDensity: 'normal',
   workProducts: [],
   pendingEffects: [],
@@ -144,6 +146,7 @@ function snapshotTimeline(items: Array<Record<string, unknown>>): TimelineEntry[
     }) : [],
     callId: string(item.call_id ?? item.callId) || undefined,
     toolName: string(item.tool_name ?? item.toolName) || undefined,
+    origin: string(item.origin) || undefined,
     args: object(item.args),
     result: item.result == null ? null : string(item.result),
     preview: item.preview == null ? null : string(item.preview),
@@ -197,7 +200,7 @@ export function runReducer(state: RunState, action: RunAction): RunState {
     }
   }
   if (action.type === 'run-registered') {
-    return { ...state, runId: action.runId, status: 'running', pendingClarification: null }
+    return { ...state, runId: action.runId, status: 'running', pendingClarification: null, inputFeedback: null }
   }
   if (action.type === 'snapshot') {
     return {
@@ -232,6 +235,7 @@ export function runReducer(state: RunState, action: RunAction): RunState {
       ...state,
       runId: event.runId,
       status: 'running',
+      inputFeedback: null,
       pendingClarification: null,
       timeline: [
         ...(restored >= 0 ? state.timeline.slice(0, restored) : state.timeline),
@@ -351,6 +355,7 @@ export function runReducer(state: RunState, action: RunAction): RunState {
           text: '',
           callId: string(data.call_id),
           toolName: string(data.name),
+          origin: string(data.origin) || undefined,
           args: object(data.args),
           status: 'running',
           callView: object(data.call_view),
@@ -497,6 +502,7 @@ export function runReducer(state: RunState, action: RunAction): RunState {
   if (event.type === 'input.queued') {
     return {
       ...state,
+      inputFeedback: null,
       queuedInputs: [
         ...state.queuedInputs,
         { id: string(data.message_id), text: string(data.text), mode: string(data.mode) },
@@ -506,6 +512,9 @@ export function runReducer(state: RunState, action: RunAction): RunState {
   if (event.type === 'input.delivered' || event.type === 'input.dequeued') {
     return {
       ...state,
+      inputFeedback: event.type === 'input.delivered'
+        ? { id: string(data.message_id), text: string(data.text), mode: string(data.mode) }
+        : state.inputFeedback,
       queuedInputs: state.queuedInputs.filter((item) => item.id !== string(data.message_id)),
     }
   }

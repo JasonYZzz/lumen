@@ -1,0 +1,49 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "Lumen 项目架构",
+    "quality_profile": "showcase",
+    "views": [
+      { "id": "main-path", "label": "主执行路径", "focus": ["clients", "host", "coordinator", "runtime", "loop", "driver", "provider"], "note": "客户端命令经 WorkspaceHost、RunCoordinator 进入 AgentRuntime 与唯一模型—工具循环。" },
+      { "id": "context-facts", "label": "上下文与持久事实", "focus": ["coordinator", "sessions", "runtime", "context"], "note": "Session 是 append-only journal，ContextEngine 只维护有界 active history。" },
+      { "id": "capability-safety", "label": "能力执行与安全", "focus": ["loop", "runtime", "gateway"], "note": "所有本地与 MCP 能力统一经 CapabilityGateway 校验、审批和记录 Effect。" },
+      { "id": "agents-work", "label": "多 Agent 与 Work Product", "focus": ["host", "orchestrator", "workspace", "runtime"], "note": "AgentOrchestrator 与 TaskWorkspace 各自拥有独立状态权威。" }
+    ]
+  },
+  "components": [
+    { "id": "clients", "type": "frontend", "label": "客户端 Adapter", "sublabel": "TUI (Textual) · Web (Next.js) · headless", "pos": [40, 480], "size": [180, 78] },
+    { "id": "host", "type": "backend", "label": "WorkspaceHost", "sublabel": "命令分派 · 单 writer 锁 · 审批", "pos": [340, 480], "size": [180, 78], "tag": "外部 seam" },
+    { "id": "coordinator", "type": "backend", "label": "RunCoordinator", "sublabel": "会话恢复 · turn 持久化", "pos": [640, 480], "size": [200, 78] },
+    { "id": "runtime", "type": "backend", "label": "AgentRuntime", "sublabel": "turn 外壳 · 事件投影 · 完成门禁", "pos": [960, 480], "size": [200, 78] },
+    { "id": "loop", "type": "backend", "label": "LumenAgentLoop", "sublabel": "唯一模型—工具循环权威", "pos": [1280, 480], "size": [200, 78], "tag": "单一权威" },
+    { "id": "driver", "type": "backend", "label": "ModelDriver", "sublabel": "PydanticAIModelDriver", "pos": [1280, 250], "size": [200, 78] },
+    { "id": "provider", "type": "external", "label": "Provider 模型", "sublabel": "OpenAI · Anthropic · 百炼", "pos": [1590, 250], "size": [180, 78] },
+
+    { "id": "sessions", "type": "database", "label": "SessionRepository", "sublabel": "append-only JSONL · schema v11", "pos": [640, 250], "size": [200, 78] },
+    { "id": "context", "type": "backend", "label": "ContextEngine", "sublabel": "预算 · 压缩 · Memory · Artifact", "pos": [960, 250], "size": [200, 78] },
+
+    { "id": "orchestrator", "type": "backend", "label": "AgentOrchestrator", "sublabel": "Agent Thread 生命周期 · AgentRuntimeFactory", "pos": [330, 800], "size": [220, 78] },
+    { "id": "workspace", "type": "backend", "label": "TaskWorkspace", "sublabel": "Work Product · mutation · 验证与恢复", "pos": [960, 800], "size": [200, 78] },
+    { "id": "gateway", "type": "security", "label": "CapabilityGateway", "sublabel": "本地/MCP 工具 · 审批 · Hook · Effect", "pos": [1280, 800], "size": [200, 78], "tag": "fail closed" }
+  ],
+  "connections": [
+    { "id": "clients-host", "from": "clients", "to": "host", "label": "命令 / 事件" },
+    { "id": "host-coordinator", "from": "host", "to": "coordinator", "label": "run(RunInput)", "variant": "emphasis" },
+    { "id": "coordinator-runtime", "from": "coordinator", "to": "runtime", "label": "run(prompt, history)" },
+    { "id": "runtime-loop", "from": "runtime", "to": "loop", "label": "执行 turn", "variant": "emphasis" },
+    { "id": "loop-driver", "from": "loop", "to": "driver", "label": "Provider 请求", "fromSide": "top", "toSide": "bottom" },
+    { "id": "driver-provider", "from": "driver", "to": "provider", "label": "HTTPS / SSE" },
+    { "id": "provider-loop", "from": "provider", "to": "loop", "label": "流式响应 / tool call", "variant": "dashed", "fromSide": "bottom", "toSide": "right" },
+    { "id": "coordinator-sessions", "from": "coordinator", "to": "sessions", "label": "append + fsync", "fromSide": "top", "toSide": "bottom" },
+    { "id": "runtime-context", "from": "runtime", "to": "context", "label": "prepare / commit", "fromSide": "top", "toSide": "bottom" },
+    { "id": "loop-gateway", "from": "loop", "to": "gateway", "label": "工具调用", "fromSide": "bottom", "toSide": "top", "labelDy": 40 },
+    { "id": "host-orchestrator", "from": "host", "to": "orchestrator", "label": "spawn / wait", "fromSide": "bottom", "toSide": "top" },
+    { "id": "runtime-workspace", "from": "runtime", "to": "workspace", "label": "mutation / 验证", "fromSide": "bottom", "toSide": "top", "labelDy": 40 }
+  ],
+  "cards": [
+    { "dot": "cyan", "title": "交互与应用控制面", "items": ["TUI / Web / headless 差异止于 Adapter", "WorkspaceHost 统一命令、锁、审批与公开事件", "单 workspace 同时只允许一个执行 writer"] },
+    { "dot": "emerald", "title": "上下文与持久事实", "items": ["SessionRepository 是 append-only journal", "ContextEngine 只维护有界 active history", "大载荷进入内容寻址 ArtifactStore"] },
+    { "dot": "rose", "title": "能力执行与状态权威", "items": ["CapabilityGateway 是唯一能力执行 seam", "Risk / EffectKind / ToolConcurrency 分轴声明", "AgentOrchestrator 与 TaskWorkspace 各有唯一权威", "child 角色只收窄父级权限，不扩大"] }
+  ]
+}

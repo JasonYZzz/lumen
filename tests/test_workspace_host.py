@@ -45,6 +45,7 @@ from lumen.application.run_lock import WorkspaceRunLock
 from lumen.attachments import AttachmentRef, AttachmentStore
 from lumen.config import LimitsConfig, PermissionsConfig
 from lumen.context import ArtifactStore
+from lumen.events import ApprovalRequest
 from lumen.plan import EvidenceKind, EvidenceReceipt, PlanState, PlanStep, StepStatus
 from lumen.runtime import AgentRuntime
 from lumen.sessions import SessionRepository
@@ -1819,3 +1820,76 @@ async def test_host_direct_command_records_effect_receipt(tmp_path: Path) -> Non
     assert len(effects) == 1
     assert effects[0].operation == "run_command"
     assert effects[0].status is EffectStatus.VERIFIED
+
+
+@pytest.mark.parametrize("scope", ["session", "always"])
+async def test_remembered_command_approval_does_not_cover_other_arguments(
+    tmp_path: Path, scope: Literal["session", "always"],
+) -> None:
+    resources = LocalResources(tmp_path, _runtime())
+    executions: list[str] = []
+    resources.capability_gateway = _direct_gateway(tmp_path, executions)
+    # Old executable-wide permanent consent must not be silently reused.
+    resources.approval_rules.allow("builtin:run_command:git")
+    host = WorkspaceHost(resources)  # type: ignore[arg-type]
+    await host.open()
+    try:
+        session = await host.dispatch(CreateSession())
+        pending: list[list[str]] = []
+        for index, argv in enumerate([("git", "status"), ("git", "status"), ("git", "diff")]):
+            started = await host.dispatch(RunDirectCommand(session.session_id, argv, f"command-{index}"))
+            async for event in host.subscribe(started.run_id):
+                if event.type == "approval.pending":
+                    pending.append(list(argv))
+                    await host.dispatch(
+                        DecideApproval(started.run_id, str(event.data["call_id"]), True, scope)
+                    )
+        assert pending == [["git", "status"], ["git", "diff"]]
+        assert executions == ["git status", "git status", "git diff"]
+    finally:
+        await host.close()
+
+
+def test_command_approval_digest_covers_cwd_and_does_not_store_arguments() -> None:
+    def key(args: dict[str, object]) -> str:
+        return WorkspaceHost._approval_scope_key(ApprovalRequest(  # pyright: ignore[reportPrivateUsage]
+            call_id="command", name="run_command", origin="builtin", risk="execute", args=args,
+        ))
+
+    first = key({"argv": ["python", "-c", "private argument"], "cwd": "."})
+    reordered = key({"cwd": ".", "argv": ["python", "-c", "private argument"]})
+    other_cwd = key({"argv": ["python", "-c", "private argument"], "cwd": "src"})
+    assert first == reordered
+    assert first != other_cwd
+    assert "private argument" not in first
+    assert first.startswith("builtin:run_command:sha256:")
+
+
+async def test_historical_failed_execution_is_visible_and_can_be_resolved_through_host(
+    tmp_path: Path,
+) -> None:
+    resources = LocalResources(tmp_path, _runtime())
+    resources.task_workspace = TaskWorkspace(tmp_path, resources.artifact_store, resources.session_repository)
+    host = WorkspaceHost(resources)  # type: ignore[arg-type]
+    await host.open()
+    try:
+        session = await host.dispatch(CreateSession())
+        resources.task_workspace.bind_session(session.session_id)
+        receipt = resources.task_workspace.record_tool_effect(
+            tool_name="run_command", effect_kind=EffectKind.EXECUTION,
+            success=False, summary="old command interrupted without snapshot",
+        )
+        assert receipt is not None
+        snapshot = await host.snapshot(session.session_id)
+        assert [item["id"] for item in snapshot.pending_effects] == [receipt.id]
+        with pytest.raises(InvalidStateError, match="待核实"):
+            await host.dispatch(StartRun(session.session_id, "continue", "blocked"))
+        await host.dispatch(
+            WaivePlanVerification(session.session_id, (receipt.id,), "operator checked outputs")
+        )
+        assert (await host.snapshot(session.session_id)).pending_effects == []
+        started = await host.dispatch(StartRun(session.session_id, "continue", "resolved"))
+        events = [event async for event in host.subscribe(started.run_id)]
+        assert events[-1].type == "run.completed"
+    finally:
+        await host.close()

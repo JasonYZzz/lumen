@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import json
 import mimetypes
 import re
 from collections import Counter
@@ -60,6 +62,7 @@ from lumen.sessions import SessionData, SessionMetadata, SessionRepository
 from lumen.skills import expand_skill_for_message
 from lumen.timeline import RepositoryTimelineAdapter, TimelineStore
 from lumen.tools.gateway import CapabilityApproval, CapabilityInvocation
+from lumen.tools.spec import EffectKind
 from lumen.tools.workspace import Workspace
 from lumen.trust import ApprovalRuleStore
 
@@ -986,7 +989,10 @@ class WorkspaceHost:
                 item.model_dump(mode="json")
                 for item in work_state.effects
                 if item.status.value in pending_statuses
-                or (item.status.value == "failed" and item.after is not None)
+                or (
+                    item.status.value == "failed"
+                    and (item.after is not None or item.effect_kind is EffectKind.EXECUTION)
+                )
             ],
             recoverable_effects=[
                 item.model_dump(mode="json")
@@ -1896,10 +1902,12 @@ class WorkspaceHost:
     @staticmethod
     def _approval_scope_key(request: ApprovalRequest) -> str:
         if request.name == "run_command":
-            argv = request.args.get("argv")
-            items = cast(list[object], argv) if isinstance(argv, list) else []
-            executable = str(items[0]) if items else "<unknown>"
-            return f"{request.origin}:{request.name}:{executable}"
+            # Bind remembered consent to the complete validated invocation,
+            # not every subcommand or script run by the same executable. Keep
+            # arguments (which may contain secrets) out of the rule store.
+            payload = json.dumps(request.args, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
+            digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()
+            return f"{request.origin}:{request.name}:sha256:{digest}"
         return f"{request.origin}:{request.name}"
 
     async def _approve_plan(self, command: ApprovePlan) -> RunStartedResult:

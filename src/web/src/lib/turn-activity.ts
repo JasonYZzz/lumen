@@ -79,7 +79,7 @@ export function turnPresentation(
     // A historical failed attempt is audit information, not an open approval.
     // Runs routinely recover from tool errors before producing their answer.
     requiresAttention: tools.some((item) => item.pendingApproval),
-    errorCount: tools.filter((item) => item.isError || item.status === 'denied' || item.status === 'error').length,
+    errorCount: tools.filter((item) => item.isError || ['denied', 'error', 'failed'].includes(item.status ?? '')).length,
     terminalStatus: (() => {
       const status = foreground.findLast((item) => (
       ['failed', 'cancelled', 'interrupted', 'waiting_for_user'].includes(item.status ?? '')
@@ -96,7 +96,78 @@ export function activityTitle(presentation: TurnPresentation, active: boolean) {
   if (!active && presentation.terminalStatus === 'waiting_for_user') return '等待补充信息'
   if (!active && presentation.terminalStatus === 'clarification_answered') return '已收到补充信息'
   if (presentation.skillName) return `${active ? '正在运行' : '已运行'} Skill · ${presentation.skillName}`
+  if (active) {
+    const running = presentation.activity.filter(isRunningTool)
+    if (running.length > 1) return `${running.length} 项操作进行中`
+    if (running.length === 1) {
+      const family = callFamily(running[0])
+      if (family === 'web') return running[0].toolName === 'web_fetch' ? '正在阅读网页' : '正在搜索资料'
+      if (family === 'read' || family === 'list') return '正在阅读文件'
+      if (family === 'search') return '正在搜索文件'
+      if (family === 'command') return '正在运行命令'
+      if (family === 'edit') return '正在修改文件'
+      return String(running[0].callView?.active_verb ?? '正在使用工具')
+    }
+    if (presentation.foreground.some((item) => item.kind === 'assistant')) return '正在生成回答'
+  }
   return active ? '正在思考' : '已完成处理'
+}
+
+export function isRunningTool(item: TimelineEntry) {
+  return item.kind === 'tool' && !item.pendingApproval && !item.isError
+    && ['running', 'approved'].includes(item.status ?? '')
+}
+
+export interface ActivityGroup {
+  id: string
+  entries: TimelineEntry[]
+  label: string | null
+}
+
+/** A reading projection only: all original events remain available in the transcript. */
+export function readableActivity(activity: TimelineEntry[]) {
+  const groups: ActivityGroup[] = []
+  const diagnostics: TimelineEntry[] = []
+  let previousKey: string | null = null
+  let previousText = ''
+  for (const original of activity) {
+    if (['thinking', 'compaction', 'work_product'].includes(original.kind)) {
+      diagnostics.push(original)
+      previousKey = null
+      continue
+    }
+    if (original.kind === 'agent' && !['failed', 'blocked', 'import_pending'].includes(original.status ?? '')) {
+      diagnostics.push(original)
+      previousKey = null
+      continue
+    }
+    const text = original.text.split('\n').filter((line) => !/^正在准备工具调用:\s/.test(line.trim())).join('\n').trim()
+    if (text !== original.text.trim()) diagnostics.push(original)
+    if (original.kind !== 'tool' && !text) continue
+    const item = text === original.text ? original : { ...original, text }
+    if (['commentary', 'progress'].includes(item.kind)) {
+      const normalized = text.replace(/\s+/g, ' ')
+      if (normalized === previousText) continue
+      previousText = normalized
+    } else previousText = ''
+    const key = item.kind === 'tool' && item.callView?.groupable === true
+      && typeof item.callView.group_key === 'string' && item.callView.group_key
+      && !item.pendingApproval && !item.isError && ['completed', 'ok', 'success'].includes(item.status ?? '')
+      ? item.callView.group_key : null
+    const previous = groups.at(-1)
+    if (key && key === previousKey && previous) {
+      previous.entries.push(item)
+      // Mixed file/directory inspection needs a neutral, accurate unit.
+      const sameFamily = previous.entries.every((entry) => callFamily(entry) === callFamily(item))
+      const webRead = sameFamily && callFamily(item) === 'web' && previous.entries.some((entry) => entry.toolName === 'web_fetch')
+      const declaredUnit = typeof item.callView?.plural === 'string' ? item.callView.plural : '次操作'
+      const unit = webRead ? '次网页操作' : sameFamily ? declaredUnit === 'calls' ? '次调用' : declaredUnit : '项只读操作'
+      const verb = webRead ? '已完成' : sameFamily ? String(item.callView?.completed_verb ?? '已完成') : '已检查'
+      previous.label = `${verb} ${previous.entries.length} ${unit}`
+    } else groups.push({ id: item.id, entries: [item], label: null })
+    previousKey = key
+  }
+  return { groups, diagnostics }
 }
 
 export function activityMeta(presentation: TurnPresentation) {
@@ -121,9 +192,15 @@ export function activityDuration(seconds: number | undefined) {
 
 export function toolActivityLabel(item: TimelineEntry) {
   const succeeded = !item.isError && ['completed', 'ok', 'success'].includes(item.status ?? '')
-  const verb = succeeded ? item.callView?.completed_verb : item.callView?.active_verb
+  const failed = item.isError || ['error', 'failed', 'denied'].includes(item.status ?? '')
+  const webRead = item.toolName === 'web_fetch' && (!item.origin || item.origin.startsWith('builtin'))
+  const verb = failed ? '操作未完成' : webRead ? succeeded ? '已阅读网页' : '正在阅读网页'
+    : succeeded ? item.callView?.completed_verb : item.callView?.active_verb
   const title = typeof verb === 'string' && verb ? verb : item.callView?.title ?? item.toolName ?? '工具'
-  const detail = item.callView?.detail
+  let detail = item.callView?.detail
+  if (webRead && typeof item.args?.url === 'string') {
+    try { detail = new URL(item.args.url).hostname } catch { /* Preserve declared presentation for invalid URLs. */ }
+  }
   return `${String(title)}${typeof detail === 'string' && detail ? ` · ${detail}` : ''}`
 }
 

@@ -233,6 +233,7 @@ export interface TimelineEntry {
   attachments?: AttachmentRef[]
   callId?: string
   toolName?: string
+  origin?: string
   args?: Record<string, unknown>
   result?: string | null
   preview?: string | null

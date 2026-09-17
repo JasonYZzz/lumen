@@ -336,7 +336,7 @@ export function Composer({
             className="composer-input"
             value={value}
             rows={1}
-            placeholder={busy ? '补充指令…' : '给 Lumen 一个任务'}
+            placeholder={busy ? '补充当前要求，或安排下一步…' : '给 Lumen 一个任务'}
             onChange={(event) => {
               setSelection({ start: event.target.selectionStart, end: event.target.selectionEnd })
               onChange(event.target.value)
@@ -456,11 +456,12 @@ export function Composer({
             >
               <Plus size={22} aria-hidden="true" />
             </button>
-            {busy && (value.trim() || attachments.length > 0) ? (
+            {busy ? (
               <div className="queue-mode" aria-label="运行中输入方式">
                 <button
                   type="button"
                   className={queueMode === 'steer' ? 'is-active' : ''}
+                  aria-pressed={queueMode === 'steer'}
                   onClick={() => onQueueModeChange('steer')}
                 >
                   立即补充
@@ -468,6 +469,7 @@ export function Composer({
                 <button
                   type="button"
                   className={queueMode === 'follow_up' ? 'is-active' : ''}
+                  aria-pressed={queueMode === 'follow_up'}
                   onClick={() => onQueueModeChange('follow_up')}
                 >
                   完成后继续

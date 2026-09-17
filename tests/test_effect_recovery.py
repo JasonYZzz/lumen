@@ -51,9 +51,10 @@ async def test_read_risk_does_not_replace_effect_preflight(tmp_path: Path, effec
     assert manager.completion_issues(session_id) == ()
 
 
-@pytest.mark.parametrize("ending", ["success", "timeout", "cancel"])
+@pytest.mark.parametrize("effect_kind", [EffectKind.EXTERNAL_ACTION, EffectKind.EXECUTION])
+@pytest.mark.parametrize("ending", ["success", "error", "timeout", "cancel"])
 async def test_external_receipt_is_durable_before_dispatch_and_reconciles_uncertainty(
-    tmp_path: Path, ending: str,
+    tmp_path: Path, ending: str, effect_kind: EffectKind,
 ) -> None:
     manager, session_id = _manager(tmp_path)
     started = asyncio.Event()
@@ -66,12 +67,14 @@ async def test_external_receipt_is_durable_before_dispatch_and_reconciles_uncert
         assert len(saved) == 1
         assert saved[0].status is EffectStatus.PREPARED
         started.set()
+        if ending == "error":
+            raise RuntimeError("failed after dispatch")
         if ending != "success":
             await asyncio.Event().wait()
         return "accepted"
 
     manager.capability_gateway.register(CapabilityDescriptor(
-        name="remote_update", origin="mcp:remote", risk="write", effect_kind=EffectKind.EXTERNAL_ACTION,
+        name="remote_update", origin="mcp:remote", risk="write", effect_kind=effect_kind,
         parameters={"type": "object", "properties": {}}, timeout_seconds=0.05,
     ), remote)
     invocation = CapabilityInvocation(
@@ -99,3 +102,43 @@ async def test_external_receipt_is_durable_before_dispatch_and_reconciles_uncert
     replay = await manager.capability_gateway.invoke(invocation)
     assert replay.succeeded is (ending == "success")
     assert calls == 1
+
+
+async def test_historical_failed_execution_requires_explicit_recovery(tmp_path: Path) -> None:
+    manager, session_id = _manager(tmp_path)
+    receipt = manager.task_workspace.record_tool_effect(
+        tool_name="run_command", effect_kind=EffectKind.EXECUTION,
+        success=False, summary="old failed command without a prepared receipt",
+    )
+    assert receipt is not None
+    assert receipt.status is EffectStatus.FAILED
+    assert receipt.after is None
+    blockers = manager.task_workspace.completion_blockers(session_id)
+    assert len(blockers) == 1
+    assert not blockers[0].model_recoverable
+    # An unrelated successful command cannot verify the failed invocation.
+    manager.task_workspace.record_tool_effect(
+        tool_name="run_command", effect_kind=EffectKind.EXECUTION,
+        success=True, summary="later successful command",
+    )
+    assert len(manager.task_workspace.completion_blockers(session_id)) == 1
+    assert manager.task_workspace.waive_effects(session_id, (receipt.id,), "operator inspected outputs") == 1
+    assert manager.task_workspace.completion_blockers(session_id) == []
+
+
+async def test_denied_execution_does_not_create_an_uncertain_receipt(tmp_path: Path) -> None:
+    manager, session_id = _manager(tmp_path)
+
+    async def execute(_arguments: dict[str, object]) -> str:
+        raise AssertionError("denied command must not execute")
+
+    manager.capability_gateway.register(CapabilityDescriptor(
+        name="command", origin="test", risk="execute", effect_kind=EffectKind.EXECUTION,
+        requires_approval=True, parameters={"type": "object", "properties": {}}, timeout_seconds=1,
+    ), execute)
+    result = await manager.capability_gateway.invoke(CapabilityInvocation(
+        execution_id="run", provider_call_id="call", name="command",
+    ))
+    assert result.status is CapabilityStatus.DENIED
+    assert manager.task_workspace.state_for(session_id).effects == ()
+    assert manager.task_workspace.completion_blockers(session_id) == []

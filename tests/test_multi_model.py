@@ -111,7 +111,26 @@ async def test_repeated_model_switches_keep_registrations_stable_and_quiesce_old
     async with manager:
         before = manager.registration_report()
         for name in ("beta", "alpha", "beta"):
+            assert manager.runtime is not None
+            engine = manager.runtime.context_engine
+            assert engine is not None
+            started = asyncio.Event()
+            cleaned = asyncio.Event()
+
+            async def compact(started: asyncio.Event, cleaned: asyncio.Event) -> None:
+                started.set()
+                try:
+                    await asyncio.Event().wait()
+                finally:
+                    cleaned.set()
+
+            task = asyncio.create_task(compact(started, cleaned))
+            engine._background_tasks["session"] = task  # pyright: ignore[reportPrivateUsage]
+            await started.wait()
             await manager.select_model(name)
+            assert task.cancelled()
+            assert cleaned.is_set()
+            assert engine._background_tasks == {}  # pyright: ignore[reportPrivateUsage]
         after = manager.registration_report()
 
         assert after["tool_count"] == before["tool_count"]

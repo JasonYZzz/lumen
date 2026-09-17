@@ -15,6 +15,19 @@ function event(type: EventEnvelope['type'], data: Record<string, unknown>, seque
 }
 
 describe('runReducer', () => {
+  it('shows a delivery receipt only after a delivered event and clears it on a new run', () => {
+    const data = { message_id: 'one', text: '补充信息', mode: 'steer' }
+    const queued = runReducer(initialRunState, { type: 'event', event: event('input.queued', data) })
+    expect(queued.inputFeedback).toBeNull()
+    expect(queued.queuedInputs).toHaveLength(1)
+    const withdrawn = runReducer(queued, { type: 'event', event: event('input.dequeued', data, 2) })
+    expect(withdrawn.inputFeedback).toBeNull()
+    const delivered = runReducer(queued, { type: 'event', event: event('input.delivered', data, 2) })
+    expect(delivered.queuedInputs).toEqual([])
+    expect(delivered.inputFeedback).toEqual({ id: 'one', text: '补充信息', mode: 'steer' })
+    expect(runReducer(delivered, { type: 'run-registered', runId: 'new' }).inputFeedback).toBeNull()
+    expect(runReducer(delivered, { type: 'reset' }).inputFeedback).toBeNull()
+  })
   it('preserves structured clarification choices and clears them only when a new run is accepted', () => {
     const requested = runReducer(initialRunState, { type: 'event', event: event('clarification.requested', {
       question_id: 'q1', question: '请选择', choices: ['全局安装', '取消'],

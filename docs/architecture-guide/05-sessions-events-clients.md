@@ -138,7 +138,9 @@ Session/Timeline 操作不受影响。
 有界错误类别，不复制 prompt、模型输出、工具参数、错误正文或未知 usage 字段；非工具耗时明确标为
 model/context/Host 的估算，不能伪装成精确 provider latency。
 
-Web Adapter 将每个用户 turn 的 timeline 投影为两层：assistant 最终输出、澄清与错误属于前景阅读层；thinking、commentary、progress、Tool、MCP、Skill、Agent 和 Work Product 属于可展开的活动层。计划事件不生成历史对话卡片，完整更新保留在 transcript 和 journal。活动层在执行或工具审批中展开，在成功 terminal 后默认折叠；Plan 方案确认入口独立保留。该分组是纯客户端 presentation，保留展示项的相对事件顺序，不修改 Session journal 或恢复权威。
+Web Adapter 将每个用户 turn 的 timeline 投影为前景回答、可读活动与原始详情：assistant 最终输出、澄清与错误保留在前景；commentary、progress 和工具动作进入活动层；thinking、压缩、Work Product 与非待处理 Agent 事件进入按需展开的原始详情。`readableActivity` 只合并连续、成功且 `callView` 声明可分组的工具，不跨失败或其他事件边界。所有正在执行的工具均标记为活动，摘要阶段来自实际工具事件。新待审批动作默认展开，审批卡片独立于折叠区域；成功 terminal 默认折叠但尊重用户手动选择，失败或中断默认展开。完成后的计划通过默认折叠的详情复用 `PlanPanel`；Plan 方案确认入口仍独立保留。该分组是纯客户端 presentation，不修改 Session journal 或恢复权威。
+
+`toolOutput` 仅解码已知内置搜索、网页读取、文件读取与命令结果契约；未知或失败结果保留原始展示，截断与分页状态明确标记。`TurnSourcesProvider` 从成功检索、网页片段和 Markdown AST 中的正文链接派生去重来源，分别记录 retrieved/read/linked，不推断证据有效性。网页链接提供预览与来源面板，长回答和 Markdown 文档复用带目录的 `MarkdownReport`；嵌套模态只由顶层浮层处理 Escape/Tab。排队和送达反馈由既有 Host input 事件派生，临时回执不写 timeline。
 
 普通模式的 `PlanProgress` 仅在当前 run 活动且当前 turn 有计划时，投影 composer 上方居中摘要与非模态清单，复用 `planPresentation` 和 `PlanPanel`，不创建第二套步骤状态。terminal 后移除胶囊，新 turn 未更新计划时不显示旧进度；旧 `PlanDrawer` 与页头入口已删除。Plan Mode 的 `PlanProposal` 在正文展示待审方案，`PlanReview` 在 composer 上方提供确认或修改入口；Host 的 revision 审核契约仍是唯一授权来源。审核请求通过同步引用防止重复发送，并检查当前 Session 与请求身份后才更新 UI、订阅运行；导航会使旧请求的客户端结果失效，不取消已经接受的 Host 工作。意见在请求失败时保留，在 Session 或方案 revision 改变时清空。
 
@@ -146,7 +148,7 @@ Web Adapter 将每个用户 turn 的 timeline 投影为两层：assistant 最终
 
 模型文本中的 think/thinking 分隔符通过 `projectThinkingMarkup` 读取投影；主对话与运行记录标准视图复用同一 Interface，后者先投影再搜索和复制。原生 thinking 的通道归属优先于文本闭合标签；原生通道及用户轮次隔离 Markdown 状态，避免未闭合代码段影响后续正文。详细运行记录、工具结果、代码与转义示例保留原文。该处理不改变 Provider history、签名或 TextRetracted 的字符偏移，不能被用作内容脱敏或安全过滤器。
 
-只有当前未决审批才显示“需要确认”并保持活动层展开；历史工具失败或拒绝仅计入可展开的失败记录，
+只有当前未决审批才显示“需要确认”并使活动层默认展开；审批卡片不受手动折叠影响。历史工具失败或拒绝仅计入可展开的失败记录，
 不把已恢复的 run 永久标成待确认。终止错误保留在前景，不伪装成成功。Web 输入框的高亮层与原生
 textarea 使用完全相同的字体、字重、换行宽度和滚动位置；文件高亮只改变颜色。`@文件` 根据实际
 光标位置补全，保留后续文本，在受控值提交后恢复光标，并忽略失效搜索结果；中文/空格路径使用引号。

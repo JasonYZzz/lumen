@@ -75,6 +75,12 @@ Provider、region、media kind 和 completion control snapshot；原始音频仍
 Host WebSocket 断开会结束对应 Provider call，避免百炼连接继续计费。主动 rollover 仍由浏览器建立
 新 call；Route selection 重新执行，但旧 call 的副作用不会转移或重放。
 
+Manager 在 Provider connection 已建立后的 admission 失败或取消时关闭连接；百炼 Adapter
+在初始 `session.update` 失败或取消时关闭尚未注册的 WebSocket，避免遗漏清理。
+输出音频队列最多保留 64 个 chunk；慢客户端或未连接的客户端导致队列满时丢弃最旧 chunk，
+不阻塞同一 Provider 流的工具与控制事件。结束调用丢弃剩余播放队列并立即发出结束标记，
+不会等待 media consumer；原始音频仍不持久化。
+
 ## 5. 配置与兼容
 
 推荐配置使用命名 Route：
@@ -103,6 +109,7 @@ live:
 ## 6. 验证入口
 
 - Host canonical control、PCM、认证与 SSE：`tests/test_web_api.py`
+- 失败/取消的连接清理、音频队列边界与无 consumer 关闭：`tests/test_live_lifecycle.py`
 - Web 状态：`src/web/src/lib/live/live-reducer.test.ts`
 - Web 构建：`pnpm --dir src/web test/typecheck/build`
 - 全量：`uv run ruff check .`、`uv run pyright`、`uv run pytest`

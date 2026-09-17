@@ -171,7 +171,7 @@ class ApprovalRuleStore:
     """Cross-session "always allow" approval rules, scoped to one project.
 
     Rules are keyed by the same bounded capability string the host derives for
-    session rules (``origin:tool[:executable]``). Stored separately from user
+    session rules (``origin:tool[:sha256:invocation_digest]``). Stored separately from user
     config because these files are machine-managed: the config YAML may hold
     credentials and hand-written comments that must never be rewritten.
     """

@@ -197,19 +197,24 @@ class BailianRealtimeAdapter:
             open_timeout=self._timeout_seconds,
             max_size=2**22,
         )
-        await websocket.send(
-            json.dumps(
-                self._session_update(request),
-                ensure_ascii=False,
-                separators=(",", ":"),
+        try:
+            await websocket.send(
+                json.dumps(
+                    self._session_update(request),
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                )
             )
-        )
-        connection = _BailianConnection(
-            websocket=websocket,
-            request=request,
-            sink=event_sink,
-            on_close=self._connections.discard,
-        )
+            connection = _BailianConnection(
+                websocket=websocket,
+                request=request,
+                sink=event_sink,
+                on_close=self._connections.discard,
+            )
+        except BaseException:
+            with suppress(Exception):
+                await websocket.close()
+            raise
         self._connections.add(connection)
         return connection
 

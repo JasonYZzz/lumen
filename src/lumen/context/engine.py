@@ -501,6 +501,7 @@ class ContextEngine:
     )
     _background_status: dict[str, str] = field(default_factory=dict[str, str])
     _last_compaction_reason: dict[str, str] = field(default_factory=dict[str, str])
+    _closed: bool = field(init=False, default=False)
 
     def __post_init__(self) -> None:
         # ``_internal=True`` suppresses the legacy-manager deprecation warning;
@@ -540,6 +541,19 @@ class ContextEngine:
         )
         if self.artifact_root is not None:
             self._artifacts = ArtifactStore(self.artifact_root)
+
+    async def close(self) -> None:
+        """Cancel and await speculative compaction before its model is released."""
+
+        self._closed = True
+        tasks = tuple(self._background_tasks.values())
+        for task in tasks:
+            task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+        self._background_tasks.clear()
+        self._background_candidates.clear()
+        self._background_status.clear()
 
     # -- prepare -----------------------------------------------------------
 
@@ -1327,7 +1341,8 @@ class ContextEngine:
         new_messages: Sequence[ModelMessage],
     ) -> None:
         if (
-            not self.config.enabled
+            self._closed
+            or not self.config.enabled
             or not self.config.background_compaction
             or envelope.compaction is not None
         ):

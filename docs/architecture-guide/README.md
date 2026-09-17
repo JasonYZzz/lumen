@@ -44,7 +44,7 @@ Lumen 是一个本地优先、事件驱动的 coding-agent 框架：`WorkspaceHo
 
 `LumenAgentLoop` 是单 Agent 模型—工具循环的唯一权威；`PydanticAIModelDriver` 只在
 `ModelDriver` seam 下提供成熟的 Model/Provider wire translation 与资源生命周期。`AgentRuntime`、
-`ContextEngine`、`CapabilityGateway`、Session v10 与完成门禁各自保持单一权威，不存在运行时 selector
+`ContextEngine`、`CapabilityGateway`、Session v11 与完成门禁各自保持单一权威，不存在运行时 selector
 或隐藏旧 Agent graph 回退路径。Context 摘要与 Memory 提取中的无工具 typed Agent 仅是结构化输出
 Adapter，不是第二套模型—工具 Loop。
 

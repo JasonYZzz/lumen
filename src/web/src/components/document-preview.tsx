@@ -4,7 +4,7 @@ import { ArrowDown, ArrowClockwise, CircleNotch, FileText, X } from '@phosphor-i
 import { createContext, useContext, useEffect, useState, type ReactNode } from 'react'
 import { lumenApi } from '../lib/api/client'
 import type { TimelineEntry } from '../lib/api/types'
-import { MarkdownMessage } from './markdown-message'
+import { MarkdownReport } from './markdown-report'
 import { useModalFocus } from './use-modal-focus'
 import { WebLink } from './web-link'
 
@@ -452,7 +452,7 @@ function DocumentPreview({ path, onClose }: { path: string; onClose: () => void 
                 {result.omittedResources ? ` · ${result.omittedResources} 个资源不可用` : ''}</span>
               {result.warning && <span>{result.warning}</span>}
             </p><iframe title="HTML 静态预览" sandbox="" srcDoc={result.htmlPreview ?? staticHtml(result.text)} /></>
-          : markdown ? <Documents.Provider value={context ? { ...context, base: path.split('/').slice(0, -1).join('/') } : null}><MarkdownMessage content={result.text} /></Documents.Provider>
+          : markdown ? <Documents.Provider value={context ? { ...context, base: path.split('/').slice(0, -1).join('/') } : null}><MarkdownReport content={result.text} /></Documents.Provider>
           : <pre>{result.text}</pre>}
       </div>
     </section>

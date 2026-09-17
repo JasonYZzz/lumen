@@ -50,6 +50,7 @@ from .types import (
     AgentThreadState,
     AgentToolPolicy,
     WorkspaceMode,
+    utc_now,
 )
 
 
@@ -423,6 +424,14 @@ class NativeAgentRuntimeFactory(AgentRuntimeFactory):
         execution = execution.model_copy(update={
             "usage": {**execution.usage, "worktree_prepare_seconds": round(prepared_seconds, 6)},
         })
+        if execution.status is not AgentStatus.COMPLETED:
+            # An empty diff does not verify failed/uncertain execution, and
+            # unfinished child changes must not be committed for import.
+            return execution.model_copy(update={
+                "worktree": str(worktree), "branch": branch, "base_commit": base,
+                "usage": {**execution.usage,
+                          "worktree_finalize_seconds": round(time.monotonic() - finalizing, 6)},
+            })
         status = (await self._git(worktree, "status", "--porcelain"))
         if not status.strip():
             return execution.model_copy(
@@ -483,27 +492,37 @@ class NativeAgentRuntimeFactory(AgentRuntimeFactory):
             *,
             tool_name: str,
             effect_kind: EffectKind,
-            success: bool,
+            success: bool | None,
             summary: str,
-            **_extra: object,
-        ) -> None:
+            receipt_id: str | None = None,
+        ) -> EffectReceipt:
+            prior = next((item for item in effect_receipts if item.id == receipt_id), None)
+            if receipt_id is not None and (
+                prior is None or prior.operation != tool_name or prior.effect_kind is not effect_kind
+            ):
+                raise ValueError("effect receipt does not belong to this invocation")
             status = (
-                EffectStatus.RECONCILIATION_REQUIRED
-                if success and effect_kind is EffectKind.UNKNOWN
+                EffectStatus.PREPARED
+                if success is None
+                else EffectStatus.RECONCILIATION_REQUIRED
+                if (not success and prior is not None) or (success and effect_kind is EffectKind.UNKNOWN)
                 else EffectStatus.VERIFIED
                 if success
                 else EffectStatus.FAILED
             )
-            effect_receipts.append(
-                EffectReceipt(
-                    id=f"effect:agent:{thread.ref.id}:{len(effect_receipts) + 1}",
-                    effect_kind=effect_kind,
-                    operation=tool_name,
-                    status=status,
-                    summary=summary,
-                    error=None if success else summary,
-                )
+            receipt = EffectReceipt(
+                id=receipt_id or f"effect:agent:{thread.ref.id}:{len(effect_receipts) + 1}",
+                effect_kind=effect_kind,
+                operation=tool_name,
+                status=status,
+                summary=summary,
+                error=summary if success is False else None,
+                created_at=prior.created_at if prior is not None else utc_now(),
             )
+            if prior is not None:
+                effect_receipts.remove(prior)
+            effect_receipts.append(receipt)
+            return receipt
 
         child_model = build_model(model_config)
         replacement_specs: list[tuple[ToolSpec, str]] = []
@@ -641,17 +660,21 @@ class NativeAgentRuntimeFactory(AgentRuntimeFactory):
         try:
             runtime.configure_reasoning(reasoning)
             async with runtime:
-                outcome = await runtime.run(
-                    prompt,
-                    history,
-                    emit,  # type: ignore[arg-type]
-                    approve,  # type: ignore[arg-type]
-                    session_id=f"{thread.ref.parent_session_id}:{thread.ref.id}",
-                    completion_policy=CompletionPolicy(
-                        require_post_mutation_verification=False,
-                        max_retries=1,
-                    ),
-                )
+                try:
+                    outcome = await runtime.run(
+                        prompt,
+                        history,
+                        emit,  # type: ignore[arg-type]
+                        approve,  # type: ignore[arg-type]
+                        session_id=f"{thread.ref.parent_session_id}:{thread.ref.id}",
+                        completion_policy=CompletionPolicy(
+                            require_post_mutation_verification=False,
+                            max_retries=1,
+                        ),
+                    )
+                finally:
+                    if runtime.context_engine is not None:
+                        await runtime.context_engine.close()
         finally:
             self._active_runtimes.pop(thread.ref.id, None)
         transcript = ModelMessagesTypeAdapter.dump_json(

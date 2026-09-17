@@ -9,6 +9,7 @@ migrated onto it.
 
 from __future__ import annotations
 
+import asyncio
 import json
 from collections.abc import Sequence
 from dataclasses import replace
@@ -96,6 +97,32 @@ def _request(history: Sequence[ModelMessage], *, session_id: str = "s1") -> Cont
 
 async def _no_emit(_event: RunEvent) -> None:
     return None
+
+
+async def test_close_cancels_and_awaits_background_compaction() -> None:
+    engine = _engine()
+    started = asyncio.Event()
+    cleaned = asyncio.Event()
+
+    async def compact() -> None:
+        started.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            # close must wait for async model/stream cleanup, not just cancel.
+            await asyncio.sleep(0)
+            cleaned.set()
+
+    task = asyncio.create_task(compact())
+    engine._background_tasks["s1"] = task  # pyright: ignore[reportPrivateUsage]
+    engine._background_status["s1"] = "running"  # pyright: ignore[reportPrivateUsage]
+    await started.wait()
+    await engine.close()
+    await engine.close()
+    assert task.cancelled()
+    assert cleaned.is_set()
+    assert engine._background_tasks == {}  # pyright: ignore[reportPrivateUsage]
+    assert engine._background_status == {}  # pyright: ignore[reportPrivateUsage]
 
 
 async def test_restored_plan_exposes_linkable_evidence_in_provider_context() -> None:

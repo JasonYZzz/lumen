@@ -44,6 +44,9 @@ export function useModalFocus(
     }
 
     const handleKeyDown = (event: KeyboardEvent) => {
+      // A source panel may open above a report; only the top dialog owns keyboard focus.
+      const dialogs = document.querySelectorAll('[role="dialog"][aria-modal="true"]')
+      if (dialogs.length && dialogs[dialogs.length - 1] !== container) return
       if (event.key === 'Escape' && !event.isComposing && event.keyCode !== 229) {
         event.preventDefault()
         event.stopPropagation()

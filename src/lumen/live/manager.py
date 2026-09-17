@@ -71,7 +71,7 @@ class _LiveRecord:
     rollover_task: asyncio.Task[None] | None = None
     ready: asyncio.Event = field(default_factory=asyncio.Event)
     audio_queue: asyncio.Queue[bytes | None] = field(
-        default_factory=lambda: asyncio.Queue[bytes | None]()
+        default_factory=lambda: asyncio.Queue[bytes | None](maxsize=64)
     )
 
 
@@ -227,6 +227,9 @@ class LiveSessionManager:
                 state=record.state,
             )
         except Exception as error:
+            if record.routed is not None:
+                with suppress(Exception):
+                    await record.routed.connection.close()
             self._update(
                 record,
                 connection=LiveConnectionState.FAILED,
@@ -240,6 +243,9 @@ class LiveSessionManager:
             await record.journal.close()
             raise
         except asyncio.CancelledError:
+            if record.routed is not None:
+                with suppress(Exception):
+                    await record.routed.connection.close()
             self._update(
                 record,
                 connection=(
@@ -296,7 +302,11 @@ class LiveSessionManager:
         if record.routed is not None:
             with suppress(Exception):
                 await record.routed.connection.close()
-        await record.audio_queue.put(None)
+        # End must not wait for an absent/slow media consumer. Discard stale
+        # playback and publish the sentinel without awaiting queue capacity.
+        while not record.audio_queue.empty():
+            record.audio_queue.get_nowait()
+        record.audio_queue.put_nowait(None)
         self._update(
             record,
             connection=LiveConnectionState.CLOSED,
@@ -391,7 +401,11 @@ class LiveSessionManager:
                 self._update(record, activity=LiveActivityState.ASSISTANT_SPEAKING)
                 await record.journal.append(LiveEventKind.RESPONSE_AUDIO_STARTED)
             if event.audio:
-                await record.audio_queue.put(event.audio)
+                # Media must not block the provider's control/tool events.
+                # Prefer fresh audio to an unbounded backlog for slow clients.
+                if record.audio_queue.full():
+                    record.audio_queue.get_nowait()
+                record.audio_queue.put_nowait(event.audio)
             return
         if event.kind is LiveProviderEventKind.RESPONSE_TRANSCRIPT_DELTA:
             delta = event.delta or ""

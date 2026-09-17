@@ -40,6 +40,44 @@ afterEach(async () => {
 })
 
 describe('conversation process disclosure', () => {
+  it('reads command output as text, retains raw records and warns about truncation', async () => {
+    const command: TimelineEntry = { id: 'command', kind: 'tool', text: '', toolName: 'run_command', status: 'completed',
+      args: { argv: ['python', 'test.py'] }, result: JSON.stringify({ argv: ['python', 'test.py'], exit_code: 0,
+        stdout: 'one\ntwo\n', stderr: '', stdout_truncated: true }), callView: { family: 'command', title: '运行命令' } }
+    await render([command, answer], false)
+    await click(summary())
+    await click(content().querySelector<HTMLButtonElement>('.tool-summary')!)
+    expect(content().querySelector('.tool-output-text pre')?.textContent).toBe('one\ntwo\n')
+    expect(content().querySelector('.output-limit')?.textContent).toContain('截断或分页')
+    await click(content().querySelector<HTMLButtonElement>('.tool-output-toolbar button')!)
+    expect(content().querySelector('.tool-readable-output')).toBeNull()
+    expect(content().querySelectorAll('.tool-output-text pre')[1]?.textContent).toBe(command.result)
+  })
+  it('filters actual read sources separately from search results and answer-only links', async () => {
+    const search: TimelineEntry = { id: 'search', kind: 'tool', text: '', toolName: 'web_search', status: 'completed',
+      result: JSON.stringify({ query: '资料', results: [{ url: 'https://example.com/', title: '已检索页面' }] }) }
+    const fetch: TimelineEntry = { id: 'fetch', kind: 'tool', text: '', toolName: 'web_fetch', status: 'completed',
+      result: JSON.stringify({ url: 'https://read.test/', title: '已阅读页面', content: '真实阅读片段' }) }
+    await render([search, fetch, { ...answer, text: '[正文链接](https://linked.test/)' }], false)
+    const trigger = container.querySelector<HTMLButtonElement>('.turn-sources-summary button')!
+    trigger.focus()
+    await click(trigger)
+    expect(document.querySelectorAll('.sources-list li')).toHaveLength(3)
+    await click(Array.from(document.querySelectorAll<HTMLButtonElement>('.sources-filters button')).find((button) => button.textContent === '已阅读片段')!)
+    expect(document.querySelectorAll('.sources-list li')).toHaveLength(1)
+    expect(document.querySelector('.sources-list')?.textContent).toContain('真实阅读片段')
+    await click(document.querySelector<HTMLButtonElement>('[aria-label="关闭来源面板"]')!)
+    expect(document.querySelector('.sources-panel')).toBeNull()
+    expect(document.activeElement).toBe(trigger)
+  })
+  it('preserves manual opening at completion and highlights all concurrent tools', async () => {
+    await render([tool, { ...tool, id: 'other', callId: 'call-2' }], true)
+    expect(content().querySelectorAll('.web-tool-card.is-live')).toHaveLength(2)
+    await click(summary())
+    await click(summary())
+    await render([{ ...tool, status: 'completed' }, answer], false)
+    expect(content().hidden).toBe(false)
+  })
   it('shows an immediate live placeholder before the first response event arrives', async () => {
     await render([], true)
     expect(container.querySelector('.assistant-turn')).not.toBeNull()
@@ -97,12 +135,12 @@ describe('conversation process disclosure', () => {
     await render([thought, tool], true)
     expect(content().hidden).toBe(false)
     expect(summary().getAttribute('aria-controls')).toBe(content().id)
-    expect(content().querySelector('.process-text strong')?.textContent).toBe('公开资料')
-    expect(content().querySelector('.process-text > div > strong')).toBeNull()
+    expect(content().querySelector<HTMLDetailsElement>('.process-diagnostics')?.open).toBe(false)
+    expect(content().querySelector('.process-diagnostics .markdown-body strong')?.textContent).toBe('公开资料')
     expect(content().querySelector('.tool-glyph svg')).not.toBeNull()
     expect(content().querySelector('.web-tool-card.is-live')).not.toBeNull()
     expect(container.querySelector('.turn-live-placeholder')).toBeNull()
-    expect(summary().textContent).toContain('正在思考')
+    expect(summary().textContent).toContain('正在阅读文件')
     expect(summary().querySelector('img.thinking-orb')?.getAttribute('src'))
       .toBe('/lumen-claude-amber.svg')
     expect(content().querySelector('.tool-title-line')?.textContent).toBe('正在读取 · README.md')
@@ -159,11 +197,15 @@ describe('conversation process disclosure', () => {
     const pending = { ...tool, pendingApproval: true, status: 'pending', presentation: { title: '读取文件', preview: '预览', full_text: '完整审批说明' } }
     await render([thought, pending], true)
     expect(content().hidden).toBe(false)
-    const allow = Array.from(content().querySelectorAll('button')).find((node) => node.textContent === '允许一次')!
+    await click(summary())
+    expect(content().hidden).toBe(true)
+    const allow = Array.from(container.querySelectorAll<HTMLButtonElement>('.turn-attention button')).find((node) => node.textContent === '允许一次')!
     await click(allow)
     expect(approve).toHaveBeenCalledWith('call-1', true, 'once')
     await render([thought, { ...pending, pendingApproval: false, status: 'completed', result: '实际结果' }], true)
     expect(content().querySelector('.approval-request')).toBeNull()
+    expect(container.querySelector('.turn-attention')).toBeNull()
+    await click(summary())
     await click(content().querySelector<HTMLButtonElement>('.tool-summary')!)
     expect(content().querySelector('.tool-detail')?.textContent).toContain('实际结果')
     expect(content().querySelector('.approval-request')?.textContent).toContain('完整审批说明')

@@ -828,7 +828,10 @@ class TaskWorkspace:
                 EffectStatus.PREPARED,
                 EffectStatus.APPLIED,
                 EffectStatus.RECONCILIATION_REQUIRED,
-            }:
+            } or (
+                effect.status is EffectStatus.FAILED
+                and effect.effect_kind is EffectKind.EXECUTION
+            ):
                 model_recoverable = effect.work_product_id is not None
                 recovery = (
                     "Inspect the work product and verify or restore its actual contents."

@@ -14,10 +14,27 @@ function CodeBlock({ children }: { children?: ReactNode }) {
   </div>
 }
 
-export function MarkdownMessage({ content }: { content: string }) {
+interface HeadingNode {
+  type: string
+  children?: HeadingNode[]
+  data?: { hProperties?: Record<string, unknown> }
+}
+
+function headingAnchors(ids: string[]) {
+  return (tree: HeadingNode) => {
+    let index = 0
+    function visit(node: HeadingNode) {
+      if (node.type === 'heading') node.data = { ...node.data, hProperties: { ...node.data?.hProperties, id: ids[index++], tabIndex: -1 } }
+      node.children?.forEach(visit)
+    }
+    visit(tree)
+  }
+}
+
+export function MarkdownMessage({ content, headingIds }: { content: string; headingIds?: string[] }) {
   return (
     <div className="markdown-body">
-      <ReactMarkdown remarkPlugins={[remarkGfm]} components={{
+      <ReactMarkdown remarkPlugins={headingIds ? [remarkGfm, [headingAnchors, headingIds]] : [remarkGfm]} components={{
         pre: CodeBlock,
         a: ({ href, children }) => <DocumentLink href={href ?? ''}>{children}</DocumentLink>,
         code: DocumentCode,

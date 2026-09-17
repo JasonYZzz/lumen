@@ -4,6 +4,7 @@ import {
   activityMeta,
   activityDuration,
   activityTitle,
+  readableActivity,
   transcriptEventLabel,
   timelineNoteLabel,
   toolSourceLabel,
@@ -15,6 +16,27 @@ function entry(kind: TimelineEntry['kind'], overrides: Partial<TimelineEntry> = 
 }
 
 describe('turn activity presentation', () => {
+  it('groups only consecutive declared groupable completed calls and preserves diagnostics', () => {
+    const read = (id: string, overrides: Partial<TimelineEntry> = {}) => entry('tool', { id, status: 'completed',
+      callView: { family: 'read', groupable: true, group_key: 'files', plural: '个文件', completed_verb: '已读取' }, ...overrides })
+    const original = [read('one'), read('two'), read('write', { callView: { family: 'edit' } }), read('three'),
+      read('failed', { isError: true }), read('four'), entry('thinking', { text: '原始思考' }), read('five'),
+      entry('progress', { text: '正在准备工具调用: read_file\n正在核对资料' })]
+    const saved = JSON.stringify(original)
+    const reading = readableActivity(original)
+    expect(reading.groups[0].entries.map((item) => item.id)).toEqual(['one', 'two'])
+    expect(reading.groups[0].label).toBe('已读取 2 个文件')
+    expect(reading.groups.slice(1).every((group) => group.entries.length === 1)).toBe(true)
+    expect(reading.diagnostics.map((item) => item.kind)).toEqual(['thinking', 'progress'])
+    expect(reading.groups.at(-1)?.entries[0].text).toBe('正在核对资料')
+    expect(JSON.stringify(original)).toBe(saved)
+  })
+  it('describes concurrent active calls and answer generation from actual events', () => {
+    const running = entry('tool', { status: 'running', callView: { family: 'read' } })
+    expect(activityTitle(turnPresentation([running]), true)).toBe('正在阅读文件')
+    expect(activityTitle(turnPresentation([running, { ...running, id: 'second' }]), true)).toBe('2 项操作进行中')
+    expect(activityTitle(turnPresentation([{ ...running, status: 'completed' }, entry('assistant', { text: '结论' })]), true)).toBe('正在生成回答')
+  })
   it('classifies interim text as soon as a tool starts, before a final answer exists', () => {
     const interim = entry('assistant', { text: 'Let me check.' })
     const presentation = turnPresentation([interim, entry('tool', { status: 'running' })])

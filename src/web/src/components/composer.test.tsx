@@ -7,14 +7,15 @@ import { buildSlashCommands } from '../lib/slash-commands'
 (globalThis as typeof globalThis & { React: typeof React }).React = React
 
 describe('Composer image capability', () => {
-  it('shows just the stop action while busy with no draft, and queue controls after typing', () => {
+  it('keeps queue intent visible while busy and enables sending only with a draft', () => {
     const props = { busy: true, queueMode: 'steer' as const, slashCommands: [], attachments: [],
       imageInputEnabled: false, onChange: vi.fn(), onQueueModeChange: vi.fn(), onAttachmentsChange: vi.fn(),
       onSubmit: vi.fn(), onStop: vi.fn() }
     const empty = renderToStaticMarkup(<Composer {...props} value="" />)
     expect(empty).toContain('aria-label="停止运行"')
     expect(empty).not.toContain('class="send-button"')
-    expect(empty).not.toContain('class="queue-mode"')
+    expect(empty).toContain('class="queue-mode"')
+    expect(empty).toContain('aria-pressed="true"')
     const draft = renderToStaticMarkup(<Composer {...props} value="补充内容" stopping stopError="连接中断，请重试" />)
     expect(draft).toContain('aria-label="加入运行队列"')
     expect(draft).toContain('class="queue-mode"')

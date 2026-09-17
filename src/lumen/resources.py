@@ -1467,6 +1467,11 @@ class ResourceManager:
                 partial(runtime_context.__aexit__, None, None, None),
                 label="agent-runtime",
             )
+            assert runtime_context.context_engine is not None
+            runtime_scope.add_disposer(
+                runtime_context.context_engine.close,
+                label="context-engine",
+            )
         except BaseException:
             self._record_scope_diagnostics(await runtime_scope.close_and_wait())
             raise

@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import asyncio
 import hashlib
 import json
@@ -619,6 +621,8 @@ async def test_runtime_executes_tool_loop_and_emits_events() -> None:
 
 async def test_runtime_records_declared_non_observe_effect() -> None:
     def execute() -> str:
+        assert recorded[-1]["success"] is None
+        assert recorded[-1]["summary"] == "execute prepared"
         return "done"
 
     async def model_function(messages: list[ModelMessage], _info: AgentInfo):  # type: ignore[no-untyped-def]
@@ -657,6 +661,12 @@ async def test_runtime_records_declared_non_observe_effect() -> None:
     await runtime.run("go", [], emit, approve, session_id="effect-session")
 
     assert recorded == [
+        {
+            "tool_name": "execute",
+            "effect_kind": EffectKind.EXECUTION,
+            "success": None,
+            "summary": "execute prepared",
+        },
         {
             "tool_name": "execute",
             "effect_kind": EffectKind.EXECUTION,

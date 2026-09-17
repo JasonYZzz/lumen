@@ -60,7 +60,7 @@
 
 ## 12.4 已确认的实现演进
 
-1. **Session 已是 v10。** v5 Context、v6 Settings/Plan、v7 Work Product、v8 Agent、v9 Live、v10 推理选择事实都通过追加 `schema_upgrade` 支持历史会话；marker 必须形成连续的有效 schema 链，且不重写 header。
+1. **Session 已是 v11。** v5 Context、v6 Settings/Plan、v7 Work Product、v8 Agent、v9 Live、v10 推理选择、v11 `history_rewind` 事实都通过追加 `schema_upgrade` 支持历史会话；marker 必须形成连续的有效 schema 链，且不重写 header。
 2. **Sandbox 已进入生产路径。** 默认 `workspace_write` 使用 Seatbelt/bubblewrap 且 fail closed；旧文档“仅实现审批和路径限制”已失效。
 3. **审批增加项目永久范围。** `always` 规则由 `ApprovalRuleStore` 以项目 identity 持久化，不污染配置 YAML。
 4. **Provider reasoning 可展示。** `ThinkingDelta` 与最终文本、commentary 分离，只作为 timeline 展示，不进入 completion 文本。
@@ -124,6 +124,18 @@
     节点为依据，Session 从 source_end 推导已覆盖前缀，避免重载重复消息；摘要与写盘失败不推进游标。
 
 ## 12.5 兼容、安全与恢复结论
+
+2026-09-17 审计升级：execution 同样在 Gateway dispatch 前记录 prepared，异常/超时/取消
+保留待对账结果；历史 FAILED execution 即使没有 after snapshot，也进入 strict 完成门禁与
+Host pending effects 展示，用户可通过现有 waiver Interface 带依据处理。命令记忆审批收窄为
+完整参数的 SHA-256，不再匹配旧 executable-wide 规则。ContextEngine 随 root runtime scope
+或 child 生命周期关闭；Live 关闭失败连接并限制音频积压；worktree 收尾保留未完成 execution
+状态，不自动提交或宣告完成。对应契约覆盖在 effect recovery、WorkspaceHost、agent execution、
+context engine、multi-model 和 live lifecycle 测试中。
+
+仍需独立设计和验证：Runtime `_run` 的大范围状态机重构、Host/SSE 和幂等结果的安全保留策略、
+Session 增量投影缓存、Orchestrator task/semaphore 回收、稳定嵌入协议、真实 Provider E2E
+与性能基线。不能直接裁剪事件或幂等结果来掩盖内存增长，否则可能破坏重连或重放安全。
 
 - 保留 v1–v10 Session 只读兼容；升级只追加，不原地迁移。
 - 配置仍为 v2；v1 仅内存迁移并警告。

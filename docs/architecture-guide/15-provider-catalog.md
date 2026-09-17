@@ -131,7 +131,7 @@ uv run python scripts/build_architecture_atlas.py
 
 目录元数据是当前能力事实，Session 恢复时刷新；用户选择按 Session/模型保留。新 Run 开始前
 按最新规则重新校验和解析，失效选择报错要求重选，不静默升级强度。已派发 child 的参数快照
-继续冻结，不能根据新目录重算旧执行。Session 仍是 v10，新增可选来源字段不重写旧 journal。
+继续冻结，不能根据新目录重算旧执行。当前 Session 是 v11，新增可选来源字段不重写旧 journal。
 
 本轮删除了 SDK 宽泛名称推断和 `reasoning.py` 的供应商条件链；它们已被目录完整替代。
 同时删除 `models.py` 私有 API 别名表，构建与能力解析共用 `model_protocol`，避免入口漂移。

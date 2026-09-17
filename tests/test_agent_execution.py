@@ -7,6 +7,9 @@ from collections.abc import Sequence
 from pathlib import Path
 
 import pytest
+from pydantic_ai import Tool
+from pydantic_ai.messages import ModelMessage
+from pydantic_ai.models.function import AgentInfo, DeltaToolCall, FunctionModel
 from test_reasoning import manager
 
 from lumen.agents.types import (
@@ -17,9 +20,11 @@ from lumen.agents.types import (
     AgentThreadRef,
     AgentThreadState,
 )
-from lumen.config import SandboxConfig
+from lumen.config import ModelSettingsConfig, SandboxConfig
+from lumen.runtime import ToolApproval
 from lumen.sandbox import SandboxRunner
 from lumen.tools.capability import run_prepared_command
+from lumen.work_products import EffectStatus
 
 
 def test_child_snapshot_excludes_host_owned_git_mutations(tmp_path: Path) -> None:
@@ -41,6 +46,102 @@ def test_child_snapshot_excludes_host_owned_git_mutations(tmp_path: Path) -> Non
     snapshot = factory.snapshot(resources.agent_profiles["worker"], approval_mode="manual")
 
     assert snapshot.tool_names == ("git_diff", "git_status")
+
+
+@pytest.mark.parametrize("status", [
+    AgentStatus.FAILED, AgentStatus.WAITING, AgentStatus.RECONCILIATION_REQUIRED,
+])
+async def test_unfinished_worktree_execution_is_not_marked_completed_or_committed(
+    tmp_path: Path, status: AgentStatus,
+) -> None:
+    resources = manager(tmp_path)
+    factory = resources.agent_runtime_factory
+    profile = resources.agent_profiles["worker"]
+    session = resources.session_repository.create(agent_name="test", model_id="test")
+    thread = AgentThreadState(
+        ref=AgentThreadRef(id="agent-failed", path="/root/failed", parent_session_id=session.id,
+                          root_run_id="run", agent_type="worker"),
+        task="execute", task_name="failed", config=factory.snapshot(profile, approval_mode="manual"),
+        idempotency_key="failed", worktree=str(tmp_path), base_commit="baseline",
+    )
+
+    async def git(cwd: Path, *args: str) -> str:
+        # No status/stage/commit is allowed after an unfinished execution.
+        assert args == ("rev-parse", "--show-toplevel")
+        assert cwd == factory.workspace
+        return str(tmp_path)
+
+    async def execute(
+        thread: AgentThreadState, profile: AgentProfile, messages: Sequence[AgentMessage], cwd: Path,
+    ) -> AgentExecutionResult:
+        del thread, profile, messages, cwd
+        return AgentExecutionResult(status=status, output="unfinished", error="requires recovery")
+
+    factory._git = git  # pyright: ignore[reportPrivateUsage]
+    factory._execute_runtime = execute  # pyright: ignore[reportPrivateUsage]
+    result = await factory.execute(thread, profile, [])
+    assert result.status is status
+    assert result.commit is None
+    assert result.worktree == str(tmp_path)
+    assert result.error == "requires recovery"
+
+
+@pytest.mark.parametrize("fail", [False, True])
+async def test_child_execution_receipt_updates_prepared_identity_and_preserves_uncertainty(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fail: bool,
+) -> None:
+    resources = manager(tmp_path)
+    factory = resources.agent_runtime_factory
+    profile = resources.agent_profiles["worker"]
+    session = resources.session_repository.create(agent_name="test", model_id="test")
+    config = factory.snapshot(profile, approval_mode="manual").model_copy(
+        update={"tool_names": ("run_command",)}
+    )
+    thread = AgentThreadState(
+        ref=AgentThreadRef(id="agent-effect", path="/root/effect", parent_session_id=session.id,
+                          root_run_id="run", agent_type="worker"),
+        task="execute", task_name="effect", config=config, idempotency_key="effect",
+    )
+    calls = 0
+
+    async def run_command(argv: list[str]) -> str:
+        assert argv == ["example"]
+        if fail:
+            raise RuntimeError("failed after dispatch")
+        return "executed"
+
+    async def stream(_messages: list[ModelMessage], _info: AgentInfo):  # type: ignore[no-untyped-def]
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            yield {0: DeltaToolCall("run_command", '{"argv":["example"]}', tool_call_id="execute")}
+        else:
+            yield "done"
+
+    async def approve(_request: object) -> ToolApproval:
+        return ToolApproval(True, "test approval")
+
+    metadata = {"run_command": {"origin": "builtin", "risk": "execute", "effect": "execution"}}
+
+    def build_model(_config: ModelSettingsConfig) -> FunctionModel:
+        return FunctionModel(stream_function=stream)
+
+    def tools_for(
+        _thread: AgentThreadState, _cwd: Path,
+    ) -> tuple[list[Tool[None]], dict[str, dict[str, str]]]:
+        return [Tool[None](run_command)], metadata
+
+    monkeypatch.setattr("lumen.agents.runtime_factory.build_model", build_model)
+    monkeypatch.setattr(factory, "_tools_for", tools_for)
+    factory.bind_approval_handler(approve)
+    factory.bind_progress_handler(None)
+    factory.bind_status_handler(None)
+    result = await factory._execute_runtime(thread, profile, [], tmp_path)  # pyright: ignore[reportPrivateUsage]
+    assert result.status is (AgentStatus.RECONCILIATION_REQUIRED if fail else AgentStatus.COMPLETED)
+    assert len(result.effect_receipts) == 1
+    receipt = result.effect_receipts[0]
+    assert receipt.id == "effect:agent:agent-effect:1"
+    assert receipt.status is (EffectStatus.RECONCILIATION_REQUIRED if fail else EffectStatus.VERIFIED)
 
 
 @pytest.mark.parametrize("resolved", [False, True])

@@ -89,7 +89,7 @@
               <div class="topology-module"><b>TaskWorkspace</b><small>effect · verify · gate</small></div>
               <div class="topology-module"><b>AgentOrchestrator</b><small>threads · evidence · import</small></div>
               <div class="topology-module"><b>CapabilityGateway</b><small>guard · approval · receipt</small></div>
-              <div class="topology-module"><b>SessionRepository</b><small>v10 append-only JSONL</small></div>
+              <div class="topology-module"><b>SessionRepository</b><small>v11 append-only JSONL</small></div>
             </div>
             <div class="topology-contracts">
               <span><b>ProviderRequestReceipt</b> route · tokens · tool digest</span>
@@ -106,7 +106,7 @@
         <div class="hero-ledger glass" aria-label="当前架构契约摘要">
           <div class="ledger-head"><span>AUTHORITY LEDGER</span><strong>REV · 2026.09</strong></div>
           <dl>
-            <div><dt>Session</dt><dd>v10 · append-only</dd></div>
+            <div><dt>Session</dt><dd>v11 · append-only</dd></div>
             <div><dt>Config</dt><dd>v2 · strict</dd></div>
             <div><dt>Sandbox</dt><dd>workspace_write</dd></div>
             <div><dt>Tool contract</dt><dd>V2 · 3 projections</dd></div>
@@ -145,7 +145,7 @@
         <div class="callout-row architecture-readout">
           <article class="callout glass"><b>唯一应用入口</b><p>TUI、Web、CLI 和 Realtime 都通过 WorkspaceHost command Interface；OS execution lock 只阻止跨进程 writer，UI reducer 只是投影。</p></article>
           <article class="callout glass"><b>双执行路径，共享能力</b><p>文字 Runtime 与 Live Provider 路由不同，但工具都回到 ToolRegistry、CapabilityGateway 与同一权限策略。</p></article>
-          <article class="callout glass"><b>事实与上下文分离</b><p>Session v10 保存完整事实；ContextEngine 只构造下一次模型请求所需的有界 active history。</p></article>
+          <article class="callout glass"><b>事实与上下文分离</b><p>Session v11 保存完整事实；ContextEngine 只构造下一次模型请求所需的有界 active history。</p></article>
           <article class="callout glass"><b>完成声明受控</b><p>Plan evidence、TaskWorkspace verification 和 AgentOrchestrator unresolved state 任一未满足都会阻止完成。</p></article>
         </div>
         <div class="blueprint-sources glass-inset">
@@ -367,7 +367,7 @@
           <div class="event-track">
             <div class="event"><i>01</i><b>运行开始</b><small>RunStarted</small></div><div class="event"><i>02</i><b>文本增量</b><small>TextDelta</small></div><div class="event"><i>03</i><b>工具开始</b><small>ToolCallStarted</small></div><div class="event coral"><i>04</i><b>等待审批</b><small>ToolApprovalPending</small></div><div class="event"><i>05</i><b>工具完成</b><small>ToolCallFinished</small></div><div class="event mint"><i>06</i><b>运行完成</b><small>fsync 后 RunCompleted</small></div>
           </div>
-          <div class="event-bottom"><div class="node">EventJournal<small>内存有序事件流</small></div><span>→</span><div class="node mint">Session v10 Journal<small>只追加的类型化 JSONL records</small></div><span>→</span><div class="node">恢复 resume()<small>消息 · 计划 · checkpoint · 推理档位 · Agent · Live</small></div></div>
+          <div class="event-bottom"><div class="node">EventJournal<small>内存有序事件流</small></div><span>→</span><div class="node mint">Session v11 Journal<small>只追加的类型化 JSONL records</small></div><span>→</span><div class="node">恢复 resume()<small>消息 · 计划 · checkpoint · 推理档位 · Agent · Live</small></div></div>
           <div class="invariant-strip"><span>✓ 普通增量实时发布</span><span>✓ terminal candidate 先随 turn fsync</span><span>✓ 每个 run 只公开一个 terminal</span><span>✓ 持久化失败只发布 RunFailed</span></div>
         </figure>
         <div class="data-record glass">

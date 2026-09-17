@@ -583,7 +583,7 @@ class CapabilityGateway:
                     record_recovery=False,
                 )
             if capability.descriptor.effect_kind in {
-                EffectKind.UNKNOWN, EffectKind.EXTERNAL_ACTION, EffectKind.MUTATION,
+                EffectKind.UNKNOWN, EffectKind.EXTERNAL_ACTION, EffectKind.MUTATION, EffectKind.EXECUTION,
             }:
                 receipt_id = self._record_effect(capability, invocation.name, None, "prepared")
             execution_started = time.monotonic()
