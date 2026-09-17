@@ -487,6 +487,9 @@ def build_git_specs(
 
 def _git_environment(*, optional_locks: bool) -> tuple[tuple[Path, ...], dict[str, str]]:
     environment = {
+        # System Git configuration is outside the reviewed workspace/user
+        # inputs and may live outside sandbox read roots (e.g. Homebrew etc).
+        "GIT_CONFIG_NOSYSTEM": "1",
         "GIT_TERMINAL_PROMPT": "0",
         "GIT_OPTIONAL_LOCKS": "1" if optional_locks else "0",
         "GIT_PAGER": "cat",

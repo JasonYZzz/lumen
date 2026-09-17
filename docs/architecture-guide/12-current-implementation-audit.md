@@ -221,5 +221,9 @@ CI 快照失败报告保留七天，并打印 snapshot details，跨环境差异
 报告确认现有 SVG 基线为 NO_COLOR 灰度模式，远程为彩色；快照 fixture 显式固定 NO_COLOR=1，
 不再继承开发机/runner 环境，不修改生产配色与已审核基线。Homebrew 读取根同时保留 opt symlink
 拼写与真实 lib 路径，允许 dyld 遍历必要祖先的 metadata，不增加 prefix 数据读取权限。
+结构化 Git 显式禁用系统配置读取，避免 Homebrew etc/gitconfig 越出沙箱读取根；仓库配置、
+显式用户配置、禁用 hooks/helper、stage 不执行 content filter 与 mutation 审批契约保持不变。
+后续 Git 系统配置隔离改动单独通过 git_tools / agent_execution / workspace_host 回归及
+Ruff/Pyright；上面的全量计数记录的是此前全量运行，不将后续新增用例冒充已跑过全量。
 Windows 的落盘/权限/路径等历史兼容性问题须单独依据真实 CI 验证，三平台 Pyright 不证明
 三平台全部运行时行为已经通过。

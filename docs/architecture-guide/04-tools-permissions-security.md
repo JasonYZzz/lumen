@@ -101,7 +101,9 @@ Git mutation 不通过通用命令放宽 `.git`。可选 builtin `git_status`、
 只接受无内嵌密码的 HTTPS/SSH remote。所有 Git 进程禁用 repository hooks，仍在 workspace
 OS sandbox 内执行，并禁用 fsmonitor 与自动维护；push 额外禁用 credential helper、代理、HTTP 重定向及非 HTTPS/SSH protocol，
 SSH 只使用 batch mode、已知主机文件与现有 SSH agent；需认证的 HTTPS push 在引入 Host credential
-broker 前应使用 SSH agent。只有 push 获得该次调用的网络能力。commit/push 始终要求显式审批，
+broker 前应使用 SSH agent。Git 子进程设置 `GIT_CONFIG_NOSYSTEM=1`，不读取工作区/显式用户配置
+之外的系统 Git 配置（包括 Homebrew etc/gitconfig），不为此扩张 sandbox read roots。
+只有 push 获得该次调用的网络能力。commit/push 始终要求显式审批，
 外部 push 继续产生可恢复的 external-action receipt。
 
 `web_fetch` 与按配置注册的 `web_search` 属于 `Risk=external`、`EffectKind=observe`，当前默认

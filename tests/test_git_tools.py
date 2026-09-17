@@ -74,6 +74,24 @@ async def test_structured_git_stage_and_commit_verify_reviewed_state(tmp_path: P
     assert _git(tmp_path, "status", "--porcelain", "--", "tracked.txt") == ""
 
 
+async def test_structured_git_ignores_system_configuration(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _repository(tmp_path)
+    expected_head = _git(tmp_path, "rev-parse", "HEAD")
+    config = tmp_path / "system.gitconfig"
+    config.write_text("[invalid\n", encoding="utf-8")
+    monkeypatch.setenv("GIT_CONFIG_SYSTEM", str(config))
+    # Explicitly pass the system-config path through the test allow-list so
+    # this checks NOSYSTEM rather than ordinary environment sanitization.
+    tools = _tools(tmp_path, sandbox=SandboxConfig(
+        mode="disabled", env_allow=["PATH", "GIT_CONFIG_SYSTEM"],
+    ))
+    status = await tools["git_status"]()
+    assert status["head"] == expected_head
+    assert status["index_fingerprint"].startswith("sha256:")
+
+
 async def test_structured_git_diff_and_remote_projection_are_read_only_and_secret_safe(
     tmp_path: Path,
 ) -> None:
