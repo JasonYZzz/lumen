@@ -208,10 +208,6 @@ class PromptEditor(TextArea):
     def bind_dropdown(self, dropdown: CompletionDropdown) -> None:
         self._dropdown = dropdown
 
-    @property
-    def dropdown_open(self) -> bool:
-        return self._dropdown is not None and self._dropdown.is_open
-
     # -- key routing -------------------------------------------------------
 
     async def on_key(self, event: Any) -> None:  # type: ignore[no-untyped-def]

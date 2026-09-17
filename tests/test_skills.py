@@ -14,7 +14,6 @@ import pytest
 from lumen.skills import (
     Skill,
     SkillLoader,
-    SkillWorkingSet,
     expand_skill_for_message,
     format_skills_for_prompt,
     load_skill,
@@ -30,6 +29,7 @@ def _isolate_user_skill_directory(  # pyright: ignore[reportUnusedFunction]
     isolated_home = tmp_path / "isolated-home"
     isolated_home.mkdir()
     monkeypatch.setenv("HOME", str(isolated_home))
+    monkeypatch.setenv("USERPROFILE", str(isolated_home))
 
 
 # ---------------------------------------------------------------------------
@@ -153,6 +153,7 @@ def test_untrusted_loader_excludes_project_skills(tmp_path: Path, monkeypatch: p
     fake_home = tmp_path / "fake-home"
     fake_home.mkdir()
     monkeypatch.setenv("HOME", str(fake_home))
+    monkeypatch.setenv("USERPROFILE", str(fake_home))
     _write_skill(tmp_path / ".lumen" / "skills" / "project-skill", name="project-skill")
     _write_skill(fake_home / ".lumen" / "skills" / "user-skill", name="user-skill")
 
@@ -167,6 +168,7 @@ def test_discover_user_skills(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -
     fake_home = tmp_path / "fake-home"
     fake_home.mkdir()
     monkeypatch.setenv("HOME", str(fake_home))
+    monkeypatch.setenv("USERPROFILE", str(fake_home))
     _write_skill(fake_home / ".lumen" / "skills" / "user-skill", name="user-skill")
     # The workspace has no project skills.
     loader = SkillLoader(tmp_path)
@@ -182,6 +184,7 @@ def test_discover_project_overrides_user(tmp_path: Path, monkeypatch: pytest.Mon
     fake_home = tmp_path / "fake-home"
     fake_home.mkdir()
     monkeypatch.setenv("HOME", str(fake_home))
+    monkeypatch.setenv("USERPROFILE", str(fake_home))
     # Same skill name in both locations.
     _write_skill(
         fake_home / ".lumen" / "skills" / "shared",
@@ -650,6 +653,7 @@ def test_model_skill_resource_tool_reads_confined_relative_resource(
     )
     (skill_dir / "reference.md").write_text("ARP reference body", encoding="utf-8")
     monkeypatch.setenv("HOME", str(fake_home))
+    monkeypatch.setenv("USERPROFILE", str(fake_home))
 
     from lumen.resources import ResourceManager
 
@@ -693,38 +697,3 @@ def test_model_skill_resource_tool_rejects_symlink_escape(tmp_path: Path) -> Non
 
     with pytest.raises(WorkspaceViolation):
         loader("arp-report", path="reference.md")
-
-
-def test_skill_working_set_caps_bodies_and_evicts_oldest(tmp_path: Path) -> None:
-    skills: list[Skill] = []
-    for name, body in (("one", "111111"), ("two", "222222"), ("three", "333333")):
-        loaded = load_skill(_write_skill(tmp_path / name, name=name, body=body), "project")
-        assert loaded is not None
-        skills.append(loaded)
-    working = SkillWorkingSet(
-        max_skill_tokens=5,
-        max_total_tokens=8,
-        token_counter=len,
-    )
-
-    first = working.activate(skills[0])
-    second = working.activate(skills[1])
-    third = working.activate(skills[2])
-
-    assert first.truncated is True
-    assert second.name not in {item.name for item in working.active()}
-    assert [item.name for item in working.active()] == [third.name]
-
-
-def test_reactivating_skill_refreshes_working_set_recency(tmp_path: Path) -> None:
-    one = load_skill(_write_skill(tmp_path / "one", name="one", body="1111"), "project")
-    two = load_skill(_write_skill(tmp_path / "two", name="two", body="2222"), "project")
-    three = load_skill(_write_skill(tmp_path / "three", name="three", body="3333"), "project")
-    assert one is not None and two is not None and three is not None
-    working = SkillWorkingSet(max_total_tokens=8, max_skill_tokens=8, token_counter=len)
-    working.activate(one)
-    working.activate(two)
-    working.activate(one)
-    working.activate(three)
-
-    assert [item.name for item in working.active()] == [one.name, three.name]

@@ -106,12 +106,6 @@ class ApprovalPanel(Vertical):
     def pending_count(self) -> int:
         return len(self._pending)
 
-    @property
-    def pending_requests(self) -> tuple[ToolApprovalPending, ...]:
-        """Stable public view used when Auto mode resolves the visible queue."""
-
-        return tuple(self._pending)
-
     def enqueue(self, request: ToolApprovalPending) -> None:
         if any(item.call_id == request.call_id for item in self._pending):
             return

@@ -30,8 +30,7 @@ tokenizers = [
 web = [
   "trafilatura>=2.1",
 ]
-# Phase 2 browser tier (Crawl4AI) for JS-rendered pages. Declared now so the
-# browser phase does not touch packaging; nothing imports crawl4ai yet.
+# Optional browser tier (Crawl4AI) for JS-rendered pages, loaded on demand.
 # Pinned >=0.9.3 for the PDF-path SSRF fix; browser binaries need a separate
 # crawl4ai-setup download.
 browser = [

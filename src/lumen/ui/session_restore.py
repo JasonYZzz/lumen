@@ -54,8 +54,6 @@ class SessionRestoreMixin:
         self._compaction_row = None
         self._active_plan_panel = None
         self._assistant_container = None
-        self._assistant_active = None
-        self._assistant_frozen_count = 0
         await messages.mount(WelcomePanel())
         self._refresh_welcome_panel()
         self._follow_tail = True

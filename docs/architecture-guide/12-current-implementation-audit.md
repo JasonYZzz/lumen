@@ -1,6 +1,6 @@
 # 12. 当前实现审计
 
-> 审计日期：2026-09-04。本文是源码与契约测试的横截面，不是新的架构决策；Accepted 决策以 10、11、13 章为准。
+> 最近复核：2026-09-17（基线审计：2026-09-04）。本文是源码与契约测试的横截面，不是新的架构决策；Accepted 决策以 10、11、13 章为准。
 
 ## 12.1 审计方法
 
@@ -96,16 +96,18 @@
 19. **中断 retry 与诊断不增加状态权威。** orphaned `running` turn 只投影为 `interrupted`；retry 恢复
     AttachmentRef，并在 unresolved/unknown Effect 存在时 fail closed。`latest_run` 诊断直接投影已有
     receipts、usage、timeline 和 diagnostics，省略所有正文与未知字段，不新增 telemetry store。
-20. **Realtime 的隔离 contract coverage 仍不完整。** 当前 Python 覆盖集中在 `test_web_api.py` 的 Host
-    canonical control、PCM、认证与 SSE，Web reducer 另有 Vitest；仓库没有旧文档所列的独立 Router、
-    OpenAI Adapter 或 Bailian wire tests，因此这部分是测试债务，不能描述为已具备完整 Provider 覆盖。
+20. **Realtime 的隔离 contract coverage 仍不完整。** `test_web_api.py` 覆盖 Host canonical control、
+    PCM、认证与 SSE；`test_live_lifecycle.py` 覆盖失败连接清理、音频队列与关闭，Web reducer 另有
+    Vitest。独立 Router、OpenAI canonical Adapter 与完整 Bailian wire tests 仍是测试债务，不能
+    描述为已具备完整 Provider 覆盖。
 21. **MCP 发现与命令失败必须按实际 Interface 解释。** `search_tools` 的 Provider-visible description
     包含有界目录，支持 Unicode 与无关键词分页浏览；发现不改变权限。SandboxRunner 的 network
     只约束子进程，公共 TLS/运行时依赖读取已修复；MCP 启动状态单独披露。断线自动重试只限配置
     明确声明 observe 的工具，read 风险不代替 effect 声明。
-22. **并行与 Web 大响应存在明确实现限制。** 原生 Loop 的两个 parallel 模式都保留 exclusive
-    屏障，只有显式 PARALLEL_SAFE 的调用可重叠。内置 Web 和 MCP Gateway 当前默认 exclusive；
-    Web fetch 的字节上限只限制解析内容，HTTP 响应仍先完整读入，尚无传输级流式大小限制。
+22. **并行与 Web 抓取边界按实际实现解释。** 原生 Loop 的两个 parallel 模式都保留 exclusive
+    屏障，只有显式 PARALLEL_SAFE 的调用可重叠。内置 Web 和 MCP Gateway 当前默认 exclusive。
+    HTTP Adapter 已通过流式读取按 `fetch_max_bytes` 限制正文；可选浏览器渲染不继承 HTTP 的传输
+    上限，其 SSRF 与依赖边界见第 4 章，真实浏览器验证仍为 opt-in。
 23. **外部结果的恢复责任已进入运行契约。** strict unknown 工具在 pre-invoke 阶段拒绝，成功
     observe 不产生 effect；非自记录的远端动作在 dispatch 前写 prepared，异常/取消保留对账状态。
     CompletionBlocker 区分模型修复与人工恢复，后者不会触发盲目完成重试。Host 在新运行与编辑
@@ -174,3 +176,38 @@ spike 保留其日期、版本和证据属性，不将它们描述为当前生�
 本次清理验证：全量 `uv run pytest` 通过 941 项测试和 60 个 snapshot；Ruff、Pyright、
 contract catalog 检查通过。45 份 Markdown 的相对文件链接及 Atlas 的 8 个显式源码入口
 无断链，Atlas 生成物已刷新并通过一致性检查。本次未修改 Web Implementation，未重跑 Web 构建。
+
+## 12.8 死代码、描述与 CI 复核（2026-09-17）
+
+扫描覆盖 `src/lumen`、`src/web`、scripts 和 tests。Vulture/TypeScript/Knip 只产生候选，逐项
+核对生产引用、注册/反射入口与契约；不能据此宣称不存在任何动态调用的死代码。测试 fake 中
+`raise` 后的 `yield` 用于保持 async-generator 类型，不是可直接删除的业务实现。
+
+| 删除内容 | 删除证据 | 保留的权威/契约 |
+|---|---|---|
+| InteractiveInputCapability、ClarificationCapability | 全仓库无构造/注册，专属 SDK graph 已退出主 turn | 原生 Loop 请求边界交互、Runtime ClarificationGate；interactive queue / clarification tests |
+| SkillWorkingSet、SkillActivation 与 ResourceManager 空实例 | 无生产 activate/read，仅旧实例与专属测试；已被持久化 Session Context 替代 | SessionContextManager 的精确 Artifact 恢复、ContextAssembler 预算；session context / engine / skills tests |
+| Runtime `_last_completion_gate_issues` 与私有 evaluate 转发 | 字段只写不读，转发只被较弱单元断言调用 | Loop 使用 CompletionGate.assess；真实 Runtime completion rejection / text retraction 集成测试 |
+| queue.mark_delivered、TUI 旧字段/未读 getter、Web voice sessionId、未读 Provider URL 常量 | 无生产读取或调用；队列由 dequeue_mode 原子交付，Web 请求使用 connect 的参数 | coordinator、queue 顺序/交付、TUI 交互/snapshot、Web 类型检查 |
+
+可选 Trafilatura 改用标准库 import_module 惰性加载，不要求核心安装包含 extra；契约覆盖安装与
+缺失时仅加载一次，并验证标准库降级。Windows 的 Unix 专属 API 用显式平台分支隔离；后台 Web
+与其进程管理保持明确拒绝（Windows 不使用 kill(pid, 0) 探测 PID），文档 preview/download 缺少
+descriptor/no-follow seam 时 fail closed。无沙箱命令
+清理使用系统 taskkill，保留直接子进程的尽力回收；不新增 Windows 沙箱承诺。
+
+CI 保留而非排除：质量任务在无 extra 的干净环境检查三平台类型与生成物，并验证网页降级；
+全量测试安装 web/live extra，覆盖 Linux Python 3.11–3.13 和 macOS/Windows Python 3.13。
+Web 保留 schema/test/typecheck/build/package 门禁；TypeScript 开启 unused locals/parameters
+检查，防止本次未读状态回归。主分支 push、PR 和手动运行触发，同分支 superseded run 自动取消。
+
+Session v1–v10、配置 v1、LegacyChildRunAdapter、ContextManager 内部摘要与公开兼容导出、MCP
+SDK Adapter、Replay validator、Textual/FastAPI/Pydantic 反射入口均保留。历史研究、计划、静态
+视觉资料不按日期或扫描器的“未导入文件”提示批量删除；它们不是生产死代码的证据。
+
+本地验收：隔离 Python 3.13 全量 1453 passed / 1 skipped、60 snapshots；无网页 extra 环境
+31 passed / 3 skipped（两个增强提取用例缺依赖、一个真实浏览器 opt-in）。Web 182 tests、
+typecheck/build、OpenAPI freshness、Ruff、三平台 Pyright、contract/provider/Atlas freshness、
+actionlint 均通过。68 份 Markdown 本地链接无断链；wheel 含静态 Web 与内置 Skills，隔离安装
+通过 `lumen --version` / `lumen --check-config`。这些不代表真实 Provider/浏览器或性能验收；
+实际 Linux/Windows 执行结果应以本次推送对应的 CI 为准。

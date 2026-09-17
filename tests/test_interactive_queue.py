@@ -27,17 +27,6 @@ def test_interactive_queue_is_fifo_and_dequeues_pending_messages() -> None:
     assert queue.snapshot() == ()
 
 
-def test_interactive_queue_marks_delivered_messages_non_retractable() -> None:
-    queue = InteractiveMessageQueue()
-    delivered = queue.enqueue("steer", "expanded", QueueMode.STEER)
-    pending = queue.enqueue("later", "expanded later", QueueMode.FOLLOW_UP)
-
-    queue.mark_delivered(delivered.id)
-
-    assert queue.snapshot() == (pending,)
-    assert queue.dequeue_all() == (pending,)
-
-
 def test_interactive_queue_dequeues_one_mode_without_reordering_the_rest() -> None:
     queue = InteractiveMessageQueue()
     steer_one = queue.enqueue("steer one", "one", QueueMode.STEER)

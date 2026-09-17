@@ -6,7 +6,7 @@ Public Seam: :class:`~lumen.context.engine.ContextEngine` with
 those, never on the summary prompt, the token estimator or the compaction
 internals.
 
-Layout (plan §16):
+Layout:
 
 * :mod:`lumen.context.types`     - frozen, round-trip-stable domain contracts
   (zones, blocks, budget report, receipts, checkpoint). Pure, no lumen deps.
@@ -16,8 +16,9 @@ Layout (plan §16):
 
 This ``__init__`` re-exports the legacy names so existing
 ``from lumen.context import ContextManager, ContextSummary, ...`` imports keep
-working unchanged during the migration. The legacy names emit no warning yet;
-M8 removes them once no caller remains.
+working unchanged. Direct ``ContextManager`` construction emits a deprecation
+warning; the engine still uses it internally for structured summarization.
+Remove these exports only after public compatibility callers have migrated.
 """
 
 from __future__ import annotations

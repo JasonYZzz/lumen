@@ -137,9 +137,9 @@ ModelStreamEvent = Annotated[
 class ModelDriverRequest(Generic[MessageT]):
     """One frozen request passed to a ModelDriver Implementation.
 
-    ``messages`` remains generic during M1 so introducing the Driver Seam does
-    not also create a second canonical message DTO. The Session message
-    migration remains an explicit later decision.
+    ``messages`` remains generic so the Driver Seam does not create a second
+    canonical message DTO. The production adapter uses Session-compatible
+    ModelMessage values; a new canonical schema requires a separate decision.
     """
 
     request_id: str

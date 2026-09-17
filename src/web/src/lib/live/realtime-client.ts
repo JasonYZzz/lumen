@@ -35,7 +35,6 @@ export class RealtimeVoiceClient {
   private silentGain: GainNode | null = null
   private closeEvents: (() => void) | null = null
   private callbacks: RealtimeVoiceCallbacks | null = null
-  private sessionId: string | null = null
   private liveSessionId: string | null = null
   private stopped = false
 
@@ -45,7 +44,6 @@ export class RealtimeVoiceClient {
     deviceId?: string,
   ): Promise<string> {
     this.callbacks = callbacks
-    this.sessionId = sessionId
     this.stopped = false
     this.stream = await navigator.mediaDevices.getUserMedia({
       audio: {

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import stat
+import sys
 from pathlib import Path
 
 from lumen.tools.workspace import Workspace
@@ -14,6 +15,10 @@ def read_workspace_document(root: Path, path: str) -> bytes:
     relative = Path(path)
     if not path or relative.is_absolute() or any(part.startswith(".") for part in relative.parts):
         raise ValueError("Document path must be workspace-relative without hidden or parent segments")
+    # Windows lacks descriptor-relative, no-follow opens. Do not weaken this
+    # security boundary to a path check followed by a race-prone ordinary open.
+    if sys.platform == "win32":
+        raise ValueError("Secure document preview/download is supported on macOS and Linux")
     workspace = Workspace(root)
     workspace.resolve_for_mutation(relative)
     descriptor = os.open(workspace.root, os.O_RDONLY | os.O_DIRECTORY)

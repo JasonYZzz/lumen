@@ -4,15 +4,25 @@ import sys
 from pathlib import Path
 from types import SimpleNamespace
 
-from pytest import MonkeyPatch
+from pytest import MonkeyPatch, raises
 from typer.testing import CliRunner
 
 import lumen.cli as cli
 from lumen.cli import app
-from lumen.config import AppConfig
+from lumen.config import AppConfig, ConfigLoadError
 
 # This module intentionally verifies the private version fallback seam.
 # pyright: reportPrivateUsage=false
+
+
+def test_windows_background_status_never_probes_pid_with_kill(monkeypatch: MonkeyPatch) -> None:
+    def kill(_pid: int, _signal: int) -> None:
+        raise AssertionError("Windows signal zero must not be used to probe a process")
+
+    monkeypatch.setattr(cli, "sys", SimpleNamespace(platform="win32"))
+    monkeypatch.setattr(cli.os, "kill", kill)
+    with raises(ConfigLoadError, match="supported on macOS and Linux"):
+        cli._pid_is_running(42)
 
 
 def _minimal_config(name: str = "global") -> str:

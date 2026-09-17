@@ -87,7 +87,7 @@ Plan 只信任 Capability Contract 自己声明的 `Risk=read`。不再根据 `r
 - legacy `write_file/edit_file` 与 Work Product Adapter 共用 `Workspace.atomic_write`，不会形成第二条写入语义；
 - 精确编辑要求目标文本只出现一次。
 
-`run_command` 使用 argv 直接执行，不经过 shell；stdout/stderr 并发 drain，只保留有界头尾，同时记录总字节数。取消或超时时终止整个进程组。
+`run_command` 使用 argv 直接执行，不经过 shell；stdout/stderr 并发 drain，只保留有界头尾，同时记录总字节数。取消或超时时，POSIX 用进程组信号清理；显式无沙箱的 Windows 执行使用系统目录中的 `taskkill /T /F` 清理进程树，helper 有界等待并回收，失败时尽力终止直接子进程。Windows 尚无内置 workspace_write sandbox，默认配置仍 fail closed；不能将 taskkill 的尽力清理描述为 OS Job Object 级隔离保证。
 
 命令还通过 `SandboxRunner` 执行：默认 `workspace_write` 在 macOS 使用 Seatbelt、Linux 使用 bubblewrap，隔离 `HOME`/临时目录、关闭网络并按 allow-list 构造环境；adapter 不可用时拒绝执行。`run_command` receipt 只证明命令执行，不声称捕获命令产生的全部文件副作用。
 
@@ -110,22 +110,17 @@ User-Agent，对 408、425、429、500、502、503、504 和传输故障做最�
 指定的环境变量读取。
 
 模型原生 `web_search`、配置型搜索/MCP、内置 `web_fetch` 是三条不同 Interface：前者由 provider
-返回搜索与来源事件，中间层提供搜索发现，后者只读取已知公共 URL 的静态文本。需要认证、浏览器
-交互、JavaScript 渲染或反爬挑战时必须使用显式 Browser MCP；内置 HTTP Adapter 不宣称具备浏览器
-执行能力。
+返回搜索与来源事件，中间层提供搜索发现，后者读取已知公共 URL。当前 `web_fetch` 使用分层链：
+HTTP 快速路径（可选 `web` extra 的 Trafilatura 正文抽取）→ 可选 `browser` extra 的 Crawl4AI
+渲染 → 标准库文本提取；增强依赖惰性加载，缺失或失败不阻止降级。需要认证或交互操作时仍需
+显式 Browser MCP，内置层不承诺绕过反爬挑战。SSRF 逐跳校验、审批矩阵与分页契约不变。
 
-> **修订（2026-09-14）**：2026-09-10 审计（[网页检索能力审计](../research/2026-09-10-web-retrieval-capability-audit.md)）
-> 的「浏览器运行时不进内置工具」结论按 [web-search-upgrade 计划](../plans/2026-09-14-web-search-upgrade.md) 正式修订。
-> 当时前提是「内置 fetch 只做 HTTP 文本读取」；现在 `web_fetch` 升级为分层策略链——HTTP 快速路径
-> （Trafilatura 正文抽取）→ 可选浏览器渲染层（Crawl4AI 惰性依赖，未安装或渲染失败时
-> 降级回现有剥标签路径，行为不劣于现状）。SSRF 逐跳校验、审批矩阵与分页契约不变。
->
-> **浏览器层已实现（Phase 2）**：Crawl4AI 为进程级懒加载 `AsyncWebCrawler` 单例（手动
-> `start()`/`close()`），随 ResourceManager 的 resource scope 关闭释放；`tools.web.fetch_strategy: http_only`
-> 可整体关闭。SDK 无内建 SSRF 防护，由本层强制执行三点：渲染前 `validate_public_url` 校验目标、
-> `before_goto` hook 对每次顶层导航重新做公共主机校验、`on_page_context_created` 挂 `context.route`
-> 拦截所有子请求（覆盖浏览器内 302 到内网）。残余风险为校验与连接之间的 DNS rebinding（TOCTOU）
-> 及上游 hook 覆盖盲区；Cloudflare 等强风控不在承诺范围（`success=False` 直接降级，不重试）。
+Crawl4AI 使用进程级懒加载 `AsyncWebCrawler` 单例（手动 `start()`/`close()`），随
+ResourceManager 的 resource scope 关闭释放；`tools.web.fetch_strategy: http_only` 可整体关闭。
+SDK 无内建 SSRF 防护，由本层强制执行三点：渲染前 `validate_public_url` 校验目标、
+`before_goto` hook 对每次顶层导航重新做公共主机校验、`on_page_context_created` 挂 `context.route`
+拦截所有子请求（覆盖浏览器内 302 到内网）。残余风险为校验与连接之间的 DNS rebinding（TOCTOU）
+及上游 hook 覆盖盲区；Cloudflare 等强风控不在承诺范围（`success=False` 直接降级，不重试）。
 
 ## 4.5 Hook 链
 

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from html.parser import HTMLParser
+from importlib import import_module
 from types import ModuleType
 from urllib.parse import urljoin, urlparse
 
@@ -90,11 +91,9 @@ def _load_trafilatura() -> ModuleType | None:
     if not _trafilatura_checked:
         _trafilatura_checked = True
         try:
-            import trafilatura
+            _trafilatura = import_module("trafilatura")
         except ImportError:
             pass
-        else:
-            _trafilatura = trafilatura
     return _trafilatura
 
 

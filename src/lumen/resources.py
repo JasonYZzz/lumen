@@ -60,7 +60,6 @@ from lumen.skill_install import SkillInstaller
 from lumen.skills import (
     Skill,
     SkillLoader,
-    SkillWorkingSet,
     expand_skill_for_message,
     format_skills_for_prompt,
 )
@@ -172,9 +171,6 @@ class ResourceManager:
         )
         self.agent_profiles = profile_loader.discover()
         self.warnings.extend(profile_loader.warnings)
-        # Retained as a compatibility surface for callers that inspect the old
-        # object; it is no longer the authority for active Skill bodies.
-        self.skill_working_set = SkillWorkingSet()
         self.prompt_profile: PromptProfile | None = None
         self.instructions = ""
         self.system_instructions = ""

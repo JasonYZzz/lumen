@@ -1,30 +1,20 @@
 """Stable contracts for context budgeting, provenance, and provider preflight.
 
-These are the frozen, round-trip-stable domain types the context engine v2
-will be built on:
+These frozen, round-trip-stable domain types are used by ContextEngine,
+Runtime request manifests, Session persistence and recovery:
 
 * :class:`ContextZone` / :class:`ContextBlock` - the structured partition model
-  (plan §6). Every model-visible byte lives in a labelled, source-tracked block.
+  with labelled, source-tracked model-visible blocks.
 * :class:`ModelContextSpec` / :class:`ContextBudgetReport` - provider-aware
-  window sizing and the per-zone budget the ``/context`` command renders
-  (plan §8, §14.1).
+  window sizing and the per-zone budget the ``/context`` command renders.
 * :class:`ToolReceipt` - the content-addressed receipt that replaces bulky tool
-  outputs in active history (plan §9.3).
+  outputs in active history.
 * :class:`CompactionCheckpointV2` - the cursor-validated checkpoint whose
   rolling state supersedes the free-text ``ContextSummary`` as durable truth.
 
-This module is deliberately contract-only: it defines the types and their
-JSON-schema validation, but wires nothing into the running engine yet. M1
-folds these into the ``lumen.context`` package as ``types``; until then they
-are produced and consumed only by tests so the contract is provable before any
-behaviour depends on it.
-
-Design choice: the plan sketches these as ``@dataclass(frozen=True, slots=True)``
-but the M0 acceptance criterion is "all schemas stably round-trip" and §10.2
-mandates Pydantic/schema validation. Pydantic ``BaseModel(frozen=True)`` is also
-the established project pattern for serialisable domain models (``ContextSummary``,
-``PlanState``), so it is used here. ``slots=True`` is omitted because Pydantic v2
-``BaseModel`` does not support it; immutability is preserved via ``frozen=True``.
+This module owns contracts and JSON-schema validation, not scheduling or
+provider I/O. Persistent domain models use strict, frozen Pydantic contracts;
+the engine and repositories consume the same types rather than copying state.
 """
 
 from __future__ import annotations

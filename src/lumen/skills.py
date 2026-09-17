@@ -31,9 +31,7 @@ the skill's ``base_dir`` (parent of SKILL.md) is the resolution root.
 
 from __future__ import annotations
 
-import hashlib
 import re
-from collections.abc import Callable
 from dataclasses import dataclass, field
 from importlib.resources import files
 from pathlib import Path
@@ -96,84 +94,6 @@ class Skill:
     source: str
     disable_model_invocation: bool = False
     scripts: dict[str, Path] = field(default_factory=dict[str, Path])
-
-
-@dataclass(frozen=True, slots=True)
-class SkillActivation:
-    """One active skill body eligible for stable context re-injection."""
-
-    name: str
-    body: str
-    revision: str
-    tokens: int
-    truncated: bool
-
-
-def _default_token_count(text: str) -> int:
-    # Conservative for both ASCII and CJK without coupling skills to a model
-    # adapter. ContextEngine re-counts the rendered body with its real counter.
-    ascii_chars = sum(1 for char in text if ord(char) < 128)
-    non_ascii = len(text) - ascii_chars
-    return max(1, (ascii_chars + 3) // 4 + non_ascii)
-
-
-class SkillWorkingSet:
-    """LRU working set for active skill bodies (M7)."""
-
-    def __init__(
-        self,
-        *,
-        max_skill_tokens: int = 5_000,
-        max_total_tokens: int = 25_000,
-        token_counter: Callable[[str], int] = _default_token_count,
-    ) -> None:
-        if max_skill_tokens < 1 or max_total_tokens < 1:
-            raise ValueError("skill working-set budgets must be positive")
-        self.max_skill_tokens = max_skill_tokens
-        self.max_total_tokens = max_total_tokens
-        self._count = token_counter
-        self._active: dict[str, SkillActivation] = {}
-
-    def activate(self, skill: Skill) -> SkillActivation:
-        body, truncated = self._fit(skill.body, self.max_skill_tokens)
-        activation = SkillActivation(
-            name=skill.name,
-            body=body,
-            revision=hashlib.sha256(skill.body.encode()).hexdigest()[:16],
-            tokens=self._count(body),
-            truncated=truncated,
-        )
-        self._active.pop(skill.name, None)
-        self._active[skill.name] = activation
-        while sum(item.tokens for item in self._active.values()) > self.max_total_tokens:
-            oldest_name = next(iter(self._active))
-            self._active.pop(oldest_name)
-        return activation
-
-    def active(self) -> tuple[SkillActivation, ...]:
-        return tuple(self._active.values())
-
-    def documents(self) -> tuple[dict[str, object], ...]:
-        return tuple(
-            {
-                "name": item.name,
-                "body": item.body,
-                "revision": item.revision,
-            }
-            for item in self._active.values()
-        )
-
-    def _fit(self, body: str, limit: int) -> tuple[str, bool]:
-        if self._count(body) <= limit:
-            return body, False
-        low, high = 0, len(body)
-        while low < high:
-            middle = (low + high + 1) // 2
-            if self._count(body[:middle]) <= limit:
-                low = middle
-            else:
-                high = middle - 1
-        return body[:low], True
 
 
 def _parse_frontmatter(text: str) -> tuple[dict[str, object], str]:
@@ -504,9 +424,7 @@ def expand_skill_for_message(skill: Skill, args: str = "") -> str:
 
 __all__ = [
     "Skill",
-    "SkillActivation",
     "SkillLoader",
-    "SkillWorkingSet",
     "expand_skill_for_message",
     "format_skills_for_prompt",
     "load_skill",

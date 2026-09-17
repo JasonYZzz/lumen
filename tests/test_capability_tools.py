@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import asyncio
 import sys
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any
+from types import SimpleNamespace
+from typing import Any, cast
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 
@@ -165,10 +168,38 @@ async def test_run_command_terminates_process_group_on_timeout(tmp_path: Path) -
         timeout=0.2,
     )
     assert result["timed_out"] is True
-    # The process group should be reaped: a negative exit code means the child
-    # was killed by a signal rather than running to completion.
+    # POSIX uses a negative signal exit status; Windows taskkill uses a positive
+    # nonzero status. Both must stop the process instead of completing normally.
     assert isinstance(result["exit_code"], int)
-    assert result["exit_code"] < 0
+    assert result["exit_code"] != 0
+
+
+@pytest.mark.parametrize("taskkill_available", [False, True])
+async def test_windows_cleanup_uses_system_taskkill_and_reaps_helper(
+    taskkill_available: bool, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from lumen.tools import capability as module
+
+    process = Mock(spec=asyncio.subprocess.Process, pid=42, returncode=None)
+    killer = Mock(spec=asyncio.subprocess.Process, returncode=0)
+    killer.wait = AsyncMock(return_value=0)
+    spawn = AsyncMock(return_value=killer)
+    if not taskkill_available:
+        spawn.side_effect = FileNotFoundError("taskkill unavailable")
+    monkeypatch.setattr(module, "sys", SimpleNamespace(platform="win32"))
+    monkeypatch.setenv("SystemRoot", "C:/Windows")
+    monkeypatch.setattr(module.asyncio, "create_subprocess_exec", spawn)
+
+    await module._terminate_process_group(  # pyright: ignore[reportPrivateUsage]
+        cast(asyncio.subprocess.Process, process)
+    )
+
+    assert spawn.call_args.args == (
+        str(Path("C:/Windows/System32/taskkill.exe")), "/PID", "42", "/T", "/F",
+    )
+    if taskkill_available:
+        killer.wait.assert_awaited_once()
+    process.kill.assert_called_once()
 
 
 async def test_run_command_clamps_timeout_to_max(tmp_path: Path) -> None:

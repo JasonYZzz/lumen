@@ -1,18 +1,12 @@
-"""Bounded interactive input queue and Pydantic AI delivery capability."""
+"""Bounded interactive input queue consumed by the native agent loop."""
 
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from enum import StrEnum
 from uuid import uuid4
 
-from pydantic_ai.capabilities import AbstractCapability
-from pydantic_ai.messages import UserContent
-from pydantic_ai.tools import RunContext
-
 from lumen.attachments import AttachmentRef
-from lumen.events import InputDelivered, RunEvent
 
 
 class QueueMode(StrEnum):
@@ -87,53 +81,7 @@ class InteractiveMessageQueue:
     def snapshot(self) -> tuple[QueuedMessage, ...]:
         return tuple(self._messages)
 
-    def mark_delivered(self, message_id: str) -> None:
-        self._messages = [message for message in self._messages if message.id != message_id]
-
-
-class InteractiveInputCapability(AbstractCapability[None]):
-    """Deliver queued input through Pydantic AI's supported enqueue seam."""
-
-    def __init__(
-        self,
-        queue: InteractiveMessageQueue,
-        emit: Callable[[RunEvent], Awaitable[None]],
-        build_content: Callable[[str, tuple[AttachmentRef, ...]], str | list[UserContent]],
-    ) -> None:
-        self.queue = queue
-        self.emit = emit
-        self.build_content = build_content
-
-    async def before_node_run(self, ctx: RunContext[None], *, node: object) -> object:  # type: ignore[override]
-        steering = [message for message in self.queue.snapshot() if message.mode is QueueMode.STEER]
-        for message in steering:
-            content = self.build_content(message.model_prompt, message.attachments)
-            if isinstance(content, list):
-                ctx.enqueue(*content, priority="asap")
-            else:
-                ctx.enqueue(content, priority="asap")
-            self.queue.mark_delivered(message.id)
-            await self.emit(InputDelivered(message.id, message.text, message.mode.value))
-
-        has_follow_up = any(
-            getattr(message, "priority", None) == "when_idle" for message in (ctx.pending_messages or [])
-        )
-        if not has_follow_up:
-            follow_ups = [message for message in self.queue.snapshot() if message.mode is QueueMode.FOLLOW_UP]
-            if follow_ups:
-                message = follow_ups[0]
-                content = self.build_content(message.model_prompt, message.attachments)
-                if isinstance(content, list):
-                    ctx.enqueue(*content, priority="when_idle")
-                else:
-                    ctx.enqueue(content, priority="when_idle")
-                self.queue.mark_delivered(message.id)
-                await self.emit(InputDelivered(message.id, message.text, message.mode.value))
-        return node
-
-
 __all__ = [
-    "InteractiveInputCapability",
     "InteractiveMessageQueue",
     "QueueLimitError",
     "QueueMode",

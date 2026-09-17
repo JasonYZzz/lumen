@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import os
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
 from typing import Any
 
 import httpx
@@ -15,6 +15,29 @@ import lumen.tools.web.extract as web_extract
 from lumen.tools.spec import ToolSpec
 from lumen.tools.web import build_web_fetch_spec
 from lumen.tools.web.browser import close_browser, render_markdown
+
+
+@pytest.mark.parametrize("installed", [False, True])
+def test_optional_article_extractor_is_loaded_once(
+    installed: bool, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = ModuleType("trafilatura")
+    imports: list[str] = []
+
+    def load(name: str) -> ModuleType:
+        imports.append(name)
+        if not installed:
+            raise ModuleNotFoundError(name)
+        return module
+
+    monkeypatch.setattr(web_extract, "_trafilatura", None)
+    monkeypatch.setattr(web_extract, "_trafilatura_checked", False)
+    monkeypatch.setattr(web_extract, "import_module", load)
+
+    for _ in range(2):
+        loaded = web_extract._load_trafilatura()  # pyright: ignore[reportPrivateUsage]
+        assert loaded is (module if installed else None)
+    assert imports == ["trafilatura"]
 
 
 def _fetch_spec(

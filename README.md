@@ -25,6 +25,8 @@ Ollama 及 OpenAI-compatible 服务，并通过 MCP、Skills 和 Python 插件�
 ## 快速开始
 
 要求 **Python 3.11–3.13**。以下命令在仓库根目录执行，使用已安装的 `uv`。
+macOS/Linux 提供完整的本地沙箱与安全文档预览；Windows 不支持后台 Web 启动和安全文档
+预览/下载，默认沙箱不可用时仍拒绝执行命令，不会自动降为无沙箱模式。
 
 ### 1. 安装并初始化
 
@@ -74,6 +76,8 @@ uv run lumen web --cwd .
 默认在 `127.0.0.1:8765` 启动并打开浏览器，当前仅支持本机访问。
 已包含静态前端的安装包运行时不需要 Node.js。
 实时语音需另装 `live` extra 并配置路由，见[实时语音指南](docs/architecture-guide/11-realtime-voice-runtime.md)。
+网页正文增强提取可安装 `web` extra；JavaScript 页面渲染可选安装 `browser` extra 并执行
+`crawl4ai-setup` 下载浏览器。未安装增强依赖时保留标准库文本提取，真实浏览器验收需单独运行。
 
 **在其他项目使用**，先从仓库根目录安装全局命令：
 
@@ -134,6 +138,10 @@ uv run ruff check .
 uv run pyright
 uv run pytest
 
+# 启用网页正文增强提取与实时语音的回归测试
+uv sync --frozen --all-groups --extra web --extra live
+uv run --frozen --extra web --extra live pytest
+
 # 修改 Web 时
 pnpm --dir src/web test
 pnpm --dir src/web typecheck
@@ -142,3 +150,9 @@ pnpm --dir src/web build
 
 打包执行 `uv build`；包含 Web 的发行包需先构建前端。
 生成物更新、契约检查及具体改动的验证要求见 [AGENTS.md](AGENTS.md)。
+
+[GitHub Actions CI](.github/workflows/ci.yml) 是版本控制中的质量门禁，不是发布脚本：主分支
+推送与 PR 自动触发，也支持手动运行；同一分支的新运行取消旧运行。静态检查与生成物检查
+集中执行，类型检查覆盖 Linux/macOS/Windows；全量测试覆盖 Linux 的 Python 3.11–3.13 和
+macOS/Windows 的 Python 3.13。另验证未安装可选网页依赖时的降级路径，以及 Web
+契约、测试、构建与打包。检查失败不代表推送失败，也不应通过删除 CI 隐藏问题。

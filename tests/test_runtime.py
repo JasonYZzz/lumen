@@ -676,22 +676,6 @@ async def test_runtime_records_declared_non_observe_effect() -> None:
     ]
 
 
-def test_work_completion_gate_applies_without_an_approved_plan() -> None:
-    runtime = AgentRuntime(
-        model="test",
-        tools=[],
-        toolsets=[],
-        instructions="Answer.",
-        limits=LimitsConfig(),
-        tool_metadata={},
-        work_completion_issues=lambda _session_id: ["effect pending"],
-    )
-
-    assert runtime._completion_gate_issues() == [  # pyright: ignore[reportPrivateUsage]
-        "effect pending"
-    ]
-
-
 async def test_real_request_snapshot_updates_for_each_model_step() -> None:
     skill_documents: list[dict[str, object]] = []
     catalog: list[dict[str, object]] = []

@@ -20,7 +20,6 @@ from pydantic import BeforeValidator, Field, StrictStr
 from pydantic_ai import (
     Tool,
 )
-from pydantic_ai.capabilities import AbstractCapability
 from pydantic_ai.messages import (
     BinaryContent,
     ModelMessage,
@@ -354,30 +353,6 @@ class ClarificationGate:
         return f"已请求澄清: {pending.id}"
 
 
-class ClarificationCapability(AbstractCapability):
-    """Hide and reject tools after a blocking clarification request."""
-
-    def __init__(self, gate: ClarificationGate) -> None:
-        self.gate = gate
-
-    async def prepare_tools(self, ctx: object, tool_defs: list[Any]) -> list[Any]:
-        del ctx
-        return [] if self.gate.pending is not None else tool_defs
-
-    async def before_tool_execute(
-        self,
-        ctx: object,
-        *,
-        call: Any,
-        tool_def: Any,
-        args: Any,
-    ) -> Any:
-        del ctx, tool_def
-        if self.gate.pending is not None and call.tool_name != "request_clarification":
-            raise RuntimeError("tool execution is blocked while waiting for user clarification")
-        return args
-
-
 def _recovery_signature(tool_name: str, args: object) -> tuple[str, object]:
     """Return a stable identity and JSON-safe argument snapshot for one call."""
 
@@ -675,7 +650,6 @@ class AgentRuntime:
         self.controller = TaskController()
         self._completion_policy = CompletionPolicy()
         self._completion_gate = CompletionGate(work_completion_issues)
-        self._last_completion_gate_issues: list[str] = []
         self.context_engine = context_engine
         self.interactive_queue = InteractiveMessageQueue()
         self.hooks = hooks
@@ -1224,7 +1198,6 @@ class AgentRuntime:
             (receipt.sequence for receipt in self.controller.snapshot().evidence), default=0,
         )
         self._completion_policy = completion_policy or CompletionPolicy()
-        self._last_completion_gate_issues = []
 
         approval_log: list[dict[str, Any]] = []
         diagnostics: list[dict[str, Any]] = []
@@ -2369,11 +2342,3 @@ class AgentRuntime:
                 parts.append(replace(part, content=content))
             canonical.append(replace(message, parts=parts))
         return canonical
-
-    def _completion_gate_issues(self, plan: PlanState | None = None) -> list[str]:
-        return self._completion_gate.evaluate(
-            session_id=self._active_session_id.get(),
-            plan=plan or self.controller.snapshot(),
-            policy=self._completion_policy,
-            plan_updated=self.controller.plan_updated,
-        )

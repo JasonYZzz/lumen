@@ -5,6 +5,7 @@ import os
 import sys
 from collections.abc import Sequence
 from pathlib import Path
+from typing import Any
 
 import pytest
 from pydantic_ai import Tool
@@ -238,7 +239,9 @@ async def test_worktree_execution_preserves_parent_and_rejects_dirty_import(tmp_
 
 @pytest.mark.skipif(not hasattr(os, "fork"), reason="process groups require POSIX")
 @pytest.mark.parametrize("cancel", [False, True])
-async def test_command_reaps_descendants_after_leader_exit(tmp_path: Path, cancel: bool) -> None:
+async def test_command_reaps_descendants_after_leader_exit(
+    tmp_path: Path, cancel: bool, monkeypatch: pytest.MonkeyPatch,
+) -> None:
     ready = tmp_path / "ready"
     escaped = tmp_path / "escaped"
     code = (
@@ -248,12 +251,24 @@ async def test_command_reaps_descendants_after_leader_exit(tmp_path: Path, cance
         f"pathlib.Path({str(escaped)!r}).write_text('escaped')"
     )
     argv = [sys.executable, "-c", code]
+    real_spawn = asyncio.create_subprocess_exec
+
+    async def spawn_ready(*argv: str, **kwargs: Any) -> asyncio.subprocess.Process:
+        process = await real_spawn(*argv, **kwargs)
+        # The 0.2s timeout exercises cleanup, not interpreter/import startup.
+        # Begin it only after the signal-ignoring descendant is ready.
+        async with asyncio.timeout(10):
+            while not ready.exists():  # noqa: ASYNC110 - external process readiness
+                await asyncio.sleep(0.01)
+        return process
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", spawn_ready)
     sandbox = SandboxRunner(tmp_path, SandboxConfig(mode="disabled"))
     task = asyncio.create_task(run_prepared_command(
         sandbox.prepare(argv, cwd=tmp_path), argv=argv, resolved_cwd=tmp_path, cwd=".",
         timeout_seconds=0.2 if not cancel else 3, sandbox_config=sandbox.config,
     ))
-    async with asyncio.timeout(2):
+    async with asyncio.timeout(10):
         while not ready.exists():  # noqa: ASYNC110 - an external process cannot signal an asyncio.Event
             await asyncio.sleep(0.01)
     if cancel:
@@ -266,6 +281,7 @@ async def test_command_reaps_descendants_after_leader_exit(tmp_path: Path, cance
     assert not escaped.exists()
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="fixture uses a POSIX shebang executable")
 async def test_cancelling_worktree_git_does_not_block_event_loop(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:

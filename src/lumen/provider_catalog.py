@@ -145,7 +145,6 @@ class NativeWebSearchRule:
 DEEPSEEK_MODELS = ("deepseek-flash",)
 BAILIAN_DEEPSEEK_MODELS = (*DEEPSEEK_MODELS, "glm-5.2")
 DS_RESPONSES = "https://api-docs.deepseek.com/api/create-response/"
-DS_RESPONSES_GUIDE = "https://api-docs.deepseek.com/guides/responses_api/"
 DS_CHAT = "https://api-docs.deepseek.com/api/create-chat-completion"
 DS_ANTHROPIC = "https://api-docs.deepseek.com/guides/anthropic_api/"
 DS_THINKING = "https://api-docs.deepseek.com/zh-cn/guides/thinking_mode/"

@@ -233,7 +233,7 @@ class ContextSequenceError(RuntimeError):
 
 
 # --------------------------------------------------------------------------- #
-# High-level DTOs (plan §7). M1 populates the compat subset only.
+# High-level context request/commit DTOs.
 # --------------------------------------------------------------------------- #
 
 
@@ -255,9 +255,8 @@ class AgentRef:
 class TaskSnapshot:
     """Current task state surfaced to the summariser.
 
-    ``diagnostics`` is empty at prepare time (the run has not produced tool
-    diagnostics yet); it is carried for forward compatibility with M4's delta
-    checkpoint, which will summarise the post-checkpoint diagnostics.
+    ``diagnostics`` is initially empty and populated at later request boundaries.
+    Rolling compaction consumes it with the current plan as summarization evidence.
     """
 
     plan: PlanState
@@ -379,7 +378,7 @@ class BackgroundCompactionCandidate:
 
 
 # --------------------------------------------------------------------------- #
-# Control commands (plan §7, §14). M1 implements /context only.
+# Host-dispatched report, compaction and memory control commands.
 # --------------------------------------------------------------------------- #
 
 
@@ -392,7 +391,7 @@ class ContextReportCommand:
 
 @dataclass(frozen=True, slots=True)
 class ContextCompactCommand:
-    """``/compact [focus]``: force a compaction on the next turn (M4)."""
+    """``/compact [focus]``: force a compaction on the next turn."""
 
     focus: str | None = None
     session_id: str | None = None
@@ -400,7 +399,7 @@ class ContextCompactCommand:
 
 @dataclass(frozen=True, slots=True)
 class ContextMemoryCommand:
-    """``/memory ...``: recall/remember/forget (M5)."""
+    """``/memory ...``: recall/remember/forget."""
 
     action: str
     payload: dict[str, Any] = field(default_factory=dict[str, Any])

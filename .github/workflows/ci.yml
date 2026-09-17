@@ -2,22 +2,21 @@ name: CI
 
 on:
   push:
+    branches: [main]
   pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: read
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  test:
-    name: Python 3.13 · ${{ matrix.os }}
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os:
-          - ubuntu-latest
-          - macos-latest
-          - windows-latest
+  quality:
+    name: Python quality and generated contracts
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
       - name: Install uv and Python
@@ -25,18 +24,47 @@ jobs:
         with:
           python-version: "3.13"
           enable-cache: true
-      - name: Install locked dependencies
+      - name: Install core and development dependencies (no extras)
         run: uv sync --frozen --all-groups
       - name: Lint
         run: uv run --frozen ruff check .
-      - name: Type check
-        run: uv run --frozen pyright
+      - name: Type check all supported platforms
+        run: |
+          uv run --frozen pyright --pythonplatform Linux
+          uv run --frozen pyright --pythonplatform Darwin
+          uv run --frozen pyright --pythonplatform Windows
       - name: Generated contract freshness
         run: uv run --frozen python -m lumen.contracts --check
+      - name: Provider catalog freshness
+        run: uv run --frozen python scripts/export_provider_catalog.py --check
       - name: Architecture Atlas content freshness
         run: uv run --frozen python scripts/build_architecture_atlas.py --check
+      - name: Web retrieval without optional extras
+        run: uv run --frozen pytest tests/test_web_fetch.py tests/test_web_search.py
+
+  test:
+    name: Python ${{ matrix.python }} · ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {os: ubuntu-latest, python: "3.11"}
+          - {os: ubuntu-latest, python: "3.12"}
+          - {os: ubuntu-latest, python: "3.13"}
+          - {os: macos-latest, python: "3.13"}
+          - {os: windows-latest, python: "3.13"}
+    steps:
+      - uses: actions/checkout@v6
+      - name: Install uv and Python
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          python-version: ${{ matrix.python }}
+          enable-cache: true
+      - name: Install locked dependencies
+        run: uv sync --frozen --all-groups --extra web --extra live
       - name: Test
-        run: uv run --frozen pytest
+        run: uv run --frozen --extra web --extra live pytest
 
   web:
     name: Web contract and build

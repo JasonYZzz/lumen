@@ -70,6 +70,10 @@ Lumen 是通用、可配置的 Agent framework：Provider 可替换，运行时�
 ## 验证与生成物
 
 根目录安装：`uv sync --frozen --all-groups`；Web：`pnpm --dir src/web install --frozen-lockfile`。CI 使用 Node 22/pnpm 10；升级依赖同步 lockfile。
+增强提取/实时语音回归安装 `--extra web --extra live`，测试命令同样显式带上这两个 extra。
+CI 的质量任务不安装可选 extra，按 Linux/Darwin/Windows 分别执行 Pyright；全量测试覆盖
+Linux Python 3.11–3.13、macOS/Windows Python 3.13。安全文档读取和后台 Web 启动仅支持
+macOS/Linux；Windows 不得使用普通路径检查后打开来绕过 descriptor/no-follow 边界。
 
 先最小回归，再按风险扩展；通过后不无故重复。纯 Markdown 修改检查事实、链接、diff 及受影响生成物，无需全套测试/构建。
 

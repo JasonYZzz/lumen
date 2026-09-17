@@ -412,7 +412,32 @@ async def _communicate(
 
 
 async def _terminate_process_group(process: asyncio.subprocess.Process) -> None:
-    """Best-effort SIGTERM of the process group, then SIGKILL if still alive."""
+    """Terminate the process tree with taskkill on Windows or POSIX signals."""
+    if sys.platform == "win32":
+        # Use the system executable, never a workspace/PATH-provided program.
+        taskkill = Path(os.environ.get("SystemRoot", r"C:\Windows")) / "System32" / "taskkill.exe"
+        killer: asyncio.subprocess.Process | None = None
+        try:
+            killer = await asyncio.create_subprocess_exec(
+                str(taskkill), "/PID", str(process.pid), "/T", "/F",
+                stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL,
+            )
+            await asyncio.wait_for(killer.wait(), timeout=5)
+        except (OSError, TimeoutError):
+            pass
+        finally:
+            if killer is not None and killer.returncode is None:
+                try:
+                    killer.kill()
+                except ProcessLookupError:
+                    pass
+                await killer.wait()
+        if process.returncode is None:
+            try:
+                process.kill()
+            except ProcessLookupError:
+                pass
+        return
     # start_new_session makes the original PID the group ID. A leader may
     # already have exited while descendants still hold stdout/stderr open.
     pgid = process.pid

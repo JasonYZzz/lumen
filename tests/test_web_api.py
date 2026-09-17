@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sys
 import time
 from pathlib import Path
 from types import SimpleNamespace
@@ -396,6 +397,10 @@ def test_document_content_uses_authenticated_host_read_and_safe_download_headers
         assert client.get("/api/v1/files/content", params={"path": "report.html"}).status_code == 401
         client.get("/auth/exchange", params={"token": "launch-secret"})
         response = client.get("/api/v1/files/content", params={"path": "report.html"})
+        if sys.platform == "win32":
+            assert response.status_code == 400
+            assert "supported on macOS and Linux" in response.text
+            return
         assert response.status_code == 200
         assert response.content == b"<script>alert(1)</script>"
         assert response.headers["content-type"] == "application/octet-stream"

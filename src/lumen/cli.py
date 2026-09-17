@@ -106,6 +106,9 @@ def _web_runtime_paths(workspace: Path) -> tuple[Path, Path]:
 def _pid_is_running(pid: int) -> bool:
     if pid <= 0:
         return False
+    if sys.platform == "win32":
+        # Unlike POSIX, Windows os.kill(pid, 0) terminates the target process.
+        raise ConfigLoadError("background Web process management is supported on macOS and Linux")
     try:
         os.kill(pid, 0)
     except ProcessLookupError:
@@ -149,7 +152,7 @@ def _background_web_process(
     base_url: str,
     serve: Callable[..., Any],
 ) -> int:
-    if not hasattr(os, "fork"):
+    if sys.platform == "win32" or not hasattr(os, "fork"):
         raise ConfigLoadError("lumen web --background is supported on macOS and Linux")
     existing = _read_web_state(state_path)
     existing_pid = int(existing.get("pid", 0)) if existing is not None else 0

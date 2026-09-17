@@ -471,8 +471,8 @@ class ContextManager:
     .. deprecated:: M1
         Retained as the implementation behind :class:`lumen.context.ContextEngine`.
         New callers should depend on ``ContextEngine.prepare``/``commit``/``control``
-        rather than constructing a ``ContextManager`` directly; this type is
-        removed at the end of the deprecation period (M8).
+        rather than constructing a ``ContextManager`` directly. Removing this
+        type requires replacing its internal summarizer and public compatibility callers.
 
     Compaction uses a dedicated, tool-free agent with a strict structured output
     type so the model cannot free-form ramble into the active context. On any
@@ -491,7 +491,7 @@ class ContextManager:
             warnings.warn(
                 "lumen.context.ContextManager is deprecated; use "
                 "lumen.context.ContextEngine instead. The manager is retained as "
-                "an internal implementation and will be removed in M8.",
+                "an internal summarization implementation.",
                 DeprecationWarning,
                 stacklevel=2,
             )
