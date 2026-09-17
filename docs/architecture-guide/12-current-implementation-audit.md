@@ -205,9 +205,18 @@ Session v1–v10、配置 v1、LegacyChildRunAdapter、ContextManager 内部摘�
 SDK Adapter、Replay validator、Textual/FastAPI/Pydantic 反射入口均保留。历史研究、计划、静态
 视觉资料不按日期或扫描器的“未导入文件”提示批量删除；它们不是生产死代码的证据。
 
-本地验收：隔离 Python 3.13 全量 1453 passed / 1 skipped、60 snapshots；无网页 extra 环境
+本地验收：隔离 Python 3.13 全量 1454 passed / 1 skipped、60 snapshots；无网页 extra 环境
 31 passed / 3 skipped（两个增强提取用例缺依赖、一个真实浏览器 opt-in）。Web 182 tests、
 typecheck/build、OpenAPI freshness、Ruff、三平台 Pyright、contract/provider/Atlas freshness、
 actionlint 均通过。68 份 Markdown 本地链接无断链；wheel 含静态 Web 与内置 Skills，隔离安装
 通过 `lumen --version` / `lumen --check-config`。这些不代表真实 Provider/浏览器或性能验收；
 实际 Linux/Windows 执行结果应以本次推送对应的 CI 为准。
+
+首次远程全量运行进一步暴露环境差异：两个非沙箱契约测试误用默认 OS sandbox，已改为
+显式 disabled 的测试配置（生产默认不变），命令 fixture 改用当前 Python；macOS 的 Homebrew
+Git 需要读取其他 formula 的动态库，Seatbelt 只增加其已安装 lib 目录，不放开整个 Homebrew
+prefix 或其 etc/var。StreamingMarkdownController.flush 同时回收等待期间重新安排的 timer，
+completion callback 按 task 身份幂等消费，防止 flush 后仍显示 pending 或旧 callback 清理新任务。
+CI 快照失败报告保留七天，并打印 snapshot details，跨环境差异不通过跳过快照或批量覆盖基线解决。
+Windows 的落盘/权限/路径等历史兼容性问题须单独依据真实 CI 验证，三平台 Pyright 不证明
+三平台全部运行时行为已经通过。

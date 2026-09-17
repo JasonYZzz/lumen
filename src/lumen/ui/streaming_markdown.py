@@ -365,6 +365,10 @@ class StreamingMarkdownController:
             await self._render(snapshot)
 
     def _frame_done(self, task: asyncio.Task[None]) -> None:
+        # flush may already have consumed this completion before the event
+        # loop dispatches its callback. Never clear a newer frame's task.
+        if self._task is not task:
+            return
         self._task = None
         if task.cancelled():
             return
@@ -383,7 +387,11 @@ class StreamingMarkdownController:
             self._timer = None
         task = self._task
         if task is not None:
-            await task
+            try:
+                await task
+            finally:
+                if task.done():
+                    self._frame_done(task)
         if self._error is not None:
             raise self._error
         while self._dirty:
@@ -391,6 +399,11 @@ class StreamingMarkdownController:
                 snapshot = self._text
                 self._dirty = False
                 await self._render(snapshot)
+        # A completed in-flight frame (or render callback) may have armed a
+        # timer while flush was awaiting it. All its deltas are now drained.
+        if self._timer is not None:
+            self._timer.cancel()
+            self._timer = None
         if self._error is not None:
             raise self._error
 

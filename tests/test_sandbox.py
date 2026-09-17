@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import socket
 import sys
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
@@ -29,6 +30,32 @@ def test_missing_sandbox_fails_closed(tmp_path: Path, monkeypatch: pytest.Monkey
     monkeypatch.setattr("lumen.sandbox.platform.system", lambda: "unsupported")
     with pytest.raises(SandboxUnavailableError):
         SandboxRunner(tmp_path, SandboxConfig()).prepare([sys.executable, "-V"], cwd=tmp_path)
+
+
+def test_homebrew_library_reads_do_not_grant_prefix_configuration(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    formula = tmp_path / "homebrew" / "Cellar" / "pcre2" / "1.0"
+    library = formula / "lib"
+    library.mkdir(parents=True)
+    private = tmp_path / "homebrew" / "etc"
+    private.mkdir()
+    real_glob = Path.glob
+
+    def formula_libraries(path: Path, pattern: str) -> Iterator[Path]:
+        if path == Path("/opt/homebrew/opt"):
+            assert pattern == "*/lib"
+            return iter([library])
+        return real_glob(path, pattern)
+
+    monkeypatch.setattr(Path, "glob", formula_libraries)
+    monkeypatch.setattr("lumen.sandbox.platform.system", lambda: "Darwin")
+    runner = SandboxRunner(workspace, SandboxConfig())
+    roots = runner._read_roots([sys.executable], ())  # pyright: ignore[reportPrivateUsage]
+    assert library in roots
+    assert not any(private.is_relative_to(root) for root in roots)
 
 
 @pytest.mark.skipif(sys.platform != "darwin", reason="Seatbelt integration")

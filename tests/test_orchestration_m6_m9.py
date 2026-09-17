@@ -358,7 +358,8 @@ def test_run_skill_script_sanitizes_environment(tmp_path: Path, monkeypatch: pyt
         encoding="utf-8",
     )
     monkeypatch.setenv("SECRET_API_KEY", "do-not-leak")
-    manager = ResourceManager(_manager_config(tmp_path), workspace=tmp_path)
+    # This contract tests environment sanitization, not an OS sandbox adapter.
+    manager = ResourceManager(_manager_config(tmp_path, "sandbox: {mode: disabled}\n"), workspace=tmp_path)
     runner = manager.registry.entries["run_skill_script"].spec.function
     output = runner("scripted", "check")
     assert "exit_code: 0" in output

@@ -399,7 +399,9 @@ def test_document_content_uses_authenticated_host_read_and_safe_download_headers
         response = client.get("/api/v1/files/content", params={"path": "report.html"})
         if sys.platform == "win32":
             assert response.status_code == 400
-            assert "supported on macOS and Linux" in response.text
+            # Host intentionally redacts filesystem failure details.
+            assert response.json()["error"]["code"] == "invalid_state"
+            assert "Document unavailable" in response.text
             return
         assert response.status_code == 200
         assert response.content == b"<script>alert(1)</script>"

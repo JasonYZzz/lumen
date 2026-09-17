@@ -64,7 +64,15 @@ jobs:
       - name: Install locked dependencies
         run: uv sync --frozen --all-groups --extra web --extra live
       - name: Test
-        run: uv run --frozen --extra web --extra live pytest
+        run: uv run --frozen --extra web --extra live pytest --snapshot-details
+      - name: Upload failed visual regression report
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: snapshots-${{ matrix.os }}-${{ matrix.python }}
+          path: snapshot_report.html
+          retention-days: 7
+          if-no-files-found: ignore
 
   web:
     name: Web contract and build

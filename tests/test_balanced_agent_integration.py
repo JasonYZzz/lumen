@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import sys
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
@@ -64,6 +65,8 @@ sessions:
   directory: sessions
 context:
   enabled: false
+sandbox:
+  mode: disabled
 """,
         encoding="utf-8",
     )
@@ -108,7 +111,7 @@ async def test_end_to_end_scenario_with_approvals(tmp_path: Path) -> None:
                 )
             elif state["phase"] == "run":
                 state["phase"] = "update"
-                yield _delta("run_command", {"argv": ["true"]}, "run-1")
+                yield _delta("run_command", {"argv": [sys.executable, "-c", "pass"]}, "run-1")
             elif state["phase"] == "update":
                 state["phase"] = "done"
                 yield _delta(

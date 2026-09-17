@@ -119,6 +119,12 @@ class SandboxRunner:
             path = Path(value)
             if path.exists():
                 candidates.append(path.resolve())
+        # Homebrew executables can dynamically link libraries from another
+        # formula. Grant only installed library directories, not the prefix's
+        # configuration, private data, or arbitrary user files.
+        if platform.system() == "Darwin":
+            for prefix in (Path("/opt/homebrew"), Path("/usr/local")):
+                candidates.extend(library.resolve() for library in (prefix / "opt").glob("*/lib"))
         # Public runtime configuration, not all of /etc (which can hold secrets).
         # TLS clients read openssl.cnf even for offline commands such as curl -V.
         for value in (
