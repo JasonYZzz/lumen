@@ -42,6 +42,11 @@ class LumenPcmPlaybackProcessor extends AudioWorkletProcessor {
     this.buffer = null
     this.position = 0
     this.port.onmessage = (event) => {
+      if (event.data?.type === 'clear') {
+        this.buffers = []; this.buffer = null; this.position = 0
+        return
+      }
+      if (!(event.data instanceof ArrayBuffer)) return
       const pcm = new Int16Array(event.data)
       const samples = new Float32Array(pcm.length)
       for (let index = 0; index < pcm.length; index += 1) samples[index] = pcm[index] / 0x8000

@@ -32,7 +32,7 @@ export default function MascotPreview() {
       </div>
       <textarea className={styles.composer} aria-label="试试输入，看看小狐狸的反应" placeholder="试试输入，看看小狐狸的反应…"
         onFocus={() => setActivity('focused')} onBlur={() => setActivity('idle')} />
-      <p className={styles.hint}>轻点狐狸打招呼。它会完成当前动作，再自然回应；不会打断姿势或连续重播。</p>
+      <p className={styles.hint}>轻点九尾狐打招呼，输入时看看它的反应。</p>
     </section>
     <footer className={styles.controls}>
       <button type="button" aria-pressed={paused} onClick={() => setPaused(!paused)}>{paused ? '继续播放' : '暂停'}</button>

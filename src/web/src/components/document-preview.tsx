@@ -1,14 +1,19 @@
 'use client'
 
 import { ArrowDown, ArrowClockwise, CircleNotch, FileText, X } from '@phosphor-icons/react'
+import dynamic from 'next/dynamic'
 import { createContext, useContext, useEffect, useState, type ReactNode } from 'react'
 import { lumenApi } from '../lib/api/client'
 import type { TimelineEntry } from '../lib/api/types'
 import { MarkdownReport } from './markdown-report'
 import { useModalFocus } from './use-modal-focus'
 import { WebLink } from './web-link'
+import { VisualBoundary } from './visual-boundary'
 
-const extensions = /\.(md|markdown|txt|html?|json|csv|tsv|log|py|tsx?|jsx?|css|ya?ml|pdf|png|jpe?g|webp|gif|svg|docx|xlsx|pptx)$/i
+const ModelPreview = dynamic(() => import('./model-preview').then(module => module.ModelPreview), {
+  ssr: false, loading: () => <p role="status">正在加载 3D 预览…</p>,
+})
+const extensions = /\.(md|markdown|txt|html?|json|csv|tsv|log|py|tsx?|jsx?|css|ya?ml|pdf|png|jpe?g|webp|gif|svg|docx|xlsx|pptx|glb)$/i
 const MAX_TABLE_ROWS = 500
 const MAX_TABLE_COLUMNS = 50
 const MAX_WORKSHEETS = 20
@@ -21,6 +26,7 @@ interface TableSheet {
 }
 
 interface PreviewResult {
+  modelBuffer?: ArrayBuffer
   text: string | null
   url: string
   htmlPreview?: string
@@ -364,8 +370,9 @@ function DocumentPreview({ path, onClose }: { path: string; onClose: () => void 
   const pdf = extension === 'pdf'
   const word = extension === 'docx'
   const excel = extension === 'xlsx'
+  const model = extension === 'glb'
   const delimited = ['csv', 'tsv'].includes(extension)
-  const binary = word || excel || extension === 'pptx'
+  const binary = word || excel || model || extension === 'pptx'
   useEffect(() => {
     const controller = new AbortController()
     let url: string | undefined
@@ -375,7 +382,10 @@ function DocumentPreview({ path, onClose }: { path: string; onClose: () => void 
       const text = !image && !pdf && !binary && blob.size <= 1024 * 1024 ? await blob.text() : null
       if (controller.signal.aborted) return
       url = URL.createObjectURL(new Blob([blob], { type: pdf ? 'application/pdf' : image ? `image/${extension === 'jpg' ? 'jpeg' : extension}` : 'application/octet-stream' }))
-      if (word) {
+      if (model) {
+        const modelBuffer = await blob.arrayBuffer()
+        if (!controller.signal.aborted) setResult({ text: null, url, modelBuffer })
+      } else if (word) {
         try {
           const preview = await wordPreview(await blob.arrayBuffer())
           if (!controller.signal.aborted) setResult({ text: null, url, wordHtml: preview.html, warning: preview.warning })
@@ -422,7 +432,7 @@ function DocumentPreview({ path, onClose }: { path: string; onClose: () => void 
       }
     }).catch((cause: unknown) => { if (!controller.signal.aborted) setError(cause instanceof Error ? cause.message : '读取失败') })
     return () => { controller.abort(); if (url) URL.revokeObjectURL(url) }
-  }, [attempt, path, image, pdf, binary, word, excel, delimited, html, extension])
+  }, [attempt, path, image, pdf, binary, word, excel, model, delimited, html, extension])
   return <div className="document-preview-backdrop" onClick={(event) => { if (event.target === event.currentTarget) onClose() }}>
     <section ref={ref} className="document-preview" role="dialog" aria-modal="true" aria-label={`文档预览：${path}`} tabIndex={-1}>
       <header><div><strong>{path.split('/').at(-1)}</strong><small>{path} · 当前文件</small></div>
@@ -437,6 +447,8 @@ function DocumentPreview({ path, onClose }: { path: string; onClose: () => void 
             </div>
           : pdf ? <iframe title="PDF 预览" src={result.url} />
           : image ? <img src={result.url} alt={path.split('/').at(-1)} />
+          : result.modelBuffer ? <VisualBoundary key={attempt} fallback={<div role="alert"><p>3D 预览加载失败，仍可下载原文件。</p>
+              <button type="button" onClick={() => window.location.reload()}>刷新页面后重试</button></div>}><ModelPreview buffer={result.modelBuffer} /></VisualBoundary>
           : result.previewError ? <div className="document-preview-empty" role="alert">
               <strong>无法生成此文件的预览</strong><span>{result.previewError}</span><span>仍可下载原文件查看。</span>
             </div>

@@ -54,7 +54,10 @@ export function ToolOutputDetails({ item }: { item: TimelineEntry }) {
       </>}
     </div> : <>
       {Object.keys(item.args ?? {}).length > 0 && <OutputText text={JSON.stringify(item.args, null, 2)} label="输入" />}
-      <OutputText text={result} label="输出" />
+      {result ? <OutputText text={result} label="输出" /> : <p className="tool-result-meta" role="status">
+        {['running', 'approved'].includes(item.status ?? '') ? '工具正在执行，结果将在返回后显示。'
+          : item.pendingApproval ? '确认后才会执行此操作。' : '此条记录没有保存输出。'}
+      </p>}
     </>}
   </div>
 }

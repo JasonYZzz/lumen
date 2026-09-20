@@ -13,6 +13,7 @@ const renderers = vi.hoisted(() => ({
 }))
 
 vi.mock('../lib/api/client', () => ({ lumenApi: { readDocument: vi.fn() } }))
+vi.mock('./model-preview', () => ({ ModelPreview: ({ buffer }: { buffer: ArrayBuffer }) => <div data-testid="model-preview">模型字节：{buffer.byteLength}</div> }))
 vi.mock('mammoth', () => ({ default: {
   convertToHtml: renderers.convertToHtml,
   images: { dataUri: {} },
@@ -55,6 +56,20 @@ async function render(path: string) {
 }
 
 describe('workspace document preview', () => {
+  it('recognizes GLB workspace paths, preserves binary bytes and download, and aborts/revokes on close', async () => {
+    const bytes = new Uint8Array([103, 108, 84, 70, 0, 255, 0, 128])
+    vi.mocked(lumenApi.readDocument).mockResolvedValue(new Blob([bytes]))
+    expect(documentPath('/project/output/model.glb', '/project')).toBe('output/model.glb')
+    await render('output/model.glb')
+    expect(lumenApi.readDocument).not.toHaveBeenCalled()
+    await click('查看报告')
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 30)) })
+    expect(container.querySelector('[data-testid="model-preview"]')?.textContent).toContain('8')
+    expect(container.querySelector('a[download]')?.getAttribute('href')).toBe('blob:document')
+    const signal = vi.mocked(lumenApi.readDocument).mock.calls[0][1]!
+    await click('关闭文档预览')
+    expect(signal.aborted).toBe(true); expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:document')
+  })
   it('shows the linked site favicon and falls back without breaking the link', async () => {
     await render('https://example.com/article?q=private#section')
     const link = container.querySelector('a')!

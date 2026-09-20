@@ -27,6 +27,8 @@ node_modules/
 /outputs/
 /snapshot_report.html
 /.qa-*/
+# Blender's automatic save backup is local-only; the authored .blend remains versioned.
+/docs/brand/mascot/three/*.blend1
 # Local skill-install staging and release archives are not source artifacts.
 /.skill-staging/
 # One-off chart input/output helper for the ignored TKA report workspace.

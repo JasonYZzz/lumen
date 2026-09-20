@@ -131,9 +131,16 @@ export function readableActivity(activity: TimelineEntry[]) {
   let previousKey: string | null = null
   let previousText = ''
   for (const original of activity) {
-    if (['thinking', 'compaction', 'work_product'].includes(original.kind)) {
+    if (['compaction', 'work_product'].includes(original.kind)) {
       diagnostics.push(original)
       previousKey = null
+      continue
+    }
+    if (original.kind === 'thinking') {
+      // Reasoning belongs beside the actions it informed, not at the end of a diagnostics dump.
+      if (original.text.trim()) groups.push({ id: original.id, entries: [original], label: null })
+      previousKey = null
+      previousText = ''
       continue
     }
     if (original.kind === 'agent' && !['failed', 'blocked', 'import_pending'].includes(original.status ?? '')) {

@@ -9,6 +9,7 @@ import { useMascotVisibility } from './mascot-visibility'
 import { RasterMascotRenderer } from './raster-mascot-renderer'
 import { VideoMascotRenderer } from './video-mascot-renderer'
 import styles from './mascot.module.css'
+import { VisualBoundary } from '../visual-boundary'
 
 const RiveMascotRenderer = dynamic(
   () => import('./rive-mascot-renderer').then((module) => module.RiveMascotRenderer),
@@ -16,6 +17,12 @@ const RiveMascotRenderer = dynamic(
 )
 
 const RIVE_ENABLED = process.env.NEXT_PUBLIC_MASCOT_RENDERER === 'rive'
+// No character asset is approved yet. Keep the loading seam dormant until visual acceptance.
+const MODEL_APPROVED = false
+const MODEL_URL = process.env.NEXT_PUBLIC_MASCOT_MODEL_URL
+const ThreeMascotRenderer = dynamic(() => import('./three-mascot-renderer').then(module => module.ThreeMascotRenderer), {
+  ssr: false, loading: () => <img src="/mascot/fox-poster.png" alt="" width={168} height={168} />,
+})
 
 export function MascotScene({ activity, motionMode, className }: MascotSceneProps) {
   return process.env.NEXT_PUBLIC_MASCOT_RENDERER === 'layered' || RIVE_ENABLED
@@ -28,10 +35,19 @@ function AnimatedMascotScene({ activity, motionMode, className }: MascotScenePro
   const visible = useMascotVisibility(stageRef)
   const preference = useMascotMotionPreference(motionMode)
   const [interaction, setInteraction] = useState(0)
+  const [resolved, setResolved] = useState(false)
+  const [failed, setFailed] = useState(false)
+  const unavailable = useCallback(() => setFailed(true), [])
+  useEffect(() => setResolved(true), [])
+  const useModel = MODEL_APPROVED && process.env.NEXT_PUBLIC_MASCOT_RENDERER === 'three' && MODEL_URL && resolved
+    && preference.mode === 'full' && !failed
   return <div ref={stageRef} className={`${styles.stage} ${className ?? ''}`} data-active={visible}>
     <button type="button" className={styles.petButton} aria-label="和九尾狐打招呼"
       onClick={() => setInteraction(value => value + 1)}>
-      <VideoMascotRenderer activity={activity} motionMode={preference.mode} active={visible} interaction={interaction} />
+      {useModel ? visible && <VisualBoundary onFailure={unavailable} fallback={<img src="/mascot/fox-poster.png" alt="" width={168} height={168} />}>
+        <ThreeMascotRenderer url={MODEL_URL!} activity={activity} active={visible}
+          interaction={interaction} onUnavailable={unavailable} /></VisualBoundary>
+        : <VideoMascotRenderer activity={activity} motionMode={preference.mode} active={visible} interaction={interaction} />}
     </button>
   </div>
 }

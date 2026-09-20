@@ -40,6 +40,33 @@ afterEach(async () => {
 })
 
 describe('conversation process disclosure', () => {
+  it('streams the complete ordered process, with a compact preview only after manual collapse', async () => {
+    const first: TimelineEntry = { id: 'first', kind: 'commentary', text: '先查找资料。' }
+    const latest: TimelineEntry = { id: 'latest', kind: 'commentary', text: '核对官方来源。' }
+    await render([first, { ...tool, id: 'done', status: 'completed' }, latest, tool,
+      { ...tool, id: 'other', callId: 'call-2' }], true)
+    expect(content().hidden).toBe(false)
+    expect(content().textContent).toContain(first.text)
+    expect(content().textContent).toContain(latest.text)
+    expect(content().querySelectorAll('.web-tool-card.is-live')).toHaveLength(2)
+    expect(Array.from(content().children, (node) => node.textContent).join('|')).toContain('先查找资料。|已读取 · README.md|核对官方来源。')
+    await click(summary())
+    expect(container.querySelector('.turn-activity-preview')?.textContent).toContain(latest.text)
+    expect(container.querySelector('.turn-activity-preview')?.textContent).not.toContain(first.text)
+    expect(container.querySelectorAll('.turn-running-tools .web-tool-card.is-live')).toHaveLength(2)
+    expect(summary().textContent).toContain('3 次工具调用')
+    await click(container.querySelector<HTMLButtonElement>('.turn-running-tools .tool-summary')!)
+    expect(container.querySelector('.turn-running-tools .tool-detail')?.textContent).toContain('结果将在返回后显示')
+    await click(summary())
+    expect(container.querySelector('.turn-activity-preview')).toBeNull()
+    expect(content().textContent).toContain(first.text)
+    await render([first, latest, { ...tool, status: 'completed' }, answer], true)
+    expect(container.querySelector('.turn-progress-preview')).toBeNull()
+    await render([first, latest, { ...tool, status: 'completed' }, answer], false)
+    expect(container.querySelector('.turn-activity-preview')).toBeNull()
+    expect(content().hidden).toBe(true)
+  })
+
   it('reads command output as text, retains raw records and warns about truncation', async () => {
     const command: TimelineEntry = { id: 'command', kind: 'tool', text: '', toolName: 'run_command', status: 'completed',
       args: { argv: ['python', 'test.py'] }, result: JSON.stringify({ argv: ['python', 'test.py'], exit_code: 0,
@@ -70,13 +97,14 @@ describe('conversation process disclosure', () => {
     expect(document.querySelector('.sources-panel')).toBeNull()
     expect(document.activeElement).toBe(trigger)
   })
-  it('preserves manual opening at completion and highlights all concurrent tools', async () => {
+  it('collapses on successful completion even when the process was manually opened', async () => {
     await render([tool, { ...tool, id: 'other', callId: 'call-2' }], true)
     expect(content().querySelectorAll('.web-tool-card.is-live')).toHaveLength(2)
     await click(summary())
     await click(summary())
     await render([{ ...tool, status: 'completed' }, answer], false)
-    expect(content().hidden).toBe(false)
+    expect(content().hidden).toBe(true)
+    expect(container.querySelectorAll('.process-live-text')).toHaveLength(0)
   })
   it('shows an immediate live placeholder before the first response event arrives', async () => {
     await render([], true)
@@ -131,12 +159,13 @@ describe('conversation process disclosure', () => {
     await click(summary())
     expect(content().textContent).not.toContain('检查来源')
   })
-  it('shows streamed process in order, folds only after completion, and preserves manual reopening', async () => {
+  it('shows thoughts directly, collapses at completion, and permits reopening the full process', async () => {
     await render([thought, tool], true)
     expect(content().hidden).toBe(false)
     expect(summary().getAttribute('aria-controls')).toBe(content().id)
-    expect(content().querySelector<HTMLDetailsElement>('.process-diagnostics')?.open).toBe(false)
-    expect(content().querySelector('.process-diagnostics .markdown-body strong')?.textContent).toBe('公开资料')
+    expect(content().querySelector('.process-thought')?.tagName).toBe('ARTICLE')
+    expect(content().querySelector('.process-thought .markdown-body strong')?.textContent).toBe('公开资料')
+    expect(content().children[0].classList.contains('process-thought')).toBe(true)
     expect(content().querySelector('.tool-glyph svg')).not.toBeNull()
     expect(content().querySelector('.web-tool-card.is-live')).not.toBeNull()
     expect(container.querySelector('.turn-live-placeholder')).toBeNull()
@@ -153,7 +182,7 @@ describe('conversation process disclosure', () => {
     expect(container.querySelector('.timeline-assistant')?.textContent).toContain('这是最终回答')
     await render([thought, { ...tool, status: 'completed' }, answer], false, 155.9)
     expect(content().hidden).toBe(true)
-    expect(summary().textContent).toContain('2m 35s')
+    expect(summary().textContent).toBe('思考了 2m 35s')
     await click(summary())
     expect(content().hidden).toBe(false)
     await render([thought, { ...tool, status: 'completed' }, answer], false, 155.9)
@@ -213,7 +242,6 @@ describe('conversation process disclosure', () => {
 
   it.each(['failed', 'cancelled', 'interrupted'])('keeps %s details visible on termination and restore', async (status) => {
     await render([thought, tool], true)
-    await click(summary())
     const terminal: TimelineEntry = { id: 'terminal', kind: 'system', text: '需要处理的信息', status }
     await render([thought, tool, terminal], false)
     expect(content().hidden).toBe(false)
@@ -260,13 +288,39 @@ describe('conversation process disclosure', () => {
     expect(option.disabled).toBe(false)
   })
 
-  it('returns keyboard focus to the disclosure when completion hides focused tool details', async () => {
+  it('returns keyboard focus to the disclosure when completion hides a focused tool', async () => {
     await render([thought, tool], true)
     const button = content().querySelector<HTMLButtonElement>('.tool-summary')!
-    button.focus()
+    await act(async () => button.focus())
     await render([thought, tool, answer], false, 60)
     expect(document.activeElement).toBe(summary())
     expect(content().hidden).toBe(true)
+  })
+
+  it('marks only the current thought or concurrent running tools for shimmer and suspends it at approval', async () => {
+    await render([thought], true)
+    expect(content().querySelector('.process-thought.is-live .process-live-text')?.textContent).toBe('正在思考')
+    await render([thought, tool, { ...tool, id: 'other', callId: 'call-2' }], true)
+    expect(content().querySelector('.process-thought.is-live')).toBeNull()
+    expect(content().querySelectorAll('.tool-title-line .process-live-text')).toHaveLength(2)
+    await render([thought, { ...tool, status: 'completed' }, { ...thought, id: 'new', text: '核对结果' }], true)
+    expect(content().querySelectorAll('.process-live-text')).toHaveLength(1)
+    expect(content().querySelector('.process-thought.is-live')?.textContent).toContain('核对结果')
+    await render([thought, tool, { ...tool, id: 'pending', pendingApproval: true, status: 'pending' }], true)
+    expect(content().querySelectorAll('.process-live-text')).toHaveLength(0)
+    expect(summary().querySelector('.is-live')).toBeNull()
+    await click(summary())
+    expect(container.querySelector('.turn-activity-preview .process-live-text')).toBeNull()
+  })
+
+  it('does not fold long progress text or successful grouped tools during execution', async () => {
+    const long: TimelineEntry = { id: 'long', kind: 'commentary', text: '正在检查完整资料。'.repeat(80) }
+    const done = { ...tool, status: 'completed', callView: { ...tool.callView, groupable: true, group_key: 'reads', plural: '个文件' } }
+    await render([long, done, { ...done, id: 'another', callId: 'call-2' }], true)
+    expect(content().textContent).toContain(long.text)
+    expect(content().querySelector('.process-long-note')).toBeNull()
+    expect(content().querySelector('.activity-tool-group')).toBeNull()
+    expect(content().querySelectorAll('.web-tool-card')).toHaveLength(2)
   })
 
   it('does not create an empty process for plain answers or invent a duration for older records', async () => {

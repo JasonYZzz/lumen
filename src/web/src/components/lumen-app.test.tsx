@@ -815,9 +815,9 @@ describe('session approval mode interactions', () => {
     snapshots.set('session-1', recorded)
     window.history.replaceState({}, '', '/?session=session-1')
     await mount()
-    expect(button('已完成处理 · 2m 35s').getAttribute('aria-expanded')).toBe('false')
+    expect(button('思考了 2m 35s').getAttribute('aria-expanded')).toBe('false')
     expect(container.querySelector('.timeline-assistant')?.textContent).toContain('最终结果')
-    await click(button('已完成处理 · 2m 35s'))
+    await click(button('思考了 2m 35s'))
     expect(container.querySelector<HTMLDivElement>('.turn-activity-list')?.hidden).toBe(false)
   })
 

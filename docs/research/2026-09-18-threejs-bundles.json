@@ -1,0 +1,295 @@
+{
+  "date": "2026-09-20T03:17:00.352Z",
+  "node": "v24.19.0",
+  "kind": "Static exported script/chunk bytes; not measured requests, latency, frames or GPU cost. Dynamic chunks may be shared between scenes.",
+  "routes": {
+    "/": {
+      "files": [
+        {
+          "path": "/_next/static/chunks/b8e57857-aaead1350787806a.js",
+          "bytes": 173023,
+          "gzipBytes": 54363,
+          "brotliBytes": 46680
+        },
+        {
+          "path": "/_next/static/chunks/205-09e882ce6c42a0e0.js",
+          "bytes": 174409,
+          "gzipBytes": 46709,
+          "brotliBytes": 38248
+        },
+        {
+          "path": "/_next/static/chunks/main-app-18bfd37e473150ce.js",
+          "bytes": 571,
+          "gzipBytes": 232,
+          "brotliBytes": 209
+        },
+        {
+          "path": "/_next/static/chunks/04763798-be0b42d751d4d60f.js",
+          "bytes": 51545,
+          "gzipBytes": 19784,
+          "brotliBytes": 18027
+        },
+        {
+          "path": "/_next/static/chunks/111-39150fba5bd9987c.js",
+          "bytes": 336914,
+          "gzipBytes": 95021,
+          "brotliBytes": 75681
+        },
+        {
+          "path": "/_next/static/chunks/775-f2d3d6ca9a7302da.js",
+          "bytes": 23755,
+          "gzipBytes": 7543,
+          "brotliBytes": 6518
+        },
+        {
+          "path": "/_next/static/chunks/app/page-e539e11187539ffb.js",
+          "bytes": 206719,
+          "gzipBytes": 61578,
+          "brotliBytes": 50381
+        },
+        {
+          "path": "/_next/static/chunks/polyfills-42372ed130431b0a.js",
+          "bytes": 112594,
+          "gzipBytes": 39627,
+          "brotliBytes": 35158
+        },
+        {
+          "path": "/_next/static/chunks/webpack-2b9aee275d82b3c5.js",
+          "bytes": 3853,
+          "gzipBytes": 2041,
+          "brotliBytes": 1784
+        }
+      ],
+      "gzipBytes": 326898
+    },
+    "/scene-preview.html": {
+      "files": [
+        {
+          "path": "/_next/static/chunks/b8e57857-aaead1350787806a.js",
+          "bytes": 173023,
+          "gzipBytes": 54363,
+          "brotliBytes": 46680
+        },
+        {
+          "path": "/_next/static/chunks/205-09e882ce6c42a0e0.js",
+          "bytes": 174409,
+          "gzipBytes": 46709,
+          "brotliBytes": 38248
+        },
+        {
+          "path": "/_next/static/chunks/main-app-18bfd37e473150ce.js",
+          "bytes": 571,
+          "gzipBytes": 232,
+          "brotliBytes": 209
+        },
+        {
+          "path": "/_next/static/chunks/775-f2d3d6ca9a7302da.js",
+          "bytes": 23755,
+          "gzipBytes": 7543,
+          "brotliBytes": 6518
+        },
+        {
+          "path": "/_next/static/chunks/app/scene-preview/page-403e2369fa3882f7.js",
+          "bytes": 10071,
+          "gzipBytes": 3960,
+          "brotliBytes": 3380
+        },
+        {
+          "path": "/_next/static/chunks/polyfills-42372ed130431b0a.js",
+          "bytes": 112594,
+          "gzipBytes": 39627,
+          "brotliBytes": 35158
+        },
+        {
+          "path": "/_next/static/chunks/webpack-2b9aee275d82b3c5.js",
+          "bytes": 3853,
+          "gzipBytes": 2041,
+          "brotliBytes": 1784
+        }
+      ],
+      "gzipBytes": 154475
+    }
+  },
+  "chunks": [
+    {
+      "path": "/_next/static/chunks/210f6791.1fcdd1c72b51200b.js",
+      "bytes": 933105,
+      "gzipBytes": 255689,
+      "brotliBytes": 199879
+    },
+    {
+      "path": "/_next/static/chunks/303.6a3470b715d9a15a.js",
+      "bytes": 520258,
+      "gzipBytes": 134532,
+      "brotliBytes": 107189
+    },
+    {
+      "path": "/_next/static/chunks/3903c171.f9105ad5e2bab578.js",
+      "bytes": 386928,
+      "gzipBytes": 101860,
+      "brotliBytes": 81744
+    },
+    {
+      "path": "/_next/static/chunks/111-39150fba5bd9987c.js",
+      "bytes": 336914,
+      "gzipBytes": 95021,
+      "brotliBytes": 75681
+    },
+    {
+      "path": "/_next/static/chunks/1a821a86.88c6bb0046ae43d2.js",
+      "bytes": 368291,
+      "gzipBytes": 88671,
+      "brotliBytes": 73854
+    },
+    {
+      "path": "/_next/static/chunks/app/page-e539e11187539ffb.js",
+      "bytes": 206719,
+      "gzipBytes": 61578,
+      "brotliBytes": 50381
+    },
+    {
+      "path": "/_next/static/chunks/framework-9937d2b921dcb2f2.js",
+      "bytes": 189786,
+      "gzipBytes": 59657,
+      "brotliBytes": 50908
+    },
+    {
+      "path": "/_next/static/chunks/b8e57857-aaead1350787806a.js",
+      "bytes": 173023,
+      "gzipBytes": 54363,
+      "brotliBytes": 46680
+    },
+    {
+      "path": "/_next/static/chunks/92bea3f0.452f1cf0851a6ab6.js",
+      "bytes": 186583,
+      "gzipBytes": 52475,
+      "brotliBytes": 45673
+    },
+    {
+      "path": "/_next/static/chunks/205-09e882ce6c42a0e0.js",
+      "bytes": 174409,
+      "gzipBytes": 46709,
+      "brotliBytes": 38248
+    },
+    {
+      "path": "/_next/static/chunks/06d7d1b6.703daf9579bf7d85.js",
+      "bytes": 148062,
+      "gzipBytes": 46439,
+      "brotliBytes": 40844
+    },
+    {
+      "path": "/_next/static/chunks/polyfills-42372ed130431b0a.js",
+      "bytes": 112594,
+      "gzipBytes": 39627,
+      "brotliBytes": 35158
+    },
+    {
+      "path": "/_next/static/chunks/main-5f0a5163e7af40ee.js",
+      "bytes": 128601,
+      "gzipBytes": 37307,
+      "brotliBytes": 31727
+    },
+    {
+      "path": "/_next/static/chunks/04763798-be0b42d751d4d60f.js",
+      "bytes": 51545,
+      "gzipBytes": 19784,
+      "brotliBytes": 18027
+    },
+    {
+      "path": "/_next/static/chunks/27.5340ff8be331a94d.js",
+      "bytes": 44937,
+      "gzipBytes": 13314,
+      "brotliBytes": 11941
+    },
+    {
+      "path": "/_next/static/chunks/775-f2d3d6ca9a7302da.js",
+      "bytes": 23755,
+      "gzipBytes": 7543,
+      "brotliBytes": 6518
+    },
+    {
+      "path": "/_next/static/chunks/115.462d8d46f75e47f6.js",
+      "bytes": 18245,
+      "gzipBytes": 5586,
+      "brotliBytes": 5022
+    },
+    {
+      "path": "/_next/static/chunks/468.50eb645cd7cc979c.js",
+      "bytes": 13225,
+      "gzipBytes": 5167,
+      "brotliBytes": 4637
+    },
+    {
+      "path": "/_next/static/chunks/app/mascot-preview/page-7bd0107c6238c043.js",
+      "bytes": 12183,
+      "gzipBytes": 5076,
+      "brotliBytes": 4465
+    },
+    {
+      "path": "/_next/static/chunks/551.e1caed3e3837479d.js",
+      "bytes": 11066,
+      "gzipBytes": 4825,
+      "brotliBytes": 4100
+    },
+    {
+      "path": "/_next/static/chunks/533.3af8a0a7dc0f9d86.js",
+      "bytes": 10559,
+      "gzipBytes": 4766,
+      "brotliBytes": 4074
+    },
+    {
+      "path": "/_next/static/chunks/353.31dcaf7cf636b4aa.js",
+      "bytes": 15503,
+      "gzipBytes": 4727,
+      "brotliBytes": 4287
+    },
+    {
+      "path": "/_next/static/chunks/app/scene-preview/page-403e2369fa3882f7.js",
+      "bytes": 10071,
+      "gzipBytes": 3960,
+      "brotliBytes": 3380
+    },
+    {
+      "path": "/_next/static/chunks/webpack-2b9aee275d82b3c5.js",
+      "bytes": 3853,
+      "gzipBytes": 2041,
+      "brotliBytes": 1784
+    },
+    {
+      "path": "/_next/static/chunks/266.4814e4c94b536663.js",
+      "bytes": 2683,
+      "gzipBytes": 1323,
+      "brotliBytes": 1150
+    },
+    {
+      "path": "/_next/static/chunks/app/_not-found/page-9e2693fb7812c8d2.js",
+      "bytes": 2678,
+      "gzipBytes": 996,
+      "brotliBytes": 836
+    },
+    {
+      "path": "/_next/static/chunks/app/layout-7e9961475c6d1487.js",
+      "bytes": 385,
+      "gzipBytes": 268,
+      "brotliBytes": 225
+    },
+    {
+      "path": "/_next/static/chunks/main-app-18bfd37e473150ce.js",
+      "bytes": 571,
+      "gzipBytes": 232,
+      "brotliBytes": 209
+    },
+    {
+      "path": "/_next/static/chunks/pages/_app-fc80ff5a9bbd59dc.js",
+      "bytes": 239,
+      "gzipBytes": 194,
+      "brotliBytes": 173
+    },
+    {
+      "path": "/_next/static/chunks/pages/_error-78e09feb16fa8e63.js",
+      "bytes": 221,
+      "gzipBytes": 181,
+      "brotliBytes": 165
+    }
+  ]
+}

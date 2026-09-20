@@ -2778,19 +2778,32 @@ function TurnActivity({
   const shouldExpand = active || Boolean(pendingCalls)
     || !['completed', 'waiting_for_user', 'clarification_answered'].includes(phase)
   const [manualExpanded, setManualExpanded] = useState<{ phase: string; expanded: boolean } | null>(null)
-  const attentionPhase = Boolean(pendingCalls) || ['failed', 'cancelled', 'interrupted'].includes(phase) ? phase : null
-  const expanded = attentionPhase && manualExpanded?.phase !== attentionPhase ? true : manualExpanded?.expanded ?? shouldExpand
+  const expanded = manualExpanded?.phase === phase ? manualExpanded.expanded : shouldExpand
   const contentId = useId()
   const summaryRef = useRef<HTMLButtonElement>(null)
   const contentRef = useRef<HTMLDivElement>(null)
+  const previewFocused = useRef(false)
   const duration = !active ? activityDuration(elapsedSeconds) : null
   const reading = readableActivity(presentation.activity)
+  const runningTools = active ? presentation.activity.filter(isRunningTool) : []
+  const entries = reading.groups.flatMap((group) => group.entries).filter((item) => !item.pendingApproval)
+  const latest = entries.at(-1)
+  const liveThoughtId = active && !presentation.requiresAttention && runningTools.length === 0
+    && !presentation.foreground.some((item) => item.kind === 'assistant') && latest?.kind === 'thinking'
+    ? latest.id : null
+  const latestProgress = active && !presentation.foreground.some((item) => item.kind === 'assistant')
+    ? reading.groups.flatMap((group) => group.entries)
+      .findLast((item) => ['commentary', 'progress'].includes(item.kind) && item.text.trim()) : undefined
 
   useEffect(() => {
+    if ((!active || !expanded) && previewFocused.current) {
+      summaryRef.current?.focus({ preventScroll: true })
+      previewFocused.current = false
+    }
     if (!expanded && contentRef.current?.contains(document.activeElement)) {
       summaryRef.current?.focus({ preventScroll: true })
     }
-  }, [expanded])
+  }, [active, expanded])
 
   return (
     <section
@@ -2804,24 +2817,37 @@ function TurnActivity({
         aria-expanded={expanded}
         aria-controls={contentId}
         title={`${activityMeta(presentation)}${duration ? '；耗时包括本轮模型、工具执行及等待' : ''}`}
-        onClick={() => setManualExpanded({ phase: attentionPhase ?? 'normal', expanded: !expanded })}
+        onClick={() => setManualExpanded({ phase, expanded: !expanded })}
       >
-        <span className={`turn-activity-heading ${active ? 'is-live' : ''}`}>
-          {active && <ThinkingOrb />}
-          <strong>{activityTitle(presentation, active)}{duration ? ` · ${duration}` : ''}</strong>
+        <span className={`turn-activity-heading ${active && !presentation.requiresAttention ? 'is-live' : ''}`}>
+          {active && !presentation.requiresAttention && <ThinkingOrb />}
+          <strong>{!active && phase === 'completed' && duration ? `思考了 ${duration}` : activityTitle(presentation, active)}</strong>
         </span>
+        {active && presentation.toolCount > 0 && <span className="turn-activity-count">{presentation.toolCount} 次工具调用</span>}
+        {active && presentation.errorCount > 0 && <span className="turn-activity-errors">{presentation.errorCount} 次失败记录</span>}
         <CaretDown size={15} className={expanded ? 'is-expanded' : ''} aria-hidden="true" />
       </button>
-      <div className="turn-activity-list" id={contentId} ref={contentRef} hidden={!expanded}>
-        {reading.groups.map((group) => group.label ? <details className="activity-tool-group" key={group.id}>
-          <summary><FolderOpen size={16} aria-hidden="true" />{group.label}</summary>
-          {group.entries.map((item) => <TimelineRow key={item.id} item={item} onApproval={onApproval} process />)}
-        </details> : group.entries.filter((item) => !item.pendingApproval).map((item) => (
-          <TimelineRow key={item.id} item={item} onApproval={onApproval} process live={active && isRunningTool(item)} />
-        )))}
+      <span className="sr-only" role="status" aria-live="polite" aria-atomic="true">{active ? activityTitle(presentation, active) : ''}</span>
+      {active && !expanded && (latestProgress || runningTools.length > 0) && <div className="turn-activity-preview" aria-label="当前进展"
+        onFocusCapture={() => { previewFocused.current = true }}
+        onBlurCapture={(event) => {
+          if (event.relatedTarget && !event.currentTarget.contains(event.relatedTarget as Node)) previewFocused.current = false
+        }}>
+        {latestProgress && <p className="turn-progress-preview">{latestProgress.text.replace(/\s+/g, ' ').trim()}</p>}
+        {runningTools.length > 0 && <div className="turn-running-tools">
+          {runningTools.map((item) => <TimelineRow key={item.id} item={item} onApproval={onApproval} process live={!presentation.requiresAttention} />)}
+        </div>}
+      </div>}
+      <div className="turn-activity-list" id={contentId} ref={contentRef} hidden={!expanded}
+        onFocusCapture={() => { previewFocused.current = true }}
+        onBlurCapture={(event) => {
+          if (event.relatedTarget && !event.currentTarget.contains(event.relatedTarget as Node)) previewFocused.current = false
+        }}>
+        {entries.map((item) => <TimelineRow key={item.id} item={item} onApproval={onApproval} process
+          live={active && !presentation.requiresAttention && (isRunningTool(item) || item.id === liveThoughtId)} />)}
         {reading.diagnostics.length > 0 && <details className="process-diagnostics">
-          <summary>原始思考与运行事件 <span>{reading.diagnostics.length}</span></summary>
-          <p className="process-diagnostics-note">按事件顺序展示思考和运行记录。</p>
+          <summary>运行事件 <span>{reading.diagnostics.length}</span></summary>
+          <p className="process-diagnostics-note">上下文、工作对象及后台事件；完整记录可在运行记录中查看。</p>
           {reading.diagnostics.map((item) => <TimelineRow key={item.id} item={item} onApproval={onApproval} />)}
         </details>}
       </div>
@@ -2844,6 +2870,14 @@ function TimelineRow({
   const detailId = useId()
 
   if (item.kind === 'plan') return null
+  if (process && item.kind === 'thinking') {
+    return <article className={`process-thought ${live ? 'is-live' : ''}`}>
+      <div className="process-step-heading"><Sparkle size={16} aria-hidden="true" />
+        <span className={live ? 'process-live-text' : ''}>{live ? '正在思考' : '思考过程'}</span>
+      </div>
+      <div className="process-thought-content"><MarkdownMessage content={item.text} /></div>
+    </article>
+  }
   if (item.kind === 'assistant') {
     return (
       <article className="timeline-assistant">
@@ -2861,7 +2895,7 @@ function TimelineRow({
       && !item.isError
       && !item.pendingApproval
     return (
-      <article className={`web-tool-card ${compact ? 'is-compact' : ''} ${live ? 'is-live' : ''} ${failed ? 'is-error' : ''} ${item.pendingApproval ? 'is-pending' : ''}`}>
+      <article className={`web-tool-card ${compact ? 'is-compact' : ''} ${live ? 'is-live' : ''} ${failed ? 'is-error' : ''} ${item.pendingApproval ? 'is-pending' : ''} ${expanded ? 'is-expanded' : ''}`}>
         <button
           className="tool-summary"
           type="button"
@@ -2874,7 +2908,7 @@ function TimelineRow({
           <span className={`tool-glyph ${live ? 'is-running' : ''}`} aria-hidden="true"><ToolGlyph item={item} /></span>
           <span>
             <span className="tool-title-line">
-              <strong>{process ? toolActivityLabel(item) : String(item.callView?.title ?? item.toolName ?? '')}</strong>
+              <strong className={live ? 'process-live-text' : undefined}>{process ? toolActivityLabel(item) : String(item.callView?.title ?? item.toolName ?? '')}</strong>
               {sourceLabel && !process && <b>{sourceLabel}</b>}
             </span>
             {!process && <small>{String(item.callView?.detail ?? toolTarget(item))}</small>}
@@ -2906,11 +2940,7 @@ function TimelineRow({
     )
   }
   const isProcessText = process && ['progress', 'thinking', 'commentary'].includes(item.kind)
-  const label = timelineNoteLabel(item.kind)
-  if (isProcessText && item.text.length > 500) return <details className="process-long-note">
-    <summary>{label} · {item.text.replace(/\s+/g, ' ').slice(0, 100)}…</summary>
-    <MarkdownMessage content={item.text} />
-  </details>
+  const label = isProcessText ? '' : timelineNoteLabel(item.kind)
   return (
     <article className={`timeline-note is-${item.kind} ${isProcessText ? 'process-text' : ''} ${live ? 'is-live' : ''}`}>
       <div>
