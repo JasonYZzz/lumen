@@ -80,6 +80,36 @@ def test_reduction_preserves_tool_pairing(tmp_path: Path) -> None:
     assert validate_active_history(result.messages) == []
 
 
+def test_receipt_advertises_search_artifacts(tmp_path: Path) -> None:
+    """The receipt points the model at full-text search over spilled bodies."""
+
+    store = _store(tmp_path)
+    history = _history_with_big_output()
+    result = reduce_tool_outputs(history, store, keep_recent_full=0)
+    return_part = next(
+        p
+        for m in result.messages
+        if isinstance(m, ModelRequest)
+        for p in m.parts
+        if isinstance(p, ToolReturnPart)
+    )
+    text = str(return_part.content)
+    assert f"artifact: {result.receipts[0].artifact_ref}" in text
+    assert "search: search_artifacts(query=...) 可检索全部已转存输出的完整正文" in text
+
+
+def test_spilled_body_is_searchable_via_index(tmp_path: Path) -> None:
+    """store() hooks the spilled body into the FTS index on the same root."""
+
+    store = _store(tmp_path)
+    history = _history_with_big_output(body="alpha " * 100 + "MIDDLE_SPILL_NEEDLE" + " omega " * 100)
+    result = reduce_tool_outputs(history, store, keep_recent_full=0)
+    ref = result.receipts[0].artifact_ref
+    assert ref is not None
+    hits = store.search_index.search("MIDDLE_SPILL_NEEDLE")
+    assert [hit.ref for hit in hits] == [ref]
+
+
 def test_structured_dict_output_receipts_as_json_success(tmp_path: Path) -> None:
     """Canonical dict outputs render as JSON and keep the success status.
 

@@ -38,6 +38,7 @@ from lumen.context import (
     SessionContextState,
     TranscriptCursor,
 )
+from lumen.context.artifact_index import ArtifactSearchIndex
 from lumen.events import RunStarted, TextDelta, TimelineEventRecord
 from lumen.live import LiveConnectionState, LiveSessionRef, LiveSessionState
 from lumen.plan import PlanState, PlanStep, StepStatus
@@ -786,6 +787,95 @@ def test_session_restores_latest_compacted_active_history(tmp_path: Path) -> Non
     assert loaded.plan == plan
     assert loaded.history == record.active_history + new_messages
     assert loaded.full_history == old_messages + new_messages
+
+
+def _append_compacted_turn(
+    repository: SessionRepository,
+    session_id: str,
+    *,
+    user_input: str,
+    checkpoint_id: str,
+    goals: list[str],
+) -> None:
+    summary = ContextSummary(goals=goals)
+    checkpoint = CompactionCheckpointV1(
+        checkpoint_id=checkpoint_id,
+        source_start=0,
+        source_end=1,
+        source_digest=f"sha256:{checkpoint_id}",
+        created_at=datetime.now(UTC),
+    )
+    record = CompactionRecord(
+        summary,
+        [ModelRequest(parts=[SystemPromptPart(content=f"Summary {checkpoint_id}")])],
+        1,
+        {},
+        checkpoint,
+    )
+    repository.append_turn(
+        session_id,
+        user_input=user_input,
+        messages=[ModelResponse(parts=[TextPart(content=f"{checkpoint_id} done")])],
+        approvals=[],
+        usage={},
+        status="completed",
+        compaction=record,
+    )
+
+
+def test_checkpoint_episode_retrieval_uses_fts_when_indexed(tmp_path: Path) -> None:
+    repository = SessionRepository(
+        tmp_path / "sessions",
+        search_index=ArtifactSearchIndex(tmp_path / "index"),
+    )
+    session = repository.create(agent_name="test", model_id="test")
+    _append_compacted_turn(
+        repository,
+        session.id,
+        user_input="set up the database",
+        checkpoint_id="cp-one",
+        goals=["migrate the configuration database"],
+    )
+    _append_compacted_turn(
+        repository,
+        session.id,
+        user_input="bake bread",
+        checkpoint_id="cp-two",
+        goals=["bakery hydration ratios"],
+    )
+
+    # Porter stemming recalls what the lexical term scorer cannot: "configured"
+    # is not a substring of the episode body but stems to "configuration".
+    episodes = repository.retrieve_checkpoint_episodes(session.id, "configured")
+    assert [episode["uri"] for episode in episodes] == ["cp-one"]
+    # The latest rolling checkpoint stays excluded on the FTS path too.
+    assert repository.retrieve_checkpoint_episodes(session.id, "hydration") == ()
+
+
+def test_checkpoint_episode_retrieval_without_index_keeps_lexical_behavior(tmp_path: Path) -> None:
+    repository = SessionRepository(tmp_path / "sessions")
+    session = repository.create(agent_name="test", model_id="test")
+    _append_compacted_turn(
+        repository,
+        session.id,
+        user_input="set up the database",
+        checkpoint_id="cp-one",
+        goals=["migrate the configuration database"],
+    )
+    _append_compacted_turn(
+        repository,
+        session.id,
+        user_input="bake bread",
+        checkpoint_id="cp-two",
+        goals=["bakery hydration ratios"],
+    )
+
+    episodes = repository.retrieve_checkpoint_episodes(session.id, "configuration")
+    assert [episode["uri"] for episode in episodes] == ["cp-one"]
+    # An inflected form the lexical scorer cannot see stays missed, exactly as
+    # before the index existed.
+    assert repository.retrieve_checkpoint_episodes(session.id, "configured") == ()
+
 
 
 def test_corrupt_v2_checkpoint_falls_back_to_raw_transcript(tmp_path: Path) -> None:

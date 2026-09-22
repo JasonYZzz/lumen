@@ -26,6 +26,8 @@ import tempfile
 from pathlib import Path
 from typing import Literal
 
+from lumen.context.artifact_index import ArtifactSearchIndex
+
 #: Outputs at or above this many bytes are spilled to an artifact instead of
 #: inlined in the receipt (plan §9.3 threshold). Tunable via the store.
 DEFAULT_INLINE_THRESHOLD_BYTES = 4_096
@@ -66,6 +68,20 @@ class ArtifactStore:
         # 0700 dir; created lazily so a store for a session that never artifacts
         # touches nothing on disk.
         self._holds: dict[str, set[str]] = {}
+        self._search_index: ArtifactSearchIndex | None = None
+
+    @property
+    def search_index(self) -> ArtifactSearchIndex:
+        """FTS5 index over this store's root (derived cache, lazily built).
+
+        The index is a pure function of the root, so every store instance
+        sharing the root (engine, host, child agents) opens its own connection
+        to the same database file; WAL keeps concurrent readers/writers safe.
+        """
+
+        if self._search_index is None:
+            self._search_index = ArtifactSearchIndex(self.root)
+        return self._search_index
 
     # -- storage ----------------------------------------------------------
 
@@ -96,6 +112,12 @@ class ArtifactStore:
                 except OSError:
                     pass
                 raise
+        try:
+            self.search_index.index_artifact(ref, body)
+        except Exception:
+            # Indexing is best-effort: a spill must never fail because the
+            # derived search cache did (degrades to read-only, not lost).
+            pass
         return ref
 
     def read(self, ref: str) -> bytes | None:
@@ -149,6 +171,10 @@ class ArtifactStore:
         path = self._artifact_path(ref)
         if path.is_file():
             path.unlink()
+            try:
+                self.search_index.remove_refs((ref,))
+            except Exception:
+                pass
             return True
         return False
 
@@ -172,6 +198,12 @@ class ArtifactStore:
             if ref not in live_refs:
                 resolved.unlink()
                 removed.append(ref)
+        try:
+            if removed:
+                self.search_index.remove_refs(removed)
+            self.search_index.purge_orphans()
+        except Exception:
+            pass
         return tuple(sorted(removed))
 
     def spill(self, content: bytes | str, *, artifact_policy: ArtifactPolicy = "auto") -> str | None:

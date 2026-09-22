@@ -49,6 +49,19 @@ def test_child_snapshot_excludes_host_owned_git_mutations(tmp_path: Path) -> Non
     assert snapshot.tool_names == ("git_diff", "git_status")
 
 
+@pytest.mark.parametrize("role", ["explorer", "worker"])
+def test_child_snapshot_inherits_artifact_tools(tmp_path: Path, role: str) -> None:
+    """Both read-only (OBSERVE filter) and writable (portable set) children get
+    the artifact read-back/search tools, which are workspace-independent."""
+    resources = manager(tmp_path)
+    factory = resources.agent_runtime_factory
+
+    snapshot = factory.snapshot(resources.agent_profiles[role], approval_mode="manual")
+
+    assert "read_artifact" in snapshot.tool_names
+    assert "search_artifacts" in snapshot.tool_names
+
+
 @pytest.mark.parametrize("status", [
     AgentStatus.FAILED, AgentStatus.WAITING, AgentStatus.RECONCILIATION_REQUIRED,
 ])

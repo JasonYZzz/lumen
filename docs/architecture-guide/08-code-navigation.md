@@ -15,6 +15,7 @@
 | MCP 工具未出现 | `runtime.py`（`_lumen_tool_schemas` / `search_tools`） | `resources.py`、`mcp_tools.py`、`config.py` |
 | MCP 断线/调用报错中断 run | `mcp_tools.py`（`ResilientMcpToolset`） | `resources.py`、`agent_loop/loop.py`、`tools/gateway.py` |
 | 历史 receipt 细节丢失 | `resources.py`（`read_artifact`） | `context/artifacts.py`、`context/transcript.py` |
+| 转存输出中段内容找不到 | `resources.py`（`search_artifacts`） | `context/artifact_index.py`、`context/artifacts.py` |
 | Skill 未加载/脚本被拒绝 | `skills.py` | `resources.py`、Skill `SKILL.md` |
 | Web 断线后漏事件 | `application/events.py` | `api/app.py`、Web reducer |
 | `/context` 与实际 provider 请求不一致 | `run_diagnostics.py`、`agent_loop/loop.py`（request manifest） | `context/types.py`、`run_coordinator.py`、`sessions.py` |

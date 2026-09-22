@@ -164,6 +164,7 @@ def _render_receipt(receipt: ToolReceipt, *, redacted: bool) -> str:
         lines.append("content: <redacted: artifact_policy=never>")
     elif receipt.artifact_ref is not None:
         lines.append(f"artifact: {receipt.artifact_ref}")
+        lines.append("search: search_artifacts(query=...) 可检索全部已转存输出的完整正文")
         if receipt.head:
             lines.append(f"head: {receipt.head}")
         if receipt.tail:

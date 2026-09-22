@@ -24,6 +24,8 @@ flowchart LR
 
 `ToolSpec` 描述 callable、名称、说明、`Risk`、`EffectKind`、超时、`ToolOutputSpec` 和显式 concurrency policy。`ToolOutputSpec` 先把返回值验证为 canonical JSON value，再分别派生模型文本与客户端 presentation；host-only renderer 不进入 provider 输入 schema。默认 concurrency 是 `exclusive`，`EffectKind.OBSERVE` 不再自动证明线程安全。`ToolRegistry` 负责名称唯一性和来源；`PermissionPolicy` 将工具转成 allow / confirm / deny。`Risk` 只回答是否审批，`EffectKind` 回答状态追踪与验证要求，二者不能合并。
 
+无条件注册的 `read_artifact`/`search_artifacts`（risk=READ，origin `builtin:artifacts`）构成 receipt 闭环的模型入口：前者按 ref 分页读回已转存正文，后者经 artifact root 下的 FTS5 派生索引全文检索并返回可续读的 `char_start`。索引与 artifact 同密级同权限（目录 0700、文件 0600），`artifact_policy="never"` 的输出不进索引。
+
 `CapabilityGateway` 是本地与 MCP 工具的唯一执行权威。本地 callable 的 pre Hook 参数先经过 Pydantic schema validation/coercion，形成唯一冻结 invocation；审批、并发分类、幂等 key、恢复签名、只读 `ToolGuard`、presentation 和实际调用都消费同一参数事实。Guard 只有 abstain/deny；任一 deny 都是单调的，无法被后续 Hook 或 Adapter 放宽。legacy `ToolSpec(function=...)` 仍通过构造兼容 Adapter 工作，待所有 builtin/MCP 完成显式输出迁移后删除。
 
 `agent.limits.parallel_tool_calls: sequential` 禁止调用重叠。当前原生 Loop 对 `parallel_safe` 和

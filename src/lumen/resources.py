@@ -31,6 +31,7 @@ from lumen.config import AgentSection, AppConfig, ModelSettingsConfig
 from lumen.config_resolver import ConfigScope
 from lumen.configuration import WorkspaceConfiguration
 from lumen.context import ArtifactStore, ArtifactStoreError, ContextEngine
+from lumen.context.artifact_index import ArtifactSearchResult
 from lumen.context.instructions import PromptProfile, build_prompt_profile
 from lumen.context.memory import (
     ExtractionProvenance,
@@ -80,7 +81,7 @@ from lumen.tools.registry import (
     ToolRegistry,
     load_plugin_specs,
 )
-from lumen.tools.spec import EffectKind, Risk, ToolSpec
+from lumen.tools.spec import EffectKind, Risk, ToolConcurrency, ToolOutputSpec, ToolSpec
 from lumen.tools.web import build_download_file_spec, build_web_fetch_spec, build_web_search_spec
 from lumen.tools.web.browser import close_browser
 from lumen.tools.workspace import WorkspaceViolation
@@ -184,7 +185,12 @@ class ResourceManager:
         # public interface.
         self._artifact_store = ArtifactStore(Path.home() / ".lumen" / "artifacts")
         self.artifact_store = self._artifact_store
-        self.session_repository = SessionRepository(config.sessions.directory)
+        # The journal stays authoritative; the shared FTS5 index (living under
+        # the artifact root) is a derived cache both sides read through.
+        self.session_repository = SessionRepository(
+            config.sessions.directory,
+            search_index=self._artifact_store.search_index,
+        )
         self.task_workspace = TaskWorkspace(
             self.workspace,
             self._artifact_store,
@@ -314,6 +320,24 @@ class ResourceManager:
                     "不足以判断时使用。大型正文可用 start/max_chars 分页读取。"
                 ),
                 risk=Risk.READ,
+            ),
+            origin="builtin:artifacts",
+        )
+        self.registry.add(
+            ToolSpec(
+                self._search_artifacts,
+                name="search_artifacts",
+                description=(
+                    "按关键词全文检索所有已转存工具输出 (receipt 中 artifact: sha256:... 的完整正文)。"
+                    "当 receipt 的 summary 与 head/tail 不足以回答、或需要在大型输出的中段"
+                    "查找报错、标识符、配置项等具体内容时使用。支持英文词干 (configured 命中 "
+                    "configuration)、代码标识符子串 (useEff 命中 useEffect) 与 CJK 子串。"
+                    "返回命中的 ref、char_start 与上下文片段; 随后用 "
+                    "read_artifact(ref, start=char_start) 从命中位置续读正文。"
+                ),
+                risk=Risk.READ,
+                concurrency=lambda _args: ToolConcurrency.PARALLEL_SAFE,
+                output=ToolOutputSpec(ArtifactSearchResult),
             ),
             origin="builtin:artifacts",
         )
@@ -864,6 +888,26 @@ class ResourceManager:
         text = body.decode("utf-8", errors="replace")
         end = min(start + max_chars, len(text))
         return f"[artifact {ref} chars={len(text)} range={start}-{end}]\n{text[start:end]}"
+
+    def _search_artifacts(self, query: str, max_results: int = 5) -> ArtifactSearchResult:
+        """Model tool implementation full-text searching every spilled body.
+
+        Receipts keep only head/tail excerpts; the shared FTS5 index (porter
+        stems plus trigram substrings) searches the decoded bodies and returns
+        hits whose ``char_start`` doubles as a ``read_artifact(ref,
+        start=...)`` resume position. Out-of-range ``max_results`` raises
+        ``ValueError``, classified recoverable like ``read_artifact``'s.
+        """
+
+        if not 1 <= max_results <= 20:
+            raise ValueError(f"max_results must be between 1 and 20, got {max_results}")
+        hits = self._artifact_store.search_index.search(query, limit=max_results)
+        hint = (
+            "用 read_artifact(ref, start=char_start) 从命中位置续读完整正文。"
+            if hits
+            else "未命中。可换用更短的关键词、英文词干或标识符子串 (如 useEff), 或减少关键词数量。"
+        )
+        return ArtifactSearchResult(query=query, hits=hits, hint=hint)
 
     def _read_model_skill_resource(self, name: str, path: str) -> str:
         """Read one text resource, confined to a model-invocable skill root.

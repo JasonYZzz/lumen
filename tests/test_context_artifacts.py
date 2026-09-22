@@ -91,3 +91,43 @@ def test_release_unknown_hold_is_noop(tmp_path: Path) -> None:
     # Never added -> no-op, artifact remains.
     assert store.release_hold(ref, "never-added") is False
     assert store.read(ref) is not None
+
+
+# --------------------------------------------------------------------------- #
+# Search index linkage (derived cache on the same root)
+# --------------------------------------------------------------------------- #
+
+
+def test_store_indexes_body_and_sweep_removes_it(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    ref = store.store(b"indexable spilled build log body")
+    assert store.search_index.search("indexable") != []
+    assert store.mark_and_sweep(set()) == (ref,)
+    assert store.search_index.search("indexable") == []
+
+
+def test_sweep_preserves_the_index_file(tmp_path: Path) -> None:
+    """mark_and_sweep only deletes 64-hex blobs; search.sqlite3 is exempt."""
+
+    store = _store(tmp_path)
+    ref = store.store(b"kept body survives the sweep")
+    removed = store.mark_and_sweep({ref})
+    assert removed == ()
+    assert (tmp_path / "artifacts" / "search.sqlite3").is_file()
+    assert store.search_index.search("kept body") != []
+
+
+def test_index_is_a_derived_cache_rebuilt_on_store(tmp_path: Path) -> None:
+    """Deleting search.sqlite3 degrades search; the next store() re-indexes."""
+
+    store = _store(tmp_path)
+    ref = store.store(b"reindex me after deletion")
+    index_file = tmp_path / "artifacts" / "search.sqlite3"
+    assert index_file.is_file()
+    index_file.unlink()
+
+    # A fresh store on the same root sees no index and creates nothing on read.
+    fresh = _store(tmp_path)
+    assert fresh.search_index.search("reindex") == []
+    assert fresh.store(b"reindex me after deletion") == ref
+    assert fresh.search_index.search("reindex") != []

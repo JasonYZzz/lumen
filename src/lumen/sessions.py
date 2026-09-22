@@ -4,6 +4,7 @@ import hashlib
 import json
 import os
 import re
+import sqlite3
 from collections.abc import Sequence
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
@@ -26,6 +27,7 @@ from lumen.agents.types import (
 )
 from lumen.attachments import AttachmentRef
 from lumen.collaboration import PlanReviewStatus, SessionSettingsState
+from lumen.context.artifact_index import ArtifactSearchIndex
 from lumen.context.legacy import validate_active_history
 from lumen.context.session_state import SessionContextState
 from lumen.context.types import ProviderRequestReceipt
@@ -168,10 +170,18 @@ def recoverable_orphaned_input(session: SessionData) -> str | None:
 
 
 class SessionRepository:
-    def __init__(self, directory: str | Path) -> None:
+    def __init__(
+        self,
+        directory: str | Path,
+        *,
+        search_index: ArtifactSearchIndex | None = None,
+    ) -> None:
         self.directory = Path(directory).expanduser().resolve()
         self.directory.mkdir(parents=True, exist_ok=True)
         self._projection_cache: dict[Path, tuple[str, SessionData]] = {}
+        # Derived FTS5 cache for checkpoint-episode retrieval; the journal
+        # stays the only authority. None keeps the lexical scoring path.
+        self._search_index = search_index
 
     def clear_projection_cache(self) -> None:
         """Delete the optional read model; canonical JSONL remains untouched."""
@@ -706,8 +716,13 @@ class SessionRepository:
             full_history.extend(turn.messages)
         # Latest rolling state is injected through HISTORY_SUMMARY; only older
         # validated checkpoints are eligible as immutable episodes.
+        eligible = episodes[:-1]
+        fts_ranked = self._episode_fts_order(session_id, query, episodes, limit=limit)
+        if fts_ranked is not None:
+            by_uri = {document["uri"]: document for _ordinal, document in eligible}
+            return tuple(by_uri[uri] for uri in fts_ranked if uri in by_uri)[:limit]
         candidates: list[tuple[int, int, dict[str, str]]] = []
-        for ordinal, document in episodes[:-1]:
+        for ordinal, document in eligible:
             lower = document["body"].lower()
             score = sum(1 for term in terms if term in lower)
             if score:
@@ -720,6 +735,33 @@ class SessionRepository:
                 )
         candidates.sort(key=lambda item: (item[0], item[1]), reverse=True)
         return tuple(item[2] for item in candidates[:limit])
+
+    def _episode_fts_order(
+        self,
+        session_id: str,
+        query: str,
+        episodes: list[tuple[int, dict[str, str]]],
+        *,
+        limit: int,
+    ) -> list[str] | None:
+        """FTS ranking over validated episodes; ``None`` means lexical fallback.
+
+        Episodes are re-validated from the JSONL journal on every call and
+        merely upserted into the derived index (idempotent per
+        ``(session_id, checkpoint_id)``); the ranking maps back to the
+        in-memory validated documents, so a stale or missing index can never
+        resurrect dropped checkpoints.
+        """
+
+        index = self._search_index
+        if index is None or not episodes:
+            return None
+        try:
+            for ordinal, document in episodes:
+                index.upsert_episode(session_id, document["uri"], ordinal, document["body"])
+        except (OSError, sqlite3.OperationalError):
+            return None
+        return index.search_episodes(session_id, query, limit=limit)
 
     @staticmethod
     def _dump_compaction(compaction: Any) -> dict[str, Any]:

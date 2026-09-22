@@ -87,9 +87,11 @@ flowchart LR
 
 较大的旧工具结果先变为 receipt：摘要、head/tail、字节数、digest 与 artifact ref 留在历史，正文写入 0600 内容寻址 artifact。随后才进行压缩，避免一个构建日志吞掉摘要预算。
 
-receipt 不是信息终点：正文仍在 artifact store 中，receipt 文本带有 `retrieve: read_artifact(ref="...")` 提示。模型在追问需要 head/tail 之外的细节时，可调用 `read_artifact(ref, start, max_chars)` 分页读回全文（risk=READ，无需审批；非法 ref 与已不存在/已 redact 的正文返回可恢复错误）。`artifact_policy="never"` 的涉密输出永不落盘，其 receipt 只有 redacted 标记，无法回读。
+receipt 不是信息终点：正文仍在 artifact store 中，receipt 文本带有 `artifact:` ref 与 `search:` 提示行。模型在追问需要 head/tail 之外的细节时，可调用 `read_artifact(ref, start, max_chars)` 分页读回全文（risk=READ，无需审批；非法 ref 与已不存在/已 redact 的正文返回可恢复错误）。`artifact_policy="never"` 的涉密输出永不落盘，其 receipt 只有 redacted 标记，无法回读。
 
-当前压缩不是“把每次摘要继续堆成一棵摘要树”。模型侧始终只注入一份最新 rolling state；旧 checkpoint 是不可变 episode archive，只在当前 prompt 与旧状态有词项重合时，以 `untrusted_external` 检索文档按需进入 `RETRIEVED_CONTEXT`。
+检索不止于已知 ref：`ArtifactStore.store()` 把解码正文同步进 artifact root 下的 `search.sqlite3` FTS5 索引（porter 词干 + trigram 子串双 tokenizer 表，~8000 字符分块、200 字符重叠，bm25 候选经 RRF 融合；SQLite < 3.34 无 trigram 时运行时探测降级为仅 porter，召回变弱但不报错）。无条件注册的 `search_artifacts(query, max_results)`（risk=READ，origin `builtin:artifacts`）让模型在全部已转存输出的中段按关键词检索（`configured` 命中 `configuration`，`useEff` 命中 `useEffect`，含 CJK 子串），命中项的 `char_start` 直接作为 `read_artifact(ref, start=...)` 的续读位置。索引是纯派生缓存：`release_hold`/`mark_and_sweep` 同步清行并 `purge_orphans` 对账，单 artifact 最多索引前 64 MB（超出截断并在命中中标记），删除 `search.sqlite3` 只退化为不可检索，下一次 `store()` 会重建对应条目。`artifact_policy="never"` 的输出不落盘，自然不进索引。
+
+当前压缩不是“把每次摘要继续堆成一棵摘要树”。模型侧始终只注入一份最新 rolling state；旧 checkpoint 是不可变 episode archive，只在当前 prompt 检索命中旧状态时（复用同一 FTS5 索引做排序，索引缺失或失败时回退词项重合打分），以 `untrusted_external` 检索文档按需进入 `RETRIEVED_CONTEXT`。
 
 一次成功压缩按下列规则执行：
 

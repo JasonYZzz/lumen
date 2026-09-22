@@ -165,7 +165,7 @@ class NativeAgentRuntimeFactory(AgentRuntimeFactory):
             candidates = {
                 name
                 for name in candidates
-                if name in set(self.enabled_builtins) | {"read_artifact"}
+                if name in set(self.enabled_builtins) | {"read_artifact", "search_artifacts"}
                 or metadata.get(name, {}).get("origin", "").startswith("mcp:")
             }
         request_limits = [v for v in (self.config.request_count, self.limits.request_count) if v is not None]
@@ -748,9 +748,10 @@ class NativeAgentRuntimeFactory(AgentRuntimeFactory):
             }
             for name, entry in registry.entries.items()
         }
-        # Artifact reading and web access are workspace-independent, so preserve
-        # the parent's already-configured tool implementations when selected.
-        portable_tools = {"read_artifact", "web_fetch", "web_search"}
+        # Artifact reading/searching and web access are workspace-independent,
+        # so preserve the parent's already-configured tool implementations when
+        # selected.
+        portable_tools = {"read_artifact", "search_artifacts", "web_fetch", "web_search"}
         tools.extend(
             tool for tool in self.parent_tools() if tool.name in portable_tools and tool.name in allowed
         )
