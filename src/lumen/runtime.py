@@ -883,7 +883,7 @@ class AgentRuntime:
         )
         return "\n".join(value for value in (base, instruction) if value)
 
-    def _freeze_lumen_request(
+    async def _freeze_lumen_request(
         self,
         *,
         context_engine: ContextEngine | None,
@@ -1014,7 +1014,10 @@ class AgentRuntime:
                 settings=settings,
             )
 
-        adapted, snapshot = context_engine.adapt_request_history(
+        from lumen.io import run_io
+
+        adapted, snapshot = await run_io(
+            context_engine.adapt_request_history,
             envelope,
             messages,
             instructions=instructions,
@@ -1118,6 +1121,7 @@ class AgentRuntime:
         recovery_receipts: Sequence[Mapping[str, object]] = (),
         completion_policy: CompletionPolicy | None = None,
         attachments: Sequence[AttachmentRef] = (),
+        batch_completed: Callable[[PartialRunOutcome], Awaitable[None]] | None = None,
     ) -> RunOutcome:
         async with self:
             return await self._run(
@@ -1139,6 +1143,7 @@ class AgentRuntime:
                 recovery_receipts=recovery_receipts,
                 completion_policy=completion_policy,
                 attachments=attachments,
+                batch_completed=batch_completed,
             )
 
     async def _run(
@@ -1162,6 +1167,7 @@ class AgentRuntime:
         recovery_receipts: Sequence[Mapping[str, object]] = (),
         completion_policy: CompletionPolicy | None = None,
         attachments: Sequence[AttachmentRef] = (),
+        batch_completed: Callable[[PartialRunOutcome], Awaitable[None]] | None = None,
     ) -> RunOutcome:
         await emit(RunStarted(prompt, tuple(attachments)))
         resolved_session_id = session_id or "default"
@@ -1511,7 +1517,7 @@ class AgentRuntime:
                         emit=emit, force=force_compaction,
                     )
                     messages = self._provider_history(messages)
-                frozen = self._freeze_lumen_request(
+                frozen = await self._freeze_lumen_request(
                     context_engine=context_engine, envelope=envelope, messages=messages,
                     tool_schemas=schemas, route=route, session_id=resolved_session_id,
                     model_step=model_step, receipts=request_receipts,
@@ -1625,6 +1631,8 @@ class AgentRuntime:
                 tool_result_request = ModelRequest(parts=result_parts)
                 native_new_messages.extend((assistant_response, tool_result_request))
                 completed_messages = self._canonical_messages(native_new_messages, delivered_attachments)
+                if batch_completed is not None:
+                    await batch_completed(_build_partial("running", "complete tool batch", retryable=True))
                 if self._clarification_gate.pending is not None:
                     return None
                 interactive_requests = await self._dequeue_native_input(

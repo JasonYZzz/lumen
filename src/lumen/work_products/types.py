@@ -84,6 +84,7 @@ class EffectReceipt(_WorkModel):
     effect_kind: EffectKind
     operation: str
     status: EffectStatus
+    interaction_id: str | None = Field(default=None, min_length=1)
     work_product_id: str | None = None
     resource: str | None = None
     target: TargetCandidate | None = None

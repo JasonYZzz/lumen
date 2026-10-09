@@ -27,6 +27,7 @@ from pathlib import Path
 from typing import Literal
 
 from lumen.context.artifact_index import ArtifactSearchIndex
+from lumen.io import run_io
 
 #: Outputs at or above this many bytes are spilled to an artifact instead of
 #: inlined in the receipt (plan §9.3 threshold). Tunable via the store.
@@ -85,7 +86,7 @@ class ArtifactStore:
 
     # -- storage ----------------------------------------------------------
 
-    def store(self, content: bytes | str) -> str:
+    def store(self, content: bytes | str, *, index: bool = True) -> str:
         """Write ``content`` to the store and return its ``sha256:<hex>`` ref.
 
         Idempotent: a second store of the same content is a no-op. The file is
@@ -98,27 +99,41 @@ class ArtifactStore:
         path = self._artifact_path(ref)
         if not path.exists():
             self.root.mkdir(parents=True, exist_ok=True)
+            os.chmod(self.root, 0o700)
             # Write to a temp file in the same dir, then atomically rename with
             # the correct mode. Avoids a partial artifact visible to readers.
             fd, tmp = tempfile.mkstemp(dir=self.root, prefix=".tmp-")
             try:
                 with os.fdopen(fd, "wb") as handle:
                     handle.write(body)
+                    handle.flush()
+                    os.fsync(handle.fileno())
                 os.chmod(tmp, 0o600)
                 os.replace(tmp, path)
+                if os.name != "nt":
+                    directory = os.open(self.root, os.O_RDONLY | os.O_DIRECTORY)
+                    try:
+                        os.fsync(directory)
+                    finally:
+                        os.close(directory)
             except BaseException:
                 try:
                     os.unlink(tmp)
                 except OSError:
                     pass
                 raise
-        try:
-            self.search_index.index_artifact(ref, body)
-        except Exception:
-            # Indexing is best-effort: a spill must never fail because the
-            # derived search cache did (degrades to read-only, not lost).
-            pass
+        if index:
+            try:
+                self.search_index.index_artifact(ref, body)
+            except Exception:
+                # Indexing is best-effort; canonical blobs stay durable.
+                pass
         return ref
+
+    async def astore(self, content: bytes | str) -> str:
+        """Store and index off the event loop, with a cancellation write barrier."""
+
+        return await run_io(self.store, content)
 
     def read(self, ref: str) -> bytes | None:
         """Return the artifact body for ``ref``, or ``None`` if it is absent."""
@@ -126,7 +141,10 @@ class ArtifactStore:
         path = self._artifact_path(ref)
         if not path.is_file():
             return None
-        return path.read_bytes()
+        body = path.read_bytes()
+        if "sha256:" + hashlib.sha256(body).hexdigest() != ref:
+            raise ArtifactStoreError("artifact content does not match its digest")
+        return body
 
     def _artifact_path(self, ref: str) -> Path:
         """Resolve ``ref`` to a path, refusing traversal out of the store root.

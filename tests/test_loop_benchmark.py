@@ -12,7 +12,7 @@ from lumen.config import ModelSettingsConfig
 from lumen.reasoning import ReasoningLevel
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from scripts.benchmark_agent_loop import BenchmarkTask, summarize_requests, trial
+from scripts.benchmark_agent_loop import BenchmarkTask, file_digests, grade_files, summarize_requests, trial
 
 
 def test_benchmark_counts_retries_without_confusing_global_attempts() -> None:
@@ -51,3 +51,17 @@ async def test_benchmark_exercises_real_host_without_provider_calls(
     assert report["agent_peak_concurrency"] == 0
     assert report["reasoning"]["effective"] == "medium"
     assert "hello" not in str(report)
+
+
+def test_file_grader_rejects_self_reported_success_and_unrelated_hidden_changes(tmp_path: Path) -> None:
+    task = BenchmarkTask(id="edit", prompt="fix", mode="edit", files={"a.txt": "before"},
+                         expected_files={"a.txt": "after"}, allowed_changed_paths=["a.txt"])
+    (tmp_path / "a.txt").write_text("before")
+    before = file_digests(tmp_path)
+    assert grade_files(task, before, before)["file_grade_pass"] is False
+    (tmp_path / "a.txt").write_text("after")
+    assert grade_files(task, before, file_digests(tmp_path))["file_grade_pass"] is True
+    (tmp_path / ".unexpected").write_text("unexpected")
+    report = grade_files(task, before, file_digests(tmp_path))
+    assert report["scope_violations"] == [".unexpected"]
+    assert report["file_grade_pass"] is False

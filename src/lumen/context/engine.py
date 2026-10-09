@@ -83,6 +83,7 @@ from lumen.events import (
     ContextCompactionStarted,
     RunEvent,
 )
+from lumen.io import run_io
 from lumen.plan import PlanState
 
 EventSink = Callable[[RunEvent], Awaitable[None]]
@@ -594,7 +595,9 @@ class ContextEngine:
             keep_recent_full = len(
                 retain_recent_tokens(history_input, self._resolved_policy.keep_recent_tokens)
             )
-            reduced = reduce_tool_outputs(history_input, self._artifacts, keep_recent_full=keep_recent_full)
+            reduced = await run_io(
+                reduce_tool_outputs, history_input, self._artifacts, keep_recent_full=keep_recent_full,
+            )
             history_input = reduced.messages
             receipts = tuple(reduced.receipts)
             for receipt in reduced.receipts:
@@ -953,7 +956,7 @@ class ContextEngine:
         # Reduction is a model projection only. The checkpoint digest below is
         # calculated from raw canonical messages, never from a reduced view.
         if self._artifacts is not None:
-            reduced = reduce_tool_outputs(delta, self._artifacts, keep_recent_full=0)
+            reduced = await run_io(reduce_tool_outputs, delta, self._artifacts, keep_recent_full=0)
             delta = reduced.messages
             for receipt in reduced.receipts:
                 if receipt.artifact_ref is not None:
@@ -973,7 +976,9 @@ class ContextEngine:
             )
             tail_source = list(new_messages)
             if self._artifacts is not None:
-                tail_source = reduce_tool_outputs(tail_source, self._artifacts, keep_recent_full=0).messages
+                tail_source = (await run_io(
+                    reduce_tool_outputs, tail_source, self._artifacts, keep_recent_full=0,
+                )).messages
             transient = [m for m in current if _transient_kind(m) is not None]
             policy = [m for m in transient if _transient_kind(m) == "session-policy-context"]
             data = [m for m in transient if _transient_kind(m) != "session-policy-context"]

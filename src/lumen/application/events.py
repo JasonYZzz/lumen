@@ -1,9 +1,15 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncIterator
-from dataclasses import asdict
+import json
+import tempfile
+from collections import deque
+from collections.abc import AsyncGenerator
+from copy import deepcopy
+from dataclasses import asdict, replace
 from typing import Any, cast
+
+from pydantic_core import to_jsonable_python
 
 from lumen.approval import ApprovalPresenter
 from lumen.events import (
@@ -39,6 +45,7 @@ from lumen.events import (
     UsageUpdated,
     WorkProductChanged,
 )
+from lumen.io import run_io
 from lumen.plan import PlanState
 
 from .models import EventEnvelope
@@ -133,47 +140,108 @@ def event_from_payload(name: str, payload: dict[str, Any]) -> RunEvent:
 class EventJournal:
     """Replayable, connection-independent event stream for one run."""
 
-    def __init__(self, *, session_id: str, run_id: str) -> None:
+    def __init__(self, *, session_id: str, run_id: str, max_bytes: int = 1024 * 1024) -> None:
+        if max_bytes < 1:
+            raise ValueError("event replay memory budget must be positive")
         self.session_id = session_id
         self.run_id = run_id
-        self._events: list[EventEnvelope] = []
+        self._events: deque[tuple[EventEnvelope, int]] = deque()
+        self._max_bytes = max_bytes
+        self.retained_bytes = 0
+        self.subscriber_count = 0
+        self._sequence = 0
+        # The transient replay file is a display projection, never a Session
+        # authority. It is deleted when the Host releases this run.
+        self._replay = tempfile.TemporaryFile(mode="w+b")
         self._closed = False
         self._condition = asyncio.Condition()
 
     @property
     def events(self) -> tuple[EventEnvelope, ...]:
-        return tuple(self._events)
+        return tuple(event for event, _ in self._events)
 
     async def append(self, event: RunEvent) -> EventEnvelope:
         name, data = event_payload(event)
+        cancelled: asyncio.CancelledError | None = None
         async with self._condition:
             envelope = EventEnvelope(
-                sequence=len(self._events) + 1,
+                sequence=self._sequence + 1,
                 session_id=self.session_id,
                 run_id=self.run_id,
                 type=name,
-                data=data,
+                data=cast(dict[str, Any], to_jsonable_python(data)),
             )
-            self._events.append(envelope)
+            encoded = (
+                json.dumps(to_jsonable_python(asdict(envelope)), ensure_ascii=False, separators=(",", ":"))
+                + "\n"
+            ).encode()
+            def write() -> None:
+                self._replay.seek(0, 2)
+                offset = self._replay.tell()
+                try:
+                    self._replay.write(encoded)
+                    self._replay.flush()
+                except BaseException:
+                    self._replay.seek(offset)
+                    self._replay.truncate()
+                    raise
+            try:
+                await run_io(write)
+            except asyncio.CancelledError as error:
+                cancelled = error
+            self._sequence = envelope.sequence
+            self._events.append((envelope, len(encoded)))
+            self.retained_bytes += len(encoded)
+            while self.retained_bytes > self._max_bytes:
+                _, size = self._events.popleft()
+                self.retained_bytes -= size
             self._condition.notify_all()
-            return envelope
+        if cancelled is not None and not isinstance(
+            event, RunCompleted | RunWaitingForUser | RunFailed | RunCancelled,
+        ):
+            raise cancelled
+        return envelope
 
     async def close(self) -> None:
         async with self._condition:
             self._closed = True
             self._condition.notify_all()
 
-    async def subscribe(self, after_sequence: int | None = None) -> AsyncIterator[EventEnvelope]:
-        index = max(0, after_sequence or 0)
-        while True:
-            async with self._condition:
-                await self._condition.wait_for(
-                    lambda position=index: position < len(self._events) or self._closed
-                )
-                pending = self._events[index:]
-                closed = self._closed
-            for event in pending:
-                index = event.sequence
-                yield event
-            if closed and index >= len(self._events):
-                return
+    async def subscribe(self, after_sequence: int | None = None) -> AsyncGenerator[EventEnvelope, None]:
+        sequence = max(0, after_sequence or 0)
+        offset = 0
+        self.subscriber_count += 1
+        try:
+            while True:
+                async with self._condition:
+                    await self._condition.wait_for(
+                        lambda position=sequence: position < self._sequence or self._closed
+                    )
+                    if sequence >= self._sequence:
+                        if self._closed:
+                            return
+                        continue
+                    def read(offset: int = offset, sequence: int = sequence) -> tuple[EventEnvelope, int]:
+                        # ponytail: cold reconnect scans up to its cursor once;
+                        # add a sparse disk offset index only if measured slow.
+                        self._replay.seek(offset)
+                        while line := self._replay.readline():
+                            item = EventEnvelope(**json.loads(line))
+                            if item.sequence > sequence:
+                                return item, self._replay.tell()
+                        raise RuntimeError("event replay ended before its published sequence")
+                    if self._events and sequence >= self._events[0][0].sequence - 1:
+                        event = self._events[sequence + 1 - self._events[0][0].sequence][0]
+                    else:
+                        event, offset = await run_io(read)
+                    sequence = event.sequence
+                yield replace(event, data=deepcopy(event.data))
+        finally:
+            self.subscriber_count -= 1
+
+    def dispose(self) -> None:
+        if not self._closed or self.subscriber_count:
+            raise RuntimeError("cannot release an active or subscribed event journal")
+        self._replay.close()
+        self._events.clear()
+        self.retained_bytes = 0

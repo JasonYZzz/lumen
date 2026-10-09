@@ -37,6 +37,7 @@ from lumen.plan import PlanState, PlanStep, StepStatus
 from lumen.ui.activity_indicator import RunActivityIndicator
 from lumen.ui.approval_panel import ApprovalPanel
 from lumen.ui.autocomplete import CompletionDropdown
+from lumen.ui.checkpoint_screen import CheckpointScreen
 from lumen.ui.choice_picker import ChoicePickerScreen
 from lumen.ui.composer import PromptEditor
 from lumen.ui.file_search import FileHit
@@ -47,6 +48,32 @@ from lumen.ui.tool_card import ToolCard
 # ---------------------------------------------------------------------------
 # PlanPanel tests
 # ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("blocked", [False, True])
+async def test_checkpoint_files_preview_and_explicit_confirmation(blocked: bool) -> None:
+    applied: list[str] = []
+    async def items() -> list[dict[str, Any]]:
+        return [{"index": 0, "status": "completed", "prompt": "edit", "mutation_count": 1,
+                 "receipt_count": 1, "created_at": ""}]
+    async def fork(_turn: int) -> str:
+        raise AssertionError("file restoration must not fork the conversation")
+    async def preview(_turn: int) -> dict[str, Any]:
+        return {"before_turn": 0, "files": [{"resource": "a.txt", "diff": "-after\n+before"}],
+                "blockers": [{"resource": "a.txt", "error": "changed"}] if blocked else [], "excluded": []}
+    async def restore(_preview: dict[str, Any], request: str) -> dict[str, Any]:
+        applied.append(request)
+        return {"status": "restored"}
+    app = App[None]()
+    async with app.run_test() as pilot:
+        app.push_screen(CheckpointScreen(items, fork, preview_provider=preview, restore_provider=restore))
+        await pilot.pause()
+        await pilot.press("f")
+        await pilot.pause()
+        assert applied == []
+        await pilot.press("enter")
+        await pilot.pause()
+        assert len(applied) == (0 if blocked else 1)
 
 
 class PlanHost(App[None]):

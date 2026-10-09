@@ -22,6 +22,7 @@ from lumen.events import (
     TimelineEventRecord,
 )
 from lumen.interactive_queue import QueuedMessage, QueueMode
+from lumen.io import run_io
 from lumen.plan import PlanState
 from lumen.runtime import (
     AgentRuntime,
@@ -29,10 +30,17 @@ from lumen.runtime import (
     ApprovalHandler,
     CompletionPolicy,
     EventSink,
+    PartialRunOutcome,
     RunOutcome,
     get_partial_outcome,
 )
-from lumen.sessions import SessionMetadata, SessionRepository, recoverable_orphaned_input
+from lumen.sessions import (
+    SessionMetadata,
+    SessionRepository,
+    TurnCheckpointBoundary,
+    recoverable_orphaned_input,
+    turn_message_digest,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -257,6 +265,31 @@ class RunCoordinator:
             await emit(visible_event)
 
         self._active_emit = record_and_emit
+        checkpoint_messages: list[ModelMessage] = []
+        checkpoint_sequence = 0
+        async def persist_batch(partial: PartialRunOutcome) -> None:
+            nonlocal checkpoint_messages, checkpoint_sequence
+            if run_input.interaction_id is None:
+                return
+            messages = partial.completed_messages
+            if len(messages) <= len(checkpoint_messages):
+                raise RuntimeError("complete batch did not advance canonical messages")
+            boundary = TurnCheckpointBoundary(
+                sequence=checkpoint_sequence + 1,
+                prefix_count=len(checkpoint_messages), prefix_digest=turn_message_digest(checkpoint_messages),
+                message_count=len(messages), message_digest=turn_message_digest(messages),
+            )
+            await run_io(
+                self._repository.append_turn, state.session.id,
+                user_input=run_input.display_text, messages=messages[len(checkpoint_messages):],
+                approvals=partial.approvals, usage=partial.usage, status="running", plan=partial.plan,
+                diagnostics=partial.diagnostics,
+                recovery_receipts=partial.recovery_receipts, request_receipts=partial.request_receipts,
+                interaction_id=run_input.interaction_id, attachments=run_input.attachments,
+                checkpoint=boundary,
+            )
+            checkpoint_messages = list(messages)
+            checkpoint_sequence += 1
         try:
             outcome = await runtime.run(
                 run_input.model_prompt,
@@ -278,10 +311,11 @@ class RunCoordinator:
                 recovery_receipts=state.last_recovery_receipts if run_input.is_retry else (),
                 completion_policy=completion_policy,
                 attachments=run_input.attachments,
+                batch_completed=persist_batch,
             )
         except asyncio.CancelledError as error:
             terminal = terminal_event or RunCancelled("cancelled")
-            self._append_partial(
+            await self._append_partial(
                 run_input,
                 error,
                 status="cancelled",
@@ -294,7 +328,7 @@ class RunCoordinator:
             terminal = terminal_event or RunFailed(
                 partial.message if partial is not None else str(error)
             )
-            self._append_partial(
+            await self._append_partial(
                 run_input,
                 error,
                 status="failed",
@@ -351,7 +385,7 @@ class RunCoordinator:
         # durable. A failed append therefore cannot move the session cursor or
         # checkpoint ahead of JSONL.
         try:
-            self._repository.append_turn(
+            await run_io(self._repository.append_turn,
                 state.session.id,
                 user_input=run_input.display_text,
                 messages=outcome.new_messages,
@@ -367,6 +401,10 @@ class RunCoordinator:
                 interaction_id=run_input.interaction_id,
                 attachments=run_input.attachments,
             )
+        except asyncio.CancelledError:
+            # The worker has finished its fsync. Commit and publish that result
+            # before the writer lease can be released by cancellation.
+            pass
         except BaseException as error:
             if runtime.context_engine is not None and outcome.context_fingerprint is not None:
                 runtime.context_engine.discard_unpersisted(
@@ -454,7 +492,7 @@ class RunCoordinator:
                 await self._active_emit(InputDequeued(message.id, message.text, message.mode.value))
         return messages
 
-    def _append_partial(
+    async def _append_partial(
         self,
         run_input: RunInput,
         error: BaseException,
@@ -481,7 +519,9 @@ class RunCoordinator:
                 tuple(partial.recovery_receipts) if partial is not None else state.last_recovery_receipts
             ),
         )
-        self._repository.append_turn(
+        cancelled: asyncio.CancelledError | None = None
+        try:
+            await run_io(self._repository.append_turn,
             state.session.id,
             user_input=run_input.display_text,
             messages=completed_messages,
@@ -498,8 +538,12 @@ class RunCoordinator:
             request_receipts=partial.request_receipts if partial is not None else (),
             interaction_id=run_input.interaction_id,
             attachments=run_input.attachments,
-        )
+            )
+        except asyncio.CancelledError as error:
+            cancelled = error
         self._state = next_state
+        if cancelled is not None:
+            raise cancelled
 
 
 __all__ = ["CoordinatorState", "RunCoordinator", "RunInput"]

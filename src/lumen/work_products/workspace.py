@@ -4,16 +4,19 @@
 
 from __future__ import annotations
 
+import difflib
 import json
 from collections.abc import Callable
 from contextvars import ContextVar
 from datetime import UTC, datetime
 from pathlib import Path
+from threading import RLock
 from typing import Any, Protocol, TypeVar
 from uuid import uuid4
 
 from lumen.completion import CompletionBlocker
 from lumen.context.artifacts import ArtifactStore
+from lumen.io import run_io
 from lumen.tools.spec import EffectKind
 from lumen.tools.workspace import Workspace
 
@@ -76,7 +79,9 @@ class TaskWorkspace:
             "lumen_task_workspace_session_id",
             default=None,
         )
+        self._interaction_id: ContextVar[str | None] = ContextVar("lumen_work_interaction", default=None)
         self._states: dict[str, SessionWorkState] = {}
+        self._effect_lock = RLock()
         self._pending_events: dict[str, list[WorkProductEvent]] = {}
         self._adapters: dict[WorkProductKind, ResourceAdapter] = {
             WorkProductKind.DIRECTORY: DirectoryResourceAdapter(
@@ -95,6 +100,43 @@ class TaskWorkspace:
         self._session_id.set(session_id)
         self._states[session_id] = self.repository.load(session_id).work_state
         self.reconcile(session_id)
+
+    def bind_interaction(self, interaction_id: str | None) -> None:
+        self._interaction_id.set(interaction_id)
+
+    def release_session_projection(self, session_id: str) -> None:
+        """Release idle derived state; undelivered events keep their projection pinned."""
+        with self._effect_lock:
+            if not self._pending_events.get(session_id):
+                self._states.pop(session_id, None)
+                self._pending_events.pop(session_id, None)
+
+    def preview_restore(self, work_product_id: str, revision: str) -> dict[str, Any]:
+        """Inspect a precise snapshot and current revision without mutating state."""
+        _, state = self._bound()
+        product = self._require_product(state, work_product_id)
+        snapshot = self._adapters[product.kind].snapshot(product.resource)
+        target = self._find_restore_snapshot(state, product, revision)
+        if product.kind is WorkProductKind.DIRECTORY:
+            raise AdapterError("turn restore supports files only; directory restoration is separate")
+        if snapshot.revision != product.current.revision:
+            raise AdapterError(f"resource changed outside TaskWorkspace: {product.resource}")
+        body = self.artifacts.read(target.content_ref) if target.content_ref is not None else None
+        if target.exists and body is None:
+            raise AdapterError(f"restore snapshot is missing: {product.resource}")
+        current = self.artifacts.read(snapshot.content_ref) if snapshot.content_ref is not None else b""
+        # ponytail: bounded preview inputs; exact revisions still guard the entire file.
+        oversized = len(current or b"") > 65536 or len(body or b"") > 65536
+        diff = "" if oversized else "".join(difflib.unified_diff(
+            (current or b"").decode("utf-8").splitlines(keepends=True),
+            (body or b"").decode("utf-8").splitlines(keepends=True),
+            fromfile=product.resource, tofile=product.resource,
+        ))
+        return {"work_product_id": product.id, "resource": product.resource, "kind": product.kind.value,
+                "current_revision": snapshot.revision, "target_revision": target.revision,
+                "current_exists": snapshot.exists, "target_exists": target.exists,
+                "target_bytes": target.byte_size, "diff": diff[:16384],
+                "diff_truncated": oversized or len(diff) > 16384}
 
     def open_work_product(
         self,
@@ -483,6 +525,12 @@ class TaskWorkspace:
         )
         self._save_effect(session_id, effect)
         return effect
+
+    async def record_tool_effect_async(self, **kwargs: Any) -> EffectReceipt | None:
+        def record() -> EffectReceipt | None:
+            with self._effect_lock:
+                return self.record_tool_effect(**kwargs)
+        return await run_io(record)
 
     def prepare_import_effects(
         self,
@@ -958,8 +1006,7 @@ class TaskWorkspace:
         return self._states.get(session_id) or self.repository.load(session_id).work_state
 
     def drain_events(self, session_id: str) -> tuple[WorkProductEvent, ...]:
-        pending = tuple(self._pending_events.get(session_id, ()))
-        self._pending_events[session_id] = []
+        pending = tuple(self._pending_events.pop(session_id, ()))
         return pending
 
     def _require_enabled(self) -> None:
@@ -984,9 +1031,12 @@ class TaskWorkspace:
         self.repository.append_work_state(session_id, state)
 
     def _save_effect(self, session_id: str, effect: EffectReceipt) -> None:
-        state = self._state(session_id).upsert_effect(effect)
-        self._states[session_id] = state
-        self.repository.append_effect(session_id, effect)
+        if effect.interaction_id is None and self._interaction_id.get() is not None:
+            effect = effect.model_copy(update={"interaction_id": self._interaction_id.get()})
+        with self._effect_lock:
+            state = self._state(session_id).upsert_effect(effect)
+            self.repository.append_effect(session_id, effect)
+            self._states[session_id] = state
         self._queue_event(
             session_id,
             phase=(

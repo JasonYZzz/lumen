@@ -117,6 +117,20 @@ class PlanReviewBody(WebModel):
     feedback: str = ""
 
 
+class RepairJournalBody(WebModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    expected_digest: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
+    confirmed: bool = False
+
+
+class TurnRestoreBody(WebModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    before_turn: int = Field(ge=0)
+    expected_digest: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
+    client_request_id: str = Field(min_length=1, max_length=200)
+    confirmed: bool = False
+
+
 class ChildRunActionBody(WebModel):
     action: Literal["cancel", "approve_import", "reject_import", "close"]
 

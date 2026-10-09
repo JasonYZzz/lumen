@@ -101,7 +101,7 @@ def format_context_result(result: ContextControlResult) -> str:
             f"elapsed={elapsed_text}  "
             f"input={usage.get('input_tokens', 0)}  "
             f"output={usage.get('output_tokens', 0)}  "
-            f"cache-read={usage.get('cache_read_tokens', 0)}"
+            f"cache-read={usage.get('cache_read_tokens', 'unknown')}"
         )
         bottlenecks = latest_run.get("bottlenecks", [])
         if bottlenecks:
@@ -112,11 +112,12 @@ def format_context_result(result: ContextControlResult) -> str:
             )
         for change in latest_run.get("schema_changes", [])[:3]:
             lines.append(f"  Request step {change['step']} changed: {', '.join(change['changed'])}")
-        if latest_run.get("model_context_host_seconds_estimate") is not None:
+        if latest_run.get("model_attempt_seconds_sum") is not None:
             lines.append(
-                "  Non-tool time estimate: "
-                f"{latest_run['model_context_host_seconds_estimate']:.2f}s "
-                "(model + context + host; parallel tool time may overlap)"
+                "  Model attempts: "
+                f"{latest_run.get('model_attempt_count', 'unknown')}  "
+                f"time-sum={latest_run['model_attempt_seconds_sum']:.2f}s "
+                "(observed attempts; not a decomposition of run wall time)"
             )
     legacy = payload.get("legacy_overrides", {})
     active_legacy = [name for name, enabled in legacy.items() if enabled]

@@ -19,6 +19,7 @@ from fastapi.staticfiles import StaticFiles
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from lumen.application import (
+    ApplyTurnRestore,
     ApprovalStateError,
     ApproveAgentImport,
     ApproveChildImport,
@@ -43,6 +44,7 @@ from lumen.application import (
     GetConfiguration,
     GetInstructions,
     InspectReasoning,
+    InspectSessionRepair,
     InterruptAgent,
     InterruptLiveSession,
     InvalidStateError,
@@ -55,11 +57,13 @@ from lumen.application import (
     ListHooks,
     ListMcpPrompts,
     ListSessions,
+    PreviewTurnRestore,
     QueueRunInput,
     RejectAgentImport,
     RejectChildImport,
     RejectPlan,
     RenameSession,
+    RepairSessionJournal,
     RetryRun,
     RunNotFoundError,
     SelectModel,
@@ -96,10 +100,12 @@ from .schemas import (
     PlanReviewBody,
     QueueInputBody,
     RenameSessionBody,
+    RepairJournalBody,
     RetryRunBody,
     SessionSettingsBody,
     StartLiveBody,
     StartRunBody,
+    TurnRestoreBody,
     VerificationWaiverBody,
     WorkspaceSettingsBody,
 )
@@ -642,6 +648,28 @@ def create_web_app(
     async def list_checkpoints(session_id: str) -> dict[str, Any]:
         result = await host.dispatch(ListCheckpoints(session_id))
         return {"items": cast(Any, result).data["items"]}
+
+    @app.get("/api/v1/sessions/{session_id}/repair")
+    async def inspect_session_repair(session_id: str) -> dict[str, Any]:
+        result = await host.dispatch(InspectSessionRepair(session_id))
+        return cast(Any, result).data
+
+    @app.post("/api/v1/sessions/{session_id}/repair")
+    async def repair_session_journal(session_id: str, body: RepairJournalBody) -> dict[str, Any]:
+        result = await host.dispatch(RepairSessionJournal(session_id, body.expected_digest, body.confirmed))
+        return cast(Any, result).data
+
+    @app.get("/api/v1/sessions/{session_id}/restore-files")
+    async def preview_turn_restore(session_id: str, before_turn: int) -> dict[str, Any]:
+        result = await host.dispatch(PreviewTurnRestore(session_id, before_turn))
+        return cast(Any, result).data
+
+    @app.post("/api/v1/sessions/{session_id}/restore-files")
+    async def apply_turn_restore(session_id: str, body: TurnRestoreBody) -> dict[str, Any]:
+        result = await host.dispatch(ApplyTurnRestore(
+            session_id, body.before_turn, body.expected_digest, body.client_request_id, body.confirmed,
+        ))
+        return {"status": cast(Any, result).status, **cast(Any, result).data}
 
     @app.post("/api/v1/sessions/{session_id}/fork", status_code=201)
     async def fork_session(session_id: str, body: ForkSessionBody) -> dict[str, str]:

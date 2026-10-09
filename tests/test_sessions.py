@@ -1,5 +1,6 @@
 import hashlib
 import json
+import os
 from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
@@ -73,7 +74,60 @@ def test_session_round_trip_preserves_model_messages(tmp_path: Path) -> None:
     assert loaded.full_history == loaded.history
     assert loaded.turns[0].user_input == "hello"
     assert loaded.plan == PlanState()
-    assert SCHEMA_VERSION == 11
+
+
+def test_projection_cache_reads_only_known_appends_and_isolates_mutable_values(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repository = SessionRepository(tmp_path)
+    session = repository.create(agent_name="test", model_id="test")
+    repository.append_turn(session.id, user_input="first", messages=[
+        ModelRequest(parts=[UserPromptPart("first")]),
+    ], approvals=[{"name": "tool"}], usage={"input_tokens": 1}, status="completed")
+    loaded = repository.load(session.id)
+    loaded.turns[0].usage["input_tokens"] = 999
+    loaded.turns[0].approvals[0]["name"] = "tampered"
+    assert isinstance(loaded.history[0], ModelRequest)
+    loaded.history[0].parts = []
+    calls = 0
+    original = json.loads
+    def counted(*args: object, **kwargs: object):  # type: ignore[no-untyped-def]
+        nonlocal calls
+        calls += 1
+        return original(*args, **kwargs)  # type: ignore[arg-type]
+    monkeypatch.setattr(json, "loads", counted)
+    hot = repository.load(session.id)
+    assert calls == 0
+    assert hot.turns[0].usage == {"input_tokens": 1}
+    assert hot.turns[0].approvals == [{"name": "tool"}]
+    assert isinstance(hot.history[0], ModelRequest) and len(hot.history[0].parts) == 1
+    repository.append_turn(session.id, user_input="second", messages=[], approvals=[], usage={},
+                           status="completed")
+    appended = repository.load(session.id)
+    assert calls == 1
+    assert [turn.user_input for turn in appended.turns] == ["first", "second"]
+    assert repository.load(session.id, revalidate=True) == appended
+    assert calls == 4
+
+
+def test_external_same_size_change_with_preserved_mtime_invalidates_projection(tmp_path: Path) -> None:
+    repository = SessionRepository(tmp_path)
+    session = repository.create(agent_name="test", model_id="test")
+    repository.append_turn(session.id, user_input="before", messages=[], approvals=[], usage={},
+                           status="completed")
+    assert repository.load(session.id).turns[0].user_input == "before"
+    stat = session.path.stat()
+    session.path.write_bytes(session.path.read_bytes().replace(b"before", b"after!"))
+    os.utime(session.path, ns=(stat.st_atime_ns, stat.st_mtime_ns))
+    assert repository.load(session.id).turns[0].user_input == "after!"
+    replacement = session.path.with_suffix(".replacement")
+    replacement.write_bytes(session.path.read_bytes())
+    os.replace(replacement, session.path)
+    assert repository.load(session.id, revalidate=True).turns[0].user_input == "after!"
+    session.path.write_bytes(b"{broken")
+    with pytest.raises(SessionCorruptError):
+        repository.load(session.id)
+    assert SCHEMA_VERSION == 12
 
 
 @pytest.mark.parametrize("turn_index", [0, 1, 2])
@@ -168,7 +222,7 @@ def test_v10_session_appends_rewind_upgrade_without_rewriting_header(tmp_path: P
     repository = SessionRepository(tmp_path)
     session = repository.create(agent_name="test", model_id="test")
     original = session.path.read_text(encoding="utf-8").replace(
-        '"schema_version":11', '"schema_version":10'
+        f'"schema_version":{SCHEMA_VERSION}', '"schema_version":10'
     )
     session.path.write_text(original, encoding="utf-8")
     repository.append_turn(
@@ -504,7 +558,9 @@ def test_session_fork_preserves_v7_work_state(tmp_path: Path) -> None:
 def test_historical_v6_session_upgrades_append_only_for_work_state(tmp_path: Path) -> None:
     repository = SessionRepository(tmp_path)
     session = repository.create(agent_name="test-agent", model_id="test")
-    original = session.path.read_text(encoding="utf-8").replace('"schema_version":11', '"schema_version":6')
+    original = session.path.read_text(encoding="utf-8").replace(
+        f'"schema_version":{SCHEMA_VERSION}', '"schema_version":6'
+    )
     session.path.write_text(original, encoding="utf-8")
 
     assert repository.load(session.id).work_state == SessionWorkState()
@@ -522,7 +578,9 @@ def test_historical_session_appends_v5_v6_upgrade_chain_without_rewriting_header
 ) -> None:
     repository = SessionRepository(tmp_path)
     session = repository.create(agent_name="test-agent", model_id="test")
-    original = session.path.read_text(encoding="utf-8").replace('"schema_version":11', '"schema_version":1')
+    original = session.path.read_text(encoding="utf-8").replace(
+        f'"schema_version":{SCHEMA_VERSION}', '"schema_version":1'
+    )
     session.path.write_text(original, encoding="utf-8")
 
     context_state = SessionContextState()

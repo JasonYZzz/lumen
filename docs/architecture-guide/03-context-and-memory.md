@@ -196,7 +196,7 @@ Runtime 会把 resolved reserve 写入真实 Provider 请求，避免预算与�
 `build_input_manifest()` 流程；工具结果和请求边界的 steer/follow-up 先进入 messages，再冻结下一步
 `ModelDriverRequest`。因此预算和请求证据只在真正掌握 provider I/O 边界的单一位置采集。
 
-每个真正准备发往 provider 的 snapshot 会连同已冻结的 route、provider/model 与 Context fingerprint 转成有界 `ProviderRequestReceipt`。Runtime 把 receipt 附在完整或 partial outcome 上，`RunCoordinator` 与 terminal turn 一起追加到 Session v11；因此正常完成、取消和失败都保留实际请求证据。
+每个真正准备发往 provider 的 snapshot 会连同已冻结的 route、provider/model 与 Context fingerprint 转成有界 `ProviderRequestReceipt`。Runtime 把 receipt 附在完整或 partial outcome 上，`RunCoordinator` 与 terminal turn 一起追加到 Session v12；因此正常完成、取消和失败都保留实际请求证据。
 
 receipt 内嵌同一步 `ModelInputManifest`：它对 instructions、实际 messages、完整有序 tool schema、模型
 settings、Context source、stable prefix 和 dynamic tail 分别计算 SHA-256，并保存 source
@@ -261,7 +261,7 @@ request/response/tool-result 轨迹，并保留 Driver 返回的完整 `ModelRes
 
 ## 3.8 SessionContextState：Skill/MCP 激活、恢复与卸载
 
-`SessionContextState` 由 schema v5 引入；当前新 session 是 v11，仍沿用同一 `context_state` record：
+`SessionContextState` 由 schema v5 引入；当前新 session 是 v12，仍沿用同一 `context_state` record：
 
 ```text
 SessionContextState

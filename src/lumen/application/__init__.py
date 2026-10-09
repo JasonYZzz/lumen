@@ -1,6 +1,7 @@
 from .events import EventJournal
 from .host import WorkspaceHost, WorkspaceResources
 from .models import (
+    ApplyTurnRestore,
     ApprovalAlreadyResolvedError,
     ApprovalStateError,
     ApproveAgentImport,
@@ -28,6 +29,7 @@ from .models import (
     GetInstructions,
     ImportAttachmentPath,
     InspectReasoning,
+    InspectSessionRepair,
     InterruptAgent,
     InterruptLiveSession,
     InvalidStateError,
@@ -42,11 +44,13 @@ from .models import (
     ListMcpResources,
     ListSessions,
     LiveStartedResult,
+    PreviewTurnRestore,
     QueueRunInput,
     RejectAgentImport,
     RejectChildImport,
     RejectPlan,
     RenameSession,
+    RepairSessionJournal,
     RetryRun,
     RunDirectCommand,
     RunNotFoundError,
@@ -77,6 +81,7 @@ from .models import (
 )
 
 __all__ = [
+    "ApplyTurnRestore",
     "ApprovalAlreadyResolvedError",
     "ApprovalStateError",
     "ApproveAgentImport",
@@ -105,6 +110,7 @@ __all__ = [
     "GetInstructions",
     "ImportAttachmentPath",
     "InspectReasoning",
+    "InspectSessionRepair",
     "InterruptAgent",
     "InterruptLiveSession",
     "InvalidStateError",
@@ -119,11 +125,13 @@ __all__ = [
     "ListMcpResources",
     "ListSessions",
     "LiveStartedResult",
+    "PreviewTurnRestore",
     "QueueRunInput",
     "RejectAgentImport",
     "RejectChildImport",
     "RejectPlan",
     "RenameSession",
+    "RepairSessionJournal",
     "RetryRun",
     "RunDirectCommand",
     "RunNotFoundError",

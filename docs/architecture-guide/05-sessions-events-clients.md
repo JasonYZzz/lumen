@@ -58,19 +58,38 @@ terminal 已随 turn append 并 `fsync` 后才交给 EventJournal。若 terminal
 
 会话文件是 append-only JSONL：
 
-- 第一条记录保存 session metadata 和创建时 schema；当前新会话写 v11；
+- 第一条记录保存 session metadata 和创建时 schema；当前新会话写 v12；
 - 后续每条 turn 保存 user input、状态、messages、timeline events、approval、usage、plan、diagnostics 与 compaction；
 - 每个 terminal turn 还保存有界 `request_receipts[]`：实际 provider/model route、step、instructions/messages/tools token、完整有序 tool schema digest、context fingerprint、output reserve、hard limit 和 estimated 标记；内嵌 `ModelInputManifest` 还保存 source refs/digests、stable prefix、dynamic tail、request fingerprint 与 replay eligibility，但不复制 secret、instructions、完整 messages/schema 或大正文；
 - context、settings、plan、Work Product/effect、Agent Thread/event/message/result 与 Live call 都使用独立类型化 record 追加，不挤入可变聚合对象；
 - 标题和归档状态由最新的 `session_catalog` record 投影；首次删除 tombstone 是终态，后到的旧目录快照不能撤销删除；不改写或物理移除 journal；
 - `history_rewind` 在同一 Session 内选择目标 user turn 之前的活动 lineage；被放弃的 turn、工具结果和 compaction summary 仍留在 JSONL 供审计，但不再进入时间线、模型 history、checkpoint retrieval 或自动记忆；
-- v1–v10 文件加载时不重写。首次写入 v5–v11 对应的新事实前追加 `schema_upgrade`，读取时按 marker 链得到的有效 schema 校验后续 record；
+- v1–v11 文件加载时不重写。首次写入 v5–v12 对应的新事实前追加 `schema_upgrade`，读取时按 marker 链得到的有效 schema 校验后续 record；
 - `load` 对不完整/非法 JSON 行明确报 `SessionCorruptError`，避免把损坏文件静默解释为合法状态；
 - active prefix、rolling summary 和 checkpoint 可从 turn 中恢复；V2 checkpoint 必须通过 parent/range/cursor/digest/full-history 校验，V1 只读兼容并映射为绝对 transcript 边界；
 - checkpoint 状态只在 append + `fsync` 成功后发布到运行中内存；
 - 分页读取用于长时间线，不要求一次挂载全部 UI widget。
 
-`SessionRepository.load` 始终以 JSONL 字节为权威，通过内容 digest 命中可删除的 read projection cache。缓存只保存 materialized read model；digest 不一致或调用 `clear_projection_cache()` 时从 JSONL 冷算。删除缓存不会丢数据，也不会改写 v1–v11 文件。
+`SessionRepository.load` 始终以 JSONL 字节为权威。可删除投影缓存绑定已打开文件的
+device/inode/size/mtime_ns/ctime_ns，读取前后检查 descriptor 与路径身份。Repository 已知的追加
+只解析新增记录；外部改变、替换或显式 `revalidate=True` 回到完整严格读取。Host 获得执行写锁后
+严格复核。缓存最多 32 条，journal 字节总量代理上限 16 MiB；返回值隔离嵌套 mutable 数据。
+热列表用 `SessionOverview`，热分页只复制目标 turn；冷读取仍构建完整严格投影，尚无持久化 offset
+索引。防御复制增加完整 `load` 的成本，不能把列表加速外推到全历史复制。删除缓存不改写 v1–v12。
+
+v12 增加 `turn_checkpoint`、`session_repair` 和 Effect 的可选 `interaction_id`。完整工具批次由
+Runtime 回调给 Coordinator，按同一 running interaction 追加增量、递增 sequence、前缀及累计
+digest。读取只形成一条 turn，terminal 校验已保存前缀后覆盖投影。checkpoint 不保存 token delta
+或未提交 compaction 父节点；超过 64 KiB 的记录先用 ArtifactStore 耐久发布至 Session 目录下的
+`checkpoint-artifacts/`，journal 仅保存 digest、长度和嵌套 Artifact 引用，且不索引正文。
+缺失或损坏 blob、变更的重复 sequence、未配对工具消息均严格拒绝。旧二进制无法加载 v12。
+
+EventJournal 的内存尾部按 JSON envelope 字节最多 1 MiB；完整显示事件保存在匿名临时文件，
+冷 cursor 扫描到边界一次，随后顺序读取，近期订阅直接读内存。文件不是 Session authority，
+不做重启回放；长 active run 的磁盘使用仍随事件增长。Host 在请求和订阅释放时回收：完成且无订阅
+的 run 最多 32 个或保留 30 分钟，active/审批/Plan review 引用保持存活。仅留下轻量请求身份，
+同 Host 过期请求返回 `run_expired`，不能重新执行；新执行、fork、restore 身份各最多 10000 个，
+满额拒绝新身份。close 等待真实写入及任务结束，不把线程取消当作 fsync 已停止。
 
 Web 编辑用户消息通过 `StartRun.regenerate_from_turn` 在一次 Host 受理中先追加 `history_rewind`，
 再为替换输入追加 running turn；Session ID、标题和当前窗口保持不变。相同文本也允许重新生成。

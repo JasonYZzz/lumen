@@ -102,7 +102,7 @@ Host `SelectReasoning` 更新同一状态。仅空闲时可切换，下次 Run �
 
 Session v10 起使用原有 `session_settings` 和 `agent_thread.config` 保存类型化推理选择与参数，
 只包含推理字段，不能持久化任意 settings、凭据或 extra_body；DeepSeek Chat 开关只保存类型化
-`wire_thinking`。v1–v10 只读加载，首次追加
+`wire_thinking`。v1–v11 只读加载，首次追加
 新事实才写 `schema_upgrade`；fork 保留 Session 选择，旧 child 快照保留兼容解析。
 新 child spawn 冻结选择；同模型继承父级，角色改模型则重新按目标模型解析。
 Session 恢复保留用户选择，同时从当前模型刷新能力元数据，防止历史上的单选列表锁死新能力；

@@ -78,7 +78,8 @@ def test_format_context_renders_latest_run_diagnostic() -> None:
             "bottlenecks": ["tool_time_dominant"],
             "slow_tools": [{"name": "run_command", "elapsed_seconds": 6.0, "status": "ok"}],
             "schema_changes": [{"step": 2, "changed": ["tools"]}],
-            "model_context_host_seconds_estimate": 4.0,
+            "model_attempt_seconds_sum": 4.0,
+            "model_attempt_count": 2,
         }
     )
 
@@ -88,4 +89,5 @@ def test_format_context_renders_latest_run_diagnostic() -> None:
     assert "Signals: tool_time_dominant" in text
     assert "Tool: run_command  6.00s" in text
     assert "Request step 2 changed: tools" in text
-    assert "Non-tool time estimate: 4.00s" in text
+    assert "Model attempts: 2  time-sum=4.00s" in text
+    assert "Non-tool time estimate" not in text

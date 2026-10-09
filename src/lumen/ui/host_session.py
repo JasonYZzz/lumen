@@ -8,6 +8,7 @@ from typing import Any, Literal
 from uuid import uuid4
 
 from lumen.application import (
+    ApplyTurnRestore,
     ApproveAgentImport,
     ApprovePlan,
     CancelRun,
@@ -20,6 +21,7 @@ from lumen.application import (
     InterruptAgent,
     ListAgents,
     ListCheckpoints,
+    PreviewTurnRestore,
     QueueRunInput,
     RejectAgentImport,
     RejectPlan,
@@ -203,6 +205,20 @@ class HostSessionAdapter:
             "pending_effects": snapshot.pending_effects,
             "recoverable_effects": snapshot.recoverable_effects,
         }
+
+    async def preview_turn_restore(self, before_turn: int) -> dict[str, Any]:
+        if self.session_id is None:
+            raise RuntimeError("no active session")
+        result = await self.host.dispatch(PreviewTurnRestore(self.session_id, before_turn))
+        return result.data
+
+    async def restore_turn_files(self, preview: dict[str, Any], client_request_id: str) -> dict[str, Any]:
+        if self.session_id != preview["session_id"]:
+            raise RuntimeError("Session changed; preview restoration again")
+        result = await self.host.dispatch(ApplyTurnRestore(
+            preview["session_id"], preview["before_turn"], preview["digest"], client_request_id, True,
+        ))
+        return {"status": result.status, **result.data}
 
     async def waive_effect(self, effect_id: str, reason: str) -> dict[str, Any]:
         if self.session_id is None:

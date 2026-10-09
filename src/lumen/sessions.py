@@ -5,11 +5,15 @@ import json
 import os
 import re
 import sqlite3
+import tempfile
+from collections import OrderedDict
 from collections.abc import Sequence
+from copy import deepcopy
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, cast
+from threading import RLock
+from typing import Any, Literal, cast
 from uuid import UUID, uuid4
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -28,15 +32,16 @@ from lumen.agents.types import (
 from lumen.attachments import AttachmentRef
 from lumen.collaboration import PlanReviewStatus, SessionSettingsState
 from lumen.context.artifact_index import ArtifactSearchIndex
+from lumen.context.artifacts import ArtifactStore, ArtifactStoreError
 from lumen.context.legacy import validate_active_history
 from lumen.context.session_state import SessionContextState
 from lumen.context.types import ProviderRequestReceipt
 from lumen.events import RunStarted, TimelineEventRecord
-from lumen.live.types import LiveSessionState, SessionLiveState
+from lumen.live.types import LiveConnectionState, LiveSessionState, SessionLiveState
 from lumen.plan import PlanState
 from lumen.work_products import EffectReceipt, SessionWorkState
 
-SCHEMA_VERSION = 11
+SCHEMA_VERSION = 12
 SUPPORTED_SCHEMA_VERSIONS = tuple(range(1, SCHEMA_VERSION + 1))
 SCHEMA_UPGRADE_TARGETS = tuple(range(5, SCHEMA_VERSION + 1))
 SESSION_RECORD_TYPES = (
@@ -53,13 +58,68 @@ SESSION_RECORD_TYPES = (
     "session",
     "session_catalog",
     "session_settings",
+    "session_repair",
     "turn",
+    "turn_checkpoint",
     "work_state",
 )
 
 
 class SessionCorruptError(ValueError):
     """Raised when persisted session data cannot be trusted."""
+
+
+class TurnCheckpointBoundary(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True, frozen=True)
+    sequence: int = Field(ge=1)
+    prefix_count: int = Field(ge=0)
+    prefix_digest: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
+    message_count: int = Field(ge=1)
+    message_digest: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
+
+
+class _TurnCheckpointRecord(BaseModel):
+    """Strict persisted batch delta; it never publishes a compaction parent."""
+    model_config = ConfigDict(extra="forbid", strict=True)
+    type: Literal["turn_checkpoint"]
+    status: Literal["running"]
+    interaction_id: str = Field(min_length=1)
+    checkpoint: TurnCheckpointBoundary
+    user_input: str
+    messages: list[dict[str, Any]]
+    approvals: list[dict[str, Any]]
+    usage: dict[str, Any]
+    created_at: str
+    plan: dict[str, Any]
+    diagnostics: list[dict[str, Any]]
+    timeline_events: list[dict[str, Any]]
+    recovery_receipts: list[dict[str, Any]]
+    request_receipts: list[dict[str, Any]]
+    attachments: list[dict[str, Any]]
+    channel: Literal["text"]
+    provider_item_ids: list[str]
+    live_metadata: dict[str, Any]
+
+
+class _SessionRepairRecord(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    type: Literal["session_repair"]
+    created_at: str
+    original_digest: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
+    backup: str = Field(pattern=r"^[0-9a-f-]+\.[0-9a-f]{64}\.corrupt-backup$")
+    discarded_bytes: int = Field(ge=1)
+
+
+class _CheckpointPayloadRecord(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    type: Literal["turn_checkpoint"]
+    payload_ref: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
+    payload_bytes: int = Field(ge=1)
+    artifact_refs: list[str]
+
+
+def turn_message_digest(messages: Sequence[ModelMessage]) -> str:
+    return "sha256:" + hashlib.sha256(ModelMessagesTypeAdapter.dump_json(list(messages))).hexdigest()
 
 
 @dataclass(frozen=True, slots=True)
@@ -96,6 +156,8 @@ class TurnRecord:
         default_factory=list[ProviderRequestReceipt]
     )
     attachments: list[AttachmentRef] = field(default_factory=list[AttachmentRef])
+    checkpoint: TurnCheckpointBoundary | None = None
+    checkpoint_record_digest: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -115,6 +177,14 @@ class SessionCatalogState(BaseModel):
     title_generation_turn: int | None = Field(default=None, ge=0)
     archived_at: str | None = None
     deleted_at: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class SessionOverview:
+    metadata: SessionMetadata
+    catalog: SessionCatalogState
+    turn_count: int
+    first_user_input: str | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -149,6 +219,21 @@ class SessionData:
     live_state: SessionLiveState = field(default_factory=SessionLiveState)
 
 
+def _file_identity(stat: os.stat_result) -> tuple[int, int, int, int, int]:
+    return stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns
+
+
+@dataclass(slots=True)
+class _CachedProjection:
+    identity: tuple[int, int, int, int, int]
+    header: dict[str, Any]
+    schema: int
+    line_count: int
+    data: SessionData
+    terminated: bool = True
+    pending: bytes = b""
+
+
 def recoverable_orphaned_input(session: SessionData) -> str | None:
     """Recover a pre-fix accepted input only when durable execution evidence exists.
 
@@ -178,7 +263,9 @@ class SessionRepository:
     ) -> None:
         self.directory = Path(directory).expanduser().resolve()
         self.directory.mkdir(parents=True, exist_ok=True)
-        self._projection_cache: dict[Path, tuple[str, SessionData]] = {}
+        self._projection_cache: OrderedDict[Path, _CachedProjection] = OrderedDict()
+        self._projection_lock = RLock()
+        self._checkpoint_artifacts = ArtifactStore(self.directory / "checkpoint-artifacts")
         # Derived FTS5 cache for checkpoint-episode retrieval; the journal
         # stays the only authority. None keeps the lexical scoring path.
         self._search_index = search_index
@@ -186,7 +273,95 @@ class SessionRepository:
     def clear_projection_cache(self) -> None:
         """Delete the optional read model; canonical JSONL remains untouched."""
 
-        self._projection_cache.clear()
+        with self._projection_lock:
+            self._projection_cache.clear()
+
+    def inspect_tail_repair(self, session_id: str) -> dict[str, Any]:
+        """Diagnose only an incomplete final append, preserving strict ordinary reads."""
+        path = self._path(session_id)
+        before = _file_identity(path.stat())
+        payload = path.read_bytes()
+        if before != _file_identity(path.stat()):
+            raise SessionCorruptError("journal changed during repair diagnosis")
+        if payload.endswith(b"\n"):
+            raise SessionCorruptError("journal has no incomplete final line")
+        boundary = payload.rfind(b"\n") + 1
+        if not boundary:
+            raise SessionCorruptError("cannot repair a missing or incomplete session header")
+        tail = payload[boundary:]
+        try:
+            text = tail.decode("utf-8")
+        except UnicodeDecodeError as error:
+            if error.end != len(tail) or error.reason != "unexpected end of data":
+                raise SessionCorruptError("final line is corrupt rather than incomplete") from error
+        else:
+            try:
+                json.loads(text)
+            except json.JSONDecodeError as error:
+                if not (error.pos >= len(text.rstrip()) or error.msg.startswith("Unterminated string")):
+                    raise SessionCorruptError("final line is corrupt rather than incomplete") from error
+            else:
+                raise SessionCorruptError("final line contains a complete record; refusing repair")
+        # The same strict projector validates the entire surviving lineage,
+        # including schema, checkpoints and interior records, before editing.
+        with tempfile.TemporaryDirectory(dir=self.directory, prefix=".repair-check-") as directory:
+            candidate = Path(directory) / path.name
+            candidate.write_bytes(payload[:boundary])
+            validator = SessionRepository(directory)
+            validator._checkpoint_artifacts = self._checkpoint_artifacts
+            loaded = validator.load(session_id, revalidate=True)
+        if any(thread.status in ACTIVE_AGENT_STATUSES for thread in loaded.agent_state.threads):
+            raise SessionCorruptError("repair requires reconciling active Agent execution first")
+        if any(state.connection not in {
+            LiveConnectionState.CLOSED, LiveConnectionState.FAILED,
+            LiveConnectionState.RECONCILIATION_REQUIRED,
+        } for state in loaded.live_state.sessions):
+            raise SessionCorruptError("repair requires ending active Live connections first")
+        return {"session_id": session_id, "original_digest": "sha256:" + hashlib.sha256(payload).hexdigest(),
+                "prefix_bytes": boundary, "discarded_bytes": len(tail), "turn_count": len(loaded.turns),
+                "limitation": "Incomplete append removed only; unknown effects still need reconciliation."}
+
+    def repair_tail(self, session_id: str, *, expected_digest: str) -> dict[str, Any]:
+        """Explicit maintenance under the Host writer lease; never called by load."""
+        inspection = self.inspect_tail_repair(session_id)
+        if inspection["original_digest"] != expected_digest:
+            raise SessionCorruptError("repair preview is stale")
+        path = self._path(session_id)
+        original = path.read_bytes()
+        if "sha256:" + hashlib.sha256(original).hexdigest() != expected_digest:
+            raise SessionCorruptError("journal changed after repair diagnosis")
+        backup = path.with_name(f"{session_id}.{expected_digest[7:]}.corrupt-backup")
+        with backup.open("xb") as handle:
+            os.chmod(backup, 0o600)
+            handle.write(original)
+            handle.flush()
+            os.fsync(handle.fileno())
+        descriptor, temporary = tempfile.mkstemp(dir=self.directory, prefix=".repair-")
+        try:
+            with os.fdopen(descriptor, "wb") as handle:
+                handle.write(original[:inspection["prefix_bytes"]])
+                handle.flush()
+                os.fsync(handle.fileno())
+            if path.read_bytes() != original:
+                raise SessionCorruptError("journal changed before repair publication")
+            os.replace(temporary, path)
+            if os.name != "nt":
+                directory_fd = os.open(self.directory, os.O_RDONLY | os.O_DIRECTORY)
+                try:
+                    os.fsync(directory_fd)
+                finally:
+                    os.close(directory_fd)
+        finally:
+            if os.path.exists(temporary):
+                os.unlink(temporary)
+        self.clear_projection_cache()
+        self.load(session_id, revalidate=True)
+        self._ensure_schema(path, 12)
+        self._append(path, {"type": "session_repair", "created_at": self._now(),
+                            "original_digest": expected_digest, "backup": backup.name,
+                            "discarded_bytes": inspection["discarded_bytes"]})
+        self.load(session_id, revalidate=True)
+        return {**inspection, "backup": backup.name, "status": "repaired"}
 
     def _path(self, session_id: str) -> Path:
         try:
@@ -200,29 +375,43 @@ class SessionRepository:
         return datetime.now(UTC).isoformat()
 
     def _append(self, path: Path, record: dict[str, Any], *, create: bool = False) -> None:
-        flags = os.O_WRONLY | os.O_APPEND | os.O_CREAT
-        if create:
-            flags |= os.O_EXCL
-        descriptor = os.open(path, flags, 0o600)
-        try:
-            # Provider, MCP and usage payloads may contain JSON-compatible domain
-            # scalars such as Decimal. Normalize through Pydantic's strict JSON
-            # encoder at the journal Seam instead of teaching every caller about
-            # every provider-specific scalar. Unknown opaque objects still fail
-            # serialization; this is deliberately narrower than ``default=str``.
-            json_record = to_jsonable_python(record)
-            encoded = (
-                json.dumps(json_record, ensure_ascii=False, separators=(",", ":")) + "\n"
-            ).encode()
-            view = memoryview(encoded)
-            while view:
-                written = os.write(descriptor, view)
-                if written <= 0:
-                    raise OSError("session append made no progress")
-                view = view[written:]
-            os.fsync(descriptor)
-        finally:
-            os.close(descriptor)
+        with self._projection_lock:
+            flags = os.O_WRONLY | os.O_APPEND | os.O_CREAT
+            if create:
+                flags |= os.O_EXCL
+            descriptor = os.open(path, flags, 0o600)
+            try:
+                before = _file_identity(os.fstat(descriptor))
+                # Provider, MCP and usage payloads may contain JSON-compatible domain
+                # scalars such as Decimal. Normalize through Pydantic's strict JSON
+                # encoder at the journal Seam instead of teaching every caller about
+                # every provider-specific scalar. Unknown opaque objects still fail
+                # serialization; this is deliberately narrower than ``default=str``.
+                json_record = to_jsonable_python(record)
+                encoded = (
+                    json.dumps(json_record, ensure_ascii=False, separators=(",", ":")) + "\n"
+                ).encode()
+                view = memoryview(encoded)
+                while view:
+                    written = os.write(descriptor, view)
+                    if written <= 0:
+                        raise OSError("session append made no progress")
+                    view = view[written:]
+                os.fsync(descriptor)
+                after = _file_identity(os.fstat(descriptor))
+                with self._projection_lock:
+                    cached = self._projection_cache.get(path)
+                    if cached is not None:
+                        if (
+                            cached.terminated and cached.identity == before
+                            and after[2] == before[2] + len(encoded) and after[2] <= 16 * 1024 * 1024
+                        ):
+                            cached.pending += encoded
+                            cached.identity = after
+                        else:
+                            self._projection_cache.pop(path, None)
+            finally:
+                os.close(descriptor)
 
     def create(self, *, agent_name: str, model_id: str) -> SessionMetadata:
         session_id = str(uuid4())
@@ -364,6 +553,7 @@ class SessionRepository:
         live_metadata: dict[str, Any] | None = None,
         request_receipts: Sequence[ProviderRequestReceipt] = (),
         attachments: Sequence[AttachmentRef] = (),
+        checkpoint: TurnCheckpointBoundary | None = None,
     ) -> None:
         path = self._path(session_id)
         if not path.is_file():
@@ -398,6 +588,19 @@ class SessionRepository:
             record["partial_text"] = partial_text
         if retryable:
             record["retryable"] = True
+        if checkpoint is not None:
+            record["type"] = "turn_checkpoint"
+            record["checkpoint"] = checkpoint.model_dump(mode="json")
+            _TurnCheckpointRecord.model_validate(record)
+            record = cast(dict[str, Any], to_jsonable_python(record))
+            payload = json.dumps(record, ensure_ascii=False, separators=(",", ":")).encode()
+            if len(payload) > 65536:
+                ref = self._checkpoint_artifacts.store(payload, index=False)
+                references: set[str] = set()
+                _collect_artifact_refs(record, references)
+                record = {"type": "turn_checkpoint", "payload_ref": ref, "payload_bytes": len(payload),
+                          "artifact_refs": sorted(references)}
+            self._ensure_schema(path, 12)
         self._append(path, record)
 
     def append_turn_started(
@@ -486,13 +689,13 @@ class SessionRepository:
         path = self._path(session_id)
         if not path.is_file():
             raise FileNotFoundError(f"session not found: {session_id}")
-        self._ensure_schema(path, 7)
+        self._ensure_schema(path, 12 if any(item.interaction_id for item in state.effects) else 7)
         self._append(
             path,
             {
                 "type": "work_state",
                 "created_at": self._now(),
-                "state": state.model_dump(mode="json"),
+                "state": state.model_dump(mode="json", exclude_none=True),
             },
         )
 
@@ -502,13 +705,13 @@ class SessionRepository:
         path = self._path(session_id)
         if not path.is_file():
             raise FileNotFoundError(f"session not found: {session_id}")
-        self._ensure_schema(path, 7)
+        self._ensure_schema(path, 12 if effect.interaction_id else 7)
         self._append(
             path,
             {
                 "type": "effect",
                 "created_at": self._now(),
-                "effect": effect.model_dump(mode="json"),
+                "effect": effect.model_dump(mode="json", exclude_none=True),
             },
         )
 
@@ -595,23 +798,30 @@ class SessionRepository:
     def _ensure_schema(self, path: Path, target: int) -> None:
         """Append one non-destructive marker before a record introduced in ``target``."""
 
-        if target not in SCHEMA_UPGRADE_TARGETS:
-            raise ValueError(f"unsupported schema upgrade target: {target}")
-        effective = self._effective_schema_version(path)
-        if effective >= target:
-            return
-        self._append(
-            path,
-            {
-                "type": "schema_upgrade",
-                "from_version": effective,
-                "to_version": target,
-                "created_at": self._now(),
-            },
-        )
+        with self._projection_lock:
+            if target not in SCHEMA_UPGRADE_TARGETS:
+                raise ValueError(f"unsupported schema upgrade target: {target}")
+            effective = self._effective_schema_version(path)
+            if effective >= target:
+                return
+            self._append(
+                path,
+                {
+                    "type": "schema_upgrade",
+                    "from_version": effective,
+                    "to_version": target,
+                    "created_at": self._now(),
+                },
+            )
 
-    @staticmethod
-    def _effective_schema_version(path: Path) -> int:
+    def _effective_schema_version(self, path: Path) -> int:
+        with self._projection_lock:
+            cached = self._projection_cache.get(path)
+            if cached is not None and cached.identity == _file_identity(path.stat()):
+                self._load_projection(path.stem)
+                cached = self._projection_cache.get(path)
+                if cached is not None:
+                    return cached.schema
         effective = 0
         with path.open(encoding="utf-8") as file:
             for line_number, line in enumerate(file, 1):
@@ -672,7 +882,9 @@ class SessionRepository:
         # Read the active lineage projection instead of scanning every raw
         # turn. Abandoned answers and their compaction summaries remain
         # auditable in JSONL but are not retrieval candidates.
-        for turn_index, turn in enumerate(self.load(session_id).turns):
+        with self._projection_lock:
+            turns = tuple(self._load_projection(session_id).turns)
+        for turn_index, turn in enumerate(turns):
             if turn.status not in {"completed", "waiting_for_user"}:
                 continue
             compaction = turn.compaction
@@ -782,21 +994,48 @@ class SessionRepository:
             result["checkpoint"] = checkpoint.model_dump(mode="json")
         return result
 
-    def load(self, session_id: str) -> SessionData:
+    def load(self, session_id: str, *, revalidate: bool = False) -> SessionData:
+        with self._projection_lock:
+            return _copy_session_data(self._load_projection(session_id, revalidate=revalidate))
+
+    def load_overview(self, session_id: str) -> SessionOverview:
+        """Copy catalog facts only, without exposing or copying cached history."""
+        with self._projection_lock:
+            projection = self._load_projection(session_id)
+            return SessionOverview(projection.metadata, projection.catalog.model_copy(deep=True),
+                len(projection.turns), projection.turns[0].user_input if projection.turns else None)
+
+    def _load_projection(self, session_id: str, *, revalidate: bool = False) -> SessionData:
         path = self._path(session_id)
-        if not path.is_file():
-            raise FileNotFoundError(f"session not found: {session_id}")
-        payload = path.read_bytes()
-        projection_digest = hashlib.sha256(payload).hexdigest()
         cached = self._projection_cache.get(path)
-        if cached is not None and cached[0] == projection_digest:
-            return _copy_session_data(cached[1])
+        initial: SessionData | None = None
+        descriptor = os.open(path, os.O_RDONLY)
+        try:
+            identity = _file_identity(os.fstat(descriptor))
+            if cached is not None and not revalidate and cached.identity == identity:
+                self._projection_cache.move_to_end(path)
+                if not cached.pending:
+                    return cached.data
+                payload = cached.pending
+                initial = cached.data
+            else:
+                chunks: list[bytes] = []
+                while chunk := os.read(descriptor, 1024 * 1024):
+                    chunks.append(chunk)
+                payload = b"".join(chunks)
+            if identity != _file_identity(os.fstat(descriptor)) or identity != _file_identity(path.stat()):
+                raise SessionCorruptError(
+                    "session changed while reading; retry under the workspace writer lease"
+                )
+        finally:
+            os.close(descriptor)
         records: list[dict[str, Any]] = []
         try:
             text = payload.decode("utf-8")
         except UnicodeDecodeError as error:
             raise SessionCorruptError(f"session {path.name} is not UTF-8") from error
-        for line_number, line in enumerate(text.splitlines(), 1):
+        first_line = cached.line_count + 1 if initial is not None and cached is not None else 1
+        for line_number, line in enumerate(text.splitlines(), first_line):
             try:
                 raw_record: Any = json.loads(line)
             except json.JSONDecodeError as error:
@@ -804,6 +1043,8 @@ class SessionRepository:
             if not isinstance(raw_record, dict):
                 raise SessionCorruptError(f"record at line {line_number} is not an object")
             records.append(cast(dict[str, Any], raw_record))
+        if initial is not None and cached is not None:
+            records.insert(0, cached.header)
         if not records or records[0].get("type") != "session":
             raise SessionCorruptError("missing session header")
         header = records[0]
@@ -817,26 +1058,41 @@ class SessionRepository:
             created_at=str(header["created_at"]),
             path=path,
         )
-        turns: list[TurnRecord] = []
-        running_turn_positions: dict[str, int] = {}
+        turns: list[TurnRecord] = list(initial.turns) if initial is not None else []
+        running_turn_positions: dict[str, int] = {
+            turn.interaction_id: index for index, turn in enumerate(turns)
+            if turn.interaction_id is not None and turn.status == "running"
+        }
         # ``active_history`` is rebuilt turn-by-turn; whenever a compaction
         # record is present we restart from its compacted prefix so the model
         # doesn't see older turns it has already summarised.
-        active_history: list[ModelMessage] = []
-        full_history: list[ModelMessage] = []
-        latest_plan = PlanState()
-        latest_compaction_summary: Any = None
-        latest_compaction_checkpoint: Any = None
-        compacted_prefix_length = 0
-        compacted_source_end = 0
-        context_state = SessionContextState()
-        settings = SessionSettingsState()
-        catalog = SessionCatalogState()
-        work_state = SessionWorkState()
-        agent_state = SessionAgentState()
-        live_state = SessionLiveState()
-        effective_schema = int(schema_version)
-        for line_number, record in enumerate(records[1:], 2):
+        active_history = list(initial.history) if initial is not None else []
+        full_history = list(initial.full_history) if initial is not None else []
+        latest_plan = initial.plan if initial is not None else PlanState()
+        latest_compaction_summary: Any = initial.latest_compaction_summary if initial is not None else None
+        latest_compaction_checkpoint: Any = (
+            initial.latest_compaction_checkpoint if initial is not None else None
+        )
+        compacted_prefix_length = initial.compacted_prefix_length if initial is not None else 0
+        compacted_source_end = initial.compacted_source_end if initial is not None else 0
+        context_state = initial.context_state if initial is not None else SessionContextState()
+        settings = initial.settings if initial is not None else SessionSettingsState()
+        catalog = initial.catalog if initial is not None else SessionCatalogState()
+        work_state = initial.work_state if initial is not None else SessionWorkState()
+        agent_state = initial.agent_state if initial is not None else SessionAgentState()
+        live_state = initial.live_state if initial is not None else SessionLiveState()
+        effective_schema = (
+            cached.schema if initial is not None and cached is not None else int(schema_version)
+        )
+        for line_number, record in enumerate(records[1:], first_line if initial is not None else 2):
+            if record.get("type") == "session_repair":
+                try:
+                    if effective_schema < 12:
+                        raise ValueError("repair audit requires schema v12")
+                    _SessionRepairRecord.model_validate(record)
+                except ValueError as error:
+                    raise SessionCorruptError(f"invalid repair audit at line {line_number}") from error
+                continue
             if record.get("type") == "schema_upgrade":
                 from_version = int(record.get("from_version", 0))
                 to_version = int(record.get("to_version", 0))
@@ -888,6 +1144,10 @@ class SessionRepository:
                     work_state = SessionWorkState.model_validate(record.get("state"))
                 except ValueError as error:
                     raise SessionCorruptError(f"invalid work_state at line {line_number}") from error
+                if effective_schema < 12 and any(item.interaction_id for item in work_state.effects):
+                    raise SessionCorruptError(
+                        f"effect turn ownership requires schema v12 at line {line_number}"
+                    )
                 continue
             if record.get("type") == "effect":
                 if effective_schema < 7:
@@ -898,6 +1158,10 @@ class SessionRepository:
                     effect = EffectReceipt.model_validate(record.get("effect"))
                 except ValueError as error:
                     raise SessionCorruptError(f"invalid effect at line {line_number}") from error
+                if effective_schema < 12 and effect.interaction_id is not None:
+                    raise SessionCorruptError(
+                        f"effect turn ownership requires schema v12 at line {line_number}"
+                    )
                 work_state = work_state.upsert_effect(effect)
                 continue
             if record.get("type") == "agent_thread":
@@ -1031,8 +1295,59 @@ class SessionRepository:
                     update={"active_resources": (), "pending_clarification": None}
                 )
                 continue
+            is_checkpoint = record.get("type") == "turn_checkpoint"
+            if is_checkpoint:
+                if effective_schema < 12:
+                    raise SessionCorruptError(f"turn_checkpoint requires schema v12 at line {line_number}")
+                try:
+                    if "payload_ref" in record:
+                        reference = _CheckpointPayloadRecord.model_validate(record)
+                        body = self._checkpoint_artifacts.read(reference.payload_ref)
+                        if body is None or len(body) != reference.payload_bytes:
+                            raise ValueError("checkpoint payload is missing or has changed")
+                        record = _parse_json_record(body.decode(), line_number=line_number, path=path)
+                        references: set[str] = set()
+                        _collect_artifact_refs(record, references)
+                        if sorted(references) != reference.artifact_refs:
+                            raise ValueError("checkpoint artifact references have changed")
+                    _TurnCheckpointRecord.model_validate(record)
+                except (ValueError, ArtifactStoreError) as error:
+                    raise SessionCorruptError(f"invalid turn_checkpoint at line {line_number}") from error
             turn = _parse_turn(record, line_number=line_number)
             messages = turn.messages
+            if is_checkpoint:
+                position = running_turn_positions.get(turn.interaction_id or "")
+                if position is None or turn.checkpoint is None:
+                    raise SessionCorruptError(f"checkpoint has no running input at line {line_number}")
+                prior = turns[position]
+                boundary = turn.checkpoint
+                fingerprint = "sha256:" + hashlib.sha256(json.dumps(
+                    {key: value for key, value in record.items() if key != "created_at"}, sort_keys=True,
+                    separators=(",", ":"), ensure_ascii=False,
+                ).encode()).hexdigest()
+                if prior.checkpoint is not None and boundary.sequence == prior.checkpoint.sequence:
+                    if fingerprint != prior.checkpoint_record_digest:
+                        raise SessionCorruptError(f"checkpoint identity changed at line {line_number}")
+                    continue
+                expected_sequence = prior.checkpoint.sequence + 1 if prior.checkpoint is not None else 1
+                combined = [*prior.messages, *messages]
+                if (
+                    boundary.sequence != expected_sequence or boundary.prefix_count != len(prior.messages)
+                    or boundary.prefix_digest != turn_message_digest(prior.messages)
+                    or boundary.message_count != len(combined)
+                    or boundary.message_digest != turn_message_digest(combined)
+                    or validate_active_history(combined)
+                    or not messages or turn.user_input != prior.user_input
+                ):
+                    raise SessionCorruptError(f"checkpoint boundary mismatch at line {line_number}")
+                turn = replace(turn, messages=combined, checkpoint_record_digest=fingerprint)
+                turns[position] = turn
+                (
+                    active_history, full_history, latest_compaction_summary, latest_compaction_checkpoint,
+                    compacted_prefix_length, compacted_source_end,
+                ) = _project_turn_history(turns)
+                latest_plan = turn.plan
+                continue
             pending_position = (
                 running_turn_positions.pop(turn.interaction_id, None)
                 if turn.interaction_id is not None and turn.status != "running"
@@ -1043,6 +1358,26 @@ class SessionRepository:
                 if turn.interaction_id is not None and turn.status == "running":
                     running_turn_positions[turn.interaction_id] = len(turns) - 1
             else:
+                prior = turns[pending_position]
+                if prior.checkpoint is not None:
+                    if not messages and turn.status in {"failed", "cancelled"}:
+                        turn = replace(turn, messages=prior.messages, diagnostics=[
+                            *turn.diagnostics,
+                            {"kind": "completed_model_steps", "message_count": len(prior.messages)},
+                        ], recovery_receipts=prior.recovery_receipts)
+                    elif (
+                        turn_message_digest(messages[:len(prior.messages)]) != prior.checkpoint.message_digest
+                    ):
+                        raise SessionCorruptError(
+                            f"terminal checkpoint prefix mismatch at line {line_number}"
+                        )
+                    turns[pending_position] = turn
+                    (
+                        active_history, full_history, latest_compaction_summary, latest_compaction_checkpoint,
+                        compacted_prefix_length, compacted_source_end,
+                    ) = _project_turn_history(turns)
+                    latest_plan = turn.plan
+                    continue
                 turns[pending_position] = turn
             completed_steps = bool(messages) and any(
                 item.get("kind") == "completed_model_steps"
@@ -1116,8 +1451,19 @@ class SessionRepository:
             agent_state=agent_state,
             live_state=live_state,
         )
-        self._projection_cache[path] = (projection_digest, projection)
-        return _copy_session_data(projection)
+        prior_lines = cached.line_count if initial is not None and cached is not None else 1
+        self._projection_cache[path] = _CachedProjection(
+            identity, header, effective_schema, prior_lines + len(records) - 1, projection,
+            terminated=payload.endswith(b"\n"),
+        )
+        self._projection_cache.move_to_end(path)
+        # ponytail: bounded in-memory projections; rebuild from the journal on
+        # eviction, add a derived disk catalog only if cold reads justify it.
+        while len(self._projection_cache) > 32 or (
+            sum(item.identity[2] for item in self._projection_cache.values()) > 16 * 1024 * 1024
+        ):
+            self._projection_cache.popitem(last=False)
+        return projection
 
     def load_turn_page(
         self,
@@ -1137,13 +1483,15 @@ class SessionRepository:
         # Pagination is a view of the same active-lineage projection used by
         # model context. Keeping one projection authority prevents abandoned
         # branches from reappearing only in the UI after resume.
-        turns = self.load(session_id).turns
-        turn_count = len(turns)
-        end = turn_count if before is None else before
-        if not 0 <= end <= turn_count:
-            raise ValueError(f"invalid turn page cursor: {before}")
-        start = max(0, end - limit)
-        return TurnPage(turns=turns[start:end], next_before=start if start > 0 else None)
+        with self._projection_lock:
+            turns = self._load_projection(session_id).turns
+            turn_count = len(turns)
+            end = turn_count if before is None else before
+            if not 0 <= end <= turn_count:
+                raise ValueError(f"invalid turn page cursor: {before}")
+            start = max(0, end - limit)
+            return TurnPage(turns=[_copy_turn(turn) for turn in turns[start:end]],
+                            next_before=start if start > 0 else None)
 
     def list(self) -> list[SessionMetadata]:
         sessions: list[SessionMetadata] = []
@@ -1154,7 +1502,8 @@ class SessionRepository:
         )
         for path in paths:
             try:
-                sessions.append(self.load(path.stem).metadata)
+                with self._projection_lock:
+                    sessions.append(self._load_projection(path.stem).metadata)
             except (OSError, ValueError):
                 continue
         return sessions
@@ -1182,14 +1531,30 @@ def _parse_json_record(line: str, *, line_number: int, path: Path) -> dict[str, 
 
 
 def _copy_session_data(value: SessionData) -> SessionData:
-    """Return a caller-owned projection shell around immutable domain state."""
+    """Nested message parts, usage and Pydantic states remain caller-owned."""
 
-    return replace(
-        value,
-        turns=list(value.turns),
-        history=list(value.history),
-        full_history=list(value.full_history),
+    messages = {id(message): message for message in value.history + value.full_history}
+    for turn in value.turns:
+        messages.update((id(message), message) for message in turn.messages)
+    copies = ModelMessagesTypeAdapter.validate_python(
+        ModelMessagesTypeAdapter.dump_python(list(messages.values())),
     )
+    return deepcopy(value, dict(zip(messages, copies, strict=True)))
+
+
+def _copy_turn(turn: TurnRecord) -> TurnRecord:
+    # Copy the mutable boundary without invoking dataclass/pickle traversal
+    # for every scalar field on a small history page.
+    return replace(turn, **deepcopy({
+        "approvals": turn.approvals, "usage": turn.usage,
+        "diagnostics": turn.diagnostics, "compaction": turn.compaction,
+        "timeline_events": turn.timeline_events, "recovery_receipts": turn.recovery_receipts,
+        "provider_item_ids": turn.provider_item_ids, "live_metadata": turn.live_metadata,
+        "request_receipts": turn.request_receipts, "attachments": turn.attachments,
+    }), plan=PlanState.model_validate(turn.plan.model_dump()),
+        messages=ModelMessagesTypeAdapter.validate_python(
+        ModelMessagesTypeAdapter.dump_python(turn.messages),
+    ))
 
 
 def _collect_artifact_refs(value: object, output: set[str]) -> None:
@@ -1206,7 +1571,7 @@ def _collect_artifact_refs(value: object, output: set[str]) -> None:
 
 
 def _parse_turn(record: dict[str, Any], *, line_number: int) -> TurnRecord:
-    if record.get("type") != "turn":
+    if record.get("type") not in {"turn", "turn_checkpoint"}:
         raise SessionCorruptError(f"unknown record type at line {line_number}")
     try:
         messages = ModelMessagesTypeAdapter.validate_python(record["messages"])
@@ -1246,6 +1611,8 @@ def _parse_turn(record: dict[str, Any], *, line_number: int) -> TurnRecord:
                 AttachmentRef.model_validate(item)
                 for item in list(record.get("attachments") or [])
             ],
+            checkpoint=(TurnCheckpointBoundary.model_validate(record["checkpoint"])
+                        if record.get("type") == "turn_checkpoint" else None),
         )
     except (KeyError, TypeError, ValueError) as error:
         raise SessionCorruptError(f"invalid turn at line {line_number}") from error
@@ -1270,7 +1637,7 @@ def _project_turn_history(
             for item in turn.diagnostics
         ) and not validate_active_history(messages)
         if turn.status not in {"completed", "waiting_for_user"} and not (
-            turn.status in {"failed", "cancelled"} and completed_steps
+            (turn.status in {"failed", "cancelled"} or turn.checkpoint is not None) and completed_steps
         ):
             continue
         covered_messages = 0

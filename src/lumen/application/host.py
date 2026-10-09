@@ -5,6 +5,7 @@ import hashlib
 import json
 import mimetypes
 import re
+import time
 from collections import Counter
 from collections.abc import AsyncIterator, Awaitable, Callable, Generator
 from contextlib import contextmanager
@@ -14,7 +15,7 @@ from pathlib import Path
 from typing import Any, Protocol, cast, overload
 from uuid import uuid4
 
-from lumen.agents.types import ACTIVE_AGENT_STATUSES
+from lumen.agents.types import ACTIVE_AGENT_STATUSES, AgentStatus
 from lumen.approval import ApprovalDecision, ApprovalMode, ApprovalPolicy
 from lumen.attachments import (
     MAX_ATTACHMENTS_PER_INPUT,
@@ -50,6 +51,7 @@ from lumen.events import (
 from lumen.files import expand_file_mentions
 from lumen.files.documents import read_workspace_document
 from lumen.interactive_queue import QueuedMessage, QueueMode
+from lumen.io import run_io
 from lumen.live import LiveConnectRequest, LiveEvent
 from lumen.live.manager import LiveSessionManager
 from lumen.live.types import LiveConnectionState
@@ -58,16 +60,18 @@ from lumen.reasoning import ReasoningLevel, ReasoningSelection, apply_reasoning,
 from lumen.run_coordinator import RunCoordinator, RunInput
 from lumen.run_diagnostics import build_run_diagnostic
 from lumen.runtime import AgentRuntime, CompletionPolicy, ToolApproval
-from lumen.sessions import SessionData, SessionMetadata, SessionRepository
+from lumen.sessions import SessionCorruptError, SessionData, SessionMetadata, SessionRepository
 from lumen.skills import expand_skill_for_message
 from lumen.timeline import RepositoryTimelineAdapter, TimelineStore
 from lumen.tools.gateway import CapabilityApproval, CapabilityInvocation
 from lumen.tools.spec import EffectKind
 from lumen.tools.workspace import Workspace
 from lumen.trust import ApprovalRuleStore
+from lumen.work_products import TaskWorkspace
 
 from .events import EventJournal
 from .models import (
+    ApplyTurnRestore,
     ApprovalAlreadyResolvedError,
     ApprovalStateError,
     ApproveAgentImport,
@@ -96,6 +100,7 @@ from .models import (
     GetInstructions,
     ImportAttachmentPath,
     InspectReasoning,
+    InspectSessionRepair,
     InterruptAgent,
     InterruptLiveSession,
     InvalidStateError,
@@ -110,11 +115,13 @@ from .models import (
     ListMcpResources,
     ListSessions,
     LiveStartedResult,
+    PreviewTurnRestore,
     QueueRunInput,
     RejectAgentImport,
     RejectChildImport,
     RejectPlan,
     RenameSession,
+    RepairSessionJournal,
     RetryRun,
     RunDirectCommand,
     RunNotFoundError,
@@ -193,6 +200,7 @@ class _RunRecord:
     task: asyncio.Task[None] | None = None
     approvals: dict[str, _PendingApproval] = field(default_factory=dict[str, _PendingApproval])
     status: str = "running"
+    ended_at: float | None = None
 
 
 @dataclass(slots=True)
@@ -210,9 +218,11 @@ class WorkspaceHost:
     def __init__(self, resources: WorkspaceResources) -> None:
         self.resources = resources
         self._sessions: dict[str, _SessionActor] = {}
+        self._session_approval_keys: dict[str, set[str]] = {}
         self._runs: dict[str, _RunRecord] = {}
         self._requests: dict[tuple[str, str], str] = {}
         self._fork_requests: dict[tuple[str, str], tuple[ForkSessionAtTurn, SessionCreated]] = {}
+        self._restore_requests: dict[tuple[str, str], tuple[ApplyTurnRestore, CommandAcknowledged]] = {}
         self._active_run_id: str | None = None
         self._state_lock = asyncio.Lock()
         self._workspace_run_lock = WorkspaceRunLock(resources.workspace)
@@ -253,7 +263,7 @@ class WorkspaceHost:
             # an active workspace run. The recorded turn remains the source.
             pending = [
                 metadata.id for metadata in self.resources.session_repository.list()
-                if (catalog := self.resources.session_repository.load(metadata.id).catalog)
+                if (catalog := self.resources.session_repository.load_overview(metadata.id).catalog)
                 .title_generation_turn is not None and catalog.deleted_at is None
             ]
             if pending and self._workspace_run_lock.acquire():
@@ -267,9 +277,7 @@ class WorkspaceHost:
     async def close(self) -> None:
         if self._active_run_id is not None:
             try:
-                await asyncio.wait_for(self._cancel(self._active_run_id), timeout=10)
-            except TimeoutError:
-                pass
+                await self._cancel(self._active_run_id)
             except RunNotFoundError:
                 pass
         for live_session_id in tuple(self._live_approvals):
@@ -282,6 +290,17 @@ class WorkspaceHost:
         for task in title_tasks:
             task.cancel()
         await asyncio.gather(*title_tasks, return_exceptions=True)
+        tasks = [record.task for record in self._runs.values() if record.task is not None]
+        await asyncio.gather(*tasks, return_exceptions=True)
+        for record in self._runs.values():
+            if record.ended_at is not None and not record.journal.subscriber_count:
+                record.journal.dispose()
+        self._runs.clear()
+        self._sessions.clear()
+        self._session_approval_keys.clear()
+        self._requests.clear()
+        self._fork_requests.clear()
+        self._restore_requests.clear()
         if self._opened:
             await self.resources.close()
             self._opened = False
@@ -378,6 +397,10 @@ class WorkspaceHost:
             | ApproveAgentImport
             | RejectAgentImport
             | ListCheckpoints
+            | InspectSessionRepair
+            | RepairSessionJournal
+            | PreviewTurnRestore
+            | ApplyTurnRestore
             | CancelChildRun
             | ApproveChildImport
             | RejectChildImport
@@ -395,6 +418,7 @@ class WorkspaceHost:
     ) -> CommandAcknowledged: ...
 
     async def dispatch(self, command: WorkspaceCommand) -> CommandResult:
+        self._reap_runs()
         if isinstance(command, GetBootstrap):
             return self._bootstrap()
         if isinstance(command, StoreAttachment):
@@ -574,6 +598,88 @@ class WorkspaceHost:
                     }
                 )
             return CommandAcknowledged("ok", {"items": items})
+        if isinstance(command, InspectSessionRepair):
+            try:
+                inspection = await run_io(
+                    self.resources.session_repository.inspect_tail_repair, command.session_id,
+                )
+            except (SessionCorruptError, OSError) as error:
+                raise InvalidStateError(str(error)) from error
+            return CommandAcknowledged("repair_preview", inspection)
+        if isinstance(command, PreviewTurnRestore):
+            with self._session_management(command.session_id):
+                result = await run_io(self._preview_turn_restore, command.session_id, command.before_turn)
+            return CommandAcknowledged("restore_preview", result)
+        if isinstance(command, ApplyTurnRestore):
+            if command.confirmed is not True or not command.client_request_id:
+                raise InvalidStateError("file restore requires explicit human confirmation and a request ID")
+            key = command.session_id, command.client_request_id
+            prior = self._restore_requests.get(key)
+            if prior is not None:
+                if prior[0] != command:
+                    raise InvalidStateError("restore request ID was reused with different parameters")
+                return prior[1]
+            if len(self._restore_requests) >= 10000:
+                raise InvalidStateError("Host restore identity capacity reached")
+            with self._session_management(command.session_id):
+                preview = await run_io(self._preview_turn_restore, command.session_id, command.before_turn)
+                if preview["digest"] != command.expected_digest or preview["blockers"]:
+                    raise InvalidStateError(
+                        "restore preview is stale or has unresolved conflicts", details=preview,
+                    )
+                workspace = cast(TaskWorkspace | None, getattr(self.resources, "task_workspace", None))
+                if workspace is None:
+                    raise InvalidStateError("work products are disabled")
+                completed: list[CommandAcknowledged] = []
+                def restore() -> None:
+                    workspace.bind_session(command.session_id)
+                    workspace.bind_interaction(None)
+                    restored: list[dict[str, Any]] = []
+                    failed: dict[str, str] | None = None
+                    for item in preview["files"]:
+                        try:
+                            restored.append(workspace.restore_work_product(
+                                item["work_product_id"], item["target_revision"],
+                            ))
+                        except Exception as error:
+                            failed = {"resource": item["resource"], "error": str(error)}
+                            break
+                    completed.append(CommandAcknowledged("partial_failure" if failed else "restored", {
+                        "restored": restored, "failed": failed, "excluded": preview["excluded"],
+                        "conversation_changed": False,
+                    }))
+                cancelled: asyncio.CancelledError | None = None
+                try:
+                    await run_io(restore)
+                except asyncio.CancelledError as error:
+                    cancelled = error
+                result = completed[0]
+                self._restore_requests[key] = command, result
+                if cancelled is not None:
+                    raise cancelled
+                return result
+        if isinstance(command, RepairSessionJournal):
+            if command.confirmed is not True:
+                raise InvalidStateError(
+                    "journal repair requires an explicit human confirmation of its preview"
+                )
+            async with self._state_lock:
+                if self._active_run_id or self._live_execution_id or self._workspace_run_lock.held:
+                    raise WorkspaceBusyError("cannot repair a journal while the workspace is running")
+                if not self._workspace_run_lock.acquire():
+                    raise WorkspaceBusyError("another Lumen process is running in this workspace")
+                try:
+                    try:
+                        result = await run_io(
+                            self.resources.session_repository.repair_tail, command.session_id,
+                            expected_digest=command.expected_digest,
+                        )
+                    except (SessionCorruptError, OSError) as error:
+                        raise InvalidStateError(str(error)) from error
+                    self._sessions.pop(command.session_id, None)
+                finally:
+                    self._workspace_run_lock.release()
+            return CommandAcknowledged("repaired", result)
         if isinstance(command, ForkSessionAtTurn):
             async with self._state_lock:
                 source = self._managed_session(command.session_id)
@@ -583,6 +689,8 @@ class WorkspaceHost:
                     if previous[0] != command:
                         raise InvalidStateError("fork request ID was already used with different parameters")
                     return previous[1]
+                if len(self._fork_requests) >= 10000:
+                    raise InvalidStateError("Host fork identity capacity reached")
                 if self._active_run_id is not None or self._live_execution_id is not None:
                     raise WorkspaceBusyError("cannot fork while an agent or Live execution is active")
                 if not 0 <= command.through_turn < len(source.turns):
@@ -779,15 +887,15 @@ class WorkspaceHost:
     def _list_sessions(self, *, include_archived: bool = False) -> SessionList:
         items: list[SessionSummary] = []
         for metadata in self.resources.session_repository.list():
-            loaded = self.resources.session_repository.load(metadata.id)
+            loaded = self.resources.session_repository.load_overview(metadata.id)
             if loaded.catalog.deleted_at is not None:
                 continue
             archived = loaded.catalog.archived_at is not None
             if archived and not include_archived:
                 continue
-            if not loaded.turns and loaded.catalog.title is None:
+            if not loaded.turn_count and loaded.catalog.title is None:
                 continue
-            title = loaded.catalog.title or loaded.turns[0].user_input.strip()
+            title = loaded.catalog.title or (loaded.first_user_input or "").strip()
             if len(title) > 60:
                 title = title[:57].rstrip() + "…"
             items.append(
@@ -898,6 +1006,49 @@ class WorkspaceHost:
         if loaded.catalog.deleted_at is not None and not include_deleted:
             raise SessionNotFoundError(f"session not found: {session_id}")
         return loaded
+
+    def _preview_turn_restore(self, session_id: str, before_turn: int) -> dict[str, Any]:
+        loaded = self.resources.session_repository.load(session_id, revalidate=True)
+        if any(thread.status in {AgentStatus.IMPORT_PENDING, AgentStatus.RECONCILIATION_REQUIRED}
+               for thread in loaded.agent_state.threads):
+            raise InvalidStateError("resolve pending Agent imports and reconciliation before restoring files")
+        if isinstance(before_turn, bool) or not 0 <= before_turn < len(loaded.turns):
+            raise InvalidStateError("restore turn index out of range")
+        workspace = cast(TaskWorkspace | None, getattr(self.resources, "task_workspace", None))
+        if workspace is None:
+            raise InvalidStateError("work products are disabled")
+        workspace.bind_session(session_id)
+        workspace.bind_interaction(None)
+        interactions = {turn.interaction_id for turn in loaded.turns[before_turn:] if turn.interaction_id}
+        targets: dict[str, Any] = {}
+        excluded: list[dict[str, Any]] = []
+        blockers: list[dict[str, str]] = []
+        for effect in loaded.work_state.effects:
+            if effect.interaction_id not in interactions:
+                if effect.interaction_id is None:
+                    excluded.append({"id": effect.id, "reason": "turn ownership is unavailable"})
+                continue
+            if effect.status.value in {"not_applied", "rolled_back"}:
+                continue
+            if (
+                effect.effect_kind is not EffectKind.MUTATION or effect.before is None or effect.after is None
+                or not effect.work_product_id
+            ):
+                excluded.append({"id": effect.id, "reason": "no restorable file snapshot"})
+                continue
+            targets.setdefault(effect.work_product_id, effect)
+        files: list[dict[str, Any]] = []
+        for product_id, effect in targets.items():
+            try:
+                files.append(workspace.preview_restore(product_id, effect.before.revision))
+            except Exception as error:
+                blockers.append({"resource": effect.resource or product_id, "error": str(error)})
+        result = {"session_id": session_id, "before_turn": before_turn, "files": files,
+                  "blockers": blockers, "excluded": excluded,
+                  "scope": "Recorded files only; shell, remote effects and conversation are separate."}
+        return {**result, "digest": "sha256:" + hashlib.sha256(
+            json.dumps(result, sort_keys=True, ensure_ascii=False).encode(),
+        ).hexdigest()}
 
     @contextmanager
     def _session_management(
@@ -1012,8 +1163,15 @@ class WorkspaceHost:
 
     async def subscribe(self, run_id: str, after_sequence: int | None = None) -> AsyncIterator[EventEnvelope]:
         record = self._run(run_id)
-        async for event in record.journal.subscribe(after_sequence):
-            yield event
+        subscription = record.journal.subscribe(after_sequence)
+        try:
+            async for event in subscription:
+                yield event
+        finally:
+            await subscription.aclose()
+            self._reap_runs()
+            if not self._opened and record.ended_at is not None and not record.journal.subscriber_count:
+                record.journal.dispose()
 
     def interactive_queue_snapshot(self) -> tuple[QueuedMessage, ...]:
         """Read-only projection of the runtime-owned interactive queue."""
@@ -1116,10 +1274,16 @@ class WorkspaceHost:
     def _actor(self, session_id: str) -> _SessionActor:
         # Another Host can append a tombstone after this actor was cached.
         # The journal remains authoritative for every public access.
-        loaded = self._managed_session(session_id)
         actor = self._sessions.get(session_id)
         if actor is not None:
+            try:
+                overview = self.resources.session_repository.load_overview(session_id)
+            except FileNotFoundError as error:
+                raise SessionNotFoundError(str(error)) from error
+            if overview.catalog.deleted_at is not None:
+                raise SessionNotFoundError(f"session not found: {session_id}")
             return actor
+        loaded = self._managed_session(session_id)
         try:
             coordinator = self._coordinator()
             state = coordinator.resume(session_id)
@@ -1136,6 +1300,7 @@ class WorkspaceHost:
         # Cross-session "always" rules carry over from previous sessions; the
         # project-scoped store is the persistence authority for them.
         actor.approval_keys.update(self._persistent_approval_keys)
+        actor.approval_keys.update(self._session_approval_keys.get(session_id, ()))
         self._sessions[session_id] = actor
         self._apply_startup_reasoning(actor)
         return actor
@@ -1183,6 +1348,10 @@ class WorkspaceHost:
             if previous_id is not None:
                 previous = self._run(previous_id)
                 return RunStartedResult(previous.id, previous.session_id, previous.status)
+            if len(self._requests) >= 10000:
+                raise InvalidStateError(
+                    "Host request identity capacity reached; restart the Host for new runs"
+                )
             if self._active_run_id is not None:
                 raise WorkspaceBusyError(
                     "another agent run is active",
@@ -1202,6 +1371,7 @@ class WorkspaceHost:
                 # A read-only Host may have cached this actor while another
                 # process held the execution lock. Refresh from the journal
                 # after admission so the new writer cannot run from stale state.
+                self.resources.session_repository.load(command.session_id, revalidate=True)
                 loaded = self._managed_session(command.session_id)
                 if loaded.catalog.archived_at is not None:
                     raise InvalidStateError("restore the archived Session before starting a run")
@@ -1317,6 +1487,10 @@ class WorkspaceHost:
             if previous_id is not None:
                 previous = self._run(previous_id)
                 return RunStartedResult(previous.id, previous.session_id, previous.status)
+            if len(self._requests) >= 10000:
+                raise InvalidStateError(
+                    "Host request identity capacity reached; restart the Host for new runs"
+                )
             if self._active_run_id is not None:
                 raise WorkspaceBusyError(
                     "another agent run is active",
@@ -1394,6 +1568,7 @@ class WorkspaceHost:
             task_workspace = getattr(self.resources, "task_workspace", None)
             if task_workspace is not None:
                 task_workspace.bind_session(record.session_id)
+                task_workspace.bind_interaction(record.id)
             result = await gateway.invoke(
                 CapabilityInvocation(
                     execution_id=record.id,
@@ -1444,6 +1619,7 @@ class WorkspaceHost:
                     self._active_run_id = None
                     self._workspace_run_lock.release()
             await record.journal.close()
+            record.ended_at = time.monotonic()
 
     async def _execute(
         self,
@@ -1514,6 +1690,10 @@ class WorkspaceHost:
             return results
 
         prepared_prompt = model_prompt or expand_file_mentions(text, Workspace(self.resources.workspace))
+        task_workspace = getattr(self.resources, "task_workspace", None)
+        if task_workspace is not None:
+            task_workspace.bind_session(record.session_id)
+            task_workspace.bind_interaction(record.id)
         prepared_prompt = apply_collaboration_context(prepared_prompt, actor.settings.collaboration_mode)
         orchestrator = getattr(self.resources, "agent_orchestrator", None)
         if orchestrator is not None:
@@ -1635,6 +1815,8 @@ class WorkspaceHost:
                 runtime_factory = getattr(self.resources, "agent_runtime_factory", None)
                 if runtime_factory is not None:
                     runtime_factory.bind_approval_handler(None)
+            if task_workspace is not None:
+                task_workspace.bind_interaction(None)
             self._resolve_pending(record, approved=False, message="run ended")
             actor.active_run_id = None
             async with self._state_lock:
@@ -1642,12 +1824,57 @@ class WorkspaceHost:
                     self._active_run_id = None
                     self._workspace_run_lock.release()
             await record.journal.close()
+            record.ended_at = time.monotonic()
+
+    def _reap_runs(self) -> None:
+        now = time.monotonic()
+        released_sessions: set[str] = set()
+        completed = [record for record in self._runs.values() if record.ended_at is not None]
+        excess = max(0, len(completed) - 32)
+        for record in completed:
+            if record.journal.subscriber_count or (record.task is not None and not record.task.done()):
+                continue
+            actor = self._sessions.get(record.session_id)
+            if actor is not None and actor.settings.execution_run_id == record.id and (
+                actor.settings.plan_review_status is not PlanReviewStatus.NONE
+            ):
+                continue
+            if not excess and record.ended_at is not None and now - record.ended_at < 1800:
+                continue
+            record.journal.dispose()
+            self._runs.pop(record.id)
+            excess = max(0, excess - 1)
+            if (
+                actor is not None and actor.active_run_id is None
+                and actor.settings.plan_review_status is PlanReviewStatus.NONE
+            ):
+                if actor.approval_keys:
+                    self._session_approval_keys[record.session_id] = actor.approval_keys
+                self._sessions.pop(record.session_id, None)
+                released_sessions.add(record.session_id)
+        # Identity evidence deliberately outlives heavyweight replay objects.
+        # A late duplicate fails explicitly instead of dispatching tools again.
+        for session_id, actor in tuple(self._sessions.items()):
+            if len(self._sessions) <= 32:
+                break
+            if actor.active_run_id is None and actor.settings.plan_review_status is PlanReviewStatus.NONE:
+                if actor.approval_keys:
+                    self._session_approval_keys[session_id] = actor.approval_keys
+                self._sessions.pop(session_id, None)
+                released_sessions.add(session_id)
+        workspace = getattr(self.resources, "task_workspace", None)
+        if isinstance(workspace, TaskWorkspace):
+            for session_id in released_sessions:
+                workspace.release_session_projection(session_id)
 
     def _run(self, run_id: str) -> _RunRecord:
         try:
             return self._runs[run_id]
         except KeyError as error:
-            raise RunNotFoundError(f"run not found: {run_id}") from error
+            raise RunNotFoundError(
+                f"run replay expired or not found: {run_id}; reload the Session transcript",
+                details={"code": "run_expired"},
+            ) from error
 
     async def _cancel(self, run_id: str) -> CommandAcknowledged:
         record = self._run(run_id)

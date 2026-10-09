@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import inspect
 import json
 import time
 from collections.abc import Awaitable, Callable, Mapping, Sequence
@@ -585,7 +586,7 @@ class CapabilityGateway:
             if capability.descriptor.effect_kind in {
                 EffectKind.UNKNOWN, EffectKind.EXTERNAL_ACTION, EffectKind.MUTATION, EffectKind.EXECUTION,
             }:
-                receipt_id = self._record_effect(capability, invocation.name, None, "prepared")
+                receipt_id = await self._record_effect(capability, invocation.name, None, "prepared")
             execution_started = time.monotonic()
             try:
                 if isinstance(capability, _LocalCapability):
@@ -601,13 +602,13 @@ class CapabilityGateway:
                 execution_seconds = time.monotonic() - execution_started
             canonical = contract.validate(raw_result)
         except asyncio.CancelledError as error:
-            self._finish_failure(
+            await self._finish_failure(
                 key, invocation, capability, error, receipt_id=receipt_id,
                 execution_seconds=execution_seconds,
             )
             raise
         except Exception as error:  # provider-facing calls must receive a typed failure
-            return self._finish_failure(
+            return await self._finish_failure(
                 key, invocation, capability, error, receipt_id=receipt_id,
                 execution_seconds=execution_seconds,
             )
@@ -650,7 +651,7 @@ class CapabilityGateway:
         if record_recovery and self._record_success is not None:
             self._record_success(invocation, canonical)
         receipt_id = (
-            self._record_effect(capability, invocation.name, True, "succeeded", receipt_id=receipt_id)
+            await self._record_effect(capability, invocation.name, True, "succeeded", receipt_id=receipt_id)
             if record_effect
             else None
         )
@@ -687,7 +688,7 @@ class CapabilityGateway:
                 result = result.model_copy(update={"model_output": modified_output})
         return self._store(key, result)
 
-    def _finish_failure(
+    async def _finish_failure(
         self,
         key: str,
         invocation: CapabilityInvocation,
@@ -698,7 +699,7 @@ class CapabilityGateway:
         execution_seconds: float | None = None,
     ) -> CapabilityResult:
         message = f"{type(error).__name__}: {error}"
-        receipt_id = self._record_effect(
+        receipt_id = await self._record_effect(
             capability, invocation.name, False, message, receipt_id=receipt_id,
         )
         call_view = self._presenter.call_view(
@@ -727,7 +728,7 @@ class CapabilityGateway:
             ),
         )
 
-    def _record_effect(
+    async def _record_effect(
         self,
         capability: _LocalCapability | _ExternalCapability,
         name: str,
@@ -750,6 +751,8 @@ class CapabilityGateway:
             summary=f"{name} {summary}",
             **kwargs,
         )
+        if inspect.isawaitable(receipt):
+            receipt = await receipt
         value = getattr(receipt, "id", None)
         return str(value) if value is not None else None
 

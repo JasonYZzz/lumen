@@ -151,7 +151,7 @@ Realtime 保持独立 transport Adapter，但共享 Gateway、Effect 和 Complet
 - 只验证上述旧 graph 的 fixture 和测试。
 
 删除依据是同一模型—工具 Loop 权威已由 Lumen Implementation 完全替代且对应入口生产引用归零。保留
-`PydanticAIModelDriver`、PydanticAI Provider Adapter、Session v11 `ModelMessage`、有实际价值的
+`PydanticAIModelDriver`、PydanticAI Provider Adapter、Session v12 `ModelMessage`、有实际价值的
 ToolDefinition/schema Adapter、无工具的结构化摘要/提取 Adapter，以及 Provider/Session/公开 Interface
 契约测试。
 
@@ -162,7 +162,7 @@ ToolDefinition/schema Adapter、无工具的结构化摘要/提取 Adapter，以
 
 以下内容不属于本决策的关键路径：
 
-- Session v11 之后的新 canonical message schema；
+- Session v12 之后的新 canonical message schema；
 - Lumen 原生 OpenAI、Anthropic、Google、Ollama Driver；
 - 公开 YAML/CLI Loop selector；
 - 线上有副作用的双 Loop shadow；
@@ -179,7 +179,7 @@ Provider 能力不发生不可接受退化”，而不是依赖数量或代码�
   tool arguments delta、usage/cache、private part 以及 stop/length/refusal/suspended/unknown；
 - 执行与恢复：参数冻结、deferred 发现、审批、Hook、并发、timeout/cancel、unknown effect 对账、
   附件、澄清、steer/follow-up，以及 Agent 权限交集、worktree 导入与完成门禁；
-- Surface 与持久化：Default、Plan、TUI、Web/SSE、headless 共用同一契约；Session v1–v11 可读，
+- Surface 与持久化：Default、Plan、TUI、Web/SSE、headless 共用同一契约；Session v1–v12 可读，
   加载不改写，实际请求均生成 Manifest/receipt；
 - 静态检查、测试、生成物与打包按仓库 `AGENTS.md` 的风险分层执行；从构建 wheel 执行
   `lumen --version` 与 `lumen --check-config`；

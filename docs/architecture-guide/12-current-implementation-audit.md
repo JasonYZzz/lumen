@@ -1,6 +1,6 @@
 # 12. 当前实现审计
 
-> 最近复核：2026-09-17（基线审计：2026-09-04）。本文是源码与契约测试的横截面，不是新的架构决策；Accepted 决策以 10、11、13 章为准。
+> 最近复核：2026-10-09（基线审计：2026-09-04）。本文是源码与契约测试的横截面，不是新的架构决策；Accepted 决策以 10、11、13、14.7 章为准。
 
 ## 12.1 审计方法
 
@@ -60,7 +60,7 @@
 
 ## 12.4 已确认的实现演进
 
-1. **Session 已是 v11。** v5 Context、v6 Settings/Plan、v7 Work Product、v8 Agent、v9 Live、v10 推理选择、v11 `history_rewind` 事实都通过追加 `schema_upgrade` 支持历史会话；marker 必须形成连续的有效 schema 链，且不重写 header。
+1. **Session 已是 v12。** v5 Context、v6 Settings/Plan、v7 Work Product、v8 Agent、v9 Live、v10 推理选择、v11 `history_rewind`、v12 完整批次/维修/Effect turn 归属都通过追加 `schema_upgrade` 支持历史会话；marker 必须形成连续的有效 schema 链，且不重写 header。
 2. **Sandbox 已进入生产路径。** 默认 `workspace_write` 使用 Seatbelt/bubblewrap 且 fail closed；旧文档“仅实现审批和路径限制”已失效。
 3. **审批增加项目永久范围。** `always` 规则由 `ApprovalRuleStore` 以项目 identity 持久化，不污染配置 YAML。
 4. **Provider reasoning 可展示。** `ThinkingDelta` 与最终文本、commentary 分离，只作为 timeline 展示，不进入 completion 文本。
@@ -135,11 +135,12 @@ Host pending effects 展示，用户可通过现有 waiver Interface 带依据�
 状态，不自动提交或宣告完成。对应契约覆盖在 effect recovery、WorkspaceHost、agent execution、
 context engine、multi-model 和 live lifecycle 测试中。
 
-仍需独立设计和验证：Runtime `_run` 的大范围状态机重构、Host/SSE 和幂等结果的安全保留策略、
-Session 增量投影缓存、Orchestrator task/semaphore 回收、稳定嵌入协议、真实 Provider E2E
-与性能基线。不能直接裁剪事件或幂等结果来掩盖内存增长，否则可能破坏重连或重放安全。
+2026-10-09 已增加 Session 身份绑定的增量投影缓存、按字节有界的事件尾部、临时磁盘回放和
+Host 完成 run 回收；过期身份拒绝再执行。仍需独立验证：Runtime 大范围状态机重构、冷会话索引、
+Orchestrator task/semaphore 回收、稳定嵌入协议、真实 Provider E2E 与跨平台性能。
+事件内存有界不等于临时回放磁盘有界；完整 load 的防御复制成本也不能被列表加速掩盖。
 
-- 保留 v1–v10 Session 只读兼容；升级只追加，不原地迁移。
+- 保留 v1–v11 Session 只读兼容；升级只追加，不原地迁移。
 - 配置仍为 v2；v1 仅内存迁移并警告。
 - `Risk`、`EffectKind` 与 `ToolConcurrency` 保持三轴独立；未知远端动作不自动重放，未声明并发安全时使用 exclusive。
 - `ToolGuard` 只有 abstain/deny；任一 deny 都不能被后续 Hook 或 Adapter 放宽。

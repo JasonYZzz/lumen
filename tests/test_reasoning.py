@@ -244,7 +244,10 @@ def test_explicit_choice_cleans_nested_controls_but_preserves_other_body_fields(
 def test_reasoning_upgrades_old_session_append_only(tmp_path: Path, version: int) -> None:
     repository = SessionRepository(tmp_path)
     session = repository.create(agent_name="test", model_id="test")
-    header = session.path.read_text().replace('"schema_version":11', f'"schema_version":{version}')
+    from lumen.sessions import SCHEMA_VERSION
+    header = session.path.read_text().replace(
+        f'"schema_version":{SCHEMA_VERSION}', f'"schema_version":{version}'
+    )
     session.path.write_text(header)
     assert not repository.load(session.id).settings.reasoning
     assert session.path.read_text() == header

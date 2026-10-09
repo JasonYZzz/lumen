@@ -4115,7 +4115,7 @@
     }
   ],
   "session": {
-    "current_schema": 11,
+    "current_schema": 12,
     "model_input_manifest": {
       "$defs": {
         "ContextZone": {
@@ -4422,7 +4422,9 @@
       "session",
       "session_catalog",
       "session_settings",
+      "session_repair",
       "turn",
+      "turn_checkpoint",
       "work_state"
     ],
     "request_receipt": {
@@ -4828,7 +4830,8 @@
       8,
       9,
       10,
-      11
+      11,
+      12
     ],
     "upgrade_policy": "append-only schema_upgrade; never rewrite prior records"
   },
@@ -5034,6 +5037,45 @@
   },
   "workspace_commands": {
     "$defs": {
+      "ApplyTurnRestore": {
+        "properties": {
+          "before_turn": {
+            "title": "Before Turn",
+            "type": "integer"
+          },
+          "client_request_id": {
+            "title": "Client Request Id",
+            "type": "string"
+          },
+          "confirmed": {
+            "default": false,
+            "title": "Confirmed",
+            "type": "boolean"
+          },
+          "expected_digest": {
+            "title": "Expected Digest",
+            "type": "string"
+          },
+          "session_id": {
+            "title": "Session Id",
+            "type": "string"
+          },
+          "type": {
+            "const": "apply_turn_restore",
+            "default": "apply_turn_restore",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "session_id",
+          "before_turn",
+          "expected_digest",
+          "client_request_id"
+        ],
+        "title": "ApplyTurnRestore",
+        "type": "object"
+      },
       "ApproveAgentImport": {
         "properties": {
           "agent_id": {
@@ -5591,6 +5633,25 @@
         "title": "InspectReasoning",
         "type": "object"
       },
+      "InspectSessionRepair": {
+        "properties": {
+          "session_id": {
+            "title": "Session Id",
+            "type": "string"
+          },
+          "type": {
+            "const": "inspect_session_repair",
+            "default": "inspect_session_repair",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "session_id"
+        ],
+        "title": "InspectSessionRepair",
+        "type": "object"
+      },
       "InterruptAgent": {
         "properties": {
           "agent_id": {
@@ -5870,6 +5931,30 @@
         "title": "ListSessions",
         "type": "object"
       },
+      "PreviewTurnRestore": {
+        "properties": {
+          "before_turn": {
+            "title": "Before Turn",
+            "type": "integer"
+          },
+          "session_id": {
+            "title": "Session Id",
+            "type": "string"
+          },
+          "type": {
+            "const": "preview_turn_restore",
+            "default": "preview_turn_restore",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "session_id",
+          "before_turn"
+        ],
+        "title": "PreviewTurnRestore",
+        "type": "object"
+      },
       "QueueRunInput": {
         "properties": {
           "attachments": {
@@ -6039,6 +6124,35 @@
           "title"
         ],
         "title": "RenameSession",
+        "type": "object"
+      },
+      "RepairSessionJournal": {
+        "properties": {
+          "confirmed": {
+            "default": false,
+            "title": "Confirmed",
+            "type": "boolean"
+          },
+          "expected_digest": {
+            "title": "Expected Digest",
+            "type": "string"
+          },
+          "session_id": {
+            "title": "Session Id",
+            "type": "string"
+          },
+          "type": {
+            "const": "repair_session_journal",
+            "default": "repair_session_journal",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "session_id",
+          "expected_digest"
+        ],
+        "title": "RepairSessionJournal",
         "type": "object"
       },
       "RetryRun": {
@@ -6662,6 +6776,18 @@
       },
       {
         "$ref": "#/$defs/ListCheckpoints"
+      },
+      {
+        "$ref": "#/$defs/InspectSessionRepair"
+      },
+      {
+        "$ref": "#/$defs/RepairSessionJournal"
+      },
+      {
+        "$ref": "#/$defs/PreviewTurnRestore"
+      },
+      {
+        "$ref": "#/$defs/ApplyTurnRestore"
       },
       {
         "$ref": "#/$defs/ForkSessionAtTurn"

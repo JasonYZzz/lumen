@@ -108,7 +108,8 @@ def test_run_diagnostic_is_bounded_and_omits_sensitive_content() -> None:
 
     assert diagnostic["request_count"] == 2
     assert diagnostic["tool_call_count"] == 1
-    assert diagnostic["model_context_host_seconds_estimate"] == 4.0
+    assert diagnostic["model_context_host_seconds_estimate"] is None
+    assert diagnostic["model_attempt_seconds_sum"] is None
     assert diagnostic["usage"] == {
         "input_tokens": 100,
         "output_tokens": 20,
@@ -143,3 +144,32 @@ def test_running_turn_is_projected_as_interrupted() -> None:
     )
 
     assert build_run_diagnostic(turn)["status"] == "interrupted"
+
+
+def test_parallel_timing_retries_and_missing_cache_are_not_inferred() -> None:
+    turn = TurnRecord(
+        user_input="check", messages=[], approvals=[], usage={}, status="completed", created_at="now",
+        diagnostics=[
+            {"kind": "request_observed", "request_index": index, "elapsed_seconds": elapsed}
+            for index, elapsed in [(1, 1.0), (1, 2.0), (2, 0.5)]
+        ] + [{"kind": "model_retry", "delay_seconds": 2.0}],
+        timeline_events=[TimelineEventRecord.from_event(
+            ToolCallFinished(str(index), "search_text", "", False, 6.0), sequence=index,
+        ) for index in (1, 2)] + [TimelineEventRecord.from_event(
+            UsageUpdated(usage={}, request_count=2, tool_call_count=2,
+                         context_tokens_estimate=0, elapsed_seconds=10.0), sequence=3,
+        )],
+    )
+    diagnostic = build_run_diagnostic(turn)
+    assert diagnostic["schema_version"] == 2
+    assert diagnostic["tool_elapsed_seconds_sum"] == 12.0
+    assert diagnostic["tool_wall_seconds"] is None
+    assert diagnostic["approval_wall_seconds"] is None
+    assert diagnostic["model_context_host_seconds_estimate"] is None
+    assert diagnostic["model_attempt_seconds_sum"] == 3.5
+    assert diagnostic["model_attempt_count"] == 3
+    assert diagnostic["model_retry_count"] == 1
+    assert diagnostic["retry_scheduled_seconds_sum"] == 2.0
+    assert "cache_reuse_not_observed" not in diagnostic["bottlenecks"]
+    turn.diagnostics.append({"execution_seconds": None})
+    assert build_run_diagnostic(turn)["tool_execution_seconds_sum"] is None

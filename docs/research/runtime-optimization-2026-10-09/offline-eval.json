@@ -1,0 +1,176 @@
+{
+  "executed_provider": false,
+  "case_count": 28,
+  "passed": true,
+  "scope": "Deterministic contract scenarios; no paid model quality estimate.",
+  "cases": [
+    {
+      "name": "test_search_streams_stops_early_and_preserves_rooted_glob",
+      "seconds": 0.002,
+      "passed": true,
+      "skipped": false
+    },
+    {
+      "name": "test_journaled_edit_preserves_exact_anchor_bytes[prefix\\nbase64\\n-base64\\n-base64suffix\\n]",
+      "seconds": 0.015,
+      "passed": true,
+      "skipped": false
+    },
+    {
+      "name": "test_journaled_edit_preserves_exact_anchor_bytes[prefix\\n  value \\t\\nend\\n-  value \\t\\n-  changed\\n]",
+      "seconds": 0.005,
+      "passed": true,
+      "skipped": false
+    },
+    {
+      "name": "test_journaled_edit_preserves_exact_anchor_bytes[prefix\\r\\nvalue\\r\\nend\\r\\n-value\\r\\n-changed\\r\\n]",
+      "seconds": 0.004,
+      "passed": true,
+      "skipped": false
+    },
+    {
+      "name": "test_journaled_edit_preserves_exact_anchor_bytes[prefix\\n  \\nend\\n-  \\n-\\t\\n]",
+      "seconds": 0.004,
+      "passed": true,
+      "skipped": false
+    },
+    {
+      "name": "test_in_run_compaction_rolls_up_and_reloads_without_duplicate_messages",
+      "seconds": 0.214,
+      "passed": true,
+      "skipped": false
+    },
+    {
+      "name": "test_per_step_window_receiptizes_large_current_run_tool_output",
+      "seconds": 0.006,
+      "passed": true,
+      "skipped": false
+    },
+    {
+      "name": "test_runtime_lumen_loop_cancellation_preserves_request_evidence",
+      "seconds": 0.01,
+      "passed": true,
+      "skipped": false
+    },
+    {
+      "name": "test_runtime_lumen_loop_reuses_shared_side_effect_recovery_receipt",
+      "seconds": 0.017,
+      "passed": true,
+      "skipped": false
+    },
+    {
+      "name": "test_external_receipt_is_durable_before_dispatch_and_reconciles_uncertainty[success-external_action]",
+      "seconds": 0.014,
+      "passed": true,
+      "skipped": false
+    },
+    {
+      "name": "test_external_receipt_is_durable_before_dispatch_and_reconciles_uncertainty[success-execution]",
+      "seconds": 0.013,
+      "passed": true,
+      "skipped": false
+    },
+    {
+      "name": "test_external_receipt_is_durable_before_dispatch_and_reconciles_uncertainty[error-external_action]",
+      "seconds": 0.014,
+      "passed": true,
+      "skipped": false
+    },
+    {
+      "name": "test_external_receipt_is_durable_before_dispatch_and_reconciles_uncertainty[error-execution]",
+      "seconds": 0.013,
+      "passed": true,
+      "skipped": false
+    },
+    {
+      "name": "test_external_receipt_is_durable_before_dispatch_and_reconciles_uncertainty[timeout-external_action]",
+      "seconds": 0.064,
+      "passed": true,
+      "skipped": false
+    },
+    {
+      "name": "test_external_receipt_is_durable_before_dispatch_and_reconciles_uncertainty[timeout-execution]",
+      "seconds": 0.066,
+      "passed": true,
+      "skipped": false
+    },
+    {
+      "name": "test_external_receipt_is_durable_before_dispatch_and_reconciles_uncertainty[cancel-external_action]",
+      "seconds": 0.017,
+      "passed": true,
+      "skipped": false
+    },
+    {
+      "name": "test_external_receipt_is_durable_before_dispatch_and_reconciles_uncertainty[cancel-execution]",
+      "seconds": 0.014,
+      "passed": true,
+      "skipped": false
+    },
+    {
+      "name": "test_plan_review_is_revisioned_persistent_and_idempotent",
+      "seconds": 0.022,
+      "passed": true,
+      "skipped": false
+    },
+    {
+      "name": "test_worktree_execution_preserves_parent_and_rejects_dirty_import",
+      "seconds": 0.215,
+      "passed": true,
+      "skipped": false
+    },
+    {
+      "name": "test_host_direct_command_denied_by_user",
+      "seconds": 0.008,
+      "passed": true,
+      "skipped": false
+    },
+    {
+      "name": "test_bounded_replay_preserves_sequences_and_slow_reconnects",
+      "seconds": 0.01,
+      "passed": true,
+      "skipped": false
+    },
+    {
+      "name": "test_restore_previews_precise_turn_files_requires_confirmation_and_is_idempotent",
+      "seconds": 0.019,
+      "passed": true,
+      "skipped": false
+    },
+    {
+      "name": "test_hard_kill_recovers_only_durable_boundaries_without_duplicate_effects[request]",
+      "seconds": 1.166,
+      "passed": true,
+      "skipped": false
+    },
+    {
+      "name": "test_hard_kill_recovers_only_durable_boundaries_without_duplicate_effects[arguments]",
+      "seconds": 1.14,
+      "passed": true,
+      "skipped": false
+    },
+    {
+      "name": "test_hard_kill_recovers_only_durable_boundaries_without_duplicate_effects[dispatch]",
+      "seconds": 1.144,
+      "passed": true,
+      "skipped": false
+    },
+    {
+      "name": "test_hard_kill_recovers_only_durable_boundaries_without_duplicate_effects[parallel]",
+      "seconds": 1.221,
+      "passed": true,
+      "skipped": false
+    },
+    {
+      "name": "test_hard_kill_recovers_only_durable_boundaries_without_duplicate_effects[checkpoint]",
+      "seconds": 1.223,
+      "passed": true,
+      "skipped": false
+    },
+    {
+      "name": "test_hard_kill_recovers_only_durable_boundaries_without_duplicate_effects[terminal]",
+      "seconds": 1.246,
+      "passed": true,
+      "skipped": false
+    }
+  ]
+}

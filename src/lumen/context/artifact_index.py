@@ -128,6 +128,12 @@ class ArtifactSearchIndex:
 
     # -- connection ---------------------------------------------------------
 
+    def close(self) -> None:
+        with self._lock:
+            if self._conn is not None:
+                self._conn.close()
+                self._conn = None
+
     def _db(self) -> sqlite3.Connection:
         """Connect and apply the schema on first use (lazy file creation)."""
 
@@ -382,6 +388,15 @@ class ArtifactSearchIndex:
             tables = [_EPISODE_PORTER_TABLE, *([_EPISODE_TRIGRAM_TABLE] if self._trigram else [])]
             try:
                 for table in tables:
+                    existing = conn.execute(
+                        f"SELECT ordinal, content FROM {table} WHERE session_id=? AND checkpoint_id=?",
+                        (session_id, checkpoint_id),
+                    ).fetchone()
+                    if (
+                        existing is not None and existing["ordinal"] == ordinal
+                        and existing["content"] == content
+                    ):
+                        continue
                     conn.execute(
                         f"DELETE FROM {table} WHERE session_id=? AND checkpoint_id=?",
                         (session_id, checkpoint_id),

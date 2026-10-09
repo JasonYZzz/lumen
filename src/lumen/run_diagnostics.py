@@ -56,9 +56,9 @@ def build_run_diagnostic(turn: TurnRecord) -> dict[str, Any]:
     tool_call_count = latest_usage.tool_call_count if latest_usage is not None else len(tool_events)
     elapsed_seconds = latest_usage.elapsed_seconds if latest_usage is not None else None
     tool_elapsed = sum(max(0.0, event.elapsed_seconds) for event in tool_events)
-    unattributed_elapsed = (
-        max(0.0, elapsed_seconds - tool_elapsed) if elapsed_seconds is not None else None
-    )
+    attempts = [item for item in turn.diagnostics if item.get("kind") == "request_observed"]
+    retries = [item for item in turn.diagnostics if item.get("kind") == "model_retry"]
+    executions = [item for item in turn.diagnostics if "execution_seconds" in item]
 
     receipts = turn.request_receipts
     routes = list(dict.fromkeys(receipt.route for receipt in receipts))[:8]
@@ -76,7 +76,7 @@ def build_run_diagnostic(turn: TurnRecord) -> dict[str, Any]:
     if schema_changes:
         bottlenecks.append("request_prefix_changed")
     usage = _safe_usage(turn.usage)
-    if request_count > 1 and usage.get("cache_read_tokens", 0) == 0:
+    if request_count > 1 and usage.get("cache_read_tokens") in (0, 0.0, "0"):
         bottlenecks.append("cache_reuse_not_observed")
 
     slow_tools = sorted(tool_events, key=lambda event: event.elapsed_seconds, reverse=True)[:5]
@@ -88,15 +88,27 @@ def build_run_diagnostic(turn: TurnRecord) -> dict[str, Any]:
         )
     )[:5]
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "created_at": turn.created_at,
         "status": "interrupted" if turn.status == "running" else turn.status,
         "request_count": request_count,
         "tool_call_count": tool_call_count,
         "elapsed_seconds": elapsed_seconds,
         "tool_elapsed_seconds_sum": tool_elapsed,
-        "model_context_host_seconds_estimate": unattributed_elapsed,
-        "timing_estimated": True,
+        # Retain the legacy key, but overlapping tool intervals cannot be
+        # subtracted from run wall time to infer model/context/Host time.
+        "model_context_host_seconds_estimate": None,
+        "timing_estimated": False,
+        "model_attempt_count": len(attempts) if attempts else None,
+        "model_retry_count": (
+            len(attempts) - len({item.get("request_index") for item in attempts})
+            if attempts else None
+        ),
+        "model_attempt_seconds_sum": _seconds_sum(attempts, "elapsed_seconds"),
+        "retry_scheduled_seconds_sum": _seconds_sum(retries, "delay_seconds"),
+        "tool_execution_seconds_sum": _seconds_sum(executions, "execution_seconds"),
+        "tool_wall_seconds": None,
+        "approval_wall_seconds": None,
         "context_tokens_estimate": (
             latest_usage.context_tokens_estimate if latest_usage is not None else None
         ),
@@ -120,6 +132,22 @@ def build_run_diagnostic(turn: TurnRecord) -> dict[str, Any]:
         "bottlenecks": bottlenecks,
         "redaction": "content_omitted",
     }
+
+
+def _seconds_sum(items: list[dict[str, Any]], key: str) -> float | None:
+    if not items:
+        return None
+    total = 0.0
+    for item in items:
+        value = item.get(key)
+        # A replay has no execution duration; incomplete observations stay
+        # unknown rather than making missing measurements look like zero.
+        if isinstance(value, bool) or not isinstance(value, int | float):
+            return None
+        if not math.isfinite(value) or value < 0:
+            return None
+        total += value
+    return total
 
 
 def _schema_changes(turn: TurnRecord) -> list[dict[str, Any]]:

@@ -1,6 +1,6 @@
 # 14. 长任务持续执行、恢复与排障
 
-核对日期：2026-09-04。本文描述当前实现；源码与契约测试优先。实施经过与当时的全套验证见
+核对日期：2026-10-09。本文描述当前实现；源码与契约测试优先。早期实施与当时的全套验证见
 [升级记录](../research/2026-09-04-run-resilience-upgrade.md)。
 
 ## 14.1 先识别停止原因
@@ -113,3 +113,40 @@ Coordinator 持久化后发布；Session 检查 `completed_model_steps` 数量�
 
 实施阶段的全套结果：1023 项 Python 测试、60 个界面快照、141 项 Web 测试通过。
 这些是 2026-09-04 的离线验证证据，不是持续更新的测试总数或跨产品完全等价声明。
+
+## 14.7 完整批次耐久与文件恢复决策
+
+状态：Accepted（2026-10-09）。保留 Loop、Coordinator、Host、TaskWorkspace 的单一权威，
+不保存 Loop program counter，不提供透明崩溃接管。
+
+Session v12 的完整批次 checkpoint 在下一模型请求前 fsync；同一 interaction 仅一条恢复 turn，
+terminal 校验前缀后覆盖投影。重启显示 interrupted，明确 retry 才续跑，已确认成功的精确 receipt
+继续按原契约复用。半截参数不能执行，部分并行工具只保留 Effect 证据，prepared 外部结果必须对账。
+同轮 compaction 仍只由 terminal 发布 durable parent，不把批次 marker 当作 summary parent。
+
+根 Host 的 `InspectSessionRepair` / `RepairSessionJournal` 提供显式尾行维修。普通加载始终严格。
+只接受不完整最后一行且整个前缀通过原 projector 的情况；拒绝中间损坏、完整非法记录、过期 digest、
+活动 Agent 和 Live。维修需人类 confirmed、workspace 写锁，保存带原 SHA256 的唯一 0600 原件，
+fsync 临时前缀并原子替换，再严格加载及追加审计。备份不可覆盖，未知副作用不会因维修得到豁免。
+维护 API 为 `/api/v1/sessions/{id}/repair` 的 GET 预览 / POST 确认；没有模型工具入口。
+
+`PreviewTurnRestore` / `ApplyTurnRestore` 根据已持久化 Effect.interaction_id 和 before 快照，
+恢复所选 turn 之前的文件状态。无归属的旧 Effect、shell/remote/child 导入仅报告排除范围。
+先核对所有 revision、路径和 blob，再按 TaskWorkspace 精确恢复；预览摘要变更、待导入 Agent、
+活跃执行或 Live 会拒绝应用。超过 64 KiB 的文件不计算全文 diff，仍显示完整 revision、长度和
+截断标记；普通 diff 最多 16 KiB。多文件不是原子事务：中途失败停止并明确返回已恢复及失败项。
+取消等待已启动的线程写入结束，保留结果；同 Host request ID 重试不重复变更。
+TUI 检查点的 F 键及 Web 的“预览文件恢复”都要求单独确认，恢复不修改对话。
+
+选择临时磁盘回放替代新 snapshot/gap 客户端协议：保持现有 SSE cursor 与撤回契约，内存按字节
+有界，代价是长 run 的临时磁盘线性增长和冷 cursor 的一次扫描。测得冷重连成为瓶颈时才增加
+稀疏 offset 索引；需要磁盘配额时再设计 snapshot/gap 契约，不能静默丢事件。
+Session 冷加载继续严格物化全部消息；暂不增加第二套 catalog/offset 持久化投影。热列表与分页
+已满足同机目标，完整 load 的复制成本单独报告，后续根据真实 UI 冷加载预算决定索引。
+
+回归入口：`test_turn_checkpoint.py`（v1–v11、边界、重复、payload）、`test_process_recovery.py`
+（管道同步的真实硬退出）、`test_turn_restore.py`（冲突、确认、取消、API）、
+`test_event_journal.py`（慢重连、断线、1000 run 回收）及 TUI/Web 的确认交互。
+诊断 schema v2 仅累加实际 attempt 和工具 execution，wall time/未知 cache 保留未知；退避字段为
+scheduled seconds，不声称实际睡眠。完整回归、微基准原始样本和推广门禁见
+[实施计划](../plans/2026-10-09-runtime-optimization-implementation-plan.md)。

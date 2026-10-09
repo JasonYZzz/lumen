@@ -1,4 +1,8 @@
+from __future__ import annotations
+
+import os
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -181,3 +185,41 @@ def test_search_text_does_not_scan_ignored_directories(tmp_path: Path) -> None:
     result = search_text("needle")
 
     assert result == "notes.txt:1:needle"
+
+
+def test_directory_depth_prunes_descent_and_ignored_trees(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    (tmp_path / "nested" / "deep").mkdir(parents=True)
+    (tmp_path / "node_modules" / "deep").mkdir(parents=True)
+    scanned: list[Path] = []
+    scandir = os.scandir
+    def observed(path: Any) -> Any:
+        scanned.append(Path(path))
+        return scandir(path)
+    monkeypatch.setattr(os, "scandir", observed)
+    listing = get_function(tmp_path, "list_directory")
+    assert listing(depth=1) == "nested/\nnode_modules/"
+    assert scanned == [tmp_path]
+    scanned.clear()
+    assert "nested/deep/" in listing(depth=2)
+    assert scanned == [tmp_path, tmp_path / "nested"]
+    assert "deep/" in listing("node_modules", depth=1)
+
+
+def test_search_streams_stops_early_and_preserves_rooted_glob(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    (tmp_path / "a.txt").write_text("needle\nneedle\n" + "x" * (MAX_OUTPUT_BYTES + 10))
+    (tmp_path / "nested").mkdir()
+    (tmp_path / "nested" / "a.txt").write_text("nested needle\n")
+    search = get_function(tmp_path, "search_text")
+    def refuse(*_args: object, **_kwargs: object) -> str:
+        raise AssertionError("whole-file reading is forbidden")
+    monkeypatch.setattr(Path, "read_text", refuse)
+    assert "1 条匹配" in search("needle", max_results=1, glob="*.txt")
+    assert search("needle", glob="nested/*.txt") == "nested/a.txt:1:nested needle"
+    with pytest.raises(ValueError, match="字符行上限"):
+        search("absent", path="a.txt")
+    with pytest.raises(ValueError, match="相对模式"):
+        search("needle", glob="../*.txt")

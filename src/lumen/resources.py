@@ -520,7 +520,7 @@ class ResourceManager:
             live_registry,
             self.policy,
             default_timeout=config.agent.limits.tool_timeout_seconds,
-            effect_recorder=self.task_workspace.record_tool_effect,
+            effect_recorder=self.task_workspace.record_tool_effect_async,
             before_invoke=self._before_capability,
             after_invoke=self._after_capability,
         )
@@ -1488,7 +1488,7 @@ class ResourceManager:
                 active_work_product_documents=self.active_work_product_documents,
                 work_completion_issues=self.completion_blockers,
                 usage_enricher=self.enrich_usage,
-                effect_recorder=self.task_workspace.record_tool_effect,
+                effect_recorder=self.task_workspace.record_tool_effect_async,
                 work_event_drain=self.task_workspace.drain_events,
                 bind_session_context=self.bind_session_context,
                 clarification_loader=self.pending_clarification,
@@ -1579,6 +1579,7 @@ class ResourceManager:
             self.runtime = None
             self._active_toolsets = []
         await self.memory_manager.close()
+        self._artifact_store.search_index.close()
 
     async def __aenter__(self) -> ResourceManager:
         return await self.open()

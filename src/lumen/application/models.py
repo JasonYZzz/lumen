@@ -259,6 +259,37 @@ class ListCheckpoints:
 
 
 @dataclass(frozen=True, slots=True)
+class InspectSessionRepair:
+    session_id: str
+    type: Literal["inspect_session_repair"] = "inspect_session_repair"
+
+
+@dataclass(frozen=True, slots=True)
+class RepairSessionJournal:
+    session_id: str
+    expected_digest: str
+    confirmed: bool = False
+    type: Literal["repair_session_journal"] = "repair_session_journal"
+
+
+@dataclass(frozen=True, slots=True)
+class PreviewTurnRestore:
+    session_id: str
+    before_turn: int
+    type: Literal["preview_turn_restore"] = "preview_turn_restore"
+
+
+@dataclass(frozen=True, slots=True)
+class ApplyTurnRestore:
+    session_id: str
+    before_turn: int
+    expected_digest: str
+    client_request_id: str
+    confirmed: bool = False
+    type: Literal["apply_turn_restore"] = "apply_turn_restore"
+
+
+@dataclass(frozen=True, slots=True)
 class ForkSessionAtTurn:
     session_id: str
     through_turn: int
@@ -430,6 +461,10 @@ WorkspaceCommand: TypeAlias = (
     | ApproveAgentImport
     | RejectAgentImport
     | ListCheckpoints
+    | InspectSessionRepair
+    | RepairSessionJournal
+    | PreviewTurnRestore
+    | ApplyTurnRestore
     | ForkSessionAtTurn
     | CancelChildRun
     | ApproveChildImport

@@ -111,7 +111,7 @@ flowchart TD
 - 外部快照持有 backend/adapter 版本、有效能力和策略摘要；执行状态持有 attempt/generation、workspace 与不透明外部 session 标识。配置变更后恢复不能静默切实现。
 - spawn 幂等保持既有语义；generation 是续轮次，attempt 是传输执行尝试，两者不能混用。关联键包含父 Session 和 Agent ID。
 - 执行意图先入 journal，再启动；拿到外部 session ID 后先记录，再发送任务。发送后丢失响应时记 unknown，不自动重复发送。
-- 新持久化语义按仓库规则引入下一版 schema（预计 v12，以合并时版本为准）；v1–v11 加载不改写，只在新事实写入时追加 upgrade。配置保持 v2 加性扩展，保留 v1 内存迁移行为。
+- 新持久化语义按仓库规则引入合并时的下一版 schema。2026-10-09 的[运行时优化](2026-10-09-runtime-optimization-implementation-plan.md)已采用 v12，本计划不能复用它（预计至少 v13，以合并时版本为准）；旧 schema 加载不改写，只在新事实写入时追加 upgrade。配置保持 v2 加性扩展，保留 v1 内存迁移行为。
 - transcript 是外部证据 artifact，不伪装成原生 ModelMessage。大输出限额并脱敏；截断不能成为完整验证 evidence。
 
 ### 4.3 权限与执行边界

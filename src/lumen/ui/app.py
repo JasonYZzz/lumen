@@ -1025,6 +1025,8 @@ class LumenApp(
             CheckpointScreen(
                 self.coordinator.list_checkpoints,
                 self.coordinator.fork_at_checkpoint,
+                preview_provider=self.coordinator.preview_turn_restore,
+                restore_provider=self.coordinator.restore_turn_files,
             ),
             resume_branch,
         )

@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import codecs
+import fnmatch
 import os
 import re
 from collections.abc import Iterator
@@ -37,17 +38,12 @@ def _truncate(text: str) -> str:
 
 
 def _iter_search_files(base: Path, glob: str) -> Iterator[Path]:
-    """Yield search candidates without descending into ignored directories."""
-
-    if glob != "**/*":
-        for candidate in sorted(base.glob(glob)):
-            relative = candidate.relative_to(base)
-            if any(part in IGNORED_DIRS for part in relative.parts[:-1]):
-                continue
-            yield candidate
+    """Yield in deterministic directory order, pruning before descent."""
+    pattern = tuple(Path(glob).parts)
+    if Path(glob).is_absolute() or ".." in pattern:
+        raise ValueError("glob 必须是工作区内的相对模式")
+    if glob.endswith("/"):
         return
-
-    candidates: list[Path] = []
     for current, directory_names, file_names in os.walk(base, topdown=True, followlinks=False):
         current_path = Path(current)
         directory_names[:] = sorted(
@@ -55,8 +51,18 @@ def _iter_search_files(base: Path, glob: str) -> Iterator[Path]:
             for name in directory_names
             if name not in IGNORED_DIRS and not (current_path / name).is_symlink()
         )
-        candidates.extend(current_path / name for name in file_names)
-    yield from sorted(candidates)
+        for name in sorted(file_names):
+            candidate = current_path / name
+            if _glob_matches(candidate.relative_to(base).parts, pattern):
+                yield candidate
+
+
+def _glob_matches(parts: tuple[str, ...], pattern: tuple[str, ...]) -> bool:
+    if not pattern:
+        return not parts
+    if pattern[0] == "**":
+        return any(_glob_matches(parts[index:], pattern[1:]) for index in range(len(parts) + 1))
+    return bool(parts) and fnmatch.fnmatchcase(parts[0], pattern[0]) and _glob_matches(parts[1:], pattern[1:])
 
 
 def build_builtin_specs(
@@ -193,21 +199,30 @@ def build_builtin_specs(
         path: Annotated[str, Field(description="工作区内目录的相对路径。")] = ".",
         depth: Annotated[int, Field(description="列出的目录层级，范围为 1 到 4。", ge=1, le=4)] = 1,
     ) -> str:
-        """列出工作区目录中的文件和子目录。"""
+        """按目录顺序列出工作区；depth 限制遍历，不深入默认忽略目录。"""
         if not 1 <= depth <= 4:
             raise ValueError("depth 必须在 1 到 4 之间")
         resolved = workspace.resolve(path)
         if not resolved.is_dir():
             raise NotADirectoryError(f"目录不存在: {path}")
         rows: list[str] = []
-        base_parts = len(resolved.parts)
-        for entry in sorted(resolved.rglob("*")):
-            relative_depth = len(entry.parts) - base_parts
-            if relative_depth > depth:
-                continue
-            safe_entry = workspace.resolve(entry)
-            suffix = "/" if safe_entry.is_dir() else ""
-            rows.append(f"{safe_entry.relative_to(workspace.root).as_posix()}{suffix}")
+        output_bytes = 0
+        for current, directories, files in os.walk(resolved, topdown=True, followlinks=False):
+            parent = Path(current)
+            level = len(parent.relative_to(resolved).parts) + 1
+            entries = sorted([*directories, *files])
+            directories[:] = sorted(
+                name for name in directories
+                if level < depth and name not in IGNORED_DIRS and not (parent / name).is_symlink()
+            )
+            for name in entries:
+                safe_entry = workspace.resolve(parent / name)
+                suffix = "/" if safe_entry.is_dir() else ""
+                row = f"{safe_entry.relative_to(workspace.root).as_posix()}{suffix}"
+                rows.append(row)
+                output_bytes += len(row.encode("utf-8")) + 1
+                if output_bytes > MAX_OUTPUT_BYTES:
+                    return _truncate("\n".join(rows))
         return _truncate("\n".join(rows) if rows else "[空目录]")
 
     def search_text(
@@ -243,6 +258,7 @@ def build_builtin_specs(
             raise FileNotFoundError(f"文件或目录不存在: {path}")
         matches: list[str] = []
         truncated = False
+        output_bytes = 0
         for file_path in candidates:
             try:
                 safe_file = workspace.resolve(file_path)
@@ -253,15 +269,31 @@ def build_builtin_specs(
             if not safe_file.is_file():
                 continue
             try:
-                lines = safe_file.read_text(encoding="utf-8").splitlines()
+                with safe_file.open(encoding="utf-8") as handle:
+                    line_number = 0
+                    while line := handle.readline(MAX_OUTPUT_BYTES + 1):
+                        line_number += 1
+                        if len(line) > MAX_OUTPUT_BYTES and not line.endswith("\n"):
+                            raise ValueError(
+                                f"{safe_file.relative_to(workspace.root)}:{line_number} "
+                                f"超过 search_text 的 {MAX_OUTPUT_BYTES} 字符行上限；请缩小读取范围"
+                            )
+                        text = line.rstrip("\r\n")
+                        if not pattern.search(text):
+                            continue
+                        if len(matches) >= max_results:
+                            truncated = True
+                            break
+                        row = (
+                            f"{safe_file.relative_to(workspace.root).as_posix()}:{line_number}:"
+                            f"{text}"
+                        )
+                        matches.append(row)
+                        output_bytes += len(row.encode("utf-8")) + 1
+                        if output_bytes > MAX_OUTPUT_BYTES:
+                            return _truncate("\n".join(matches))
             except (OSError, UnicodeDecodeError):
                 continue
-            for line_number, line in enumerate(lines, 1):
-                if pattern.search(line):
-                    if len(matches) >= max_results:
-                        truncated = True
-                        break
-                    matches.append(f"{safe_file.relative_to(workspace.root).as_posix()}:{line_number}:{line}")
             if truncated:
                 break
         if truncated:

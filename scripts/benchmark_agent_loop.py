@@ -10,12 +10,18 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import hashlib
 import io
 import json
+import os
+import random
+import subprocess
+import sys
 import tempfile
 import time
+import xml.etree.ElementTree as ET
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, field_validator
 
@@ -32,15 +38,87 @@ class BenchmarkTask(BaseModel):
     prompt: str = Field(min_length=1)
     files: dict[str, str] = Field(default_factory=dict)
     expected_substrings: list[str] = Field(default_factory=list)
+    mode: Literal["read", "edit"] = "read"
+    expected_files: dict[str, str | None] = Field(default_factory=dict)
+    allowed_changed_paths: list[str] = Field(default_factory=list)
 
-    @field_validator("files")
+    @field_validator("files", "expected_files")
     @classmethod
-    def relative_files(cls, files: dict[str, str]) -> dict[str, str]:
+    def relative_files(cls, files: dict[str, Any]) -> dict[str, Any]:
         for name in files:
             path = Path(name)
-            if path.is_absolute() or ".." in path.parts or not path.parts:
+            if path.is_absolute() or ".." in path.parts or not path.parts or path.parts[0].startswith("."):
                 raise ValueError("fixture files must stay inside the trial workspace")
         return files
+
+    @field_validator("allowed_changed_paths")
+    @classmethod
+    def changed_paths(cls, values: list[str]) -> list[str]:
+        cls.relative_files(dict.fromkeys(values))
+        return values
+
+
+def file_digests(workspace: Path) -> dict[str, str]:
+    result: dict[str, str] = {}
+    for directory, dirs, files in os.walk(workspace, followlinks=False):
+        for name in dirs:
+            path = Path(directory) / name
+            if path.is_symlink():
+                result[path.relative_to(workspace).as_posix()] = "symlink"
+        dirs[:] = sorted(name for name in dirs if not (
+            Path(directory) == workspace and name in {".sessions", ".worktrees", ".lumen"}
+        ))
+        for name in files:
+            path = Path(directory) / name
+            if path.is_symlink():
+                result[path.relative_to(workspace).as_posix()] = "symlink"
+            else:
+                result[path.relative_to(workspace).as_posix()] = hashlib.sha256(path.read_bytes()).hexdigest()
+    return result
+
+
+def grade_files(task: BenchmarkTask, before: dict[str, str], after: dict[str, str]) -> dict[str, Any]:
+    changes = sorted(name for name in before.keys() | after.keys() if before.get(name) != after.get(name))
+    allowed = set(task.allowed_changed_paths) if task.mode == "edit" else set()
+    violations = sorted(set(changes) - allowed)
+    mismatches = [name for name, content in task.expected_files.items() if after.get(name) != (
+        hashlib.sha256(content.encode()).hexdigest() if content is not None else None
+    )]
+    return {"changed_paths": changes, "scope_violations": violations, "file_mismatches": mismatches,
+            "file_grade_pass": not violations and not mismatches}
+
+
+OFFLINE_CASES = (
+    "tests/test_builtin_tools.py::test_search_streams_stops_early_and_preserves_rooted_glob",
+    "tests/test_capability_tools.py::test_journaled_edit_preserves_exact_anchor_bytes",
+    "tests/test_context_engine.py::test_in_run_compaction_rolls_up_and_reloads_without_duplicate_messages",
+    "tests/test_context_engine.py::test_per_step_window_receiptizes_large_current_run_tool_output",
+    "tests/test_runtime.py::test_runtime_lumen_loop_cancellation_preserves_request_evidence",
+    "tests/test_runtime.py::test_runtime_lumen_loop_reuses_shared_side_effect_recovery_receipt",
+    "tests/test_effect_recovery.py::test_external_receipt_is_durable_before_dispatch_and_reconciles_uncertainty",
+    "tests/test_workspace_host.py::test_plan_review_is_revisioned_persistent_and_idempotent",
+    "tests/test_agent_execution.py::test_worktree_execution_preserves_parent_and_rejects_dirty_import",
+    "tests/test_workspace_host.py::test_host_direct_command_denied_by_user",
+    "tests/test_event_journal.py::test_bounded_replay_preserves_sequences_and_slow_reconnects",
+    "tests/test_turn_restore.py::test_restore_previews_precise_turn_files_requires_confirmation_and_is_idempotent",
+    "tests/test_process_recovery.py::test_hard_kill_recovers_only_durable_boundaries_without_duplicate_effects",
+)
+
+
+def offline_report() -> dict[str, Any]:
+    with tempfile.TemporaryDirectory(prefix="lumen-offline-eval-") as directory:
+        junit = Path(directory) / "results.xml"
+        result = subprocess.run([sys.executable, "-m", "pytest", *OFFLINE_CASES,
+                                 f"--junitxml={junit}", "-q"], cwd=Path(__file__).resolve().parents[1],
+                                capture_output=True, text=True, timeout=180)
+        cases = []
+        if junit.exists():
+            for item in ET.parse(junit).iter("testcase"):
+                cases.append({"name": item.attrib["name"], "seconds": float(item.attrib.get("time", "0")),
+                    "passed": item.find("failure") is None and item.find("error") is None,
+                    "skipped": item.find("skipped") is not None})
+        return {"executed_provider": False, "case_count": len(cases), "passed": result.returncode == 0,
+                "scope": "Deterministic contract scenarios; no paid model quality estimate.", "cases": cases}
 
 
 def summarize_requests(diagnostics: list[dict[str, Any]]) -> dict[str, Any]:
@@ -65,6 +143,7 @@ async def trial(config: AppConfig, task: BenchmarkTask, effort: ReasoningLevel,
             path = workspace / name
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(content)
+        before = file_digests(workspace)
         isolated = config.model_copy(update={
             "agent": config.agent.model_copy(
                 update={"prompt": PromptConfig(mode="preset"), "skills_enabled": False}
@@ -74,7 +153,9 @@ async def trial(config: AppConfig, task: BenchmarkTask, effort: ReasoningLevel,
                 "max_concurrency": concurrency, "worktree_root": workspace / ".worktrees",
             }),
             "sessions": config.sessions.model_copy(update={"directory": workspace / ".sessions"}),
-            "tools": ToolsConfig(builtins=["read_file", "list_directory", "search_text"]),
+            "tools": ToolsConfig(builtins=["read_file", "list_directory", "search_text"]
+                + (["write_file", "edit_file"] if task.mode == "edit" else [])),
+            "permissions": config.permissions.model_copy(update={"default_mode": "auto"}),
             "hooks": [], "mcp_servers": {}, "project_trusted": False,
             "memory": config.memory.model_copy(update={"use": False, "learn": False}),
             "live": config.live.model_copy(update={"enabled": False}),
@@ -102,10 +183,15 @@ async def trial(config: AppConfig, task: BenchmarkTask, effort: ReasoningLevel,
                 peak = max(peak, len(active))
             elif event.status not in {AgentStatus.RUNNING, AgentStatus.APPROVAL_PENDING}:
                 active.discard(event.agent_id)
+        grade = grade_files(task, before, file_digests(workspace))
+        completed = outcome.error is None and bool(session.turns) and session.turns[-1].status == "completed"
+        answer_pass = all(value in outcome.text for value in task.expected_substrings)
+        success = completed and grade["file_grade_pass"] and answer_pass
         return {
             "task": task.id, "effort": effort.value, "concurrency": concurrency,
-            "elapsed_seconds": elapsed, "completed": outcome.error is None
-            and bool(session.turns) and session.turns[-1].status == "completed",
+            "elapsed_seconds": elapsed, "completed": completed, "task_success": success,
+            "false_completion": completed and not success, **grade,
+            "total_usage_complete": bool(outcome.usage) and not session.agent_state.threads, "cost": None,
             "expected_substrings_pass": all(value in outcome.text for value in task.expected_substrings)
             if task.expected_substrings else None,
             "parent_usage": outcome.usage, "parent_requests": outcome.request_count,
@@ -119,16 +205,45 @@ async def trial(config: AppConfig, task: BenchmarkTask, effort: ReasoningLevel,
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--config", required=True, type=Path)
-    parser.add_argument("--tasks", required=True, type=Path)
+    parser.add_argument("--config", type=Path)
+    parser.add_argument("--tasks", type=Path)
+    parser.add_argument("--micro", action="store_true", help="Run offline runtime microbenchmarks")
+    parser.add_argument("--offline", action="store_true", help="Run trusted deterministic contract scenarios")
+    parser.add_argument("--samples", type=int, default=30)
     parser.add_argument("--efforts", nargs="+", type=ReasoningLevel,
                         default=[ReasoningLevel.PROVIDER_DEFAULT, ReasoningLevel.LOW,
                                  ReasoningLevel.MEDIUM, ReasoningLevel.HIGH])
     parser.add_argument("--concurrency", nargs="+", type=int, choices=range(1, 9), default=[1, 3])
-    parser.add_argument("--repeats", type=int, default=3)
+    parser.add_argument("--repeats", type=int, default=5)
     parser.add_argument("--execute", action="store_true", help="Actually call the configured model")
     parser.add_argument("--output", type=Path)
     args = parser.parse_args()
+    if args.offline:
+        if args.micro or args.execute or args.config or args.tasks:
+            parser.error("--offline cannot be combined with micro/provider arguments")
+        report = offline_report()
+        payload = json.dumps(report, ensure_ascii=False, indent=2) + "\n"
+        if args.output:
+            args.output.write_text(payload)
+        else:
+            print(payload, end="")
+        if not report["passed"]:
+            raise SystemExit(1)
+        return
+    if args.micro:
+        if args.execute or args.config or args.tasks:
+            parser.error("--micro is offline and cannot be combined with provider arguments")
+        if args.samples < 1:
+            parser.error("samples must be positive")
+        from benchmark_runtime import run
+        payload = json.dumps(run(args.samples), ensure_ascii=False, indent=2) + "\n"
+        if args.output:
+            args.output.write_text(payload)
+        else:
+            print(payload, end="")
+        return
+    if args.config is None or args.tasks is None:
+        parser.error("provider comparison requires --config and --tasks")
     if args.repeats < 1 or (args.execute and args.output is None):
         parser.error("repeats must be positive; --execute requires --output")
     tasks = TypeAdapter(list[BenchmarkTask]).validate_json(args.tasks.read_text())
@@ -142,9 +257,10 @@ def main() -> None:
     matrix = [(task, effort, concurrency, repeat)
               for repeat in range(args.repeats) for task in tasks
               for effort in args.efforts for concurrency in args.concurrency]
+    random.Random(0).shuffle(matrix)
     report: dict[str, Any] = {
         "model": model.id, "executed": args.execute, "trial_count": len(matrix), "results": [],
-        "scope": "Read-only fixtures; parent request metrics and separate child usage. "
+        "scope": "Explicit read/edit fixtures, exact file/scope grading. Parent/child usage is separate. "
         "Substring checks are a quality proxy; absent usage/cost is unknown, not zero. "
         "Provider cache, rate limits and infrastructure can affect comparisons.",
     }
