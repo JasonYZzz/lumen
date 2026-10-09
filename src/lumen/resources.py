@@ -5,6 +5,7 @@ import json
 import os
 import subprocess
 import sys
+from collections.abc import Mapping
 from contextlib import AsyncExitStack
 from functools import partial
 from importlib.resources import files
@@ -132,6 +133,7 @@ class ResourceManager:
         config: AppConfig,
         *,
         workspace: str | Path,
+        environ: Mapping[str, str] | None = None,
     ) -> None:
         self.config = config
         self.workspace = Path(workspace).expanduser().resolve()
@@ -147,6 +149,7 @@ class ResourceManager:
             self.workspace,
             explicit_path=getattr(explicit_source, "path", None),
             project_trusted=config.project_trusted,
+            environ=environ,
         )
         self.warnings: list[str] = []
         self.hooks = HookBus.from_config(
@@ -294,6 +297,7 @@ class ResourceManager:
                 build_web_search_spec(
                     config.tools.web.search,
                     timeout=config.tools.web.fetch_timeout_seconds,
+                    environ=environ,
                 ),
                 origin="builtin:web",
             )

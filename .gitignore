@@ -21,6 +21,9 @@ node_modules/
 # CI rebuilds this Next.js static export before `uv build`; source assets live
 # in `src/web/public/` and the wheel build hook bundles the fresh export.
 /src/web/out/
+/src/desktop/target/
+/src/desktop/gen/
+/src/desktop/node_modules/
 
 # Lumen runtime state and local QA/build artifacts
 /.lumen/

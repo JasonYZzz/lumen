@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import os
+from collections.abc import Mapping
 from typing import Protocol
 
 import httpx
@@ -45,10 +46,10 @@ def _bound_snippet_volume(result: WebSearchResult) -> WebSearchResult:
     return result.model_copy(update={"results": items})
 
 
-def _build_provider(config: WebSearchConfig) -> SearchProvider:
+def _build_provider(config: WebSearchConfig, environ: Mapping[str, str] | None = None) -> SearchProvider:
     token: str | None = None
     if config.api_key_env is not None:
-        token = os.environ.get(config.api_key_env)
+        token = (os.environ if environ is None else environ).get(config.api_key_env)
         if not token:
             raise ValueError(
                 f"web search is configured for provider '{config.provider}' but the "
@@ -74,10 +75,11 @@ def build_web_search_spec(
     *,
     timeout: float = DEFAULT_TIMEOUT_SECONDS,
     transport: httpx.BaseTransport | None = None,
+    environ: Mapping[str, str] | None = None,
 ) -> ToolSpec:
     """Build the ``web_search`` tool spec; requires a configured search provider."""
 
-    provider = _build_provider(config)
+    provider = _build_provider(config, environ)
     # SearXNG fans out to upstream engines and waits for the slowest one, so
     # it gets a dedicated client timeout independent of the fetch timeout.
     request_timeout = SEARXNG_TIMEOUT_SECONDS if isinstance(provider, SearxngSearchProvider) else timeout

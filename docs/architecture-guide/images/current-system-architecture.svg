@@ -125,7 +125,7 @@
     <g transform="translate(440 215)">
       <rect width="330" height="65" class="node"/>
       <circle cx="0" cy="32" r="5" class="terminal"/>
-      <text x="18" y="26" class="node-title">Next.js 网页端</text>
+      <text x="18" y="26" class="node-title">Next.js 网页 / macOS</text>
       <text x="18" y="48" class="mono">FastAPI REST + SSE 适配器</text>
     </g>
     <g transform="translate(790 215)">

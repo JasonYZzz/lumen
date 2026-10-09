@@ -25,12 +25,13 @@ from lumen.api import create_web_app
 from lumen.application import WorkspaceHost
 from lumen.approval import ApprovalMode
 from lumen.branding import FRAMEWORK_NAME, FRAMEWORK_SLUG
-from lumen.config import AppConfig, ConfigLoadError
+from lumen.config import AppConfig, ConfigLoadError, create_config_file
 from lumen.config_resolver import ConfigResolution, ConfigResolver, ConfigScope
 from lumen.headless import run_headless
 from lumen.reasoning import ReasoningLevel
 from lumen.resources import ResourceManager
 from lumen.trust import McpApprovalStore, TrustStore, git_common_directory
+from lumen.trust import apply_mcp_approvals as _apply_mcp_approvals
 from lumen.ui.app import LumenApp
 
 app = typer.Typer(
@@ -293,78 +294,6 @@ def _ensure_project_trust(resolver: ConfigResolver, workspace: Path) -> bool:
     return True
 
 
-def _apply_mcp_approvals(
-    config: AppConfig,
-    workspace: Path,
-    *,
-    interactive: bool,
-    report_only: bool = False,
-) -> AppConfig:
-    store = McpApprovalStore(workspace)
-    accepted = {}
-    warnings = list(config.config_warnings)
-    diagnostics: list[dict[str, str]] = []
-    for name, server in config.mcp_servers.items():
-        if not config.mcp.enabled.get(name, True):
-            accepted[name] = server.model_copy(update={"approval_status": "disabled"})
-            diagnostics.append(
-                {"name": name, "scope": server.source_scope, "approval": "disabled"}
-            )
-            continue
-        if server.source_scope not in {ConfigScope.LEGACY.value, ConfigScope.PROJECT.value}:
-            accepted[name] = server.model_copy(update={"approval_status": "automatic"})
-            diagnostics.append({"name": name, "scope": server.source_scope, "approval": "automatic"})
-            continue
-        fingerprint = server.definition_fingerprint or ""
-        decision = store.decision(name, fingerprint)
-        if decision == "always":
-            accepted[name] = server.model_copy(update={"approval_status": "always"})
-            diagnostics.append({"name": name, "scope": server.source_scope, "approval": "always"})
-            continue
-        if decision == "deny":
-            diagnostics.append({"name": name, "scope": server.source_scope, "approval": "deny"})
-            warnings.append(
-                f"MCP server {name!r} from {server.source_scope} scope is denied and was not started."
-            )
-            continue
-        if report_only:
-            diagnostics.append({"name": name, "scope": server.source_scope, "approval": "pending"})
-            warnings.append(
-                f"MCP server {name!r} from {server.source_scope} scope is pending approval; "
-                f"run 'lumen mcp approve {name}'."
-            )
-            continue
-        if not interactive:
-            raise ConfigLoadError(
-                f"MCP server {name!r} from {server.source_scope} scope requires approval. "
-                f"Run 'lumen mcp approve {name}' or 'lumen mcp deny {name}'."
-            )
-        choice = (
-            typer.prompt(
-                f"Allow project MCP server {name!r} ({server.transport})? [once/always/deny]",
-                default="once",
-            )
-            .strip()
-            .lower()
-        )
-        if choice not in {"once", "always", "deny"}:
-            raise ConfigLoadError("MCP approval must be one of: once, always, deny")
-        if choice == "deny":
-            store.set(name, fingerprint, "deny")
-            diagnostics.append({"name": name, "scope": server.source_scope, "approval": "deny"})
-            warnings.append(f"MCP server {name!r} was denied and was not started.")
-            continue
-        if choice == "always":
-            store.set(name, fingerprint, "always")
-        accepted[name] = server.model_copy(update={"approval_status": choice})
-        diagnostics.append({"name": name, "scope": server.source_scope, "approval": choice})
-    return config.model_copy(
-        update={
-            "mcp_servers": accepted,
-            "config_warnings": tuple(warnings),
-            "mcp_diagnostics": tuple(diagnostics),
-        }
-    )
 
 
 def _resolve_for_workspace(
@@ -691,11 +620,6 @@ def capabilities(
         raise typer.Exit(1) from error
 
 
-def _write_new_file(path: Path, content: str) -> None:
-    if path.exists():
-        raise ConfigLoadError(f"refusing to overwrite existing file: {path}")
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(content, encoding="utf-8")
 
 
 def _exclude_local_config(workspace: Path) -> Path | None:
@@ -743,7 +667,7 @@ def init_config(
             else:
                 target = workspace / ".lumen" / "agent.yaml"
                 content = _FULL_TEMPLATE
-        _write_new_file(target, content)
+        create_config_file(target, content)
         typer.echo(f"Created {target}")
         if local:
             assert workspace is not None

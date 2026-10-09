@@ -4,6 +4,7 @@ import copy
 import hashlib
 import json
 import os
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from enum import StrEnum
@@ -41,6 +42,7 @@ class ConfigResolution:
     warnings: tuple[str, ...]
     exclusive: bool
     provenance: Mapping[str, ConfigSource] = field(default_factory=dict[str, ConfigSource])
+    secret_values: tuple[str, ...] = field(default=(), repr=False)
 
     def report(self, *, config: AppConfig | None = None) -> ResolvedConfigReport:
         """Return a read-only, secret-safe projection of the effective config.
@@ -49,7 +51,7 @@ class ConfigResolution:
         :attr:`config`, keeping configuration ownership in ``ConfigResolver``.
         """
 
-        effective_config = _redacted_config(config or self.config)
+        effective_config = _redacted_config(config or self.config, secret_values=self.secret_values)
         effective_paths = set(_declared_paths(effective_config))
         return ResolvedConfigReport(
             effective_config=effective_config,
@@ -156,13 +158,14 @@ def _is_secret_environment_name(name: str) -> bool:
     )
 
 
-def _redacted_config(config: AppConfig) -> dict[str, Any]:
+def _redacted_config(config: AppConfig, *, secret_values: tuple[str, ...] = ()) -> dict[str, Any]:
     raw = config.model_dump(mode="json")
-    secret_values = {
+    secrets = set(secret_values) | {
         value
         for name, value in os.environ.items()
         if value and _is_secret_environment_name(name)
     }
+    secrets.update(model.api_key for model in config.agent.model_registry().values() if model.api_key)
 
     def redact(value: Any, path: tuple[str, ...]) -> Any:
         if len(path) >= 4 and path[0] == "mcp_servers" and path[2] in {"env", "headers"}:
@@ -179,7 +182,7 @@ def _redacted_config(config: AppConfig) -> dict[str, Any]:
         if isinstance(value, list):
             items = cast(list[Any], value)
             return [redact(item, (*path, str(index))) for index, item in enumerate(items)]
-        if isinstance(value, str) and any(secret in value for secret in secret_values):
+        if isinstance(value, str) and any(secret in value for secret in secrets):
             return "<redacted>"
         return value
 
@@ -395,6 +398,7 @@ class ConfigResolver:
         *,
         project_trusted: bool = True,
         source_overrides: Mapping[Path, Mapping[str, Any]] | None = None,
+        resolve_environment: bool = True,
     ) -> ConfigResolution:
         overrides = {
             Path(path).expanduser().resolve(): copy.deepcopy(dict(value))
@@ -465,6 +469,8 @@ class ConfigResolver:
                 config_sources=discovered,
                 config_warnings=tuple(warnings),
                 project_trusted=project_trusted,
+                environ=self.environ,
+                resolve_environment=resolve_environment,
             )
         except ConfigLoadError as error:
             source_text = ", ".join(f"{source.scope.value}={source.path}" for source in discovered)
@@ -476,6 +482,11 @@ class ConfigResolver:
             warnings=tuple(warnings),
             exclusive=self.exclusive,
             provenance=provenance,
+            secret_values=tuple({
+                self.environ[name] for name in re.findall(
+                    r"\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-[^}]*)?\}", str(merged),
+                ) if name != "LUMEN_PROJECT_DIR" and self.environ.get(name)
+            }),
         )
 
 

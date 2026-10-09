@@ -9,7 +9,7 @@
 
 **可配置的 Python Agent 框架，让模型在工作区中调用工具、执行任务并保留可恢复的会话。**
 
-Lumen 提供终端 TUI、本机 Web 和脚本 CLI 三种入口，共用会话、工具、审批与上下文管理。
+Lumen 提供终端 TUI、本机 Web、脚本 CLI，以及 Apple Silicon macOS 桌面 Beta，共用会话、工具、审批与上下文管理。
 模型负责推理，Lumen 自己管理模型与工具的执行循环；可接入 OpenAI、Anthropic、Google、
 Ollama 及 OpenAI-compatible 服务，并通过 MCP、Skills 和 Python 插件扩展能力。
 
@@ -90,6 +90,10 @@ lumen --cwd /path/to/project
 
 `--cwd` 指定工具实际操作的工作区，默认是当前目录；配置文件的位置不会改变它。
 完整选项、后台 Web 管理和会话恢复命令见[命令说明](docs/commands.md)。
+
+**macOS 桌面 Beta**：内置 Python 和 Web，使用 Tauri 2 与 ad-hoc 签名，无需付费 Apple Developer
+账户即可构建。安装、Keychain、人工升级和验收范围见[桌面指南](docs/desktop.md)。
+源码构建执行 `python3 scripts/build_desktop.py`；公开发布仍需独立授权。
 
 ## 配置与安全
 

@@ -4,9 +4,13 @@ import hashlib
 import json
 import os
 import tempfile
+from collections.abc import Mapping
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Literal, cast
+from typing import TYPE_CHECKING, Any, Literal, cast
+
+if TYPE_CHECKING:
+    from lumen.config import AppConfig
 
 
 def git_common_directory(workspace: str | Path) -> Path | None:
@@ -225,3 +229,84 @@ __all__ = [
     "canonical_project_identity",
     "git_common_directory",
 ]
+
+
+def apply_mcp_approvals(
+    config: AppConfig,
+    workspace: Path,
+    *,
+    interactive: bool,
+    report_only: bool = False,
+    choices: Mapping[str, Literal["once", "always", "deny"]] | None = None,
+) -> AppConfig:
+    import typer
+
+    from lumen.config import ConfigLoadError
+    from lumen.config_resolver import ConfigScope
+
+    store = McpApprovalStore(workspace)
+    accepted = {}
+    warnings = list(config.config_warnings)
+    diagnostics: list[dict[str, str]] = []
+    for name, server in config.mcp_servers.items():
+        if not config.mcp.enabled.get(name, True):
+            accepted[name] = server.model_copy(update={"approval_status": "disabled"})
+            diagnostics.append(
+                {"name": name, "scope": server.source_scope, "approval": "disabled"}
+            )
+            continue
+        if server.source_scope not in {ConfigScope.LEGACY.value, ConfigScope.PROJECT.value}:
+            accepted[name] = server.model_copy(update={"approval_status": "automatic"})
+            diagnostics.append({"name": name, "scope": server.source_scope, "approval": "automatic"})
+            continue
+        fingerprint = server.definition_fingerprint or ""
+        decision = store.decision(name, fingerprint)
+        if decision == "always":
+            accepted[name] = server.model_copy(update={"approval_status": "always"})
+            diagnostics.append({"name": name, "scope": server.source_scope, "approval": "always"})
+            continue
+        if decision == "deny":
+            diagnostics.append({"name": name, "scope": server.source_scope, "approval": "deny"})
+            warnings.append(
+                f"MCP server {name!r} from {server.source_scope} scope is denied and was not started."
+            )
+            continue
+        if report_only:
+            diagnostics.append({"name": name, "scope": server.source_scope, "approval": "pending"})
+            warnings.append(
+                f"MCP server {name!r} from {server.source_scope} scope is pending approval; "
+                f"run 'lumen mcp approve {name}'."
+            )
+            continue
+        selected = choices.get(name) if choices is not None else None
+        if not interactive and selected is None:
+            raise ConfigLoadError(
+                f"MCP server {name!r} from {server.source_scope} scope requires approval. "
+                f"Run 'lumen mcp approve {name}' or 'lumen mcp deny {name}'."
+            )
+        choice = selected or (
+            typer.prompt(
+                f"Allow project MCP server {name!r} ({server.transport})? [once/always/deny]",
+                default="once",
+            )
+            .strip()
+            .lower()
+        )
+        if choice not in {"once", "always", "deny"}:
+            raise ConfigLoadError("MCP approval must be one of: once, always, deny")
+        if choice == "deny":
+            store.set(name, fingerprint, "deny")
+            diagnostics.append({"name": name, "scope": server.source_scope, "approval": "deny"})
+            warnings.append(f"MCP server {name!r} was denied and was not started.")
+            continue
+        if choice == "always":
+            store.set(name, fingerprint, "always")
+        accepted[name] = server.model_copy(update={"approval_status": choice})
+        diagnostics.append({"name": name, "scope": server.source_scope, "approval": choice})
+    return config.model_copy(
+        update={
+            "mcp_servers": accepted,
+            "config_warnings": tuple(warnings),
+            "mcp_diagnostics": tuple(diagnostics),
+        }
+    )

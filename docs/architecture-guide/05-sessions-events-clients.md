@@ -16,6 +16,13 @@ flowchart TB
 
 TUI 与 Web 不各自维护一套 Agent 状态。它们通过 `WorkspaceHost` 看到同一 session、run、approval 和 event sequence。
 
+Apple Silicon 桌面客户端位于 `src/desktop/`：Tauri 管理窗口、目录选择、Keychain 和它拥有的
+Python 子进程，主 WebView 使用该进程的同源 loopback Web/API。`lumen.desktop` 通过既有 Host
+命令和 snapshot 检查状态、取消 run、结束 Live；不另写 timeline、Plan 或 Agent 状态。
+随包启动页的原生命令权限不授予 HTTP 主页面，导航只允许当前后台端口和随包页面。
+有界私有管道只负责启动授权、凭据、ready 和关闭，启动 token 不发到网页事件或日志。
+窗口关闭保留 Host；退出和项目切换先有序释放旧 Host。详见[桌面指南](../desktop.md)。
+
 ## 5.2 Command 模型
 
 应用层命令定义在 `application/models.py`：

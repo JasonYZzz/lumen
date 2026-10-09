@@ -1,0 +1,12 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "bootstrap",
+  "description": "Only the bundled startup page can respond to startup requests.",
+  "windows": ["main"],
+  "local": true,
+  "permissions": [
+    "core:event:allow-listen", "core:event:allow-unlisten",
+    "allow-bootstrap", "allow-choose-project", "allow-reply", "allow-cancel-startup",
+    "allow-forget-credential"
+  ]
+}

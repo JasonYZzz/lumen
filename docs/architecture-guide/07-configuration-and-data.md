@@ -39,6 +39,13 @@ Runtime、活动名称和 registry，再关闭旧 Scope。因此 Session、MCP�
 
 `ConfigResolver.resolve().report()` 是只读 observation projection：它展示最终配置、参与合并的 source 与显式字段 provenance，但不参与运行决策。`api_key`、MCP env/header、OAuth secret 等值在投影前统一脱敏；CLI 的 `--dump-effective-config` 只序列化该报告。
 
+桌面先以 `resolve_environment=False` 获取严格预览，完成 TrustStore 和共享
+`apply_mcp_approvals` 交互后再解析凭据。`resolve_config_environment` 直接处理已验证对象，
+保留排除序列化的内联密钥和 MCP 来源；拒绝或禁用的连接不请求其凭据。
+Keychain 值通过受限 `environ` Mapping 进入配置、WorkspaceConfiguration 和 Web search，
+不写入全局 `os.environ`；显式 Mapping 不回退进程变量，报告也脱敏插值到 args/URL 的值。
+CLI 默认使用进程环境。首次配置通过 `O_CREAT | O_EXCL` 与 `0600` 创建，竞争出现同名文件时拒绝覆盖。
+
 `docs/generated/contracts.json` 从当前 `AppConfig`、`WorkspaceCommand/CommandResult`、`RunEvent`、`ToolSpec` 枚举以及 Session schema/record authority 生成。`python -m lumen.contracts --check` 是 CI freshness gate；生成物只用于导航和漂移检测，不成为第二套运行 schema。
 
 ## 7.2 AppConfig 结构

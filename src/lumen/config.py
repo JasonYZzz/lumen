@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import re
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Annotated, Any, Literal, cast
 
@@ -689,14 +690,14 @@ class AppConfig(StrictModel):
 _ENV_PATTERN = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-([^}]*))?\}")
 
 
-def _expand_environment(value: str, *, variables: dict[str, str] | None = None) -> str:
+def _expand_environment(value: str, *, variables: Mapping[str, str] | None = None) -> str:
     def replace(match: re.Match[str]) -> str:
         name = match.group(1)
         default = match.group(2)
         if variables is not None and name in variables:
             resolved = variables[name]
             return default if default is not None and resolved == "" else resolved
-        value = os.environ.get(name)
+        value = (os.environ if variables is None else variables).get(name)
         if value is not None and (value != "" or default is None):
             return value
         if default is not None:
@@ -714,6 +715,8 @@ def validate_config_data(
     config_sources: tuple[Any, ...] = (),
     config_warnings: tuple[str, ...] = (),
     project_trusted: bool = True,
+    environ: Mapping[str, str] | None = None,
+    resolve_environment: bool = True,
 ) -> AppConfig:
     """Validate merged configuration and resolve runtime-only values.
 
@@ -794,100 +797,17 @@ def validate_config_data(
             }
         )
 
-    # Resolve API keys for every configured model. Both single- and multi-model
-    # forms may declare api_key_env; we look the env var up once per model and
-    # store the value on the (excluded) api_key field. Plaintext api_key values
-    # declared directly in YAML are preserved verbatim.
-    def resolve_model(model_cfg: ModelSettingsConfig) -> ModelSettingsConfig:
-        if model_cfg.api_key_env:
-            name = model_cfg.api_key_env
-            value = os.environ.get(name)
-            if value is None:
-                raise ConfigLoadError(f"environment variable {name} is not set")
-            return model_cfg.model_copy(update={"api_key": value})
-        return model_cfg
-
-    resolved_single = resolve_model(config.agent.model) if config.agent.model is not None else None
-    resolved_models = {name: resolve_model(model_cfg) for name, model_cfg in config.agent.models.items()}
-    resolved_live = config.live
-    if config.live.enabled:
-        if config.live.routes:
-            resolved_routes: dict[str, LiveRouteConfig] = {}
-            for route_name, route in config.live.routes.items():
-                live_key = os.environ.get(route.api_key_env)
-                if live_key is None:
-                    raise ConfigLoadError(f"environment variable {route.api_key_env} is not set")
-                updates: dict[str, Any] = {"api_key": live_key}
-                if isinstance(route, BailianLiveRouteConfig):
-                    workspace_id = os.environ.get(route.workspace_id_env)
-                    if workspace_id is None:
-                        raise ConfigLoadError(
-                            f"environment variable {route.workspace_id_env} is not set"
-                        )
-                    updates["workspace_id"] = workspace_id
-                resolved_routes[route_name] = route.model_copy(update=updates)
-            resolved_live = config.live.model_copy(update={"routes": resolved_routes})
-        else:
-            live_key = os.environ.get(config.live.api_key_env)
-            if live_key is None:
-                raise ConfigLoadError(f"environment variable {config.live.api_key_env} is not set")
-            resolved_live = config.live.model_copy(update={"api_key": live_key})
-
-    resolved_servers: dict[str, McpServerConfig] = {}
-    variables = dict(os.environ)
-    # This built-in is intentionally assigned last and cannot be overridden by
-    # the process environment or an MCP server's own env mapping.
-    variables["LUMEN_PROJECT_DIR"] = str(workspace)
-    for name, server in config.mcp_servers.items():
-        resolved_env = {
-            key: _expand_environment(value, variables=variables) for key, value in server.env.items()
-        }
-        if server.transport == "stdio":
-            resolved_env["LUMEN_PROJECT_DIR"] = str(workspace)
-        resolved_servers[name] = server.model_copy(
-            update={
-                "command": _expand_environment(server.command, variables=variables)
-                if server.command is not None
-                else None,
-                "args": [_expand_environment(value, variables=variables) for value in server.args],
-                "url": _expand_environment(server.url, variables=variables)
-                if server.url is not None
-                else None,
-                "env": resolved_env,
-                "headers": {
-                    key: _expand_environment(value, variables=variables)
-                    for key, value in server.headers.items()
-                },
-                "oauth": (
-                    server.oauth.model_copy(
-                        update={
-                            "client_id": _expand_environment(server.oauth.client_id, variables=variables)
-                            if server.oauth.client_id is not None
-                            else None,
-                            "client_secret": _expand_environment(
-                                server.oauth.client_secret, variables=variables
-                            )
-                            if server.oauth.client_secret is not None
-                            else None,
-                        }
-                    )
-                    if server.oauth is not None
-                    else None
-                ),
-            }
-        )
-
     session_directory = config.sessions.directory.expanduser()
     if not session_directory.is_absolute():
         session_directory = base / session_directory
 
-    return config.model_copy(
+    resolved = config.model_copy(
         update={
             "agent": config.agent.model_copy(
                 update={
                     "prompt": resolve_prompt(config.agent.prompt),
-                    "model": resolved_single,
-                    "models": resolved_models,
+                    "model": config.agent.model,
+                    "models": config.agent.models,
                 }
             ),
             "tools": config.tools.model_copy(
@@ -906,14 +826,120 @@ def validate_config_data(
                     ]
                 }
             ),
-            "mcp_servers": resolved_servers,
+            "mcp_servers": config.mcp_servers,
             "agents": config.agents.model_copy(
                 update={"worktree_root": config.agents.worktree_root.expanduser().resolve()}
             ),
-            "live": resolved_live,
+            "live": config.live,
             "sessions": config.sessions.model_copy(update={"directory": session_directory.resolve()}),
         }
     )
+
+    if resolve_environment:
+        return resolve_config_environment(resolved, workspace=workspace, environ=environ)
+    return resolved
+
+
+def resolve_config_environment(
+    config: AppConfig, *, workspace: Path, environ: Mapping[str, str] | None = None,
+) -> AppConfig:
+    """Resolve a validated preview without serializing or dropping excluded credentials."""
+    # Resolve API keys for every configured model. Both single- and multi-model
+    # forms may declare api_key_env; we look the env var up once per model and
+    # store the value on the (excluded) api_key field. Plaintext api_key values
+    # declared directly in YAML are preserved verbatim.
+    def resolve_model(model_cfg: ModelSettingsConfig) -> ModelSettingsConfig:
+        if environ is not None and model_cfg.api_key is None and model_cfg.api_key_env is None:
+            name = {"openai": "OPENAI_API_KEY", "anthropic": "ANTHROPIC_API_KEY",
+                    "google": "GOOGLE_API_KEY", "gemini": "GOOGLE_API_KEY"}.get(model_cfg.id.split(":")[0])
+            if name and environ.get(name):
+                return model_cfg.model_copy(update={"api_key": environ[name]})
+        if model_cfg.api_key_env:
+            name = model_cfg.api_key_env
+            value = (os.environ if environ is None else environ).get(name)
+            if value is None:
+                raise ConfigLoadError(f"environment variable {name} is not set")
+            return model_cfg.model_copy(update={"api_key": value})
+        return model_cfg
+
+    resolved_single = resolve_model(config.agent.model) if config.agent.model is not None else None
+    resolved_models = {name: resolve_model(model_cfg) for name, model_cfg in config.agent.models.items()}
+    resolved_live = config.live
+    if config.live.enabled:
+        if config.live.routes:
+            resolved_routes: dict[str, LiveRouteConfig] = {}
+            for route_name, route in config.live.routes.items():
+                live_key = (os.environ if environ is None else environ).get(route.api_key_env)
+                if live_key is None:
+                    raise ConfigLoadError(f"environment variable {route.api_key_env} is not set")
+                updates: dict[str, Any] = {"api_key": live_key}
+                if isinstance(route, BailianLiveRouteConfig):
+                    workspace_id = (os.environ if environ is None else environ).get(route.workspace_id_env)
+                    if workspace_id is None:
+                        raise ConfigLoadError(
+                            f"environment variable {route.workspace_id_env} is not set"
+                        )
+                    updates["workspace_id"] = workspace_id
+                resolved_routes[route_name] = route.model_copy(update=updates)
+            resolved_live = config.live.model_copy(update={"routes": resolved_routes})
+        else:
+            live_key = (os.environ if environ is None else environ).get(config.live.api_key_env)
+            if live_key is None:
+                raise ConfigLoadError(f"environment variable {config.live.api_key_env} is not set")
+            resolved_live = config.live.model_copy(update={"api_key": live_key})
+
+    resolved_servers: dict[str, McpServerConfig] = {}
+    variables = dict(os.environ if environ is None else environ)
+    # This built-in is intentionally assigned last and cannot be overridden by
+    # the process environment or an MCP server's own env mapping.
+    variables["LUMEN_PROJECT_DIR"] = str(workspace)
+    def expand(value: str) -> str:
+        return _expand_environment(value, variables=variables)
+
+    for name, server in config.mcp_servers.items():
+        if not config.mcp.enabled.get(name, True):
+            resolved_servers[name] = server
+            continue
+        resolved_env = {
+            key: expand(value) for key, value in server.env.items()
+        }
+        if server.transport == "stdio":
+            resolved_env["LUMEN_PROJECT_DIR"] = str(workspace)
+        resolved_servers[name] = server.model_copy(
+            update={
+                "command": expand(server.command)
+                if server.command is not None
+                else None,
+                "args": [expand(value) for value in server.args],
+                "url": expand(server.url)
+                if server.url is not None
+                else None,
+                "env": resolved_env,
+                "headers": {
+                    key: expand(value)
+                    for key, value in server.headers.items()
+                },
+                "oauth": (
+                    server.oauth.model_copy(
+                        update={
+                            "client_id": expand(server.oauth.client_id)
+                            if server.oauth.client_id is not None
+                            else None,
+                            "client_secret": expand(server.oauth.client_secret)
+                            if server.oauth.client_secret is not None
+                            else None,
+                        }
+                    )
+                    if server.oauth is not None
+                    else None
+                ),
+            }
+        )
+
+    return config.model_copy(update={
+        "agent": config.agent.model_copy(update={"model": resolved_single, "models": resolved_models}),
+        "live": resolved_live, "mcp_servers": resolved_servers,
+    })
 
 
 def load_config(path: str | Path, *, workspace: str | Path | None = None) -> AppConfig:
@@ -950,3 +976,15 @@ def load_config(path: str | Path, *, workspace: str | Path | None = None) -> App
         config_path=config_path,
         workspace=effective_workspace,
     )
+
+
+def create_config_file(path: Path, content: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    except FileExistsError as error:
+        raise ConfigLoadError(f"refusing to overwrite existing file: {path}") from error
+    with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+        handle.write(content)
+        handle.flush()
+        os.fsync(handle.fileno())
