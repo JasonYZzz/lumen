@@ -308,13 +308,8 @@ export function Composer({
 
   return (
     <div ref={shellRef} className="composer-shell">
-      {settingsControl && (
-        <div className="composer-context" role="group" aria-label="任务设置">
-          {settingsControl}
-        </div>
-      )}
       <div
-        className={`composer composer--workspace ${attachments.length || uploading || visibleAttachmentError ? 'has-attachments' : ''}`}
+        className={`composer composer--workspace ${busy ? 'is-busy' : ''} ${attachments.length || uploading || visibleAttachmentError ? 'has-attachments' : ''}`}
         onDragOver={(event) => event.preventDefault()}
         onDrop={handleDrop}
       >
@@ -457,11 +452,12 @@ export function Composer({
               <Plus size={22} aria-hidden="true" />
             </button>
             {busy ? (
-              <div className="queue-mode" aria-label="运行中输入方式">
+              <div className="queue-mode" role="group" aria-label="运行中输入方式">
                 <button
                   type="button"
                   className={queueMode === 'steer' ? 'is-active' : ''}
                   aria-pressed={queueMode === 'steer'}
+                  title="将消息补充到当前运行"
                   onClick={() => onQueueModeChange('steer')}
                 >
                   立即补充
@@ -470,16 +466,20 @@ export function Composer({
                   type="button"
                   className={queueMode === 'follow_up' ? 'is-active' : ''}
                   aria-pressed={queueMode === 'follow_up'}
+                  title="当前运行完成后再发送消息"
                   onClick={() => onQueueModeChange('follow_up')}
                 >
                   完成后继续
                 </button>
               </div>
-            ) : (
-              <span className="composer-hint">@ 文件&nbsp;&nbsp; / 命令</span>
-            )}
+            ) : null}
           </div>
 
+          {settingsControl && (
+            <div className="composer-context" role="group" aria-label="任务设置">
+              {settingsControl}
+            </div>
+          )}
           <div className="composer-actions">
             {liveControl}
             {busy && (

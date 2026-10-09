@@ -139,6 +139,10 @@ FastAPI 提供 bootstrap、session、run、approval、context 和文件搜索端
 Web Composer 支持图片选择、拖放和剪贴板图片。浏览器使用原始二进制请求上传，Host 校验格式、大小和
 magic signature 后写入 ArtifactStore；`StartRun` / `QueueRunInput` 只携带 AttachmentRef。
 
+Web Composer 将正文编辑与底部工具栏分开；添加内容、运行中输入方式、模型、推理和审批设置集中在输入框内，
+窄屏将任务设置换行并允许横向浏览。系统设置保留分类导航，模型表单按连接设置、推理与搜索、用量限制分组；
+保存操作固定在滚动区底部，分类切换保留草稿，关闭时仍通过既有未保存确认流程。
+
 Session 管理端点只向 `WorkspaceHost` 派发 command。历史列表默认过滤归档、删除墓碑和没有 turn/显式标题的空 Session；归档列表可显式请求。归档、恢复可见性与软删除在工作区 OS execution lock 内检查最新 journal；活动 run、活动 Agent 或未结束的 Live 连接阻止操作。未核实的历史 effect、待导入结果和失败记录不阻止隐藏任务，也不会因此被豁免或重放；完成与续跑仍使用原有恢复门禁。重复删除已存在的墓碑返回成功，不追加重复 record；不存在的 ID 仍返回 404。Host 访问缓存 actor 前重新检查墓碑，避免跨进程删除后继续暴露会话。Web Adapter 不直接修改 journal。
 
 `WorkspaceHost` 接受 `StartRun` 时，会在调度模型或工具前通过 `RunCoordinator` 追加一个带唯一 `interaction_id` 的 `running` turn。未命名 Session 随后追加标题“新对话”及 `title_generation_turn` 来源索引；Host 后台读取该 turn 的脱敏、有界输入，经 ResourceManager 的无工具模型调用生成短标题。生成不阻塞主 run；失败回退到本地摘要。目录更新只追加新 record，且只有来源索引仍匹配时才能写回；手动命名清除待生成索引并取消任务，删除也取消任务。Host 关闭时取消未完成的标题请求，后续打开可从持久化索引恢复。Web 仅在列表存在 `titlePending` 时轮询目录，不重载 timeline；其他 Adapter 读取相同 Host 投影。

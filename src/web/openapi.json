@@ -534,6 +534,26 @@
         "title": "RenameSessionBody",
         "type": "object"
       },
+      "RepairJournalBody": {
+        "additionalProperties": false,
+        "properties": {
+          "confirmed": {
+            "default": false,
+            "title": "Confirmed",
+            "type": "boolean"
+          },
+          "expected_digest": {
+            "pattern": "^sha256:[0-9a-f]{64}$",
+            "title": "Expected Digest",
+            "type": "string"
+          }
+        },
+        "required": [
+          "expected_digest"
+        ],
+        "title": "RepairJournalBody",
+        "type": "object"
+      },
       "RetryRunBody": {
         "properties": {
           "clientRequestId": {
@@ -691,6 +711,39 @@
           "clientRequestId"
         ],
         "title": "StartRunBody",
+        "type": "object"
+      },
+      "TurnRestoreBody": {
+        "additionalProperties": false,
+        "properties": {
+          "before_turn": {
+            "minimum": 0.0,
+            "title": "Before Turn",
+            "type": "integer"
+          },
+          "client_request_id": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Client Request Id",
+            "type": "string"
+          },
+          "confirmed": {
+            "default": false,
+            "title": "Confirmed",
+            "type": "boolean"
+          },
+          "expected_digest": {
+            "pattern": "^sha256:[0-9a-f]{64}$",
+            "title": "Expected Digest",
+            "type": "string"
+          }
+        },
+        "required": [
+          "before_turn",
+          "expected_digest",
+          "client_request_id"
+        ],
+        "title": "TurnRestoreBody",
         "type": "object"
       },
       "ValidationError": {
@@ -2513,6 +2566,195 @@
           }
         },
         "summary": "Review Plan"
+      }
+    },
+    "/api/v1/sessions/{session_id}/repair": {
+      "get": {
+        "operationId": "inspect_session_repair_api_v1_sessions__session_id__repair_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "schema": {
+              "title": "Session Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Inspect Session Repair Api V1 Sessions  Session Id  Repair Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Inspect Session Repair"
+      },
+      "post": {
+        "operationId": "repair_session_journal_api_v1_sessions__session_id__repair_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "schema": {
+              "title": "Session Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RepairJournalBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Repair Session Journal Api V1 Sessions  Session Id  Repair Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Repair Session Journal"
+      }
+    },
+    "/api/v1/sessions/{session_id}/restore-files": {
+      "get": {
+        "operationId": "preview_turn_restore_api_v1_sessions__session_id__restore_files_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "schema": {
+              "title": "Session Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "before_turn",
+            "required": true,
+            "schema": {
+              "title": "Before Turn",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Preview Turn Restore Api V1 Sessions  Session Id  Restore Files Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Preview Turn Restore"
+      },
+      "post": {
+        "operationId": "apply_turn_restore_api_v1_sessions__session_id__restore_files_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "schema": {
+              "title": "Session Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TurnRestoreBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Apply Turn Restore Api V1 Sessions  Session Id  Restore Files Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Apply Turn Restore"
       }
     },
     "/api/v1/sessions/{session_id}/retry": {

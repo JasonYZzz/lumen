@@ -55,6 +55,7 @@ import type {
   SessionSummary,
   SessionSnapshot,
   TimelineEntry,
+  TurnRestorePreview,
 } from '@/lib/api/types'
 import { initialRunState, runReducer } from '@/lib/state/run-reducer'
 import {
@@ -833,7 +834,7 @@ export function LumenApp() {
       dispatch({ type: 'local-error', message: `未知命令：${name}。输入 / 查看可用命令。` })
       setInput('')
       return true
-    },
+  },
     [
       attachRun,
       bootstrap,
@@ -1185,6 +1186,23 @@ export function LumenApp() {
   const composerSettings = (
     <div className="composer-settings">
       <ChoiceMenu
+        className="is-model"
+        label="模型"
+        open={modelMenuOpen}
+        onOpenChange={setModelMenuOpen}
+        searchable
+        alignToComposer
+        value={bootstrap?.activeModel ?? ''}
+        disabled={!bootstrap || workspaceBusy || modelChanging}
+        icon={<ModelIcon model={bootstrap?.activeModel ?? bootstrap?.modelId ?? ''} />}
+        options={(bootstrap?.availableModels ?? []).map((model) => ({
+          value: model,
+          label: model,
+          icon: <ModelIcon model={model} />,
+        }))}
+        onChange={selectModel}
+      />
+      <ChoiceMenu
         label="推理强度"
         open={thinkingMenuOpen}
         onOpenChange={setThinkingMenuOpen}
@@ -1205,23 +1223,6 @@ export function LumenApp() {
               : option),
         ]}
         onChange={selectThinking}
-      />
-      <ChoiceMenu
-        className="is-model"
-        label="模型"
-        open={modelMenuOpen}
-        onOpenChange={setModelMenuOpen}
-        searchable
-        alignToComposer
-        value={bootstrap?.activeModel ?? ''}
-        disabled={!bootstrap || workspaceBusy || modelChanging}
-        icon={<ModelIcon model={bootstrap?.activeModel ?? bootstrap?.modelId ?? ''} />}
-        options={(bootstrap?.availableModels ?? []).map((model) => ({
-          value: model,
-          label: model,
-          icon: <ModelIcon model={model} />,
-        }))}
-        onChange={selectModel}
       />
       {collaborationMode === 'plan' && <span className="composer-plan-indicator" role="status">
         <ListChecks size={14} aria-hidden="true" /> Plan
@@ -1455,6 +1456,19 @@ export function LumenApp() {
             busy={controlBusy}
             onClose={() => setCheckpointsOpen(false)}
             onFork={(checkpoint) => void forkCheckpoint(checkpoint)}
+            onPreview={async (checkpoint) => {
+              if (!sessionId) throw new Error('请先选择任务。')
+              return lumenApi.previewTurnRestore(sessionId, checkpoint.index)
+            }}
+            onRestore={async (preview, clientRequestId) => {
+              if (sessionId !== preview.session_id) throw new Error('已切换任务，请重新预览。')
+              setControlBusy(true)
+              try {
+                const result = await lumenApi.applyTurnRestore(preview, clientRequestId)
+                await refreshSessionCapabilities()
+                if (result.failed) throw new Error(`部分恢复失败：${result.failed.resource} · ${result.failed.error}`)
+              } finally { setControlBusy(false) }
+            }}
           />
         )}
 
@@ -2062,13 +2076,16 @@ function SettingsDialog({
                   {draft && (
                     <form className="model-form" onSubmit={(event) => { event.preventDefault(); void save() }}>
                       {error && <div className="settings-inline-error" role="alert"><span>{error}</span><button type="button" onClick={() => void load()}>重新读取</button></div>}
-                      <div className="model-form-grid">
-                        <label className="model-form-wide"><span>代理能力 Profile（可选）</span>
-                          <input aria-label="代理能力 Profile" value={draft.reasoningProfile}
-                            disabled={busy || !editable} placeholder="留空自动匹配；例如 openai-gpt56-sol"
-                            onChange={(event) => setDraft({ ...draft, reasoningProfile: event.target.value })} />
-                          <small>自定义代理可引用已核对的目录规则；模型 ID 和 API 协议必须与规则一致。</small>
-                        </label>
+                      <fieldset className="model-form-grid">
+                        <legend>连接设置</legend>
+                        <label><span>配置名称</span><input value={draft.name} disabled={draft.originalName !== null || busy || !editable} onChange={(event) => setDraft({ ...draft, name: event.target.value })} placeholder="例如 local-qwen" /></label>
+                        <label><span>模型 ID</span><input value={draft.id} disabled={busy || !editable} onChange={(event) => setDraft({ ...draft, id: event.target.value })} placeholder="例如 openai:qwen3" /></label>
+                        <label><span>API 协议</span><select value={draft.api} disabled={busy || !editable} onChange={(event) => setDraft({ ...draft, api: event.target.value as ModelDraft['api'] })}><option value="">自动选择（默认 Responses）</option><option value="responses">Responses API</option><option value="chat">Chat Completions</option><option value="openai-responses">OpenAI Responses 兼容</option><option value="openai-completions">OpenAI Completions 兼容</option><option value="chat-completions">Chat Completions 兼容别名</option></select></label>
+                        <label><span>API 地址</span><input value={draft.baseUrl} disabled={busy || !editable} onChange={(event) => setDraft({ ...draft, baseUrl: event.target.value })} placeholder="提供方默认或 http://127.0.0.1:11434/v1" /></label>
+                        <label className="model-form-wide"><span>API 密钥环境变量</span><input value={draft.apiKeyEnv} disabled={busy || !editable} onChange={(event) => setDraft({ ...draft, apiKeyEnv: event.target.value })} placeholder="例如 OPENAI_API_KEY；本地模型可留空" /><small>Web 不读取、显示或保存密钥明文。</small></label>
+                      </fieldset>
+                      <fieldset className="model-form-grid">
+                        <legend>推理与搜索</legend>
                         <label><span>默认推理强度</span><select aria-label="默认推理强度"
                           value={draft.reasoningEffort ?? ''}
                           disabled={busy || !editable || !availableReasoning}
@@ -2089,9 +2106,12 @@ function SettingsDialog({
                             核对日期：{availableReasoning.capability_reviewed_on} · 目录：{availableReasoning.catalog_revision}
                           </small>}
                         </label>
-                        <label><span>配置名称</span><input value={draft.name} disabled={draft.originalName !== null || busy || !editable} onChange={(event) => setDraft({ ...draft, name: event.target.value })} placeholder="例如 local-qwen" /></label>
-                        <label><span>模型 ID</span><input value={draft.id} disabled={busy || !editable} onChange={(event) => setDraft({ ...draft, id: event.target.value })} placeholder="例如 openai:qwen3" /></label>
-                        <label><span>API 协议</span><select value={draft.api} disabled={busy || !editable} onChange={(event) => setDraft({ ...draft, api: event.target.value as ModelDraft['api'] })}><option value="">自动选择（默认 Responses）</option><option value="responses">Responses API</option><option value="chat">Chat Completions</option><option value="openai-responses">OpenAI Responses 兼容</option><option value="openai-completions">OpenAI Completions 兼容</option><option value="chat-completions">Chat Completions 兼容别名</option></select></label>
+                        <label className="model-form-wide"><span>代理能力 Profile（可选）</span>
+                          <input aria-label="代理能力 Profile" value={draft.reasoningProfile}
+                            disabled={busy || !editable} placeholder="留空自动匹配；例如 openai-gpt56-sol"
+                            onChange={(event) => setDraft({ ...draft, reasoningProfile: event.target.value })} />
+                          <small>自定义代理可引用已核对的目录规则；模型 ID 和 API 协议必须与规则一致。</small>
+                        </label>
                         <label><span>模型内建联网</span><select aria-label="模型内建联网"
                           value={draft.nativeWebSearch.mode ?? 'auto'} disabled={busy || !editable}
                           onChange={(event) => setDraft({ ...draft, nativeWebSearch: {
@@ -2115,11 +2135,12 @@ function SettingsDialog({
                           } })}>
                           <option value="low">精简</option><option value="medium">标准</option><option value="high">深入</option>
                         </select><small>提供方可忽略此提示；DeepSeek 当前固定由服务端决定搜索上下文。</small></label>
-                        <label><span>API 地址</span><input value={draft.baseUrl} disabled={busy || !editable} onChange={(event) => setDraft({ ...draft, baseUrl: event.target.value })} placeholder="提供方默认或 http://127.0.0.1:11434/v1" /></label>
-                        <label className="model-form-wide"><span>API 密钥环境变量</span><input value={draft.apiKeyEnv} disabled={busy || !editable} onChange={(event) => setDraft({ ...draft, apiKeyEnv: event.target.value })} placeholder="例如 OPENAI_API_KEY；本地模型可留空" /><small>Web 不读取、显示或保存密钥明文。</small></label>
+                      </fieldset>
+                      <fieldset className="model-form-grid">
+                        <legend>用量限制</legend>
                         <label><span>最大输出 Token</span><input type="number" min="1" value={String(draft.settings.max_tokens ?? '')} disabled={busy || !editable} onChange={(event) => setDraft({ ...draft, settings: { ...draft.settings, max_tokens: event.target.value ? Number(event.target.value) : undefined } })} placeholder="提供方默认" /></label>
                         <label><span>上下文窗口</span><input type="number" min="1" value={String(draft.context.window_tokens ?? '')} disabled={busy || !editable} onChange={(event) => setDraft({ ...draft, context: { ...draft.context, window_tokens: event.target.value ? Number(event.target.value) : undefined } })} placeholder="自动识别" /></label>
-                      </div>
+                      </fieldset>
                       {draft.authKind === 'inline' && !draft.apiKeyEnv.trim() && (
                         <div className="settings-notice"><WarningCircle size={17} /><span>此模型来自含内联密钥的配置。先改为环境变量名，Web 才会创建安全覆盖。</span></div>
                       )}
@@ -2511,13 +2532,34 @@ function CheckpointInspector({
   busy,
   onClose,
   onFork,
+  onPreview,
+  onRestore,
 }: {
   checkpoints: CheckpointRecord[]
   busy: boolean
   onClose: () => void
   onFork: (checkpoint: CheckpointRecord) => void
+  onPreview: (checkpoint: CheckpointRecord) => Promise<TurnRestorePreview>
+  onRestore: (preview: TurnRestorePreview, clientRequestId: string) => Promise<void>
 }) {
   const dialogRef = useModalFocus(onClose)
+  const [preview, setPreview] = useState<TurnRestorePreview | null>(null)
+  const [restoreRequestId, setRestoreRequestId] = useState('')
+  const [loading, setLoading] = useState(false)
+  const [notice, setNotice] = useState('')
+  const inspect = async (checkpoint: CheckpointRecord) => {
+    setLoading(true); setNotice(''); setPreview(null)
+    try { setPreview(await onPreview(checkpoint)); setRestoreRequestId(requestId()) }
+    catch (error) { setNotice(error instanceof Error ? error.message : '无法预览恢复。') }
+    finally { setLoading(false) }
+  }
+  const restore = async () => {
+    if (!preview) return
+    setLoading(true); setNotice('')
+    try { await onRestore(preview, restoreRequestId); setPreview(null); setNotice('文件已恢复；对话保持当前状态。') }
+    catch (error) { setNotice(error instanceof Error ? error.message : '恢复失败，请刷新检查文件。') }
+    finally { setLoading(false) }
+  }
   return (
     <div ref={dialogRef} className="runtime-overlay" role="dialog" aria-modal="true" aria-label="Session 检查点" tabIndex={-1}>
       <section className="runtime-inspector compact-inspector">
@@ -2527,8 +2569,24 @@ function CheckpointInspector({
             <article className="checkpoint-record" key={checkpoint.index}>
               <div><strong>Turn {checkpoint.index + 1}</strong><span>{checkpoint.status} · {checkpoint.receipt_count} receipts · {checkpoint.mutation_count} mutations</span><p>{checkpoint.prompt}</p></div>
               <button type="button" disabled={busy} onClick={() => onFork(checkpoint)}>从这里分支</button>
+              <button type="button" disabled={busy || loading} onClick={() => void inspect(checkpoint)}>预览文件恢复</button>
             </article>
           ))}
+          {notice && <p role="status">{notice}</p>}
+          {preview && <section aria-label="文件恢复预览">
+            <h3>恢复到 Turn {preview.before_turn + 1} 之前</h3>
+            <p>仅恢复有快照的文件；对话、Shell 和外部操作需单独处理。</p>
+            {preview.files.map((file) => <article key={file.work_product_id}>
+              <strong>{file.resource}{file.target_exists ? '' : '（将删除）'}</strong>
+              <pre style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{file.diff}</pre>
+              {file.diff_truncated && <p>差异预览已截断。</p>}
+            </article>)}
+            {preview.blockers.map((item) => <p role="alert" key={item.resource}>{item.resource}：{item.error}</p>)}
+            <p>未覆盖操作：{preview.excluded.length}；可恢复文件：{preview.files.length}。</p>
+            <button type="button" disabled={busy || loading || !!preview.blockers.length || !preview.files.length}
+              onClick={() => void restore()}>确认恢复这些文件</button>
+            <button type="button" disabled={loading} onClick={() => setPreview(null)}>取消</button>
+          </section>}
         </div>
       </section>
     </div>

@@ -7,6 +7,17 @@ import { buildSlashCommands } from '../lib/slash-commands'
 (globalThis as typeof globalThis & { React: typeof React }).React = React
 
 describe('Composer image capability', () => {
+  it('places task settings between the tools and send actions inside the composer', () => {
+    const markup = renderToStaticMarkup(<Composer value="多行任务\n下一步" busy={false}
+      queueMode="steer" slashCommands={[]} attachments={[]} imageInputEnabled={false}
+      onChange={vi.fn()} onQueueModeChange={vi.fn()} onAttachmentsChange={vi.fn()}
+      onSubmit={vi.fn()} onStop={vi.fn()} settingsControl={<button>模型设置</button>} />)
+    const toolbar = markup.indexOf('class="composer-toolbar"')
+    const settings = markup.indexOf('aria-label="任务设置"')
+    const actions = markup.indexOf('class="composer-actions"')
+    expect(toolbar).toBeLessThan(settings)
+    expect(settings).toBeLessThan(actions)
+  })
   it('keeps queue intent visible while busy and enables sending only with a draft', () => {
     const props = { busy: true, queueMode: 'steer' as const, slashCommands: [], attachments: [],
       imageInputEnabled: false, onChange: vi.fn(), onQueueModeChange: vi.fn(), onAttachmentsChange: vi.fn(),

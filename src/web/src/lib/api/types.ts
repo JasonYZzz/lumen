@@ -275,6 +275,17 @@ export interface SessionSnapshot {
   liveSessions: LiveSessionState[]
 }
 
+export interface TurnRestorePreview {
+  session_id: string
+  before_turn: number
+  digest: string
+  files: Array<{ work_product_id: string; resource: string; current_revision: string;
+    target_revision: string; target_exists: boolean; diff: string; diff_truncated: boolean }>
+  blockers: Array<{ resource: string; error: string }>
+  excluded: Array<{ id: string; reason: string }>
+  scope: string
+}
+
 export type EventType =
   | 'run.started'
   | 'run.completed'

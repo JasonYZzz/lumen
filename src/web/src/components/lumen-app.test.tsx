@@ -18,6 +18,7 @@ vi.mock('../lib/api/client', () => ({
     setMcpServerEnabled: vi.fn(),
     inspectReasoning: vi.fn(),
     listAgents: vi.fn(), waiveVerification: vi.fn(), reviewPlan: vi.fn(),
+    listCheckpoints: vi.fn(), previewTurnRestore: vi.fn(), applyTurnRestore: vi.fn(),
   },
 }))
 vi.mock('./mascot/mascot-scene', () => ({ MascotScene: () => null }))
@@ -96,6 +97,7 @@ beforeEach(() => {
   })
   vi.mocked(lumenApi.session).mockImplementation(async (id) => ({ ...snapshots.get(id)! }))
   vi.mocked(lumenApi.listAgents).mockResolvedValue([])
+  vi.mocked(lumenApi.listCheckpoints).mockResolvedValue([])
   vi.mocked(lumenApi.inspectReasoning).mockResolvedValue({ reasoning: {
     requested: null, effective: null, source: 'provider_default', mapping: 'provider_default',
     parameters: {}, supported_levels: ['provider_default'], capability_status: 'unknown', level_map: {},
@@ -119,6 +121,29 @@ afterEach(async () => {
   vi.restoreAllMocks()
   vi.unstubAllGlobals()
   vi.useRealTimers()
+})
+
+describe('file restoration', () => {
+  it('previews first and applies only after explicit confirmation', async () => {
+    snapshots.set('source', snapshot('source'))
+    window.history.replaceState({}, '', '?session=source')
+    vi.mocked(lumenApi.listCheckpoints).mockResolvedValue([{ index: 0, created_at: '', status: 'completed',
+      prompt: 'edit', receipt_count: 1, mutation_count: 1 }])
+    const preview = { session_id: 'source', before_turn: 0, digest: `sha256:${'a'.repeat(64)}`,
+      files: [{ work_product_id: 'file', resource: 'a.txt', kind: 'text', current_revision: 'current',
+        target_revision: 'target', current_exists: true, target_exists: true, target_bytes: 7,
+        diff: '-after\n+before', diff_truncated: false }], blockers: [], excluded: [], scope: 'files' }
+    vi.mocked(lumenApi.previewTurnRestore).mockResolvedValue(preview)
+    vi.mocked(lumenApi.applyTurnRestore).mockResolvedValue({ status: 'restored', failed: null })
+    await mount()
+    await click(button('打开检查点'))
+    await click(button('预览文件恢复'))
+    expect(container.textContent).toContain('+before')
+    expect(lumenApi.applyTurnRestore).not.toHaveBeenCalled()
+    await click(button('确认恢复这些文件'))
+    expect(lumenApi.applyTurnRestore).toHaveBeenCalledWith(preview, expect.any(String))
+    expect(container.textContent).toContain('文件已恢复')
+  })
 })
 
 describe('plan mode review and ordinary progress', () => {
@@ -280,6 +305,8 @@ describe('settings editing', () => {
   it('preserves model edits across categories and requires explicit discard even after repeated Escape', async () => {
     await mount()
     await click(button('打开系统设置'))
+    expect(Array.from(document.querySelectorAll('.model-form legend'), (item) => item.textContent))
+      .toEqual(['连接设置', '推理与搜索', '用量限制'])
     await editModelId('openai:updated')
     expect(button('添加模型').disabled).toBe(true)
     expect(document.querySelector<HTMLSelectElement>('select[aria-label="已配置模型"]')?.disabled).toBe(true)

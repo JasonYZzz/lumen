@@ -639,6 +639,42 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/sessions/{session_id}/repair": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Inspect Session Repair */
+        get: operations["inspect_session_repair_api_v1_sessions__session_id__repair_get"];
+        put?: never;
+        /** Repair Session Journal */
+        post: operations["repair_session_journal_api_v1_sessions__session_id__repair_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/sessions/{session_id}/restore-files": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Preview Turn Restore */
+        get: operations["preview_turn_restore_api_v1_sessions__session_id__restore_files_get"];
+        put?: never;
+        /** Apply Turn Restore */
+        post: operations["apply_turn_restore_api_v1_sessions__session_id__restore_files_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/sessions/{session_id}/retry": {
         parameters: {
             query?: never;
@@ -928,6 +964,16 @@ export interface components {
             /** Title */
             title: string;
         };
+        /** RepairJournalBody */
+        RepairJournalBody: {
+            /**
+             * Confirmed
+             * @default false
+             */
+            confirmed: boolean;
+            /** Expected Digest */
+            expected_digest: string;
+        };
         /** RetryRunBody */
         RetryRunBody: {
             /** Clientrequestid */
@@ -962,6 +1008,20 @@ export interface components {
             input: string;
             /** Regeneratefromturn */
             regenerateFromTurn?: number | null;
+        };
+        /** TurnRestoreBody */
+        TurnRestoreBody: {
+            /** Before Turn */
+            before_turn: number;
+            /** Client Request Id */
+            client_request_id: string;
+            /**
+             * Confirmed
+             * @default false
+             */
+            confirmed: boolean;
+            /** Expected Digest */
+            expected_digest: string;
         };
         /** ValidationError */
         ValidationError: {
@@ -2361,6 +2421,148 @@ export interface operations {
                 content: {
                     "application/json": {
                         [key: string]: string;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    inspect_session_repair_api_v1_sessions__session_id__repair_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    repair_session_journal_api_v1_sessions__session_id__repair_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RepairJournalBody"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    preview_turn_restore_api_v1_sessions__session_id__restore_files_get: {
+        parameters: {
+            query: {
+                before_turn: number;
+            };
+            header?: never;
+            path: {
+                session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    apply_turn_restore_api_v1_sessions__session_id__restore_files_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TurnRestoreBody"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
                     };
                 };
             };

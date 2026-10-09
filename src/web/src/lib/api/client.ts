@@ -23,6 +23,7 @@ import type {
   RunStartedResponse,
   SessionSnapshot,
   SessionSummary,
+  TurnRestorePreview,
 } from './types'
 
 const apiBaseUrl = process.env.NEXT_PUBLIC_LUMEN_API_BASE?.replace(/\/$/, '') ?? ''
@@ -112,6 +113,15 @@ export const lumenApi = {
     )).sessions.map((session) => ({ ...session, archived: session.archived ?? false })),
   createSession: () =>
     requestJson<{ sessionId: string }>('/api/v1/sessions', { method: 'POST' }),
+  previewTurnRestore: (sessionId: string, beforeTurn: number) =>
+    requestJson<TurnRestorePreview>(`/api/v1/sessions/${sessionId}/restore-files?before_turn=${beforeTurn}`),
+  applyTurnRestore: (preview: TurnRestorePreview, clientRequestId: string) =>
+    requestJson<{ status: string; failed: { resource: string; error: string } | null }>(
+      `/api/v1/sessions/${preview.session_id}/restore-files`, {
+        method: 'POST', body: JSON.stringify({ before_turn: preview.before_turn,
+          expected_digest: preview.digest, client_request_id: clientRequestId, confirmed: true }),
+      },
+    ),
   renameSession: (sessionId: string, title: string) =>
     requestJson<{ status: string; title: string }>(`/api/v1/sessions/${sessionId}`, {
       method: 'PATCH',
