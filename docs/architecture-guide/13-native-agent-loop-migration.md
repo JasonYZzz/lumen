@@ -190,5 +190,5 @@ Provider 能力不发生不可接受退化”，而不是依赖数量或代码�
   排除 Provider/工具耗时后的 Loop p95 增幅不超过 5%，TTFT median 额外开销不超过 20ms。
 
 本地 fixture 通过不代表真实 Provider smoke 或性能已验收。尚未完成的性能基线采样仍由
-[活动精简计划](../plans/2026-09-02-pi-harness-v2-dongbi-v7-upgrade-plan.md) 跟踪。
+[运行时优化计划](../plans/2026-10-09-runtime-optimization-implementation-plan.md#17-从旧-harness-计划迁入的推广门槛) 跟踪。
 门禁失败应停止发布；回滚单位是上一发布版本，不能让已产生 Effect 的活动 run 切换 Loop 并重放。

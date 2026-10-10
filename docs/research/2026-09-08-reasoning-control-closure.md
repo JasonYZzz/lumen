@@ -2,7 +2,7 @@
 
 > 文档复核（2026-10-10）：本文保留原始研究／验收证据；当前实现见[文档地图](../README.md#当前事实)。外部资料与测试结果仍以本文原日期、版本和环境为限。
 
-日期：2026-09-08。以当前 checkout 源码和契约测试为准；不重写用户模型配置、不访问付费模型。
+日期：2026-09-08。复核对象为当日 checkout 源码和契约测试；不重写用户模型配置、不访问付费模型。
 
 后续修订：供应商匹配已改为经过官方文档核对的精确目录，取代本文阶段的 SDK 能力推断。
 当前规则以 [Accepted 决策 15](../architecture-guide/15-provider-catalog.md)及
@@ -18,32 +18,11 @@
 完成实证验收**：真实模型配对实验、产物正确率及速度/成本比较仍未执行。不能据此宣称某档位
 必然提速、默认并发 3 必然优于 1，或 Lumen 已比 pi 更快。
 
-## 当前模型的真实选择
+## 能力目录的权威
 
-| 模型及路由 | 有效强度 | 兼容选择映射 | 关闭 |
-| --- | --- | --- | --- |
-| DeepSeek V4 Flash/Pro，官方 Responses | low / high / max | minimal→low；medium/xhigh→high | off→reasoning.effort=none |
-| DeepSeek V4 Flash/Pro，官方 Chat | low / high / max | medium/xhigh→high | thinking.type=disabled，不发送 effort |
-| DeepSeek V4，官方 Anthropic | low / high / max | medium/xhigh→high | thinking.type=disabled |
-| Qwen 3.8 Max/Flash，百炼 Anthropic | low / medium / xhigh | high/max→xhigh | thinking.type=disabled |
-| DeepSeek V4 / GLM 5.2，百炼 Anthropic | high / max | low/medium→high；xhigh→max | thinking.type=disabled |
-| Kimi Coding k3 / k3-256k | low / high / max | medium→high；xhigh→max | 不提供；避免路由改用 K2.6 |
-| Kimi 开放平台 kimi-k3 | low / high / max | 只暴露文档确认的档位 | 不提供 |
-
-所有模型另有 `provider_default`，表示不指定应用档位。省略配置保留原设置，不推断服务端实际
-预算。上述规则匹配已知模型 ID 和端点；普通兼容协议前缀不能作为能力证据。未知部署仍可通过
-`reasoning_levels` 声明经部署方确认的能力；已知专用映射不允许凭声明制造不存在的 off 等档位。
-
-来源（2026-09-08 核对，服务端仍可能调整，测试验证的是客户端请求）：
-
-- [DeepSeek thinking mode](https://api-docs.deepseek.com/guides/thinking_mode/)、
-  [Responses](https://api-docs.deepseek.com/api/create-response/)、
-  [Chat](https://api-docs.deepseek.com/api/create-chat-completion/)：按协议分别映射开关和 effort。
-- [百炼 Anthropic Messages](https://help.aliyun.com/zh/model-studio/anthropic-api-messages)：
-  Qwen 与 DeepSeek 的有效 effort 集合不同；推荐原生 `output_config.effort`，不能套用 Claude budget。
-- [Kimi Coding 模型](https://www.kimi.com/code/docs/en/kimi-code/models.html)、
-  [K3 开放平台指南](https://platform.kimi.com/docs/guide/kimi-k3-quickstart)：
-  Coding 兼容档位和关闭时的模型路由行为，开放平台的有效强度。
+本记录的阶段性模型映射表已由 Accepted 第 15 章与自动生成能力目录替代；不再复制一份可能
+漂移的列表。provider_default 表示不指定应用档位，未知部署不能由兼容协议前缀推断能力。
+HTTP MockTransport 验证客户端序列化，不证明服务端内部预算或真实模型性能。
 
 ## 控制与恢复如何闭环
 
@@ -111,3 +90,62 @@ child 权限交集、worktree dirty/conflict 检查、审批与 Sandbox 正交�
   均返回 supported 和多个档位；只输出模型名、支持集及映射，未输出配置凭据、未发起模型请求。
 - 真实 Provider 的参数接受、内部预算、速度、费用和产物质量尚未经本轮联网调用验证；
   新增的请求级测试使用真实 SDK 和 MockTransport，不能替代真实模型实验。
+
+## 合并的原始 Loop 与并发证据（2026-09-08）
+
+整理日期：2026-10-10。以下合并首轮 Loop 分析、推理/并发研究和交付记录的独立证据；
+不把优化前缺口或初轮能力推断当成现行实现。
+
+最初比较的 Lumen 基线为 250adf89903761260413577848519e818b825f16 加当时未提交修改；
+Pi 为 b2602be77cb7b0de45dd616407fd210daa48aa75，工作区干净。
+历史 HTML 报告任务有 23 次逻辑请求/23 次尝试、22 个完成批次、31 次工具调用，
+其中控制调用 16 次、纯控制批次 11 个、控制错误 7 次；thinking 共 176,424 字符，
+输出 usage 67,025 tokens。累计输入/缓存读取 usage 为 2,030,976/1,829,248。
+末段请求间隔约 849 秒，包含生成、工具和上下文准备，不能全部归为模型计算。
+
+案例支持减少无工作产出的控制往返；没有 completion retry/compaction 事件证据，
+不能归因为完成门禁循环、压缩风暴或 Python 本地 CPU。thinking 字符不是 token，
+输出预留不是输入 prompt，elapsed 工具总和包含等待；未提供完整时钟的失败原因仍未知。
+
+受控 FunctionModel 穿过真实 Runtime、TaskController 与 Gateway，均只执行一次 inspect_report：
+
+| 场景 | 模型请求 | 全部工具调用 | 结果 |
+| --- | ---: | ---: | --- |
+| 无计划 | 2 | 1 | completed |
+| 两步骤计划，控制逐条发送 | 8 | 7 | completed |
+| 相同计划与验收，已知参数合批 | 3 | 7 | completed |
+
+合批保留依赖、真实 receipt ID 和完成检查：先 set_plan/开始步骤/实际检查，
+收到真实证据后才 link_evidence/更新步骤，再最终回答。不需要新增批处理权威，
+不证明真实模型必然采用该轨迹，也不是 Lumen/Pi 性能 A/B。初轮相关定向回归 72 项通过。
+
+原生并发实验使用真实 Orchestrator、临时 Session 与模拟 Factory：依次 spawn 四次，
+前三个 running、第四 queued，释放后全部 completed，峰值 3。控制工具顺序登记并不等待
+child 执行结束；模型 spawn 后立即逐个 wait 仍会削弱收益。Pi 工具批次默认并行不等于
+默认自动拆分子 Agent，adaptive 名称也不是依赖分析算法。
+
+首轮交付的 Python 1113 tests/60 snapshots、Web 144 tests，后来闭环修正的
+1174/148 计数见上文；均不是本次整理重跑。两轮当时的全仓 Ruff 均受既有脚本问题限制，
+不能改写为历史全绿。
+
+## 保留的实验入口与推广限制
+
+scripts/benchmark_agent_loop.py 默认只显示矩阵；显式 --execute 才调用 Provider。
+每个 JSON fixture 新建临时工作区/Session，关闭 MCP、Hook、Skill、Memory recall/学习，
+只保留只读文件查询与 explorer；比较 provider_default/low/medium/high 与并发 1/3，
+默认重复 3 次。先比较有效映射，不把别名当独立强度。
+
+```bash
+uv run python scripts/benchmark_agent_loop.py --config agent.yaml --tasks tasks.json
+uv run python scripts/benchmark_agent_loop.py --config agent.yaml --tasks tasks.json \
+  --execute --output results.json
+```
+
+任务包含 id、prompt、files、expected_substrings；结果记录请求/控制比例、耗时、首语义事件、
+thinking 长度、重试、父子 usage、峰值并发及 worktree/排队指标。
+未提供的费用/token 明细为未知，substring 是粗粒度只读质量代理。
+已验证默认 24 次矩阵 dry-run 与离线 Host 链路，没有执行付费模型 A/B。
+
+写入正确率、返工、费用及同任务 Pi 配对实验仍需独立任务和验收；
+发布推广门槛统一跟踪于[运行时优化计划](../plans/2026-10-09-runtime-optimization-implementation-plan.md)。
+完整前序记录可从[整理前 Git 快照](https://github.com/JasonYZzz/lumen/tree/8940f92b3a61b0f0e3d7dc0e770da7d06facc3ea/docs/research)追溯。

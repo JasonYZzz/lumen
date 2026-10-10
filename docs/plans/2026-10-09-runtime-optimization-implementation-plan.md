@@ -91,7 +91,7 @@ Web 本机环境为 Node 24 / pnpm 12，不等同 CI 的 Node 22 / pnpm 10。
 与[外部 Agent 接入计划](2026-09-15-external-agent-integration-plan.md)共同修改 schema 时，
 本轮已引入 v12 完整批次／维修／Effect 归属；外部接入仍为 Proposed，必须使用其合并时的下一版本，
 不得再独立占用 v12。
-与[本地 Harness 精简计划](2026-09-02-pi-harness-v2-dongbi-v7-upgrade-plan.md)保持同一原则：
+沿用[单一 Loop 决策](../architecture-guide/13-native-agent-loop-migration.md)的原则：
 不保存完整 Loop state、不做透明崩溃接管；本轮新增的是完整批次恢复证据。
 
 ## 4. M0 建立可重复基线
@@ -539,3 +539,20 @@ pnpm --dir src/web build
 付费矩阵仍需明确配置和任务文件，显式 `--execute --output` 后运行；建议每个任务至少5次，
 在同机/同任务/同模型/reasoning/并发条件下比较，达成质量门禁再推广。
 基线及最终样本见 [本地验收报告](../research/2026-10-09-runtime-optimization-validation.md)。
+
+## 17. 从旧 Harness 计划迁入的推广门槛
+
+整理日期：2026-10-10。早期 L0–L2 精简计划的持久化、单写者、诊断与恢复意图已由
+[单一 Loop 决策](../architecture-guide/13-native-agent-loop-migration.md)、
+[长任务恢复](../architecture-guide/14-long-running-recovery.md)及本计划实施结果覆盖，
+不再并列维护旧计划。其尚未通过的真实 Provider 门槛并入 M5：
+
+固定模型/版本、协议、endpoint、任务、reasoning 和并发，采集脱敏 conformance、凭据 smoke、
+text/thinking/tool delta、usage/cache/private part 及所有终止原因。记录质量、重试、首事件、
+TTFT、Loop 本地耗时、费用和父子总量完整度；未知值不填零，区分冷暖缓存。
+至少覆盖问答、单文件修复、多源调查、独立多文件与依赖链；只读 benchmark 不替代写入验收。
+
+沿用 Accepted 13.9 的发布预算：排除 Provider/工具耗时后的 Loop p95 增幅 ≤5%，
+TTFT median 额外开销 ≤20ms，目标平台取消/超时后不遗留 stream/task/client/进程树。
+本机 fixture、构建和文档整理均未补齐这些门槛。失败时停止推广并回退上一发布版本，
+不得对已产生 Effect 的活动 run 切换 Loop 或透明重放未知动作。

@@ -35,9 +35,8 @@ schema，其次是 Accepted 决策记录；计划和研究不能反向定义运�
 - [`plans/`](plans/README.md)：仍有未完成发布验证或条件式后续工作的活动计划。计划不等于已实现。
 - [`research/`](research/README.md)：固定日期、版本或 commit 的外部研究快照。结论可能被后续实现取代。
 - [`spikes/`](spikes/langgraph-context-resume.md)：隔离技术验证，不属于生产依赖。
-- `diagrams/`、研究 HTML 和 UI prototype 保留各自生成时的设计快照；当前运行拓扑以 Architecture Atlas 和其 SVG 为准。
-- [旧架构图](diagrams/lumen-architecture.html)与[计划 UI 原型](chatgpt_codex_plan_ui_prototype.html)保留历史标记；
-  对应 `visual-check` 是原图生成时的视觉验证材料，根目录 `pd.html` 是 Pi 外部页面参考，不是 Lumen 技术规范。
+- 阶段交付按主题合并；已被替代的图、原型和外部页面不再保留并列入口。
+  删除依据与迁入的验收门槛见[当前实现审计](architecture-guide/12-current-implementation-audit.md#129-文档合并与清理2026-10-10)。
 
 最近实现及验收记录：运行时提交 `7f5e5ce`、Web 提交 `fa0aba3`、桌面提交 `28d1679`；
 见[运行时验收](research/2026-10-09-runtime-optimization-validation.md)与[桌面验收](research/2026-10-09-macos-desktop-validation.md)。
@@ -61,12 +60,13 @@ uv run python scripts/build_architecture_atlas.py
 uv run python scripts/build_architecture_atlas.py --check
 ```
 
-## 本轮文档验证（2026-10-10）
+## 整理验证（2026-10-10）
 
-- Ruff、strict Pyright、contract catalog、Provider catalog、OpenAPI 与 Atlas 新鲜度检查通过。
-- 95 份 Markdown／HTML 的本地链接目标存在；41 份 Markdown 研究记录全部进入研究索引。
-- Atlas 的 394 条证据路径与内容摘要一致，桌面 Rust／启动页可读取，研究、构建目录和本地 QA 不进入快照；浏览器载荷 JavaScript 与架构 SVG 的 v12 标签检查通过。
-- Web 231 tests、typecheck、生产构建和 `uv build` 通过；wheel 元数据及内置 Web 已检查，隔离安装的 `lumen --version`／`lumen --check-config` 通过。
+本轮只修改 Markdown、删除旧展示附件，并按正式命令刷新 Atlas。
+73 份 Markdown/HTML 本地链接目标检查通过；29 份研究和 5 份活动计划完整进入索引。
+contracts、Provider catalog 与 Atlas 新鲜度检查通过；Atlas 的 394 条路径/内容摘要、
+载荷 JavaScript、架构 SVG 和 diff whitespace 检查通过。
 
-本轮未修改 Runtime／Host／Session 契约，未重跑 Python 全量测试，也未重做 DMG、真实 Provider、
-语音、Keychain、最低 macOS 或跨平台验收；此前报告的原始环境和剩余门禁保持可追溯。
+上一轮文档刷新曾运行 Web 231 tests、typecheck/build、Ruff、Pyright 与隔离 wheel 检查；
+本轮不将其计数当成重新执行。完整原始验收见上方运行时和桌面报告。
+纯文档整理未重跑 Python/Web 全量测试、应用打包或真实 Provider/设备验证。

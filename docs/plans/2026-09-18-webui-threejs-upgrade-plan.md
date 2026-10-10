@@ -215,3 +215,21 @@ postprocessing、Quarks、Spark、图谱和 WebGPU 暂不进入安装清单。
 [实施验收记录](../research/2026-09-18-threejs-implementation.md)。
 `/scene-preview` 是明确标注模拟状态/RMS 的本地开发验收页；导出后访问 `/scene-preview.html`。
 示例立方体是真实内嵌 GLB，不是九尾狐资产，也不申请麦克风或访问 Provider。
+
+## 10. 从旧角色计划迁入的条件式验收
+
+整理日期：2026-10-10。旧计划将 Rive 作为默认的路线已被[视频默认实现](../brand/mascot/README.md)
+替代；原有 layered/Rive 可选回退仍存在，不因删除计划而删除代码、素材或测试。
+正式 .riv 资产尚未交付，若继续该路线，由本计划统一跟踪：
+
+- 提供有授权来源的 lumen-fox.riv，包含 Mascot 状态机及 activity、motionLevel、submit inputs，
+  分别验证 idle/focused/submitting、减少动画和暂停。合同见现有 rive-mascot-renderer.tsx。
+- 资产/runtime/WASM/状态机失败时保持海报或 layered 回退，输入和提交始终可用；
+  poster 到增强层不白闪、不跳布局，后台/离屏/静态模式停止推进，恢复不补播动作。
+- 320px 窄屏、200% zoom、系统字体放大、键盘和动态切换 reduced-motion 均可完成输入；
+  角色不遮挡标题、composer，不承担审批/错误等关键状态。
+- 原性能目标作为待测预算保留：首屏角色增量关键资源 <2 MB，桌面 p75 ≥55fps、
+  中端移动 ≥45fps，角色 p95 frame time <8ms，布局 CLS=0。
+  这些指标未经代表设备测量，不能宣称通过；默认启用必须补齐测量与失败回退验收。
+
+M4 真机测量仍按上文保持未执行；Rive 条件式美术和性能门槛不表示恢复为默认或启用未批准 GLB。

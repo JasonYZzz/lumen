@@ -229,3 +229,27 @@ CI 快照失败报告保留七天，并打印 snapshot details，跨环境差异
 Ruff/Pyright；上面的全量计数记录的是此前全量运行，不将后续新增用例冒充已跑过全量。
 Windows 的落盘/权限/路径等历史兼容性问题须单独依据真实 CI 验证，三平台 Pyright 不证明
 三平台全部运行时行为已经通过。
+
+## 12.9 文档合并与清理（2026-10-10）
+
+本轮仅整理项目文档与其专属展示附件，不删除运行时源码、公开契约测试、内置 Skill、
+品牌生产素材或用户本地 QA。删除前检查生产引用与替代入口，未按日期清除独立证据。
+
+| 清理组 | 删除依据 | 保留或迁入的入口 |
+| --- | --- | --- |
+| 根目录 Pi 外部页面、Dongbi v7 图 | 外部项目页面/企业参考图，无 Lumen 生产调用；当前架构不由它们定义 | 本仓库 Atlas、源码与 Accepted 决策；固定版本上游研究继续保留 |
+| 旧架构 HTML、JSON、4 张截图及 QA 包装/回执 | 同一旧图的生成和验收附件，已由当前 Atlas 与 v12 SVG 替代；专属附件一起删除以避免孤儿资源 | architecture-guide/index.html、images/current-system-architecture.svg、生成命令 |
+| 架构对比 HTML 导出 | 重复同主题 Markdown 的展示内容 | [源码对比研究](../research/lumen-pi-deepseek-harness-architecture-comparison.md)及固定上游证据 |
+| 外部接入 HTML 调研 | 设计建议已逐条修订并纳入本项目 Proposed 计划；旧图和二手排名不是施工依据 | [外部接入评估与计划](../plans/2026-09-15-external-agent-integration-plan.md)、该计划官方资料与准入门槛 |
+| UI 原型、根目录设计 QA、六份早期 UI 阶段记录 | 原型含模拟状态；多轮投影/布局描述互相覆盖，前期编辑分支与常驻计划入口已被修订 | [合并交互验收](../research/2026-09-18-web-conversation-experience.md)、同 Session 重生成专项审计；公开事件、路径边界、焦点、草稿、静态 HTML 与动态偏好约束保留 |
+| 三份 Skill 阶段记录 | 同一故障→原生安装→全局范围/澄清修复，不需三份互相引用的交付说明 | [Skill 安装历史](../research/2026-09-04-skill-installation-history.md)，保留安全范围、原始网络样本与分阶段测试计数 |
+| 三份 Loop/推理前序记录 | 优化前能力缺口与初轮交付已由后续闭环和 Accepted Provider Catalog 替代 | [推理闭环与原始实验](../research/2026-09-08-reasoning-control-closure.md)，保留真实历史聚合、合成对照、并发证据与 benchmark 限制 |
+| 长任务上限方案 | 实施后的恢复记录与 Accepted 第 14 章覆盖意图、重试矩阵和契约；早期硬墙建议不再适用 | [实施验收](../research/2026-09-04-run-resilience-upgrade.md)、第 14 章 |
+| 旧 Rive 角色计划、早期 Harness 精简计划 | 默认方案或阶段状态已被后续实现替代；不能丢弃条件式资产和真实 Provider 门槛 | Three.js 计划第 10 节、运行时优化计划第 17 节、Accepted 13.9 |
+
+独立的 Provider/协议研究、固定上游版本研究、真实故障审计、隔离 spike 与未完成计划继续保留。
+删除的完整原文和专属展示附件可从[整理前提交](https://github.com/JasonYZzz/lumen/tree/8940f92b3a61b0f0e3d7dc0e770da7d06facc3ea)
+恢复；当前索引不再将其作为并列阅读入口。原验收日期和测试边界保留，不改写为本次通过。
+
+合计删除 25 份文本资料与 4 张专属截图，约 1.82 MiB；研究记录从 41 份归并为 29 份，
+活动计划从 7 份归并为 5 份。验证结果见[文档地图](../README.md#整理验证2026-10-10)。
