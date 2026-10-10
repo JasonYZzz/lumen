@@ -2,6 +2,8 @@
 
 本文档对应当前 `lumen` CLI、TUI slash 命令注册表和 Web 命令实现。CLI 的实时帮助以 `lumen --help` 为准；TUI slash 命令的单一事实源是 `src/lumen/ui/slash_commands.py`。
 
+实现复核：2026-10-10；macOS 原生入口、首次配置及凭据行为见[桌面指南](desktop.md)。
+
 ## 1. CLI 入口
 
 ### 1.1 启动 TUI
@@ -127,7 +129,7 @@ lumen mcp reset [--name <name>] --cwd . [--config PATH]
 | Session | `/new` | 新建 session | 禁用 |
 | Session | `/sessions` | 列出历史 session | 可用 |
 | Session | `/children [cancel\|interrupt\|message\|continue\|import\|reject\|close] <id> [text]` | 查看、协调、中断、导入/拒绝或关闭 Agent；`/agents` 是可调用但暂不出现在 TUI 补全中的 canonical alias | 可用 |
-| Session | `/checkpoints` | 浏览 receipts，并从历史 turn 创建非破坏式 session 分支 | 禁用 |
+| Session | `/checkpoints` | 浏览 receipts；Enter 创建非破坏式分支，F 预览并确认恢复有快照的文件 | 禁用 |
 | Session | `/resume <id>` | 恢复指定 session | 禁用 |
 | Session | `/clear` | 清空可见时间线，保留 session 上下文 | 禁用 |
 | Session | `/retry` | 重发上一条 prompt，恢复附件/receipts 及已持久化完整工具批次；未解决 Effect 阻止执行 | 需先结束当前 run |
@@ -186,7 +188,7 @@ Web 通过 FastAPI application host 执行命令；本地显示类命令不会�
 
 | 能力 | Web 命令 | 备注 |
 |---|---|---|
-| 会话 | `/new`、`/retry`、`/clear`、`/checkpoints`、`/dequeue` | 历史列表、恢复、重命名、归档与删除由侧边栏提供；checkpoint 可创建分支，dequeue 撤回尚未执行的排队输入 |
+| 会话 | `/new`、`/retry`、`/clear`、`/checkpoints`、`/dequeue` | 历史列表、恢复、重命名、归档与删除由侧边栏提供；checkpoint 可创建分支或预览文件恢复，dequeue 撤回尚未执行的排队输入 |
 | Agent/审计 | `/agents`、`/transcript` | 打开 Agent 协调面板或结构化 transcript；具体 Agent 动作由面板/API 执行 |
 | 模型/审批 | `/model [name]`、`/mode [mode]`、`/plan <task>` | `auto` 仍需显式确认；`/plan` 以 Plan collaboration mode 启动任务 |
 | 计划 | `/tasks` | 打开最新计划侧栏；完成与跳过分开计数；此入口不批准执行 |
@@ -264,9 +266,30 @@ Web 回复中的工作区文档链接与内联文件路径可点击预览；本�
 
 GLB（`.glb`）文件支持按需 3D 预览，可拖动旋转，也可使用旋转、缩放与重置视角按钮。加载或渲染失败可重新预览，下载始终保留；关闭后释放模型资源。首版仅支持有界的内嵌静态模型，外部/data/blob URI、压缩扩展、sparse、morph 和蒙皮会被拒绝，不加载外部解码器。格式/顶点/纹理解码限额见 WebUI Three.js 实施记录，尚未完成真机性能验收。
 
-九尾狐继续默认使用现有视频。正式模型到位后，将自有 GLB 放入 `src/web/public/mascot/`，构建时设置 `NEXT_PUBLIC_MASCOT_RENDERER=three` 和 `NEXT_PUBLIC_MASCOT_MODEL_URL=/mascot/fox.glb` 可选用模型路径。模型须内嵌资源，骨骼和动画仍受限额约束；支持命名 `idle` 和 `react` / `reaction` / `wave` 的动画，缺少动作时不伪造骨骼效果。未配置模型、减少动态效果或加载/渲染失败会回退现有视频/静态路径；正式角色资产及画质待验收。
+九尾狐继续默认使用现有视频。当前 `mascot-scene.tsx` 的 `MODEL_APPROVED = false`，仅设置
+`NEXT_PUBLIC_MASCOT_RENDERER=three` 和 `NEXT_PUBLIC_MASCOT_MODEL_URL` 不能启用模型。
+只有模型通过[角色质量门禁](brand/mascot/three/README.md)并明确获准解除源码门禁后，才可沿既有
+GLB 加载接口使用模型路径。模型须内嵌资源，骨骼和动画仍受限额约束；支持命名 `idle` 和
+`react` / `reaction` / `wave` 的动画，缺少动作时不伪造骨骼效果。减少动态效果或加载／渲染失败
+回退现有视频／静态路径；正式角色资产、画质与设备性能仍待验收。
 
 本地开发的 `/scene-preview`（静态导出 `/scene-preview.html`）用于检查语音场景和 GLB 示例，所有状态/RMS/审批均标注为模拟，不申请麦克风或建立通话。
+
+### 检查点文件恢复
+
+TUI `/checkpoints` 选中 turn 后按 F 查看文件预览；Web 检查点提供“预览文件恢复”，再点击
+“确认恢复这些文件”。两者通过 Host 的 `PreviewTurnRestore` / `ApplyTurnRestore` 工作。
+预览展示可恢复文件、冲突和未覆盖操作；确认时重新校验 digest 与文件 revision。
+只能恢复已记录快照的文件动作，命令、远端动作及未知关联不因此撤销；后续用户修改不会被猜测覆盖。
+文件恢复保持当前对话，检查点分支则创建新 Session，两项操作均不透明重放工具。
+
+### macOS 原生入口
+
+Finder／Dock 启动 `Lumen.app` 后选择项目，按需完成项目信任、模型配置、凭据和 MCP 授权。
+内置启动页的服务商预设只写入选中的模型；已有用户配置优先，不附带可使用的 API Key。
+凭据可仅用于本次启动，也可明确选择保存到 Keychain；新增凭据变量后重新打开项目供给。
+关闭窗口保留后台；Cmd+Q 有序停止，项目菜单可切换工作区，设置菜单提供外部工具目录和人工更新。
+原生入口复用 Web 命令和 Host；完整构建、签名与发行限制见[桌面指南](desktop.md)。
 
 ## 5. 维护约定
 

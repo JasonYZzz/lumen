@@ -1,5 +1,7 @@
 # LangGraph context resume spike
 
+> 文档复核（2026-10-10）：本文是隔离技术验证；LangGraph 不属于生产依赖。当前 Loop 与恢复契约见[架构指南](../architecture-guide/README.md)。
+
 这个 spike 不属于生产依赖，只回答一个问题：LangGraph 的 checkpoint/interrupt 是否能替代 Lumen 当前的请求边界澄清状态机。
 
 运行：

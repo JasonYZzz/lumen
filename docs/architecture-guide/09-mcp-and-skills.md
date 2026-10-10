@@ -2,6 +2,11 @@
 
 MCP 和 Skill 都能扩展 Lumen，但它们解决的问题不同：MCP 是连接外部系统的协议适配层，Skill 是向模型渐进式披露专业方法的本地指令包。
 
+CLI 和 macOS 启动 Adapter 共用 `trust.apply_mcp_approvals`。项目／legacy MCP 按定义指纹
+选择仅本次、始终或拒绝；拒绝和禁用的服务不会在桌面请求其凭据。桌面先做配置预览与信任，
+再通过受限环境 Mapping 解析已允许服务的 env/header；不将 Keychain 值注入全局环境。
+批准连接不批准全部工具，调用时仍按 ToolSpec 的 Risk／Effect／Concurrency 经 Gateway 检查。
+
 Provider 原生 `web_search` 不属于 MCP。它由模型端点执行，作为冻结 `ModelDriverRequest` 的
 native tool 进入请求 manifest；MCP 则先由 `ResourceManager` 建立连接，再把能力投影到统一
 `CapabilityGateway`。两条路径不能共享一个开关或状态权威。

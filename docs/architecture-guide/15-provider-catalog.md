@@ -13,6 +13,11 @@ provider 原生联网能力及官方依据。
 [当前对应关系列表](../generated/provider-reasoning.md)从生产目录生成，不能手写维护另一份表。
 每个 Profile 包含稳定 ID、官方文档链接和核对日期；目录版本进入 Session 和请求诊断。
 这份目录描述已核对的参数契约，不代表全球全部模型、账户可用性、配额或模型仍在售。
+
+桌面 `src/desktop/bootstrap/model-presets.js` 是首次连接配置列表，包含 GPT‑6、DeepSeek、Qwen、
+Kimi 与 GLM；它不扩充 `RULES`，不注入凭据，也不证明新增型号具备某个推理档位或原生搜索。
+未在 Runtime 目录中单独确认的模型继续使用服务商默认行为或显式部署声明。
+预设端点、变量与核对日期见[桌面指南](../desktop.md#首次配置模型预设)。
 目录版本 `2026-09-11.1` 撤销此前误登记的 DeepSeek Flash Responses 原生搜索能力。
 此前版本按维护范围精简：删除全部 Claude、Gemini 及 OpenAI 旧型号条目，
 OpenAI 只保留 GPT-5.6（Sol、Terra、Luna，含 gpt-5.6 别名）和 GPT-6 Astra。

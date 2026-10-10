@@ -1,5 +1,6 @@
 {
   "name": "lumen-desktop-build",
+  "description": "Build tools for the Lumen Apple Silicon macOS desktop Beta",
   "version": "0.1.0",
   "private": true,
   "packageManager": "pnpm@10.28.2",

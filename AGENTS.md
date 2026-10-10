@@ -28,8 +28,9 @@ Lumen 是通用、可配置的 Agent framework：Provider 可替换，运行时�
 | 工作对象、snapshot、mutation、验证和恢复 | `work_products/workspace.py`：TaskWorkspace |
 | Agent 生命周期与隔离执行 | `agents/orchestrator.py`：AgentOrchestrator；`agents/runtime_factory.py`：NativeAgentRuntimeFactory |
 | 装配与释放 | `resources.py`、`lifecycle.py`：RegistrationScope 只拥有注册和后台任务生命周期 |
+| macOS 壳、首次配置、私有启动 IPC | `src/desktop/`、`src/lumen/desktop.py`；用户行为与构建见 `docs/desktop.md` |
 
-表中 Python 路径相对于 `src/lumen/`。更细的问题定位见 [源码导航](docs/architecture-guide/08-code-navigation.md)。
+表中未带 `src/` 的 Python 路径相对于 `src/lumen/`。更细的问题定位见 [源码导航](docs/architecture-guide/08-code-navigation.md)。
 
 按改动查阅，无需整套加载：
 

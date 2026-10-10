@@ -2,7 +2,9 @@
 
 > **网页版入口：** 直接打开 [`index.html`](index.html)。它是无外部运行时依赖的离线 Architecture Atlas，包含可搜索导航、响应式布局、打印样式、精确技术图，以及在当前页面打开 Markdown 与源码的 Trace Reader。以下 Markdown 文件仍是可审计的文字事实来源。
 
-Atlas 不维护第二套技术正文。`content.generated.js` 是当前架构/命令/扩展文档、核心 Python/Web 源码、
+实现复核：2026-10-10；当前代码基线 `28d1679`，Session schema v12，配置 schema v2。
+
+Atlas 不维护第二套技术正文。`content.generated.js` 是当前架构/命令/扩展/桌面文档、核心 Python/Web/Rust 源码、
 契约测试和生成契约的确定性只读快照；无论通过 HTTP 还是直接打开 `index.html`，Trace Reader 都读取
 这份经过 freshness 校验的离线证据。`docs/research/`、`docs/plans/` 和隔离 spike 是
 时间点证据，不进入“当前实现”全文检索。完整文档分层见 [`docs/README.md`](../README.md)。修改相关
@@ -14,6 +16,8 @@ uv run python scripts/build_architecture_atlas.py --check
 ```
 
 CI 会执行 freshness 检查，防止新版实现已经落地但网页版仍携带旧内容。
+桌面启动页、原生权限声明及构建配置属于当前证据；`src/desktop/target/`、本地 QA 截图、安装包、
+用户配置和凭据不进入 Reader 快照。[桌面指南](../desktop.md)区分已实现能力和未完成发行门禁。
 
 这套文档面向希望真正理解 Lumen 实现逻辑的维护者。它不按文件列表复述代码，而是围绕系统中的深
 Module、Interface、Seam、状态变化和失败路径展开。

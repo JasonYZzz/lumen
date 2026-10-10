@@ -1,5 +1,8 @@
 # 6. 扩展体系与子 Agent
 
+扩展权威在所有客户端间共用。macOS Beta 将原生授权投影到既有 TrustStore／MCP 决定，
+不增加一套插件或 Agent 注册状态；冻结包的依赖及执行器限制见[桌面指南](../desktop.md)。
+
 ## 6.1 能力来源总览
 
 ```mermaid

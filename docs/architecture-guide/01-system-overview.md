@@ -6,6 +6,10 @@
 flowchart TB
     User["用户"] --> TUI["Textual TUI adapter"]
     User --> Web["Next.js Web adapter"]
+    User --> Desktop["Tauri 2 macOS adapter"]
+    User --> CLI["Headless CLI adapter"]
+    Desktop -->|"内置 Python / 同源 WebView"| API
+    CLI --> Host
     Web --> API["FastAPI + SSE adapter"]
     Web -->|"WebRTC / PCM"| Live
     TUI --> Host["WorkspaceHost"]
@@ -42,7 +46,7 @@ flowchart TB
 
 | 层 | 主要职责 | 关键源码 |
 |---|---|---|
-| 交互层 | 输入、展示、审批交互、SSE/WebRTC 断线重连 | `ui/`、`web/`、`api/app.py` |
+| 交互层 | 输入、展示、审批交互、SSE/WebRTC 断线重连与原生启动 | `src/lumen/ui/`、`src/web/`、`src/lumen/api/app.py`、`src/desktop/` |
 | 应用层 | 命令分派、workspace 并发规则、run 生命周期 | `application/host.py` |
 | 会话层 | 恢复、交互队列、turn 持久化 | `run_coordinator.py`、`sessions.py` |
 | Agent 层 | 模型调用、工具循环、流式输出、重试 | `runtime.py` |
@@ -55,7 +59,7 @@ flowchart TB
 
 这张图按运行时责任而不是源码目录组织当前实现：
 
-- **应用控制面只有一个入口。** TUI、Web、headless 与 Realtime 的客户端差异止于 Adapter；命令、
+- **应用控制面只有一个入口。** TUI、Web、headless、macOS 桌面与 Realtime 的客户端差异止于 Adapter；命令、
   进程内 active run、跨进程 OS advisory execution lock、审批和公开事件统一由 `WorkspaceHost` 管理。
 - **文字与语音是两条执行路径，但不是两套能力系统。** 文字路径进入 `RunCoordinator` 与
   `AgentRuntime`；Realtime 进入 `LiveSessionManager` 与 Provider Adapter。两者最终共享

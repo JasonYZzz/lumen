@@ -1,5 +1,7 @@
 # 推理强度与子 Agent 并发：Lumen / pi 源码复核
 
+> 文档复核（2026-10-10）：本文保留原始研究／验收证据；当前实现见[文档地图](../README.md#当前事实)。外部资料与测试结果仍以本文原日期、版本和环境为限。
+
 > 后续已按本报告落实代码优化；当前状态与实验入口见[交付说明](2026-09-08-reasoning-optimization-delivery.md)。下文保留研究时基线。
 
 日期：2026-09-08。Lumen 基线 `250adf89903761260413577848519e818b825f16` 加当前工作区修改；pi 基线 `b2602be77cb7b0de45dd616407fd210daa48aa75`，工作区干净。本文是研究与优化建议，不是 Accepted 实现规范。本轮不修改生产代码，不访问真实模型，不修改用户配置或原 Session。
@@ -32,7 +34,7 @@
 - 实时语音：`LiveConfig.reasoning_effort` 默认 low，仅属于 Live 通道，不能当成文本主 Agent 的默认设置。
 - Driver 已修复 Anthropic 显式 false 的 disabled 传参，以及 SDK 未识别的 OpenAI-compatible Responses 模型对显式 thinking 的兼容映射。
 
-源码：[模型配置](../../src/lumen/config.py:45)、[Live 配置](../../src/lumen/config.py:505)、[角色字段](../../src/lumen/agents/types.py:63)、[角色加载](../../src/lumen/agents/profiles.py:105)、[Driver](../../src/lumen/agent_loop/pydantic_driver.py:283)、[Runtime 初始化](../../src/lumen/resources.py:1351)。
+源码：[模型配置](../../src/lumen/config.py#L45)、[Live 配置](../../src/lumen/config.py#L505)、[角色字段](../../src/lumen/agents/types.py#L63)、[角色加载](../../src/lumen/agents/profiles.py#L105)、[Driver](../../src/lumen/agent_loop/pydantic_driver.py#L283)、[Runtime 初始化](../../src/lumen/resources.py#L1351)。
 
 ### 2.2 可复现的问题
 
@@ -73,7 +75,7 @@ MockTransport 实测，虚构的 SDK 未知模型 `custom-reasoner`：
 
 `snapshot()` 记录角色的可选 effort；执行时再从 model_registry 取 settings。角色省略时，只能从模型配置得到默认，而快照中的 effort 仍为 None。恢复后若配置变更，不能仅凭该字段还原原请求档位。引入 Session 档位切换时，必须同时补全父配置继承、角色覆盖和 spawn 时冻结，不能只改 UI。
 
-源码：[snapshot](../../src/lumen/agents/runtime_factory.py:106)、[child settings 合并](../../src/lumen/agents/runtime_factory.py:419)、[诊断字段](../../src/lumen/runtime.py:1461)。SDK 证据位于本地 `.venv/lib/python3.12/site-packages/pydantic_ai/settings.py` 的 thinking 定义、`models/__init__.py` 的 prepare_request，以及 `models/openai.py` 的 _translate_thinking。
+源码：[snapshot](../../src/lumen/agents/runtime_factory.py#L106)、[child settings 合并](../../src/lumen/agents/runtime_factory.py#L419)、[诊断字段](../../src/lumen/runtime.py#L1461)。SDK 证据位于本地 `.venv/lib/python3.12/site-packages/pydantic_ai/settings.py` 的 thinking 定义、`models/__init__.py` 的 prepare_request，以及 `models/openai.py` 的 _translate_thinking。
 
 ## 3. pi 真正值得借鉴的设计
 
@@ -129,7 +131,7 @@ Agent 控制工具的 `sequential=True` 保证登记、生命周期状态修改�
 
 本地实验使用真实 Orchestrator、临时 SessionRepository 与模拟执行 Factory，连续 await 四次 spawn；前三个执行被 Event 暂停，断言状态为三个 running、一个 queued，释放后四个全部 completed，观测最大活动数为 3。没有启动实际模型、工作区写入任务或新的 Codex 子 Agent。
 
-源码：[默认值](../../src/lumen/config.py:123)、[spawn](../../src/lumen/agents/orchestrator.py:128)、[调度器](../../src/lumen/agents/orchestrator.py:496)、[wait](../../src/lumen/agents/orchestrator.py:277)、[工具注册](../../src/lumen/resources.py:1267)。
+源码：[默认值](../../src/lumen/config.py#L123)、[spawn](../../src/lumen/agents/orchestrator.py#L128)、[调度器](../../src/lumen/agents/orchestrator.py#L496)、[wait](../../src/lumen/agents/orchestrator.py#L277)、[工具注册](../../src/lumen/resources.py#L1267)。
 
 ### 4.4 真正影响并行收益的剩余问题
 
@@ -138,7 +140,7 @@ Agent 控制工具的 `sequential=True` 保证登记、生命周期状态修改�
 - **等待目标。** wait_agent 对任一已非 queued/running 的目标立即返回。如果反复把已完成目标放回等待列表，会产生无意义的即时返回；优先改工具说明和模型使用契约，确有需求再扩展已有 wait Interface，避免新增轮询器。
 - **“adaptive”没有自动任务拆分算法。** 代码里的策略名不是依赖分析器。当前 `explicit` 与 `adaptive` 在 spawn 校验中也没有独立的许可上下文判断，基础指令仍是同一份 adaptive 指引；若将这些选项展示为严格行为保证，需要补相应 Host/运行契约，而不是只靠名称。
 
-源码：[派发指引](../../src/lumen/resources.py:124)、[worktree 路径](../../src/lumen/agents/runtime_factory.py:362)、[阻塞 Git](../../src/lumen/agents/runtime_factory.py:699)。
+源码：[派发指引](../../src/lumen/resources.py#L124)、[worktree 路径](../../src/lumen/agents/runtime_factory.py#L362)、[阻塞 Git](../../src/lumen/agents/runtime_factory.py#L699)。
 
 ## 5. 建议的实现顺序
 

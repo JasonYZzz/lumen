@@ -15,16 +15,27 @@ from markdown_it.token import Token
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 ATLAS_ROOT = REPOSITORY_ROOT / "docs" / "architecture-guide"
 OUTPUT_PATH = ATLAS_ROOT / "content.generated.js"
-TEXT_SUFFIXES = {".css", ".json", ".md", ".py", ".toml", ".ts", ".tsx", ".yaml", ".yml"}
+TEXT_SUFFIXES = {
+    ".css", ".html", ".js", ".json", ".md", ".py", ".rs", ".toml", ".ts", ".tsx", ".yaml", ".yml",
+}
 ROOT_DOCUMENTS = (
     REPOSITORY_ROOT / "README.md",
     REPOSITORY_ROOT / "AGENTS.md",
+    REPOSITORY_ROOT / "PRODUCT.md",
+    REPOSITORY_ROOT / "DESIGN.md",
     REPOSITORY_ROOT / "agent.example.yaml",
     REPOSITORY_ROOT / "docs" / "README.md",
     REPOSITORY_ROOT / "docs" / "commands.md",
+    REPOSITORY_ROOT / "docs" / "desktop.md",
     REPOSITORY_ROOT / "docs" / "generated" / "contracts.json",
     REPOSITORY_ROOT / "docs" / "generated" / "provider-reasoning.md",
     REPOSITORY_ROOT / "pyproject.toml",
+    REPOSITORY_ROOT / "src" / "desktop" / "Cargo.toml",
+    REPOSITORY_ROOT / "src" / "desktop" / "build.rs",
+    REPOSITORY_ROOT / "src" / "desktop" / "tauri.conf.json",
+    REPOSITORY_ROOT / "src" / "desktop" / "tauri.bundle.json",
+    REPOSITORY_ROOT / ".github" / "workflows" / "desktop.yml",
+    REPOSITORY_ROOT / "scripts" / "build_desktop.py",
 )
 CURRENT_DOCUMENT_ROOTS = (
     REPOSITORY_ROOT / "docs" / "architecture-guide",
@@ -34,9 +45,12 @@ CURRENT_DOCUMENT_ROOTS = (
 )
 LANGUAGES = {
     ".css": "css",
+    ".html": "html",
+    ".js": "javascript",
     ".json": "json",
     ".md": "markdown",
     ".py": "python",
+    ".rs": "rust",
     ".toml": "toml",
     ".ts": "typescript",
     ".tsx": "tsx",
@@ -75,7 +89,14 @@ def _iter_content_files() -> Iterable[Path]:
     for root in CURRENT_DOCUMENT_ROOTS:
         candidates.update(root.rglob("*.md"))
     candidates.update((REPOSITORY_ROOT / "tests").rglob("*.py"))
-    for root in (REPOSITORY_ROOT / "src" / "lumen", REPOSITORY_ROOT / "src" / "web" / "src"):
+    for root in (
+        REPOSITORY_ROOT / "src" / "lumen",
+        REPOSITORY_ROOT / "src" / "web" / "src",
+        REPOSITORY_ROOT / "src" / "desktop" / "src",
+        REPOSITORY_ROOT / "src" / "desktop" / "bootstrap",
+        REPOSITORY_ROOT / "src" / "desktop" / "capabilities",
+        REPOSITORY_ROOT / "src" / "desktop" / "permissions",
+    ):
         candidates.update(path for path in root.rglob("*") if path.suffix in TEXT_SUFFIXES)
     candidates.add(REPOSITORY_ROOT / "src" / "web" / "openapi.json")
     for path in sorted(candidates):

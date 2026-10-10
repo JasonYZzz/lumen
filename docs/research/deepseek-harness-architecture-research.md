@@ -1,5 +1,7 @@
 # DeepSeek Harness 深度研究：架构、机制与对 Lumen 的升级启示
 
+> 文档复核（2026-10-10）：本文保留原始研究／验收证据；当前实现见[文档地图](../README.md#当前事实)。外部资料与测试结果仍以本文原日期、版本和环境为限。
+
 研究日期：2026-08-18
 
 DeepSeek Harness 证据快照：官方仓库 `deepseek-ai/deepseek-harness`，commit

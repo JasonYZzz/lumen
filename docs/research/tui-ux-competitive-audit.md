@@ -1,5 +1,7 @@
 # Lumen TUI UX Competitive Audit
 
+> 文档复核（2026-10-10）：本文保留原始研究／验收证据；当前实现见[文档地图](../README.md#当前事实)。外部资料与测试结果仍以本文原日期、版本和环境为限。
+
 Date: 2026-08-04
 
 ## Scope and method

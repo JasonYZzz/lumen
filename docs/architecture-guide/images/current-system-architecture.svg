@@ -30,7 +30,7 @@
   <rect width="1920" height="1320" fill="url(#major-grid)"/>
 
   <g aria-label="标题与图例">
-    <text x="60" y="65" class="eyebrow">LUMEN · 当前实现 · 会话模式 V9</text>
+    <text x="60" y="65" class="eyebrow">LUMEN · 当前实现 · 会话模式 V12</text>
     <text x="60" y="112" class="title">当前系统底层技术架构</text>
     <text x="60" y="142" class="subtitle">一个状态概念，一个运行时权威；客户端适配器只消费命令与事件，不直接拥有 Agent 状态。</text>
     <g transform="translate(1280 51)">
@@ -287,8 +287,8 @@
     <g transform="translate(90 1100)">
       <rect width="410" height="115" class="node-authority"/>
       <text x="18" y="24" class="mono-copper">规范事实日志</text>
-      <text x="18" y="52" class="node-title">SessionRepository · 模式 v10</text>
-      <text x="18" y="75" class="mono">只追加 JSONL · 落盘同步 · 加载 v1–v10</text>
+      <text x="18" y="52" class="node-title">SessionRepository · 模式 v12</text>
+      <text x="18" y="75" class="mono">只追加 JSONL · 落盘同步 · 加载 v1–v11</text>
       <text x="18" y="94" class="mono">轮次 · 上下文 · 工作 · Agent · 实时记录</text>
     </g>
     <g transform="translate(535 1100)">
@@ -324,6 +324,6 @@
   <g aria-label="页脚说明">
     <line x1="50" y1="1280" x2="1870" y2="1280" class="rule"/>
     <text x="60" y="1305" class="mono">权威规则 · 界面 / Skill / 插件 / 子角色只能投影或收窄能力；都不能扩大父级权限或替代持久权威。</text>
-    <text x="1500" y="1305" class="mono-copper">源码审计 · 2026.09.02</text>
+    <text x="1500" y="1305" class="mono-copper">源码复核 · 2026.10.10</text>
   </g>
 </svg>

@@ -80,6 +80,12 @@ sequenceDiagram
 
 完整 raw/full history 的权威属于 `SessionRepository`；interactive queue 属于 `AgentRuntime`。Coordinator 不复制这两套状态，也不实现模型循环。它只把 active 投影交给 runtime，收到 `RunOutcome` 后先构造候选状态，再追加并 `fsync` turn；持久化成功后才让 ContextEngine 发布 checkpoint，最后替换内存状态。失败时读取 runtime 附着的 `PartialRunOutcome`，仍然持久化审批、usage、diagnostic、部分文本、已产生的 clarification 和已经发生的 provider request receipts。
 
+Session v12 还在完整模型／工具批次边界，由 Runtime 回调 Coordinator 追加 `turn_checkpoint`。
+terminal 记录校验已保存前缀后覆盖同一 interaction 的投影，不产生重复 turn。
+大 payload 先耐久发布为 Artifact 引用；checkpoint 不保存半截参数、Loop 游标或未提交压缩候选。
+进程硬退出后保留最后完整批次并显示 interrupted，未知副作用继续通过原有恢复门禁核实。
+详细耐久、维修和文件恢复契约见[14.7](14-long-running-recovery.md#147-完整批次耐久与文件恢复决策)。
+
 ## 2.4 Runtime 内的一轮模型响应
 
 实质多阶段工作使用一份简短执行计划；单次修改、单条命令和普通问答不强制先规划。

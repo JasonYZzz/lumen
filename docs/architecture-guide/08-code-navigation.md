@@ -7,6 +7,8 @@
 | Agent 为什么没继续调用工具 | `runtime.py`、`agent_loop/loop.py` | `agent_loop/pydantic_driver.py`、`tools/gateway.py`、`resources.py`、provider 配置 |
 | TUI 与 Web 状态不一致 | `application/host.py` | `application/events.py`、`api/app.py` |
 | resume 后上下文错误 | `run_coordinator.py` | `sessions.py`、`context/engine.py` |
+| 硬退出后完整批次丢失或 journal 损坏 | `sessions.py`、`run_coordinator.py` | `io.py`、`tests/test_turn_checkpoint.py`、`tests/test_process_recovery.py` |
+| 文件恢复预览、冲突或确认异常 | `application/host.py` | `work_products/workspace.py`、`ui/checkpoint_screen.py`、`tests/test_turn_restore.py` |
 | token 超限或压缩异常 | `context/engine.py` | `assembler.py`、`compaction.py`、`budget.py`、`tokenizers.py` |
 | 工具越权或审批不正确 | `tools/registry.py` | `approval.py`、`trust.py`、`hooks.py`、`tools/workspace.py`、`sandbox.py` |
 | 工具结果、模型文本与 UI 卡片不一致 | `tools/spec.py` | `tools/presentation.py`、`tools/gateway.py`、`events.py` |
@@ -18,6 +20,7 @@
 | 转存输出中段内容找不到 | `resources.py`（`search_artifacts`） | `context/artifact_index.py`、`context/artifacts.py` |
 | Skill 未加载/脚本被拒绝 | `skills.py` | `resources.py`、Skill `SKILL.md` |
 | Web 断线后漏事件 | `application/events.py` | `api/app.py`、Web reducer |
+| 长会话读取慢、事件占用增长或请求过期 | `sessions.py`、`application/events.py` | `application/host.py`、`io.py`、`scripts/benchmark_runtime.py` |
 | `/context` 与实际 provider 请求不一致 | `run_diagnostics.py`、`agent_loop/loop.py`（request manifest） | `context/types.py`、`run_coordinator.py`、`sessions.py` |
 | 重开/切换模型后工具或 listener 重复 | `lifecycle.py` | `resources.py`、`tools/registry.py`、`tools/gateway.py` |
 | CLI/TUI/Web 能力清单不一致 | `resources.py`（`capabilities_report`） | `application/host.py`、`api/app.py`、`ui/slash_handlers.py` |
@@ -25,6 +28,10 @@
 | Live 语音连接、工具或恢复异常 | `live/manager.py` | `live/router.py`、`live/protocol.py`、Provider Adapter、`tools/gateway.py`、Web media client |
 | 长期记忆污染 | `context/memory/manager.py` | `extraction.py`、`redaction.py`、`records.py` |
 | 子 Agent 行为异常 | `agents/orchestrator.py` | `agents/runtime_factory.py`、`resources.py`、`sessions.py` |
+| macOS 原生启动、IPC、凭据或退出异常 | `src/desktop/src/main.rs`、`desktop.py` | `trust.py`、`config_resolver.py`、`tests/test_desktop.py`、`docs/desktop.md` |
+| 首次配置模型预设或启动页表单异常 | `src/desktop/bootstrap/` | `src/web/src/desktop-bootstrap.test.js`、`docs/desktop.md` |
+
+未带 `src/` 的生产 Python 路径相对于 `src/lumen/`；`tests/`、`scripts/` 和 `docs/` 路径相对于仓库根目录。
 
 ## 8.2 推荐阅读调用链
 
@@ -51,6 +58,7 @@ cli.py
 - runtime integration：FunctionModel/TestModel 驱动工具循环；
 - adapter：FastAPI endpoint、Web reducer、Textual snapshot；
 - packaging：OpenAPI schema、Next build、wheel 内置静态资源和 Skills。
+- desktop：私有启动管道、首次配置、Rust 来源／生命周期单元检查，以及 app/DMG 冻结冒烟；真实 Keychain／媒体需独立实机验收。
 
 常用质量门：
 
@@ -64,6 +72,9 @@ pnpm --dir src/web typecheck
 pnpm --dir src/web build
 uv build
 ```
+
+macOS arm64 构建命令、依赖版本与包内验证见[桌面指南](../desktop.md)；源码修改后的首次配置
+最小回归是 `pnpm --dir src/web test src/desktop-bootstrap.test.js`。
 
 ## 8.4 新功能应放在哪个 seam
 

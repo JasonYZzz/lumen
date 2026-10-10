@@ -28,6 +28,7 @@ Python 子进程，主 WebView 使用该进程的同源 loopback Web/API。`lume
 应用层命令定义在 `application/models.py`：
 
 - session：`CreateSession`、`ForkSessionAtTurn`、`ListSessions`、`RenameSession`、`SetSessionArchived`、`DeleteSession`；
+- file restore：`PreviewTurnRestore`、`ApplyTurnRestore`，要求预览摘要、明确确认及文件 revision 再验；
 - run：`StartRun`、`RetryRun`、`CancelRun`；
 - interaction：`QueueRunInput`、`DecideApproval`；
 - settings：`SetApprovalMode`、`SelectModel`；

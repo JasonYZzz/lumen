@@ -14,7 +14,8 @@ Lumen 的生产标志是 **Lumen Fold**：粗体字母 L 是品牌名称与本�
 | [`lumen-lockup-light.svg`](lumen-lockup-light.svg) | 浅色背景横向组合 |
 
 实际产品中的字标使用可访问的 DOM 文本 `lumen`，而不是把文字烘焙成图片；这样可以保持清晰、可缩放、
-可选择，并复用 Web 的 Geist 字体栈。静态 lockup 是导出预览，保留相同的字体 fallback。
+可选择，并复用 Web 的 Geist 字体栈。macOS 原生启动页复用标志和可访问字标，采用系统字体栈；
+应用图标在 `src/desktop/icons/`。静态 lockup 是导出预览，保留相同的字体 fallback。
 
 ## 几何与安全区
 

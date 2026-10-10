@@ -1,5 +1,7 @@
 # Lumen Web UI 与动态角色完整实施计划
 
+> 文档复核（2026-10-10）：下文保留计划目标与原始基线；最新完成范围和剩余门禁见[活动计划索引](README.md)，运行行为以源码和当前架构为准。
+
 > 状态：M1–M3 与 M5 runtime adapter 已实施并通过构建；M4 正式 `.riv` 资产待编辑器可用后导出
 > 日期：2026-08-02
 > 依据：`docs/research/web-3d-character-benchmark.md` 与 `design-audit/2026-08-02-web3d/audit.md`

@@ -1,5 +1,7 @@
 # Codex Harness、DeepSeek Harness 与 Pi Agent：核心架构、底层原理与工程取舍
 
+> 文档复核（2026-10-10）：本文保留原始研究／验收证据；当前实现见[文档地图](../README.md#当前事实)。外部资料与测试结果仍以本文原日期、版本和环境为限。
+
 > **调研日期：** 2026-08-26<br>
 > **研究对象：** OpenAI Codex Harness、DeepSeek Harness（dsh）、Pi coding agent / pi-mono
 

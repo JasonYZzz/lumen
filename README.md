@@ -20,7 +20,8 @@ Ollama 及 OpenAI-compatible 服务，并通过 MCP、Skills 和 Python 插件�
 - **能力扩展**：连接 stdio / Streamable HTTP MCP 服务；按需加载 Skills，接入工具插件与生命周期 Hooks。
 - **多 Agent 协作**：并行处理独立任务；只读探索共享工作区，写入任务使用隔离 Git worktree，检查后导入结果。
 - **持续执行与恢复**：流式进度、计划与证据验证、上下文自动压缩、会话恢复，以及可管理的持久记忆。
-- **交互界面**：TUI 与 Web 提供工具过程、审批和会话管理；Web 还可选启用实时语音。
+- **完整批次与文件恢复**：Session v12 保留完整模型／工具批次；检查点可预览并确认恢复有快照的文件，检测后续修改，保留对话和未覆盖操作。
+- **交互界面**：TUI、Web 与 macOS 桌面提供工具过程、审批和会话管理；Web 和桌面可按配置启用实时语音。
 
 ## 快速开始
 
@@ -94,6 +95,8 @@ lumen --cwd /path/to/project
 **macOS 桌面 Beta**：内置 Python 和 Web，使用 Tauri 2 与 ad-hoc 签名，无需付费 Apple Developer
 账户即可构建。安装、Keychain、人工升级和验收范围见[桌面指南](docs/desktop.md)。
 源码构建执行 `python3 scripts/build_desktop.py`；公开发布仍需独立授权。
+无已有配置时，原生引导提供 GPT‑6、DeepSeek、Qwen、Kimi、GLM 模型预设，用户自行提供凭据；
+已有配置优先使用，不自动更新模型列表。CLI 初始化模板仍是上文的 `openai:gpt-5`。
 
 ## 配置与安全
 
@@ -138,6 +141,7 @@ lumen init --local  # 本机覆盖配置：.lumen/agent.local.yaml
 
 Python 包与 CLI 名称为 `lumen`，发行包名称为 `lumen-agent`。
 核心代码在 `src/lumen/`，Web 在 `src/web/`，测试在 `tests/`。
+macOS 壳与原生引导在 `src/desktop/`，Python 启动 Adapter 在 `src/lumen/desktop.py`。
 
 ```bash
 uv run ruff check .

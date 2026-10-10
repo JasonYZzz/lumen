@@ -3,6 +3,9 @@
 桌面版采用 Tauri 2 + 内置 Python 3.13，复用 Lumen Web 和 WorkspaceHost。
 目前是 Apple Silicon 开源 Beta；目标为 macOS 14 及以上，最低版本和实际媒体仍需实机验收。
 
+实现复核：2026-10-10，代码交付 `28d1679`；此前的构建与模拟服务验收发生于 2026-10-09，
+详见[验收记录](research/2026-10-09-macos-desktop-validation.md)。应用版本仍为 `0.1.0`。
+
 ## 安装与打开
 
 打开 DMG，将 Lumen 拖入 Applications，再启动应用。应用内置 Python、Web、网页提取与 Live
@@ -84,6 +87,7 @@ Hardened Runtime 分支，无 Team ID 的 Python 依赖会被 Library Validation
 `.github/workflows/desktop.yml` 执行 arm64 Rust 检查、构建和后台冒烟，并上传 Actions artifact；
 只需要仓库读取权限，不含证书，不创建 Release。runner 架构显式检查，标签含义参见
 [GitHub 官方说明](https://docs.github.com/en/actions/reference/runners/github-hosted-runners)。
+该工作流由手动运行或匹配路径的 PR 触发，推送 `main` 只触发通用 CI，不自动生成或发布 DMG。
 
 ## 验证与限制
 

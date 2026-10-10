@@ -1,5 +1,7 @@
 # Lumen、Pi Agent 与 DeepSeek Harness：源码级底层原理与架构对比
 
+> 文档复核（2026-10-10）：本文保留原始研究／验收证据；当前实现见[文档地图](../README.md#当前事实)。外部资料与测试结果仍以本文原日期、版本和环境为限。
+
 > 调研日期：2026-08-24  
 > 证据范围：Lumen 当前本地 worktree；Pi 与 DeepSeek Harness 官方 GitHub 仓库的固定 commit。  
 > 方法：以源码、契约测试、Accepted 架构记录和官方仓库文档为一手证据；不以社区文章推断内部实现。

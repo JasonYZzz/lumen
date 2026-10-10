@@ -61,6 +61,7 @@
         <a href="README.md" data-inspect-path="docs/architecture-guide/README.md"><span>14 章技术正文</span><small>MD · 当前页预览</small></a>
         <a href="12-current-implementation-audit.md" data-inspect-path="docs/architecture-guide/12-current-implementation-audit.md"><span>当前实现审计</span><small>MD · 当前页预览</small></a>
         <a href="../README.md" data-inspect-path="docs/README.md"><span>文档事实分层</span><small>当前 / 研究 / 计划</small></a>
+        <a href="../desktop.md" data-inspect-path="docs/desktop.md"><span>macOS 桌面 Beta</span><small>原生启动 · 凭据 · 构建</small></a>
       </div>
     </aside>
 
@@ -112,7 +113,7 @@
             <div><dt>Tool contract</dt><dd>V2 · 3 projections</dd></div>
             <div><dt>Catalog</dt><dd>contracts.json · v7</dd></div>
             <div><dt>Request receipt</dt><dd>terminal turn ledger</dd></div>
-            <div><dt>Capabilities</dt><dd>CLI · TUI · Web</dd></div>
+            <div><dt>Capabilities</dt><dd>CLI · TUI · Web · macOS</dd></div>
             <div><dt>Lifecycle</dt><dd>scoped · reversible</dd></div>
             <div><dt>Mutation</dt><dd>expected revision</dd></div>
           </dl>
@@ -143,7 +144,7 @@
           </div>
         </figure>
         <div class="callout-row architecture-readout">
-          <article class="callout glass"><b>唯一应用入口</b><p>TUI、Web、CLI 和 Realtime 都通过 WorkspaceHost command Interface；OS execution lock 只阻止跨进程 writer，UI reducer 只是投影。</p></article>
+          <article class="callout glass"><b>唯一应用入口</b><p>TUI、Web、CLI、macOS 桌面和 Realtime 都通过 WorkspaceHost command Interface；OS execution lock 只阻止跨进程 writer，UI reducer 只是投影。</p></article>
           <article class="callout glass"><b>双执行路径，共享能力</b><p>文字 Runtime 与 Live Provider 路由不同，但工具都回到 ToolRegistry、CapabilityGateway 与同一权限策略。</p></article>
           <article class="callout glass"><b>事实与上下文分离</b><p>Session v12 保存完整事实；ContextEngine 只构造下一次模型请求所需的有界 active history。</p></article>
           <article class="callout glass"><b>完成声明受控</b><p>Plan evidence、TaskWorkspace verification 和 AgentOrchestrator unresolved state 任一未满足都会阻止完成。</p></article>

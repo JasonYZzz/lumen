@@ -1,5 +1,7 @@
 # Pi 与 DeepSeek Harness 上游源码核查账本
 
+> 文档复核（2026-10-10）：本文保留原始研究／验收证据；当前实现见[文档地图](../README.md#当前事实)。外部资料与测试结果仍以本文原日期、版本和环境为限。
+
 > 核查日期：2026-08-24  
 > 对照文档：[`lumen-pi-deepseek-harness-architecture-comparison.md`](./lumen-pi-deepseek-harness-architecture-comparison.md)  
 > 范围：只核查该文档涉及的 Pi 与 DeepSeek Harness 架构主张；未扩展到其他仓库、版本或产品能力。

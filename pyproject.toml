@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "lumen-agent"
 version = "0.1.0"
-description = "Lumen: a configurable agent framework with local tools, MCP, and a Textual TUI"
+description = "Lumen: a configurable agent framework with local tools, MCP, TUI, and Web clients"
 readme = "README.md"
 requires-python = ">=3.11,<3.14"
 dependencies = [

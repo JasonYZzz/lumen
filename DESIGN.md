@@ -103,6 +103,12 @@ components:
 
 # Design System: Lumen Copper Trace Atlas
 
+## Scope
+
+This system describes the Architecture Atlas under `docs/architecture-guide/`, not the Web application or native desktop startup pages. Implementation scope was reviewed on 2026-10-10. Web uses its own styles in `src/web/src/app/globals.css`; desktop first setup uses `src/desktop/bootstrap/style.css`.
+
+The desktop startup flow uses warm neutral surfaces, the Lumen mark, system fonts, a centered form, provider/model presets, expandable connection settings, and a separate credential step. Web uses Geist. Credential storage is an explicit Keychain choice; presets contain no secrets. Read `docs/desktop.md` for the implemented flow and its verification limits. Atlas visual approval below records the original design review, not acceptance of every client or later change.
+
 ## Overview
 
 **Creative North Star: "The Inspectable Control Circuit"**

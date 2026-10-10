@@ -1,5 +1,7 @@
 # DeepSeek-V4-Pro-0813 官方 API 模型核查
 
+> 文档复核（2026-10-10）：本文保留原始研究／验收证据；当前实现见[文档地图](../README.md#当前事实)。外部资料与测试结果仍以本文原日期、版本和环境为限。
+
 调研日期：2026-08-13  
 范围：DeepSeek 官方 API 文档、官方模型与价格页、官方 API Reference、官方更新日志。  
 证据边界：未调用需要账号凭据的实时 `/models` endpoint；模型可用 ID 以 DeepSeek 官方 API Reference

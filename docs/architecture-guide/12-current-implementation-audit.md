@@ -1,6 +1,6 @@
 # 12. 当前实现审计
 
-> 最近复核：2026-10-09（基线审计：2026-09-04）。本文是源码与契约测试的横截面，不是新的架构决策；Accepted 决策以 10、11、13、14.7 章为准。
+> 最近复核：2026-10-10（代码基线：`28d1679`；基线审计：2026-09-04）。本文是源码与契约测试的横截面，不是新的架构决策；Accepted 决策以 10、11、13、14.7、15 章为准。
 
 ## 12.1 审计方法
 
@@ -19,6 +19,7 @@
 - 工具契约与展示：`tools/spec.py`、`tools/presentation.py`、`tools/registry.py`、`tools/gateway.py`；
 - 生命周期与观测：`lifecycle.py`、`resources.py`、`contracts.py`；
 - 离线 Atlas：`scripts/build_architecture_atlas.py`、`content.generated.js`、`document-inspector.js`；
+- macOS Adapter：`src/desktop/src/main.rs`、`src/desktop/bootstrap/`、`src/lumen/desktop.py`，构建及验收边界见[桌面指南](../desktop.md)；
 - 安全：`tools/workspace.py`、`tools/web/`、`sandbox.py`、`trust.py`；
 - 契约：`tests/test_workspace_host.py`、`test_sessions.py`、`test_runtime.py`、`test_lumen_agent_loop.py`、
   `test_capability_gateway.py`、`test_delegation.py`、`test_timeline.py`、`test_resources.py`、
@@ -28,7 +29,7 @@
 
 | 状态概念 | 唯一运行时权威 | 持久化权威 | Adapter / 投影 |
 |---|---|---|---|
-| workspace command、active run、审批 future | `WorkspaceHost` | run timeline 与 session records | TUI、FastAPI/SSE、Web |
+| workspace command、active run、审批 future | `WorkspaceHost` | run timeline 与 session records | TUI、FastAPI/SSE、Web、headless、macOS WebView |
 | 单 Session turn、active history、恢复游标 | `RunCoordinator` | `SessionRepository` JSONL | Host actor |
 | 单 Agent turn 外层与公开执行契约 | `AgentRuntime` | turn messages、events、partial outcome | `LumenAgentLoop` Adapter |
 | 模型—工具状态机（唯一权威） | `LumenAgentLoop` | 通过 `AgentRuntime` 投影到同一 turn | `ModelDriver`、`CapabilityGateway` |

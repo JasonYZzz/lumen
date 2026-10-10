@@ -6,13 +6,15 @@
 
 web
 
+This platform label describes the Architecture Atlas design surface. Lumen itself also provides TUI, headless CLI, and an Apple Silicon macOS desktop Beta; their runtime authority is shared, while their visual systems are separate.
+
 ## Users
 
 Primary audience for the Architecture Atlas is inferred from the repository and this task: maintainers who need to change Lumen without creating a second runtime authority. A secondary audience is framework and platform engineers evaluating how Lumen can be integrated or extended. This audience ordering remains open for explicit user confirmation.
 
 ## Product Purpose
 
-Lumen is a general, configurable Agent framework. Model providers are replaceable Implementations; Lumen owns Session history, context, tools, approvals, Sandbox execution, Work Products, Realtime calls, and multi-Agent lifecycle. Success means those capabilities remain understandable, auditable, recoverable, and consistent across TUI, Web, and headless Adapters.
+Lumen is a general, configurable Agent framework. Model providers are replaceable Implementations; Lumen owns Session history, context, tools, approvals, Sandbox execution, Work Products, Realtime calls, and multi-Agent lifecycle. Success means those capabilities remain understandable, auditable, recoverable, and consistent across TUI, Web, headless, and macOS desktop Adapters.
 
 The Architecture Atlas explains the current Implementation from source-backed facts. It should let a maintainer identify the authoritative Module and the correct Seam before editing code, and let an evaluator understand the runtime flow, safety guarantees, compatibility policy, and extension model.
 
@@ -29,8 +31,10 @@ Readers move between the offline Architecture Atlas, Markdown decision records, 
 - Python 3.11–3.13; distribution, package, and CLI names are `lumen-agent` / `lumen`.
 - The Architecture Atlas is a static HTML/CSS/JavaScript Read surface under `docs/architecture-guide/`.
 - Source, contract tests, and current schema outrank prose documentation.
-- Session is an append-only v9 journal with read compatibility for v1–v8.
+- Session is an append-only v12 journal with read compatibility for v1–v11; upgrades only append `schema_upgrade` records.
 - Configuration schema is v2; v1 migration is memory-only and does not rewrite user files.
+- The Apple Silicon desktop Beta uses Tauri 2, bundled Python 3.13, and the existing Web/Host Interface; ad-hoc signing and manual updates are the current delivery scope.
+- Desktop first setup offers provider/model presets without credentials; existing user configuration remains authoritative. Presets do not define runtime reasoning capabilities.
 - The page must preserve offline search, keyboard access, responsive reading, print output, and direct source links.
 - No customer, benchmark, deployment, pricing, or compatibility claims may be invented.
 
@@ -40,11 +44,12 @@ The confirmed name is Lumen. Existing terminology is binding: Module, Interface,
 
 ## Evidence on Hand
 
-- Accepted decisions: `docs/architecture-guide/10-native-multi-agent-runtime.md` and `11-realtime-voice-runtime.md`.
+- Accepted decisions: `docs/architecture-guide/10-native-multi-agent-runtime.md`, `11-realtime-voice-runtime.md`, `13-native-agent-loop-migration.md`, `14-long-running-recovery.md` section 14.7, and `15-provider-catalog.md`.
 - Runtime authorities: `src/lumen/application/host.py`, `run_coordinator.py`, `runtime.py`, `context/`, `work_products/`, `agents/`, `live/`, `tools/`, and `sessions.py`.
 - Generated contract evidence: `docs/generated/contracts.json`.
 - Contract suites under `tests/` and Web contracts under `src/web/`.
 - Existing Lumen mark and architecture imagery under `docs/architecture-guide/`.
+- Current desktop behavior and release limits: `docs/desktop.md`; implementation review baseline: 2026-10-10, code commit `28d1679`.
 
 ## Product Principles
 

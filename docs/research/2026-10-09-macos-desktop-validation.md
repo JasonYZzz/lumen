@@ -1,5 +1,7 @@
 # macOS Apple Silicon 桌面实施验证
 
+> 文档复核（2026-10-10）：本文保留原始研究／验收证据；当前实现见[文档地图](../README.md#当前事实)。外部资料与测试结果仍以本文原日期、版本和环境为限。
+
 日期：2026-10-09。对应[实施计划](../plans/2026-10-09-macos-apple-silicon-desktop-implementation-plan.md)。
 交付为可本机构建的开源 Beta，不是已公开发行或经过 Apple 公证的正式版本。
 用户没有 Developer ID 证书，因此本次采用 ad-hoc 签名、DMG、只读 GitHub Actions artifact 和人工更新。
@@ -21,7 +23,8 @@
 - `.github/workflows/desktop.yml`：只读权限、arm64 构建、检查、冻结冒烟与 artifact；不发布 Release。
 
 没有更改配置 v2、Session v12 或 Host schema；兼容读取和原有恢复门禁保持原实现。
-开始时工作区已含大量其他改动，保留原有 dirty/untracked 文件，未提交、推送或发布。
+实施验收时保留了原有 dirty/untracked 文件，当时未提交、推送或发布。
+后续用户授权将代码提交并推送：运行时 `7f5e5ce`、Web `fa0aba3`、桌面 `28d1679`；未创建 Release。
 
 ## 构建基线
 
@@ -110,6 +113,7 @@ Python 运行时未改动，没有重复前一阶段的全量 Python 回归。
 展开高级配置使用顶部/底部配对截图，最小凭据页的主要操作可见，辅助删除操作可滚动到达。
 独立界面复核检查九张最终原生截图与源码，结论 `disposition: ship`，没有要求额外修正；
 依据保存在同目录 `finish-review.md`。此结论覆盖本次引导界面，不代表真实账户或 VoiceOver 验收。
+文中本地 QA 截图与复核材料保留在验收机器，未纳入 Git；仓库中的源码、测试与构建命令提供复现入口。
 独立文档复核同样给出范围内 `ship`，记录为 `documentation-review.md`；纠正了 Web 使用 Geist、
 桌面使用 macOS 系统字体的表述，保留既有 Atlas 设计文档及其历史偏差。
 

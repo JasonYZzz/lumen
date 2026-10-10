@@ -7,6 +7,11 @@ ResourceManager 的 runtime scope 在模型切换和 Host 关闭时先关闭 Con
 AgentRuntime/ModelDriver；child factory 同样在退出其模型生命周期前关闭独立 ContextEngine。
 未持久化的后台候选不因此变成 Session checkpoint，raw journal 保持不变。
 
+阻塞的 Session／Artifact I/O 通过 `io.run_io` 进入线程，并在取消时等待实际 I/O 完成，避免把
+线程取消当作 durable write 已停止。Artifact 索引正文和 checkpoint episode 只随新事实更新，
+ResourceManager 关闭时释放索引连接。Session 的增量缓存及防御复制仍是可重建投影，
+不能成为 Context 或 journal 的第二权威；性能范围见[验收记录](../research/2026-10-09-runtime-optimization-validation.md)。
+
 ### Prompt profile 与动态上下文
 
 `agent.prompt` 是稳定 Provider instructions 的唯一配置入口，支持 `minimal`、`preset`、

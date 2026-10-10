@@ -4,6 +4,9 @@
 > **接受日期：2026-08-26**<br>
 > **实施更新：2026-09-04（长任务恢复契约对齐）**
 
+实现复核：2026-10-10。后续 Session v12 完整批次持久化由 Runtime → Coordinator → Repository
+负责，不引入第二个 Loop 或持久化游标；当前恢复决策见[14.7](14-long-running-recovery.md#147-完整批次耐久与文件恢复决策)。
+
 ## 13.1 决策
 
 Lumen 的单 Agent 主模型—工具循环由 `LumenAgentLoop` 唯一拥有。生产 turn 路径不再构造或调用

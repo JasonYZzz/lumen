@@ -1,5 +1,6 @@
 {
   "name": "lumen-web",
+  "description": "Lumen Web client sharing WorkspaceHost sessions, tools, approvals, and runtime events",
   "version": "0.1.0",
   "private": true,
   "scripts": {

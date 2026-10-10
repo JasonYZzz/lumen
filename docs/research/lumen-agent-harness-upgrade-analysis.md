@@ -1,5 +1,7 @@
 # Lumen Agent Harness 技术对标与升级研究报告
 
+> 文档复核（2026-10-10）：本文保留原始研究／验收证据；当前实现见[文档地图](../README.md#当前事实)。外部资料与测试结果仍以本文原日期、版本和环境为限。
+
 > 研究日期：2026-08-26<br>
 > 研究对象：Lumen 当前实现、`agent-harness-research.md`，以及其中引用的 Codex、DeepSeek Harness、Pi 一手资料<br>
 > 结论性质：架构研究与升级建议，不是 Accepted 决策或实现规范
