@@ -8,6 +8,7 @@ import os
 import platform
 import subprocess
 import tempfile
+import tomllib
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -80,7 +81,8 @@ def main() -> None:
         run("codesign", "--verify", "--deep", "--strict", str(app))
         run(str(python), str(ROOT / "scripts/smoke_desktop_backend.py"),
             str(app / "Contents/Resources/backend/lumen-backend"))
-        dmg = app.parent.parent / "dmg" / "Lumen_0.1.0_aarch64.dmg"
+        version = tomllib.loads((ROOT / "pyproject.toml").read_text())["project"]["version"]
+        dmg = app.parent.parent / "dmg" / f"Lumen_{version}_aarch64.dmg"
         run("hdiutil", "verify", str(dmg))
         artifacts[dmg.name] = hashlib.sha256(dmg.read_bytes()).hexdigest()
         (dmg.parent / "SHA256SUMS.txt").write_text(f"{artifacts[dmg.name]}  {dmg.name}\n")

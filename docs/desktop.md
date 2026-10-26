@@ -4,7 +4,13 @@
 目前是 Apple Silicon 开源 Beta；目标为 macOS 14 及以上，最低版本和实际媒体仍需实机验收。
 
 实现复核：2026-10-10，代码交付 `28d1679`；此前的构建与模拟服务验收发生于 2026-10-09，
-详见[验收记录](research/2026-10-09-macos-desktop-validation.md)。应用版本仍为 `0.1.0`。
+详见[验收记录](research/2026-10-09-macos-desktop-validation.md)。v2 源码和应用元数据已升级为 `2.0.0`，
+本轮尚未产出经过设备／公证验收的新 DMG，不能将旧安装包视为 v2。
+
+v2 复用同一个 Web 客户端，提供对话、信息流、灵感、目标和资料空间；持续跟进从全局活动入口或关联目标管理，现有动态狐狸与配色保留。
+自动化随 Host 运行；窗口行为仍按下方原有生命周期约定，退出应用、休眠和关机时不执行，不自动启用登录项。
+范围、升级回退和常驻 CLI 见 [v2 自动化说明](architecture-guide/16-personal-assistant-automations.md)。
+2026-10-20 的[代码审查](research/2026-10-20-v2-code-review.md)四项问题已修复并纳入回归，后续闭环升级见[实施验收](research/2026-10-21-v2-product-flow-validation.md)。本地 Web／Host 验证不能替代新 DMG 的设备与公证验收。
 
 ## 安装与打开
 
@@ -33,7 +39,7 @@ env/header 插值可得到对应值。
 
 ### 首次配置模型预设
 
-2026-10-09 核实的公开模型选项，定义在 `src/desktop/bootstrap/model-presets.js`。
+2026-10-26 核实的公开模型选项，定义在 `src/desktop/bootstrap/model-presets.js`。
 只保存用户所选的一个模型，不同时启用全部服务商，也不附带凭据或模型权重。
 
 | 服务商 | 模型 ID（配置使用 `openai:` 前缀） | 协议 | 凭据变量 |
@@ -41,16 +47,18 @@ env/header 插值可得到对应值。
 | OpenAI | `gpt-6.1-sol`、`gpt-6-astra`、`gpt-6-luna` | Responses | `OPENAI_API_KEY` |
 | DeepSeek | `deepseek-flash`、`deepseek-v4-pro` | Responses | `DEEPSEEK_API_KEY` |
 | 阿里云百炼 | `qwen3.8-max`、`qwen3.8-flash` | Chat Completions | `DASHSCOPE_API_KEY` |
+| Kimi Code | `k3.1-pro` | Responses | `KIMI_API_KEY` |
 | Moonshot | `kimi-k3` | Chat Completions | `MOONSHOT_API_KEY` |
 | 智谱 | `glm-5.3` | Chat Completions | `ZHIPU_API_KEY` |
 
 官方依据：[OpenAI](https://developers.openai.com/api/docs/guides/latest-model)、
 [DeepSeek](https://api-docs.deepseek.com/api/create-response/)、
 [Qwen](https://help.aliyun.com/zh/model-studio/qwen-api-via-openai-chat-completions)、
-[Kimi](https://platform.kimi.com/docs/guide/kimi-k3-quickstart)、
+[Kimi Code](https://www.kimi.com/code/docs/en/kimi-code/models.html)、
+[Moonshot](https://platform.kimi.com/docs/guide/kimi-k3-quickstart)、
 [GLM](https://docs.bigmodel.cn/cn/guide/models/text/glm-5.3)。
 Qwen 默认使用仍受支持的中国内地公共域名；其他地域与业务空间专属地址需要按官方文档修改。
-Kimi/GLM 预设为开放平台按用量计费接口，Coding 订阅有独立地址与凭据，不能混用。
+Kimi Code 使用 Coding 订阅的独立地址与凭据；Moonshot/GLM 预设为开放平台按用量计费接口，不能混用。
 预设沿用现有 Provider Adapter；新增型号未单独声明的推理能力使用服务商默认值，
 不根据模型名称猜测能力。真实账户是否有权限、余额和当地网络可用性仍需实际调用验证。
 
@@ -93,6 +101,10 @@ Hardened Runtime 分支，无 Team ID 的 Python 依赖会被 Library Validation
 
 冻结冒烟使用本地 OpenAI Chat 模拟服务，通过真实 SDK、HTTP API 和 Host 验证流式回复、落盘、
 一次性 token、Cookie、Origin 与父管道 EOF 退出；不代表真实 Provider、OAuth、性能或语音验收。
+
+CLI Web 的持久浏览器登录与桌面私有后台分开：CLI 按工作区／监听地址保存私有认证密钥，
+桌面仍通过私有启动 IPC 提供一次性 token，并为每个后台生成独立 Cookie；不读取 CLI 的认证文件。
+WebView 刷新使用当前后台 Cookie；后台重建由原生启动流程重新握手，不能用裸 loopback 地址绕过认证。
 发布前仍需干净 macOS 用户、最低 macOS 14、实际模型、MCP、两条 Live 链路、麦克风授权、
 中文输入法、VoiceOver、quarantine 和 N→N+1 数据兼容验收。
 

@@ -1481,7 +1481,7 @@ wheels = [
 
 [[package]]
 name = "lumen-agent"
-version = "0.1.0"
+version = "2.0.0"
 source = { editable = "." }
 dependencies = [
     { name = "fastapi" },
@@ -1491,6 +1491,7 @@ dependencies = [
     { name = "pyyaml" },
     { name = "textual" },
     { name = "typer" },
+    { name = "tzdata" },
     { name = "uvicorn" },
 ]
 
@@ -1536,6 +1537,7 @@ requires-dist = [
     { name = "tiktoken", marker = "extra == 'tokenizers'", specifier = ">=0.7,<1" },
     { name = "trafilatura", marker = "extra == 'web'", specifier = ">=2.1" },
     { name = "typer", specifier = ">=0.16" },
+    { name = "tzdata", specifier = ">=2024.1" },
     { name = "uvicorn", specifier = ">=0.30" },
     { name = "websockets", marker = "extra == 'live'", specifier = ">=14,<17" },
 ]
