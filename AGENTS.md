@@ -63,7 +63,7 @@ Lumen 是通用、可配置的 Agent framework：Provider 可替换，运行时�
 - 本地/MCP 工具经 Gateway；canonical output 派生模型文字和客户端展示，post Hook 不改 canonical output/Effect。工具与 UI 不自行写 timeline。Provider 原生工具属于 ModelDriverRequest，不属于 `search_tools` 目录。
 - MCP/插件未声明副作用默认 unknown。Lumen Plan 只信任 Contract 的 `Risk=read`，不猜命令 basename；Git 检查用 `git_status` / `git_diff`。
 - Lumen Git stage/commit/push 由根 Host 的结构化 Interface 持有：stage 不执行仓库 content filter；commit/push 为 `Risk=confirm`，每次新审批，auto、记忆规则和 child 均不能放宽。
-- 文件经 workspace 路径解析，拒绝 `..`、绝对路径/符号链接逃逸。Sandbox 与审批正交，`workspace_write` fail closed。`run_command` 只提供 execution receipt，不代表捕获全部文件副作用。
+- 文件经 Workspace 路径解析，默认拒绝 `..`、绝对路径/符号链接逃逸；配置默认 `sandbox.mode: disabled` 或 Host 明确确认的会话“完全访问”可授权外部目录，仍保留 mutation 的符号链接、revision 与验证保护。范围由 Host 派生 task-local 投影，不修改共享配置；切换预设先结束运行／Agent／Live，fork 收回工作区范围。可写 child 的文件工具、cwd 与命令 sandbox 保持 worktree 边界。Sandbox 与审批正交，`workspace_write` fail closed。`run_command` 只提供 execution receipt，不代表捕获全部文件副作用。
 - command Hook 使用 SandboxRunner，启动或沙箱失败即拒绝；Python Hook/Plugin 是显式信任的 Host 进程内代码。secret、API key、个人数据和完整凭据不进入日志、Session、fixture、diff 或 Artifact 摘要。
 - Lumen child 深度最多一，工具为父有效集合 ∩ 角色 allow-list ∩ workspace mode，无多 Agent 控制工具；角色/Skill 不扩大权限。explorer 共享只读，default/worker 写独立 worktree；校验父 Session 所有权，spawn 幂等。
 - worktree 导入检查基线、父 dirty path 和三方冲突，并验证导入。`LegacyChildRunAdapter` 只投影到 AgentOrchestrator；Session fork 不复制运行中执行，未完成 Agent 记录 `not_carried`。

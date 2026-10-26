@@ -1,0 +1,396 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-10-20T08:35:45.592Z",
+  "title": "Design System: Lumen v2 personal assistant proposal",
+  "extensions": {
+    "colorMeta": {
+      "paper": {
+        "role": "neutral",
+        "displayName": "Page White",
+        "tonalRamp": [
+          "oklch(15.0% 0.0013 106.4)",
+          "oklch(26.4% 0.0013 106.4)",
+          "oklch(37.9% 0.0013 106.4)",
+          "oklch(49.3% 0.0013 106.4)",
+          "oklch(60.7% 0.0013 106.4)",
+          "oklch(72.1% 0.0013 106.4)",
+          "oklch(83.6% 0.0013 106.4)",
+          "oklch(95.0% 0.0013 106.4)"
+        ]
+      },
+      "surface": {
+        "role": "neutral",
+        "displayName": "Field White",
+        "tonalRamp": [
+          "oklch(15.0% 0.0013 106.4)",
+          "oklch(26.4% 0.0013 106.4)",
+          "oklch(37.9% 0.0013 106.4)",
+          "oklch(49.3% 0.0013 106.4)",
+          "oklch(60.7% 0.0013 106.4)",
+          "oklch(72.1% 0.0013 106.4)",
+          "oklch(83.6% 0.0013 106.4)",
+          "oklch(95.0% 0.0013 106.4)"
+        ]
+      },
+      "sidebar": {
+        "role": "neutral",
+        "displayName": "Sidebar Gray",
+        "tonalRamp": [
+          "oklch(15.0% 0.0000 89.9)",
+          "oklch(26.4% 0.0000 89.9)",
+          "oklch(37.9% 0.0000 89.9)",
+          "oklch(49.3% 0.0000 89.9)",
+          "oklch(60.7% 0.0000 89.9)",
+          "oklch(72.1% 0.0000 89.9)",
+          "oklch(83.6% 0.0000 89.9)",
+          "oklch(95.0% 0.0000 89.9)"
+        ]
+      },
+      "surface-soft": {
+        "role": "neutral",
+        "displayName": "Soft Gray",
+        "tonalRamp": [
+          "oklch(15.0% 0.0027 106.4)",
+          "oklch(26.4% 0.0027 106.4)",
+          "oklch(37.9% 0.0027 106.4)",
+          "oklch(49.3% 0.0027 106.4)",
+          "oklch(60.7% 0.0027 106.4)",
+          "oklch(72.1% 0.0027 106.4)",
+          "oklch(83.6% 0.0027 106.4)",
+          "oklch(95.0% 0.0027 106.4)"
+        ]
+      },
+      "ink": {
+        "role": "primary",
+        "displayName": "Lumen Ink",
+        "tonalRamp": [
+          "oklch(15.0% 0.0037 106.7)",
+          "oklch(26.4% 0.0037 106.7)",
+          "oklch(37.9% 0.0037 106.7)",
+          "oklch(49.3% 0.0037 106.7)",
+          "oklch(60.7% 0.0037 106.7)",
+          "oklch(72.1% 0.0037 106.7)",
+          "oklch(83.6% 0.0037 106.7)",
+          "oklch(95.0% 0.0037 106.7)"
+        ]
+      },
+      "ink-soft": {
+        "role": "neutral",
+        "displayName": "Secondary Ink",
+        "tonalRamp": [
+          "oklch(15.0% 0.0048 106.6)",
+          "oklch(26.4% 0.0048 106.6)",
+          "oklch(37.9% 0.0048 106.6)",
+          "oklch(49.3% 0.0048 106.6)",
+          "oklch(60.7% 0.0048 106.6)",
+          "oklch(72.1% 0.0048 106.6)",
+          "oklch(83.6% 0.0048 106.6)",
+          "oklch(95.0% 0.0048 106.6)"
+        ]
+      },
+      "muted": {
+        "role": "neutral",
+        "displayName": "Muted Gray",
+        "tonalRamp": [
+          "oklch(15.0% 0.0062 106.6)",
+          "oklch(26.4% 0.0062 106.6)",
+          "oklch(37.9% 0.0062 106.6)",
+          "oklch(49.3% 0.0062 106.6)",
+          "oklch(60.7% 0.0062 106.6)",
+          "oklch(72.1% 0.0062 106.6)",
+          "oklch(83.6% 0.0062 106.6)",
+          "oklch(95.0% 0.0062 106.6)"
+        ]
+      },
+      "line": {
+        "role": "neutral",
+        "displayName": "Fine Line",
+        "tonalRamp": [
+          "oklch(15.0% 0.0040 106.5)",
+          "oklch(26.4% 0.0040 106.5)",
+          "oklch(37.9% 0.0040 106.5)",
+          "oklch(49.3% 0.0040 106.5)",
+          "oklch(60.7% 0.0040 106.5)",
+          "oklch(72.1% 0.0040 106.5)",
+          "oklch(83.6% 0.0040 106.5)",
+          "oklch(95.0% 0.0040 106.5)"
+        ]
+      },
+      "line-strong": {
+        "role": "neutral",
+        "displayName": "Strong Line",
+        "tonalRamp": [
+          "oklch(15.0% 0.0054 106.5)",
+          "oklch(26.4% 0.0054 106.5)",
+          "oklch(37.9% 0.0054 106.5)",
+          "oklch(49.3% 0.0054 106.5)",
+          "oklch(60.7% 0.0054 106.5)",
+          "oklch(72.1% 0.0054 106.5)",
+          "oklch(83.6% 0.0054 106.5)",
+          "oklch(95.0% 0.0054 106.5)"
+        ]
+      },
+      "nav-active": {
+        "role": "neutral",
+        "displayName": "Selected Gray",
+        "tonalRamp": [
+          "oklch(15.0% 0.0040 106.5)",
+          "oklch(26.4% 0.0040 106.5)",
+          "oklch(37.9% 0.0040 106.5)",
+          "oklch(49.3% 0.0040 106.5)",
+          "oklch(60.7% 0.0040 106.5)",
+          "oklch(72.1% 0.0040 106.5)",
+          "oklch(83.6% 0.0040 106.5)",
+          "oklch(95.0% 0.0040 106.5)"
+        ]
+      },
+      "green": {
+        "role": "secondary",
+        "displayName": "Source Green",
+        "tonalRamp": [
+          "oklch(15.0% 0.0538 149.1)",
+          "oklch(26.4% 0.0538 149.1)",
+          "oklch(37.9% 0.0538 149.1)",
+          "oklch(49.3% 0.0538 149.1)",
+          "oklch(60.7% 0.0538 149.1)",
+          "oklch(72.1% 0.0538 149.1)",
+          "oklch(83.6% 0.0538 149.1)",
+          "oklch(95.0% 0.0538 149.1)"
+        ]
+      },
+      "green-bg": {
+        "role": "secondary",
+        "displayName": "Source Green Wash",
+        "tonalRamp": [
+          "oklch(15.0% 0.0073 132.4)",
+          "oklch(26.4% 0.0073 132.4)",
+          "oklch(37.9% 0.0073 132.4)",
+          "oklch(49.3% 0.0073 132.4)",
+          "oklch(60.7% 0.0073 132.4)",
+          "oklch(72.1% 0.0073 132.4)",
+          "oklch(83.6% 0.0073 132.4)",
+          "oklch(95.0% 0.0073 132.4)"
+        ]
+      },
+      "warn": {
+        "role": "secondary",
+        "displayName": "Source Caution",
+        "tonalRamp": [
+          "oklch(15.0% 0.0839 65.3)",
+          "oklch(26.4% 0.0839 65.3)",
+          "oklch(37.9% 0.0839 65.3)",
+          "oklch(49.3% 0.0839 65.3)",
+          "oklch(60.7% 0.0839 65.3)",
+          "oklch(72.1% 0.0839 65.3)",
+          "oklch(83.6% 0.0839 65.3)",
+          "oklch(95.0% 0.0839 65.3)"
+        ]
+      },
+      "warn-bg": {
+        "role": "secondary",
+        "displayName": "Caution Wash",
+        "tonalRamp": [
+          "oklch(15.0% 0.0086 84.6)",
+          "oklch(26.4% 0.0086 84.6)",
+          "oklch(37.9% 0.0086 84.6)",
+          "oklch(49.3% 0.0086 84.6)",
+          "oklch(60.7% 0.0086 84.6)",
+          "oklch(72.1% 0.0086 84.6)",
+          "oklch(83.6% 0.0086 84.6)",
+          "oklch(95.0% 0.0086 84.6)"
+        ]
+      },
+      "danger": {
+        "role": "secondary",
+        "displayName": "Error Red",
+        "tonalRamp": [
+          "oklch(15.0% 0.1358 15.1)",
+          "oklch(26.4% 0.1358 15.1)",
+          "oklch(37.9% 0.1358 15.1)",
+          "oklch(49.3% 0.1358 15.1)",
+          "oklch(60.7% 0.1358 15.1)",
+          "oklch(72.1% 0.1358 15.1)",
+          "oklch(83.6% 0.1358 15.1)",
+          "oklch(95.0% 0.1358 15.1)"
+        ]
+      }
+    },
+    "typographyMeta": {
+      "headline": {
+        "displayName": "Page headline",
+        "purpose": "27px general headings, 25px at compact widths."
+      },
+      "title": {
+        "displayName": "Section title",
+        "purpose": "19px feed headings; contextual variants remain in the implementation."
+      },
+      "body": {
+        "displayName": "Body",
+        "purpose": "14px default text with contextual reading sizes."
+      },
+      "composer": {
+        "displayName": "Composer",
+        "purpose": "16px main input, 15px on mobile."
+      },
+      "label": {
+        "displayName": "Control label",
+        "purpose": "12px compact controls."
+      },
+      "metadata": {
+        "displayName": "Metadata",
+        "purpose": "11px dates, source details, and small state labels."
+      }
+    },
+    "shadows": [
+      {
+        "name": "overlay",
+        "value": "0 18px 70px #24242226",
+        "purpose": "Dialogs and temporary mobile navigation."
+      },
+      {
+        "name": "toast",
+        "value": "0 5px 20px #0002",
+        "purpose": "Short-lived feedback."
+      }
+    ],
+    "motion": [
+      {
+        "name": "page-arrival",
+        "value": "animation:none",
+        "purpose": "r2 disables page-entry animation."
+      },
+      {
+        "name": "existing-fox-video",
+        "value": "VideoMascotRenderer + original idle/react clips",
+        "purpose": "Welcome-page player reuses authored motion, interaction, reduced-motion poster, visibility pause, and cleanup. No standalone HTML animation is fabricated in this sidecar."
+      },
+      {
+        "name": "reduced-motion",
+        "value": "animation:none!important; transition:none!important; scroll-behavior:auto!important",
+        "purpose": "Global reduced-motion CSS; the existing player also honors the system preference."
+      }
+    ],
+    "breakpoints": [
+      {
+        "name": "wide-min",
+        "value": "1500px"
+      },
+      {
+        "name": "compact-max",
+        "value": "1100px"
+      },
+      {
+        "name": "feed-stack-max",
+        "value": "900px"
+      },
+      {
+        "name": "legacy-columns-stack-max",
+        "value": "850px"
+      },
+      {
+        "name": "mobile-max",
+        "value": "620px"
+      }
+    ]
+  },
+  "components": [
+    {
+      "name": "Primary button",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "Ink-filled next action; explicit confirmations share this treatment.",
+      "html": "<button class=\"ds-primary\">保存草稿并检查</button>",
+      "css": ".ds-primary{display:inline-flex;align-items:center;justify-content:center;min-height:40px;padding:9px 15px;border:0;border-radius:9px;background:var(--ink,#242422);color:var(--paper,#fdfdfc);font:12px/1.65 Geist,\"PingFang SC\",\"Microsoft YaHei\",sans-serif;cursor:pointer}.ds-primary:hover{background:#444441}.ds-primary:disabled{opacity:.5;cursor:not-allowed}.ds-primary:focus-visible{outline:2px solid var(--ink,#242422);outline-offset:4px}"
+    },
+    {
+      "name": "Secondary button",
+      "kind": "button",
+      "refersTo": "button-secondary",
+      "description": "Outlined alternative with the same compact footprint.",
+      "html": "<button class=\"ds-secondary\">本次不发送</button>",
+      "css": ".ds-secondary{display:inline-flex;align-items:center;justify-content:center;min-height:40px;padding:9px 15px;border:1px solid var(--line-strong,#d5d5d1);border-radius:9px;background:transparent;color:var(--ink-soft,#555552);font:12px/1.65 Geist,\"PingFang SC\",\"Microsoft YaHei\",sans-serif;cursor:pointer}.ds-secondary:hover{background:var(--surface-soft,#f0f0ee)}.ds-secondary:disabled{opacity:.5;cursor:not-allowed}.ds-secondary:focus-visible{outline:2px solid var(--ink,#242422);outline-offset:4px}"
+    },
+    {
+      "name": "Labeled field",
+      "kind": "input",
+      "refersTo": "field",
+      "description": "Visible-label field for a local automation draft.",
+      "html": "<label class=\"ds-field\"><span>委托名称</span><input class=\"ds-input\" value=\"每天早上，整理工作简报\"><small>只创建本机演示草稿。</small></label>",
+      "css": ".ds-field{display:flex;flex-direction:column;gap:7px;color:var(--ink,#242422);font:12px/1.65 Geist,\"PingFang SC\",\"Microsoft YaHei\",sans-serif}.ds-field>span{font-weight:600}.ds-input{min-height:42px;padding:10px 12px;border:1px solid var(--line-strong,#d5d5d1);border-radius:7px;background:var(--surface,#fdfdfc);color:var(--ink,#242422);font:13px/1.65 Geist,\"PingFang SC\",\"Microsoft YaHei\",sans-serif}.ds-field small{font-size:11px;color:var(--muted,#6b6b67)}.ds-input:focus-visible{outline:2px solid var(--ink,#242422);outline-offset:4px}"
+    },
+    {
+      "name": "Active navigation",
+      "kind": "nav",
+      "refersTo": "nav-active",
+      "description": "Current-page link in the five-destination primary navigation.",
+      "html": "<nav aria-label=\"示例导航\"><a class=\"ds-nav\" href=\"#feed\" aria-current=\"page\"><svg viewBox=\"0 0 24 24\" width=\"19\" height=\"19\" aria-hidden=\"true\"><path d=\"M4 4h13v16H4Zm13 4h3v12h-3M7 8h7M7 12h7M7 16h4\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.5\" stroke-linejoin=\"round\"/></svg>信息流<span>1</span></a></nav>",
+      "css": ".ds-nav{display:flex;align-items:center;gap:12px;min-height:43px;padding:9px 12px;border-radius:8px;background:#eaeae7;color:var(--ink,#242422);font:600 14px/1.65 Geist,\"PingFang SC\",\"Microsoft YaHei\",sans-serif;text-decoration:none}.ds-nav span{font-size:11px;font-weight:400;margin-left:auto}.ds-nav:hover{background:var(--surface-soft,#f0f0ee);text-decoration:none}.ds-nav:focus-visible{outline:2px solid var(--ink,#242422);outline-offset:4px}"
+    },
+    {
+      "name": "Status labels",
+      "kind": "chip",
+      "refersTo": "status-label",
+      "description": "Static state labels keep source availability explicit in text.",
+      "html": "<div class=\"ds-status-set\"><span class=\"ds-status\">已连接</span><span class=\"ds-status ds-warning\">来源不可用</span></div>",
+      "css": ".ds-status-set{display:flex;gap:8px;flex-wrap:wrap}.ds-status{display:inline-flex;align-items:center;gap:5px;padding:3px 7px;border-radius:5px;white-space:nowrap;background:var(--green-bg,#f0f3ee);color:var(--green,#426047);font:11px/1.65 Geist,\"PingFang SC\",\"Microsoft YaHei\",sans-serif}.ds-warning{background:var(--warn-bg,#f8f5ef);color:var(--warn,#805527)}"
+    },
+    {
+      "name": "Feed card",
+      "kind": "card",
+      "refersTo": "feed-card",
+      "description": "One update with source coverage and a local next action.",
+      "html": "<article class=\"ds-feed\"><small>工作简报 · 示例数据</small><h2>今天的工作简报，整理好了。</h2><p>重点和下一步已经汇总到草稿中。</p><p class=\"ds-feed-warning\">日历来源不可用，未包含相关安排。</p><button class=\"ds-feed-action\">查看简报</button></article>",
+      "css": ".ds-feed{padding:23px 24px;border:1px solid var(--line,#e5e5e2);border-radius:16px;background:var(--paper,#fdfdfc);color:var(--ink,#242422);font:14px/1.65 Geist,\"PingFang SC\",\"Microsoft YaHei\",sans-serif}.ds-feed>small{font-size:11px;color:var(--muted,#6b6b67)}.ds-feed h2{font-size:19px;line-height:1.5;font-weight:600;letter-spacing:-.02em;margin:19px 0 11px}.ds-feed p{font-size:14px;line-height:1.8;color:var(--ink-soft,#555552);margin:0}.ds-feed p.ds-feed-warning{font-size:12px;color:var(--warn,#805527);margin:14px 0}.ds-feed-action{min-height:36px;padding:0;border:0;background:transparent;color:var(--ink,#242422);font:12px/1.65 Geist,\"PingFang SC\",\"Microsoft YaHei\",sans-serif;cursor:pointer}.ds-feed-action:hover{color:var(--muted,#6b6b67)}.ds-feed-action:focus-visible{outline:2px solid var(--ink,#242422);outline-offset:4px}"
+    },
+    {
+      "name": "Conversation composer",
+      "kind": "custom",
+      "refersTo": "composer",
+      "description": "Main natural-language input; this isolated preview does not submit.",
+      "html": "<div class=\"ds-composer\"><textarea class=\"ds-prompt\" aria-label=\"告诉 Lumen 你想做什么\" placeholder=\"有什么想交给我？\"></textarea><div class=\"ds-composer-tools\"><span>默认模式</span><button class=\"ds-send\" aria-label=\"发送（组件示例）\"><svg viewBox=\"0 0 24 24\" width=\"18\" height=\"18\" aria-hidden=\"true\"><path d=\"M12 19V5m-6 6 6-6 6 6\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.7\" stroke-linecap=\"round\" stroke-linejoin=\"round\"/></svg></button></div></div>",
+      "css": ".ds-composer{padding:17px 20px 14px;border:1px solid var(--line-strong,#d5d5d1);border-radius:24px;background:var(--surface,#fdfdfc);color:var(--ink,#242422)}.ds-prompt{display:block;width:100%;min-height:53px;max-height:180px;border:0;resize:vertical;background:transparent;color:inherit;font:16px/1.7 Geist,\"PingFang SC\",\"Microsoft YaHei\",sans-serif}.ds-prompt::placeholder{color:var(--muted,#6b6b67)}.ds-composer-tools{display:flex;justify-content:space-between;align-items:center;gap:13px;margin-top:11px;color:var(--muted,#6b6b67);font:12px/1.65 Geist,\"PingFang SC\",\"Microsoft YaHei\",sans-serif}.ds-send{display:grid;place-items:center;width:36px;height:36px;border:0;border-radius:50%;background:var(--ink,#242422);color:var(--paper,#fdfdfc);cursor:pointer}.ds-send:hover{background:#444441}.ds-prompt:focus-visible{outline:2px solid var(--ink,#242422);outline-offset:4px}.ds-send:focus-visible{outline:2px solid var(--ink,#242422);outline-offset:4px}"
+    }
+  ],
+  "narrative": {
+    "northStar": "The familiar Lumen workspace",
+    "overview": "This system describes the r2 prototype in this directory. Its visual authority is the current Lumen product, especially [globals.css](../../src/web/src/app/globals.css), with the final cascade in [style.css](style.css). The scoped proposal does not replace the repository's Architecture Atlas identity. [research.md](research.md) records the product decisions and evidence.\n\nThe interface keeps Lumen's white and gray surfaces, dark text, local Geist, original Fold logo, and existing animated nine-tail fox. Calm hierarchy makes conversations, readable updates, suggestions, ongoing goals, and produced resources easy to inspect. Content and familiar controls carry the work; the fox provides companionship.",
+    "keyCharacteristics": [
+      "White and gray surfaces with dark primary actions and fine boundaries.",
+      "Local Geist and Chinese system fallbacks preserve the current product identity.",
+      "Conversations lead; updates, ideas, goals, and resources have distinct places.",
+      "Existing authored fox video supplies companionship without certifying task success.",
+      "Example data and simulated actions remain explicitly disclosed."
+    ],
+    "rules": [
+      {
+        "name": "The Neutral Action Rule",
+        "body": "Primary actions, active navigation, and focus use ink; the logo's amber and semantic state colors stay local to their purpose.",
+        "section": "colors"
+      },
+      {
+        "name": "The State Has Words Rule",
+        "body": "Color never replaces a state label, missing-source explanation, or delivery evidence.",
+        "section": "colors"
+      },
+      {
+        "name": "The Quiet Surface Rule",
+        "body": "Reading surfaces stay flat; depth identifies a temporary layer requiring attention.",
+        "section": "elevation"
+      }
+    ],
+    "dos": [
+      "**Do** preserve the current Lumen palette, local Geist, original Fold logo, and existing animated fox.",
+      "**Do** keep updates, suggestions, goals, and resources distinguishable and their shared references inspectable.",
+      "**Do** keep source coverage, simulation disclosures, native controls, and visible keyboard focus readable.",
+      "**Do** preserve reduced motion, offscreen pause, and renderer cleanup.",
+      "**Do** use the fox as a quiet companion while operational text carries status and risk."
+    ],
+    "donts": [
+      "**Don't** apply this scoped proposal to the root Architecture Atlas design system.",
+      "**Don't** restore the r1 orange theme, generated chibi asset, or separate memory and identity navigation.",
+      "**Don't** use a fox expression as execution evidence or normal waiting as a pulsing activity state.",
+      "**Don't** present a prepared result as confirmed delivery, or missing sources as no new information.",
+      "**Don't** treat screenshots or local checks as proof of production automation, complete accessibility, or real-device acceptance."
+    ]
+  }
+}

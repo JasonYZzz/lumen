@@ -1,0 +1,104 @@
+[
+  {
+    "antipattern": "design-system-font-size",
+    "name": "Font size outside DESIGN.md",
+    "description": "A literal font-size is off the type ramp documented in DESIGN.md typography. Use a documented size step or update the design system if the new step is intentional.",
+    "severity": "advisory",
+    "category": "quality",
+    "file": "/Users/admin/IdeaProjects/lumen/src/web/src/components/landing-entry.module.css",
+    "line": 4,
+    "snippet": "font-size: clamp(22px, 2.1vw, 28px) has fluid endpoints 22px and 28px off the DESIGN.md type ramp",
+    "advisory": true,
+    "ignoreValue": "22px"
+  },
+  {
+    "antipattern": "design-system-color",
+    "name": "Color outside DESIGN.md",
+    "description": "A literal color is outside the DESIGN.md palette and sidecar tonal ramps. This may be legitimate, but it should be an intentional design-system addition rather than drift.",
+    "severity": "advisory",
+    "category": "quality",
+    "file": "/Users/admin/IdeaProjects/lumen/src/web/src/app/mascot-preview/preview.module.css",
+    "line": 2,
+    "snippet": "Undocumented color #29232e is outside DESIGN.md colors",
+    "advisory": true,
+    "ignoreValue": "#29232e",
+    "importedBy": [
+      "page.tsx"
+    ]
+  },
+  {
+    "antipattern": "design-system-color",
+    "name": "Color outside DESIGN.md",
+    "description": "A literal color is outside the DESIGN.md palette and sidecar tonal ramps. This may be legitimate, but it should be an intentional design-system addition rather than drift.",
+    "severity": "advisory",
+    "category": "quality",
+    "file": "/Users/admin/IdeaProjects/lumen/src/web/src/app/mascot-preview/preview.module.css",
+    "line": 2,
+    "snippet": "Undocumented color #f6edf5 is outside DESIGN.md colors",
+    "advisory": true,
+    "ignoreValue": "#f6edf5",
+    "importedBy": [
+      "page.tsx"
+    ]
+  },
+  {
+    "antipattern": "design-system-font-size",
+    "name": "Font size outside DESIGN.md",
+    "description": "A literal font-size is off the type ramp documented in DESIGN.md typography. Use a documented size step or update the design system if the new step is intentional.",
+    "severity": "advisory",
+    "category": "quality",
+    "file": "/Users/admin/IdeaProjects/lumen/src/web/src/app/mascot-preview/preview.module.css",
+    "line": 6,
+    "snippet": "font-size: 28px is off the DESIGN.md type ramp",
+    "advisory": true,
+    "ignoreValue": "28px",
+    "importedBy": [
+      "page.tsx"
+    ]
+  },
+  {
+    "antipattern": "design-system-color",
+    "name": "Color outside DESIGN.md",
+    "description": "A literal color is outside the DESIGN.md palette and sidecar tonal ramps. This may be legitimate, but it should be an intentional design-system addition rather than drift.",
+    "severity": "advisory",
+    "category": "quality",
+    "file": "/Users/admin/IdeaProjects/lumen/src/web/src/app/mascot-preview/preview.module.css",
+    "line": 9,
+    "snippet": "Undocumented color #c6b8c9 is outside DESIGN.md colors",
+    "advisory": true,
+    "ignoreValue": "#c6b8c9",
+    "importedBy": [
+      "page.tsx"
+    ]
+  },
+  {
+    "antipattern": "design-system-font-size",
+    "name": "Font size outside DESIGN.md",
+    "description": "A literal font-size is off the type ramp documented in DESIGN.md typography. Use a documented size step or update the design system if the new step is intentional.",
+    "severity": "advisory",
+    "category": "quality",
+    "file": "/Users/admin/IdeaProjects/lumen/src/web/src/app/mascot-preview/preview.module.css",
+    "line": 14,
+    "snippet": "font-size: 11px is off the DESIGN.md type ramp",
+    "advisory": true,
+    "ignoreValue": "11px",
+    "importedBy": [
+      "page.tsx"
+    ]
+  },
+  {
+    "antipattern": "design-system-font-size",
+    "name": "Font size outside DESIGN.md",
+    "description": "A literal font-size is off the type ramp documented in DESIGN.md typography. Use a documented size step or update the design system if the new step is intentional.",
+    "severity": "advisory",
+    "category": "quality",
+    "file": "/Users/admin/IdeaProjects/lumen/src/web/src/app/mascot-preview/preview.module.css",
+    "line": 18,
+    "snippet": "font-size: 10px is off the DESIGN.md type ramp",
+    "advisory": true,
+    "ignoreValue": "10px",
+    "importedBy": [
+      "page.tsx"
+    ]
+  }
+]

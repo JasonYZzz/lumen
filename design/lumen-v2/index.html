@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="theme-color" content="#fdfdfc">
+  <title>Lumen v2 · 你的个人助理</title>
+  <link rel="icon" href="assets/lumen-mark.svg">
+  <link rel="stylesheet" href="style.css">
+  <link rel="stylesheet" href="assets/mascot-player.css">
+  <script src="assets/mascot-player.js" defer></script>
+  <script src="surfaces.js" defer></script>
+  <script src="app.js" defer></script>
+</head>
+<body>
+  <a class="skip" href="#main">跳到主要内容</a>
+  <aside class="sidebar" aria-label="主导航">
+    <button class="mobile-close" data-action="menu" aria-label="收起导航"><span data-icon="X"></span></button>
+    <a class="brand" href="#chat"><img src="assets/lumen-mark.svg" alt=""><span>lumen</span></a>
+    <button class="new-task" data-action="new-chat"><span data-icon="Plus"></span> 新建对话</button>
+    <button class="sidebar-search" data-action="search"><span data-icon="MagnifyingGlass"></span> 搜索</button>
+    <nav id="nav"></nav>
+    <div class="side-note"><span class="small-dot"></span><span>本机演示<br><small>只模拟，不执行真实任务</small></span></div>
+    <div class="sidebar-bottom">
+      <button data-action="settings"><span data-icon="GearSix"></span> 设置</button>
+      <div class="profile"><span class="profile-image">林</span><div>我的个人空间<small>Asia/Shanghai</small></div><button data-action="search" aria-label="搜索内容"><span data-icon="MagnifyingGlass"></span></button></div>
+    </div>
+  </aside>
+  <div class="workspace">
+    <header class="topbar">
+      <button class="mobile-menu" data-action="menu" aria-label="展开导航" aria-expanded="false"><span data-icon="List"></span></button>
+      <div class="breadcrumb"><b id="page-title">对话</b></div>
+      <div class="top-actions"><span class="demo-label">v2 交互原型 · 示例数据</span><button class="activity-button" data-action="activity"><img src="assets/mascot/fox-poster.png" alt=""><span>等待下次任务</span><span data-icon="CaretRight"></span></button></div>
+    </header>
+    <main id="main" tabindex="-1"></main>
+    <footer class="page-footer"><span>你的委托，由你掌控。</span><div><a href="research.md">设计分析</a><a href="implementation-plan.md">技术实施计划</a><button data-action="reset">重置演示</button></div></footer>
+  </div>
+  <dialog id="dialog" aria-labelledby="dialog-title"><div id="dialog-content"></div></dialog>
+  <div id="toast" role="status" aria-live="polite"></div>
+  <div id="storage-warning" role="status" hidden>演示状态未能读取或保存。当前使用本次打开期间的数据。</div>
+</body>
+</html>

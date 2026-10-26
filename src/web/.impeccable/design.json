@@ -1,0 +1,856 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-10-22T04:07:49Z",
+  "title": "Design System: Lumen Web",
+  "extensions": {
+    "colorMeta": {
+      "page": {
+        "role": "neutral",
+        "displayName": "Pink-snow canvas",
+        "tonalRamp": [
+          "oklch(15% 0.0034 354.7)",
+          "oklch(26% 0.0034 354.7)",
+          "oklch(38% 0.0034 354.7)",
+          "oklch(50% 0.0034 354.7)",
+          "oklch(62% 0.0034 354.7)",
+          "oklch(74% 0.0034 354.7)",
+          "oklch(86% 0.0034 354.7)",
+          "oklch(95% 0.0034 354.7)"
+        ]
+      },
+      "surface": {
+        "role": "neutral",
+        "displayName": "Reading white",
+        "tonalRamp": [
+          "oklch(15% 0.0000 0.0)",
+          "oklch(26% 0.0000 0.0)",
+          "oklch(38% 0.0000 0.0)",
+          "oklch(50% 0.0000 0.0)",
+          "oklch(62% 0.0000 0.0)",
+          "oklch(74% 0.0000 0.0)",
+          "oklch(86% 0.0000 0.0)",
+          "oklch(95% 0.0000 0.0)"
+        ]
+      },
+      "sidebar": {
+        "role": "neutral",
+        "displayName": "Rose paper",
+        "tonalRamp": [
+          "oklch(15% 0.0083 337.4)",
+          "oklch(26% 0.0083 337.4)",
+          "oklch(38% 0.0083 337.4)",
+          "oklch(50% 0.0083 337.4)",
+          "oklch(62% 0.0083 337.4)",
+          "oklch(74% 0.0083 337.4)",
+          "oklch(86% 0.0083 337.4)",
+          "oklch(95% 0.0083 337.4)"
+        ]
+      },
+      "surface-soft": {
+        "role": "neutral",
+        "displayName": "Pale lilac",
+        "tonalRamp": [
+          "oklch(15% 0.0143 329.1)",
+          "oklch(26% 0.0143 329.1)",
+          "oklch(38% 0.0143 329.1)",
+          "oklch(50% 0.0143 329.1)",
+          "oklch(62% 0.0143 329.1)",
+          "oklch(74% 0.0143 329.1)",
+          "oklch(86% 0.0143 329.1)",
+          "oklch(95% 0.0143 329.1)"
+        ]
+      },
+      "accent": {
+        "role": "primary",
+        "displayName": "Muted plum",
+        "tonalRamp": [
+          "oklch(15% 0.0686 334.2)",
+          "oklch(26% 0.0686 334.2)",
+          "oklch(38% 0.0686 334.2)",
+          "oklch(50% 0.0686 334.2)",
+          "oklch(62% 0.0686 334.2)",
+          "oklch(74% 0.0686 334.2)",
+          "oklch(86% 0.0686 334.2)",
+          "oklch(95% 0.0686 334.2)"
+        ]
+      },
+      "accent-hover": {
+        "role": "primary",
+        "displayName": "Deep plum",
+        "tonalRamp": [
+          "oklch(15% 0.0631 333.1)",
+          "oklch(26% 0.0631 333.1)",
+          "oklch(38% 0.0631 333.1)",
+          "oklch(50% 0.0631 333.1)",
+          "oklch(62% 0.0631 333.1)",
+          "oklch(74% 0.0631 333.1)",
+          "oklch(86% 0.0631 333.1)",
+          "oklch(95% 0.0631 333.1)"
+        ]
+      },
+      "ink": {
+        "role": "neutral",
+        "displayName": "Lumen ink",
+        "tonalRamp": [
+          "oklch(15% 0.0158 313.0)",
+          "oklch(26% 0.0158 313.0)",
+          "oklch(38% 0.0158 313.0)",
+          "oklch(50% 0.0158 313.0)",
+          "oklch(62% 0.0158 313.0)",
+          "oklch(74% 0.0158 313.0)",
+          "oklch(86% 0.0158 313.0)",
+          "oklch(95% 0.0158 313.0)"
+        ]
+      },
+      "ink-soft": {
+        "role": "neutral",
+        "displayName": "Secondary ink",
+        "tonalRamp": [
+          "oklch(15% 0.0250 321.1)",
+          "oklch(26% 0.0250 321.1)",
+          "oklch(38% 0.0250 321.1)",
+          "oklch(50% 0.0250 321.1)",
+          "oklch(62% 0.0250 321.1)",
+          "oklch(74% 0.0250 321.1)",
+          "oklch(86% 0.0250 321.1)",
+          "oklch(95% 0.0250 321.1)"
+        ]
+      },
+      "muted": {
+        "role": "neutral",
+        "displayName": "Muted plum-gray",
+        "tonalRamp": [
+          "oklch(15% 0.0289 323.9)",
+          "oklch(26% 0.0289 323.9)",
+          "oklch(38% 0.0289 323.9)",
+          "oklch(50% 0.0289 323.9)",
+          "oklch(62% 0.0289 323.9)",
+          "oklch(74% 0.0289 323.9)",
+          "oklch(86% 0.0289 323.9)",
+          "oklch(95% 0.0289 323.9)"
+        ]
+      },
+      "faint": {
+        "role": "neutral",
+        "displayName": "Decorative gray",
+        "tonalRamp": [
+          "oklch(15% 0.0059 106.6)",
+          "oklch(26% 0.0059 106.6)",
+          "oklch(38% 0.0059 106.6)",
+          "oklch(50% 0.0059 106.6)",
+          "oklch(62% 0.0059 106.6)",
+          "oklch(74% 0.0059 106.6)",
+          "oklch(86% 0.0059 106.6)",
+          "oklch(95% 0.0059 106.6)"
+        ]
+      },
+      "line": {
+        "role": "neutral",
+        "displayName": "Fine lilac line",
+        "tonalRamp": [
+          "oklch(15% 0.0152 332.3)",
+          "oklch(26% 0.0152 332.3)",
+          "oklch(38% 0.0152 332.3)",
+          "oklch(50% 0.0152 332.3)",
+          "oklch(62% 0.0152 332.3)",
+          "oklch(74% 0.0152 332.3)",
+          "oklch(86% 0.0152 332.3)",
+          "oklch(95% 0.0152 332.3)"
+        ]
+      },
+      "line-strong": {
+        "role": "neutral",
+        "displayName": "Strong lilac line",
+        "tonalRamp": [
+          "oklch(15% 0.0271 331.6)",
+          "oklch(26% 0.0271 331.6)",
+          "oklch(38% 0.0271 331.6)",
+          "oklch(50% 0.0271 331.6)",
+          "oklch(62% 0.0271 331.6)",
+          "oklch(74% 0.0271 331.6)",
+          "oklch(86% 0.0271 331.6)",
+          "oklch(95% 0.0271 331.6)"
+        ]
+      },
+      "danger": {
+        "role": "secondary",
+        "displayName": "Failure red",
+        "tonalRamp": [
+          "oklch(15% 0.1358 15.1)",
+          "oklch(26% 0.1358 15.1)",
+          "oklch(38% 0.1358 15.1)",
+          "oklch(50% 0.1358 15.1)",
+          "oklch(62% 0.1358 15.1)",
+          "oklch(74% 0.1358 15.1)",
+          "oklch(86% 0.1358 15.1)",
+          "oklch(95% 0.1358 15.1)"
+        ]
+      },
+      "attention-ink": {
+        "role": "secondary",
+        "displayName": "Attention amber",
+        "tonalRamp": [
+          "oklch(15% 0.0854 72.2)",
+          "oklch(26% 0.0854 72.2)",
+          "oklch(38% 0.0854 72.2)",
+          "oklch(50% 0.0854 72.2)",
+          "oklch(62% 0.0854 72.2)",
+          "oklch(74% 0.0854 72.2)",
+          "oklch(86% 0.0854 72.2)",
+          "oklch(95% 0.0854 72.2)"
+        ]
+      },
+      "attention-bg": {
+        "role": "secondary",
+        "displayName": "Pale attention amber",
+        "tonalRamp": [
+          "oklch(15% 0.0274 83.5)",
+          "oklch(26% 0.0274 83.5)",
+          "oklch(38% 0.0274 83.5)",
+          "oklch(50% 0.0274 83.5)",
+          "oklch(62% 0.0274 83.5)",
+          "oklch(74% 0.0274 83.5)",
+          "oklch(86% 0.0274 83.5)",
+          "oklch(95% 0.0274 83.5)"
+        ]
+      },
+      "attention-surface": {
+        "role": "neutral",
+        "displayName": "Attention reading surface",
+        "tonalRamp": [
+          "oklch(15% 0.0082 91.5)",
+          "oklch(26% 0.0082 91.5)",
+          "oklch(38% 0.0082 91.5)",
+          "oklch(50% 0.0082 91.5)",
+          "oklch(62% 0.0082 91.5)",
+          "oklch(74% 0.0082 91.5)",
+          "oklch(86% 0.0082 91.5)",
+          "oklch(95% 0.0082 91.5)"
+        ]
+      },
+      "failure-bg": {
+        "role": "secondary",
+        "displayName": "Pale failure red",
+        "tonalRamp": [
+          "oklch(15% 0.0165 26.6)",
+          "oklch(26% 0.0165 26.6)",
+          "oklch(38% 0.0165 26.6)",
+          "oklch(50% 0.0165 26.6)",
+          "oklch(62% 0.0165 26.6)",
+          "oklch(74% 0.0165 26.6)",
+          "oklch(86% 0.0165 26.6)",
+          "oklch(95% 0.0165 26.6)"
+        ]
+      },
+      "excerpt": {
+        "role": "neutral",
+        "displayName": "Excerpt paper",
+        "tonalRamp": [
+          "oklch(15% 0.0066 106.5)",
+          "oklch(26% 0.0066 106.5)",
+          "oklch(38% 0.0066 106.5)",
+          "oklch(50% 0.0066 106.5)",
+          "oklch(62% 0.0066 106.5)",
+          "oklch(74% 0.0066 106.5)",
+          "oklch(86% 0.0066 106.5)",
+          "oklch(95% 0.0066 106.5)"
+        ]
+      },
+      "appearance-pink": {
+        "role": "neutral",
+        "displayName": "Pink",
+        "tonalRamp": [
+          "oklch(15% 0.0034 354.7)",
+          "oklch(26% 0.0034 354.7)",
+          "oklch(38% 0.0034 354.7)",
+          "oklch(50% 0.0034 354.7)",
+          "oklch(62% 0.0034 354.7)",
+          "oklch(74% 0.0034 354.7)",
+          "oklch(86% 0.0034 354.7)",
+          "oklch(95% 0.0034 354.7)"
+        ]
+      },
+      "appearance-apricot": {
+        "role": "neutral",
+        "displayName": "Apricot",
+        "tonalRamp": [
+          "oklch(15% 0.0158 73.7)",
+          "oklch(26% 0.0158 73.7)",
+          "oklch(38% 0.0158 73.7)",
+          "oklch(50% 0.0158 73.7)",
+          "oklch(62% 0.0158 73.7)",
+          "oklch(74% 0.0158 73.7)",
+          "oklch(86% 0.0158 73.7)",
+          "oklch(95% 0.0158 73.7)"
+        ]
+      },
+      "appearance-mint": {
+        "role": "neutral",
+        "displayName": "Mint",
+        "tonalRamp": [
+          "oklch(15% 0.0109 167.8)",
+          "oklch(26% 0.0109 167.8)",
+          "oklch(38% 0.0109 167.8)",
+          "oklch(50% 0.0109 167.8)",
+          "oklch(62% 0.0109 167.8)",
+          "oklch(74% 0.0109 167.8)",
+          "oklch(86% 0.0109 167.8)",
+          "oklch(95% 0.0109 167.8)"
+        ]
+      },
+      "appearance-blue": {
+        "role": "neutral",
+        "displayName": "Blue",
+        "tonalRamp": [
+          "oklch(15% 0.0103 247.9)",
+          "oklch(26% 0.0103 247.9)",
+          "oklch(38% 0.0103 247.9)",
+          "oklch(50% 0.0103 247.9)",
+          "oklch(62% 0.0103 247.9)",
+          "oklch(74% 0.0103 247.9)",
+          "oklch(86% 0.0103 247.9)",
+          "oklch(95% 0.0103 247.9)"
+        ]
+      },
+      "appearance-lilac": {
+        "role": "neutral",
+        "displayName": "Lilac",
+        "tonalRamp": [
+          "oklch(15% 0.0139 304.1)",
+          "oklch(26% 0.0139 304.1)",
+          "oklch(38% 0.0139 304.1)",
+          "oklch(50% 0.0139 304.1)",
+          "oklch(62% 0.0139 304.1)",
+          "oklch(74% 0.0139 304.1)",
+          "oklch(86% 0.0139 304.1)",
+          "oklch(95% 0.0139 304.1)"
+        ]
+      },
+      "appearance-apricot-sidebar": {
+        "role": "neutral",
+        "displayName": "Apricot Sidebar",
+        "tonalRamp": [
+          "oklch(15% 0.0193 72.6)",
+          "oklch(26% 0.0193 72.6)",
+          "oklch(38% 0.0193 72.6)",
+          "oklch(50% 0.0193 72.6)",
+          "oklch(62% 0.0193 72.6)",
+          "oklch(74% 0.0193 72.6)",
+          "oklch(86% 0.0193 72.6)",
+          "oklch(95% 0.0193 72.6)"
+        ]
+      },
+      "appearance-apricot-surface-soft": {
+        "role": "neutral",
+        "displayName": "Apricot Surface Soft",
+        "tonalRamp": [
+          "oklch(15% 0.0221 74.1)",
+          "oklch(26% 0.0221 74.1)",
+          "oklch(38% 0.0221 74.1)",
+          "oklch(50% 0.0221 74.1)",
+          "oklch(62% 0.0221 74.1)",
+          "oklch(74% 0.0221 74.1)",
+          "oklch(86% 0.0221 74.1)",
+          "oklch(95% 0.0221 74.1)"
+        ]
+      },
+      "appearance-apricot-line": {
+        "role": "neutral",
+        "displayName": "Apricot Line",
+        "tonalRamp": [
+          "oklch(15% 0.0230 71.8)",
+          "oklch(26% 0.0230 71.8)",
+          "oklch(38% 0.0230 71.8)",
+          "oklch(50% 0.0230 71.8)",
+          "oklch(62% 0.0230 71.8)",
+          "oklch(74% 0.0230 71.8)",
+          "oklch(86% 0.0230 71.8)",
+          "oklch(95% 0.0230 71.8)"
+        ]
+      },
+      "appearance-apricot-line-strong": {
+        "role": "neutral",
+        "displayName": "Apricot Line Strong",
+        "tonalRamp": [
+          "oklch(15% 0.0375 74.0)",
+          "oklch(26% 0.0375 74.0)",
+          "oklch(38% 0.0375 74.0)",
+          "oklch(50% 0.0375 74.0)",
+          "oklch(62% 0.0375 74.0)",
+          "oklch(74% 0.0375 74.0)",
+          "oklch(86% 0.0375 74.0)",
+          "oklch(95% 0.0375 74.0)"
+        ]
+      },
+      "appearance-mint-sidebar": {
+        "role": "neutral",
+        "displayName": "Mint Sidebar",
+        "tonalRamp": [
+          "oklch(15% 0.0124 157.0)",
+          "oklch(26% 0.0124 157.0)",
+          "oklch(38% 0.0124 157.0)",
+          "oklch(50% 0.0124 157.0)",
+          "oklch(62% 0.0124 157.0)",
+          "oklch(74% 0.0124 157.0)",
+          "oklch(86% 0.0124 157.0)",
+          "oklch(95% 0.0124 157.0)"
+        ]
+      },
+      "appearance-mint-surface-soft": {
+        "role": "neutral",
+        "displayName": "Mint Surface Soft",
+        "tonalRamp": [
+          "oklch(15% 0.0183 161.1)",
+          "oklch(26% 0.0183 161.1)",
+          "oklch(38% 0.0183 161.1)",
+          "oklch(50% 0.0183 161.1)",
+          "oklch(62% 0.0183 161.1)",
+          "oklch(74% 0.0183 161.1)",
+          "oklch(86% 0.0183 161.1)",
+          "oklch(95% 0.0183 161.1)"
+        ]
+      },
+      "appearance-mint-line": {
+        "role": "neutral",
+        "displayName": "Mint Line",
+        "tonalRamp": [
+          "oklch(15% 0.0209 161.4)",
+          "oklch(26% 0.0209 161.4)",
+          "oklch(38% 0.0209 161.4)",
+          "oklch(50% 0.0209 161.4)",
+          "oklch(62% 0.0209 161.4)",
+          "oklch(74% 0.0209 161.4)",
+          "oklch(86% 0.0209 161.4)",
+          "oklch(95% 0.0209 161.4)"
+        ]
+      },
+      "appearance-mint-line-strong": {
+        "role": "neutral",
+        "displayName": "Mint Line Strong",
+        "tonalRamp": [
+          "oklch(15% 0.0351 157.5)",
+          "oklch(26% 0.0351 157.5)",
+          "oklch(38% 0.0351 157.5)",
+          "oklch(50% 0.0351 157.5)",
+          "oklch(62% 0.0351 157.5)",
+          "oklch(74% 0.0351 157.5)",
+          "oklch(86% 0.0351 157.5)",
+          "oklch(95% 0.0351 157.5)"
+        ]
+      },
+      "appearance-blue-sidebar": {
+        "role": "neutral",
+        "displayName": "Blue Sidebar",
+        "tonalRamp": [
+          "oklch(15% 0.0131 251.6)",
+          "oklch(26% 0.0131 251.6)",
+          "oklch(38% 0.0131 251.6)",
+          "oklch(50% 0.0131 251.6)",
+          "oklch(62% 0.0131 251.6)",
+          "oklch(74% 0.0131 251.6)",
+          "oklch(86% 0.0131 251.6)",
+          "oklch(95% 0.0131 251.6)"
+        ]
+      },
+      "appearance-blue-surface-soft": {
+        "role": "neutral",
+        "displayName": "Blue Surface Soft",
+        "tonalRamp": [
+          "oklch(15% 0.0201 250.4)",
+          "oklch(26% 0.0201 250.4)",
+          "oklch(38% 0.0201 250.4)",
+          "oklch(50% 0.0201 250.4)",
+          "oklch(62% 0.0201 250.4)",
+          "oklch(74% 0.0201 250.4)",
+          "oklch(86% 0.0201 250.4)",
+          "oklch(95% 0.0201 250.4)"
+        ]
+      },
+      "appearance-blue-line": {
+        "role": "neutral",
+        "displayName": "Blue Line",
+        "tonalRamp": [
+          "oklch(15% 0.0231 252.2)",
+          "oklch(26% 0.0231 252.2)",
+          "oklch(38% 0.0231 252.2)",
+          "oklch(50% 0.0231 252.2)",
+          "oklch(62% 0.0231 252.2)",
+          "oklch(74% 0.0231 252.2)",
+          "oklch(86% 0.0231 252.2)",
+          "oklch(95% 0.0231 252.2)"
+        ]
+      },
+      "appearance-blue-line-strong": {
+        "role": "neutral",
+        "displayName": "Blue Line Strong",
+        "tonalRamp": [
+          "oklch(15% 0.0381 254.6)",
+          "oklch(26% 0.0381 254.6)",
+          "oklch(38% 0.0381 254.6)",
+          "oklch(50% 0.0381 254.6)",
+          "oklch(62% 0.0381 254.6)",
+          "oklch(74% 0.0381 254.6)",
+          "oklch(86% 0.0381 254.6)",
+          "oklch(95% 0.0381 254.6)"
+        ]
+      },
+      "appearance-lilac-sidebar": {
+        "role": "neutral",
+        "displayName": "Lilac Sidebar",
+        "tonalRamp": [
+          "oklch(15% 0.0197 305.3)",
+          "oklch(26% 0.0197 305.3)",
+          "oklch(38% 0.0197 305.3)",
+          "oklch(50% 0.0197 305.3)",
+          "oklch(62% 0.0197 305.3)",
+          "oklch(74% 0.0197 305.3)",
+          "oklch(86% 0.0197 305.3)",
+          "oklch(95% 0.0197 305.3)"
+        ]
+      },
+      "appearance-lilac-surface-soft": {
+        "role": "neutral",
+        "displayName": "Lilac Surface Soft",
+        "tonalRamp": [
+          "oklch(15% 0.0285 306.0)",
+          "oklch(26% 0.0285 306.0)",
+          "oklch(38% 0.0285 306.0)",
+          "oklch(50% 0.0285 306.0)",
+          "oklch(62% 0.0285 306.0)",
+          "oklch(74% 0.0285 306.0)",
+          "oklch(86% 0.0285 306.0)",
+          "oklch(95% 0.0285 306.0)"
+        ]
+      },
+      "appearance-lilac-line": {
+        "role": "neutral",
+        "displayName": "Lilac Line",
+        "tonalRamp": [
+          "oklch(15% 0.0345 306.3)",
+          "oklch(26% 0.0345 306.3)",
+          "oklch(38% 0.0345 306.3)",
+          "oklch(50% 0.0345 306.3)",
+          "oklch(62% 0.0345 306.3)",
+          "oklch(74% 0.0345 306.3)",
+          "oklch(86% 0.0345 306.3)",
+          "oklch(95% 0.0345 306.3)"
+        ]
+      },
+      "appearance-lilac-line-strong": {
+        "role": "neutral",
+        "displayName": "Lilac Line Strong",
+        "tonalRamp": [
+          "oklch(15% 0.0595 306.5)",
+          "oklch(26% 0.0595 306.5)",
+          "oklch(38% 0.0595 306.5)",
+          "oklch(50% 0.0595 306.5)",
+          "oklch(62% 0.0595 306.5)",
+          "oklch(74% 0.0595 306.5)",
+          "oklch(86% 0.0595 306.5)",
+          "oklch(95% 0.0595 306.5)"
+        ]
+      }
+    },
+    "typographyMeta": {
+      "headline": {
+        "displayName": "Page headline",
+        "purpose": "Assistant page headings; 25px on compact pages and library headings."
+      },
+      "title": {
+        "displayName": "Result title",
+        "purpose": "Feed result titles; related source-defined subheading sizes are documented in DESIGN.md."
+      },
+      "body": {
+        "displayName": "Reading body",
+        "purpose": "Descriptions and explanations; transcripts retain the user-controlled transcript-size setting."
+      },
+      "label": {
+        "displayName": "Action label",
+        "purpose": "Assistant buttons and compact controls; form labels use the incumbent weight 500."
+      },
+      "metadata": {
+        "displayName": "Status and source metadata",
+        "purpose": "Written state, dates, footnotes, and tabular timestamps."
+      },
+      "resource": {
+        "displayName": "Resource filename",
+        "purpose": "Library names at weight 450, with single-line truncation in the index."
+      },
+      "composer": {
+        "displayName": "Composer overlay text",
+        "purpose": "The existing textarea and highlight layer share these metrics."
+      },
+      "welcome": {
+        "displayName": "Welcome greeting",
+        "purpose": "Centered conversation welcome only, using clamp(22px, 2.1vw, 28px)."
+      }
+    },
+    "shadows": [
+      {
+        "name": "library-hover",
+        "value": "0 8px 20px rgb(35 42 36 / .06)",
+        "purpose": "Resource grid hover only; the white card stays flat at rest."
+      },
+      {
+        "name": "assistant-menu",
+        "value": "0 8px 24px rgb(35 42 36 / .1)",
+        "purpose": "Header tools and feed More menus."
+      },
+      {
+        "name": "assistant-panel",
+        "value": "0 24px 80px rgb(35 42 36 / .14)",
+        "purpose": "Temporary assistant panel above a rgb(35 42 36 / .22) scrim and 5px blur."
+      },
+      {
+        "name": "settings-session-search",
+        "value": "0 24px 80px rgb(0 0 0 / 18%)",
+        "purpose": "Retained settings and session-search dialogs."
+      },
+      {
+        "name": "runtime-inspector",
+        "value": "0 26px 72px rgb(25 25 22 / .2), 0 8px 22px rgb(25 25 22 / .08)",
+        "purpose": "Retained runtime-inspector dialog."
+      }
+    ],
+    "motion": [
+      {
+        "name": "global-control-state",
+        "value": "150ms ease",
+        "purpose": "Background, color, opacity, and enabled press state."
+      },
+      {
+        "name": "assistant-control-state",
+        "value": "180ms ease",
+        "purpose": "Assistant button fill/border, composer border, and library hover."
+      },
+      {
+        "name": "mobile-sidebar",
+        "value": "200ms ease",
+        "purpose": "Off-canvas sidebar transform."
+      },
+      {
+        "name": "reduced-motion",
+        "value": "none",
+        "purpose": "Assistant page, panel, and mobile-navigation transitions/animations are removed; global retained motion uses 0.01ms duration and one iteration."
+      },
+      {
+        "name": "fox-form-transition",
+        "value": "320ms ease-out",
+        "purpose": "Preload the new responsive image before crossfading; failed loads retain the current image, stale callbacks are cancelled, and inactive/static/reduced views do not animate."
+      },
+      {
+        "name": "fox-breathing",
+        "value": "5.6s ease-in-out",
+        "purpose": "Low-amplitude breathing while visible; disabled in static/reduced modes."
+      },
+      {
+        "name": "fox-greeting",
+        "value": "650ms ease-out",
+        "purpose": "650ms greeting on interaction, cleared by a 700ms timer; hidden/offscreen and static/reduced modes stop animation."
+      },
+      {
+        "name": "fox-blink",
+        "value": "6.8s steps(1, end)",
+        "purpose": "Base form only: a clipped generated eye patch appears for about 136ms; inactive/static/reduced or transitioning scenes do not mount the image."
+      },
+      {
+        "name": "fox-pointer-attention",
+        "value": "240ms cubic-bezier(.16, 1, .3, 1)",
+        "purpose": "Lean about ±2.5° within the pointer target, reset on leave; no touch or static/reduced tracking."
+      },
+      {
+        "name": "fox-focus-attention",
+        "value": "320ms cubic-bezier(.16, 1, .3, 1)",
+        "purpose": "Small attentive pose while the input is focused; static/reduced modes remove the pose."
+      },
+      {
+        "name": "appearance-background",
+        "value": "320ms ease-out",
+        "purpose": "Page and sidebar background changes from the inline five-stop appearance slider; reduced motion removes the transition."
+      }
+    ],
+    "breakpoints": [
+      {
+        "name": "wide",
+        "value": "1500px",
+        "purpose": "Minimum width: 48px top and minimum-side page padding; 48px feed gap."
+      },
+      {
+        "name": "single-column",
+        "value": "1050px",
+        "purpose": "Maximum width: one-column feed/goals, collapsed optional context summary, stacked automation rows."
+      },
+      {
+        "name": "library-toolbar",
+        "value": "900px",
+        "purpose": "Maximum width: stacked heading/toolbar and expanding search."
+      },
+      {
+        "name": "mobile-shell",
+        "value": "800px",
+        "purpose": "Maximum width: off-canvas sidebar, five labeled bottom destinations with 50px button heights, reserved 64px plus bottom safe area, resource content/discussion switch."
+      },
+      {
+        "name": "compact",
+        "value": "700px",
+        "purpose": "Maximum width: 44px assistant action touch height, compact card/page spacing, one-column form/result layouts, and 16px goal-editor fields."
+      },
+      {
+        "name": "stacked-ideas",
+        "value": "640px",
+        "purpose": "Maximum width: stacked idea summary/launch, 168px welcome fox, full-viewport voice focus, and a fluid inline appearance slider."
+      },
+      {
+        "name": "compact-library",
+        "value": "600px",
+        "purpose": "Maximum width: two-column resource grid and compact list metadata."
+      },
+      {
+        "name": "compact-composer",
+        "value": "480px",
+        "purpose": "Maximum width: combined model/effort trigger truncates names and hides default suffix/provider icon."
+      },
+      {
+        "name": "short-landing",
+        "value": "700px",
+        "purpose": "Maximum viewport height: 144px welcome fox, tighter entry gaps/padding, and vertical landing scrolling without shrinking the entry."
+      }
+    ]
+  },
+  "components": [
+    {
+      "name": "Primary action",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "Green primary assistant action, including create-and-plan and opening an actual result.",
+      "html": "<button type=\"button\" class=\"ds-primary\">查看本次成果 <svg width=\"16\" height=\"16\" viewBox=\"0 0 256 256\" fill=\"currentColor\" aria-hidden=\"true\"><path d=\"M200,64V168a8,8,0,0,1-16,0V83.31L69.66,197.66a8,8,0,0,1-11.32-11.32L172.69,72H88a8,8,0,0,1,0-16H192A8,8,0,0,1,200,64Z\"/></svg></button>",
+      "css": ".ds-primary{font-family:var(--font-geist-sans,Geist),\"PingFang SC\",\"Microsoft YaHei\",sans-serif;display:inline-flex;align-items:center;justify-content:center;gap:7px;min-height:36px;padding:8px 12px;border:1px solid var(--accent,#795271);border-radius:10px;background:var(--accent,#795271);color:var(--surface,#ffffff);font-size:13px;cursor:pointer;transition:background-color 180ms ease,border-color 180ms ease;}.ds-primary:hover:not(:disabled){background:var(--accent-hover,#62405c);}.ds-primary:focus-visible{outline:2px solid var(--accent,#795271);outline-offset:2px;}.ds-primary:active:not(:disabled){transform:translateY(1px);}.ds-primary:disabled{opacity:.45;cursor:not-allowed;}@media(max-width:700px){.ds-primary{min-height:44px;}}@media(prefers-reduced-motion:reduce){.ds-primary{transition:none!important;animation:none!important;}}"
+    },
+    {
+      "name": "Secondary action",
+      "kind": "button",
+      "refersTo": "button-secondary",
+      "description": "Outlined assistant action for editing or deliberate secondary steps.",
+      "html": "<button type=\"button\" class=\"ds-secondary\">编辑目标</button>",
+      "css": ".ds-secondary{font-family:var(--font-geist-sans,Geist),\"PingFang SC\",\"Microsoft YaHei\",sans-serif;display:inline-flex;align-items:center;justify-content:center;gap:7px;min-height:36px;padding:8px 12px;border:1px solid var(--line-strong,#c9b8c6);border-radius:10px;background:transparent;color:var(--ink,#302b33);font-size:13px;cursor:pointer;transition:background-color 180ms ease,border-color 180ms ease;}.ds-secondary:hover:not(:disabled){background:var(--surface-soft,#f2e9f1);}.ds-secondary:focus-visible{outline:2px solid var(--accent,#795271);outline-offset:2px;}.ds-secondary:active:not(:disabled){transform:translateY(1px);}.ds-secondary:disabled{opacity:.45;cursor:not-allowed;}@media(max-width:700px){.ds-secondary{min-height:44px;}}@media(prefers-reduced-motion:reduce){.ds-secondary{transition:none!important;animation:none!important;}}"
+    },
+    {
+      "name": "Goal intent field",
+      "kind": "input",
+      "refersTo": "field",
+      "description": "Visible label and white input used in the goal editor; text grows to 16px on small screens.",
+      "html": "<label class=\"ds-field\">想达成什么<input name=\"goal-title\" required maxlength=\"200\" placeholder=\"例如：完成产品体验改版\"/></label>",
+      "css": ".ds-field{font-family:var(--font-geist-sans,Geist),\"PingFang SC\",\"Microsoft YaHei\",sans-serif;display:flex;flex-direction:column;gap:8px;color:var(--ink,#302b33);font-size:13px;font-weight:500;}.ds-field input{font-family:var(--font-geist-sans,Geist),\"PingFang SC\",\"Microsoft YaHei\",sans-serif;font-size:14px;font-weight:400;border:1px solid var(--line-strong,#c9b8c6);background:var(--surface,#ffffff);color:var(--ink,#302b33);border-radius:8px;padding:10px 12px;max-width:100%;caret-color:var(--ink,#302b33);}.ds-field input:focus-visible{outline:2px solid var(--accent,#795271);outline-offset:2px;}@media(max-width:700px){.ds-field input{font-size:16px;}}"
+    },
+    {
+      "name": "Five-destination navigation",
+      "kind": "nav",
+      "refersTo": "nav-active",
+      "description": "The actual five labeled destinations; the narrow presentation becomes a bottom-navigation row with safe-area space. Positioning belongs to the app shell.",
+      "html": "<nav class=\"ds-navigation\" aria-label=\"主导航\"><button type=\"button\" class=\"ds-destination\"><svg width=\"21\" height=\"21\" viewBox=\"0 0 256 256\" fill=\"currentColor\" aria-hidden=\"true\"><path d=\"M128,24A104,104,0,0,0,36.18,176.88L24.83,210.93a16,16,0,0,0,20.24,20.24l34.05-11.35A104,104,0,1,0,128,24Zm0,192a87.87,87.87,0,0,1-44.06-11.81,8,8,0,0,0-6.54-.67L40,216,52.47,178.6a8,8,0,0,0-.66-6.54A88,88,0,1,1,128,216Z\"/></svg><span>对话</span></button><button type=\"button\" class=\"ds-destination\"><svg width=\"21\" height=\"21\" viewBox=\"0 0 256 256\" fill=\"currentColor\" aria-hidden=\"true\"><path d=\"M88,112a8,8,0,0,1,8-8h80a8,8,0,0,1,0,16H96A8,8,0,0,1,88,112Zm8,40h80a8,8,0,0,0,0-16H96a8,8,0,0,0,0,16ZM232,64V184a24,24,0,0,1-24,24H32A24,24,0,0,1,8,184.11V88a8,8,0,0,1,16,0v96a8,8,0,0,0,16,0V64A16,16,0,0,1,56,48H216A16,16,0,0,1,232,64Zm-16,0H56V184a23.84,23.84,0,0,1-1.37,8H208a8,8,0,0,0,8-8Z\"/></svg><span>信息流</span></button><button type=\"button\" class=\"ds-destination\"><svg width=\"21\" height=\"21\" viewBox=\"0 0 256 256\" fill=\"currentColor\" aria-hidden=\"true\"><path d=\"M176,232a8,8,0,0,1-8,8H88a8,8,0,0,1,0-16h80A8,8,0,0,1,176,232Zm40-128a87.55,87.55,0,0,1-33.64,69.21A16.24,16.24,0,0,0,176,186v6a16,16,0,0,1-16,16H96a16,16,0,0,1-16-16v-6a16,16,0,0,0-6.23-12.66A87.59,87.59,0,0,1,40,104.49C39.74,56.83,78.26,17.14,125.88,16A88,88,0,0,1,216,104Zm-16,0a72,72,0,0,0-73.74-72c-39,.92-70.47,33.39-70.26,72.39a71.65,71.65,0,0,0,27.64,56.3A32,32,0,0,1,96,186v6h64v-6a32.15,32.15,0,0,1,12.47-25.35A71.65,71.65,0,0,0,200,104Zm-16.11-9.34a57.6,57.6,0,0,0-46.56-46.55,8,8,0,0,0-2.66,15.78c16.57,2.79,30.63,16.85,33.44,33.45A8,8,0,0,0,176,104a9,9,0,0,0,1.35-.11A8,8,0,0,0,183.89,94.66Z\"/></svg><span>灵感</span></button><button type=\"button\" class=\"ds-destination\" aria-current=\"page\"><svg width=\"21\" height=\"21\" viewBox=\"0 0 256 256\" fill=\"currentColor\" aria-hidden=\"true\"><path d=\"M221.87,83.16A104.1,104.1,0,1,1,195.67,49l22.67-22.68a8,8,0,0,1,11.32,11.32l-96,96a8,8,0,0,1-11.32-11.32l27.72-27.72a40,40,0,1,0,17.87,31.09,8,8,0,1,1,16-.9,56,56,0,1,1-22.38-41.65L184.3,60.39a87.88,87.88,0,1,0,23.13,29.67,8,8,0,0,1,14.44-6.9Z\"/></svg><span>目标</span></button><button type=\"button\" class=\"ds-destination\"><svg width=\"21\" height=\"21\" viewBox=\"0 0 256 256\" fill=\"currentColor\" aria-hidden=\"true\"><path d=\"M213.66,82.34l-56-56A8,8,0,0,0,152,24H56A16,16,0,0,0,40,40V216a16,16,0,0,0,16,16H200a16,16,0,0,0,16-16V88A8,8,0,0,0,213.66,82.34ZM160,51.31,188.69,80H160ZM200,216H56V40h88V88a8,8,0,0,0,8,8h48V216Zm-32-80a8,8,0,0,1-8,8H96a8,8,0,0,1,0-16h64A8,8,0,0,1,168,136Zm0,32a8,8,0,0,1-8,8H96a8,8,0,0,1,0-16h64A8,8,0,0,1,168,168Z\"/></svg><span>资料空间</span></button></nav>",
+      "css": ".ds-navigation{display:flex;flex-direction:column;gap:3px;padding:8px;background:var(--sidebar,#f3edf1);}.ds-destination{font-family:var(--font-geist-sans,Geist),\"PingFang SC\",\"Microsoft YaHei\",sans-serif;display:flex;align-items:center;gap:12px;text-align:left;min-height:40px;padding:9px 12px;border:0;border-radius:10px;background:transparent;color:var(--ink-soft,#5e5360);font-size:14px;cursor:pointer;transition:background-color 150ms ease,color 150ms ease;}.ds-destination:hover,.ds-destination[aria-current='page']{background:var(--surface-soft,#f2e9f1);color:var(--accent,#795271);}.ds-destination:focus-visible{outline:2px solid var(--accent,#795271);outline-offset:2px;}.ds-destination:active{transform:translateY(1px);}@media(max-width:800px){.ds-navigation{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));padding:6px 8px calc(6px + env(safe-area-inset-bottom));border-top:1px solid var(--line,#e6dce4);background:var(--surface,#ffffff);}.ds-destination{display:grid;justify-items:center;align-content:center;gap:5px;min-height:50px;font-size:11px;padding:0;}.ds-destination[aria-current='page']{font-weight:600;}}@media(prefers-reduced-motion:reduce){.ds-destination{transition:none!important;animation:none!important;}}"
+    },
+    {
+      "name": "Library type filter",
+      "kind": "chip",
+      "refersTo": "filter-active",
+      "description": "Scrollable resource-type query controls with a pale selected state and aria-pressed.",
+      "html": "<div class=\"ds-filters\" aria-label=\"资料类型\"><button class=\"ds-filter\" type=\"button\" aria-pressed=\"true\">全部</button><button class=\"ds-filter\" type=\"button\" aria-pressed=\"false\">文档</button><button class=\"ds-filter\" type=\"button\" aria-pressed=\"false\">网页</button></div>",
+      "css": ".ds-filters{display:flex;gap:4px;overflow-x:auto;scrollbar-width:thin;}.ds-filter{font-family:var(--font-geist-sans,Geist),\"PingFang SC\",\"Microsoft YaHei\",sans-serif;flex:0 0 auto;min-height:36px;border:0;border-radius:999px;padding:8px 16px;background:transparent;color:var(--ink-soft,#5e5360);white-space:nowrap;font-size:13px;cursor:pointer;transition:background-color 180ms ease;}.ds-filter:hover,.ds-filter[aria-pressed='true']{background:var(--surface-soft,#f2e9f1);}.ds-filter[aria-pressed='true']{color:var(--ink,#302b33);font-weight:600;}.ds-filter:focus-visible{outline:2px solid var(--accent,#795271);outline-offset:2px;}.ds-filter:active{transform:translateY(1px);}@media(max-width:700px){.ds-filter{min-height:44px;}}@media(prefers-reduced-motion:reduce){.ds-filter{transition:none!important;animation:none!important;}}"
+    },
+    {
+      "name": "Feed result card",
+      "kind": "card",
+      "refersTo": "feed-card",
+      "description": "A real-output feed pattern: written state, result title, summary, and a primary fixed-version open action beside discussion. Preview text is the reviewed fixture's resource name.",
+      "html": "<article class=\"ds-feed-card\"><div class=\"ds-feed-meta\"><span><svg width=\"16\" height=\"16\" viewBox=\"0 0 256 256\" fill=\"currentColor\" aria-hidden=\"true\"><path d=\"M173.66,98.34a8,8,0,0,1,0,11.32l-56,56a8,8,0,0,1-11.32,0l-24-24a8,8,0,0,1,11.32-11.32L112,148.69l50.34-50.35A8,8,0,0,1,173.66,98.34ZM232,128A104,104,0,1,1,128,24,104.11,104.11,0,0,1,232,128Zm-16,0a88,88,0,1,0-88,88A88.1,88.1,0,0,0,216,128Z\"/></svg> 成果更新</span><span>10/22 10:24 · 未读</span></div><h3>体验研究.html</h3><span class=\"ds-feed-status\">已完成</span><p>新成果已就绪。打开查看或围绕这份成果继续讨论。</p><div class=\"ds-feed-actions\"><button class=\"ds-feed-open\" type=\"button\">查看本次成果 <svg width=\"16\" height=\"16\" viewBox=\"0 0 256 256\" fill=\"currentColor\" aria-hidden=\"true\"><path d=\"M200,64V168a8,8,0,0,1-16,0V83.31L69.66,197.66a8,8,0,0,1-11.32-11.32L172.69,72H88a8,8,0,0,1,0-16H192A8,8,0,0,1,200,64Z\"/></svg></button><button class=\"ds-feed-discuss\" type=\"button\">围绕成果讨论</button></div></article>",
+      "css": ".ds-feed-card{font-family:var(--font-geist-sans,Geist),\"PingFang SC\",\"Microsoft YaHei\",sans-serif;padding:28px;border:1px solid var(--line,#e6dce4);border-radius:20px;background:var(--surface,#ffffff);color:var(--ink,#302b33);}.ds-feed-meta{display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;color:var(--muted,#706271);font-size:12px;line-height:1.6;font-variant-numeric:tabular-nums;}.ds-feed-meta>span:first-child{display:inline-flex;align-items:center;gap:7px;color:var(--accent,#795271);}.ds-feed-card h3{margin:18px 0 10px;font-size:20px;font-weight:600;line-height:1.5;}.ds-feed-status{display:inline-flex;align-items:center;padding:4px 9px;border-radius:6px;background:var(--surface-soft,#f2e9f1);color:var(--accent,#795271);font-size:12px;line-height:1.5;}.ds-feed-card p{margin:8px 0 16px;color:var(--ink-soft,#5e5360);font-size:14px;line-height:1.75;}.ds-feed-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:20px;}.ds-feed-open{font-family:var(--font-geist-sans,Geist),\"PingFang SC\",\"Microsoft YaHei\",sans-serif;display:inline-flex;align-items:center;justify-content:center;gap:7px;min-height:36px;padding:8px 12px;border:1px solid var(--accent,#795271);border-radius:10px;background:var(--accent,#795271);color:var(--surface,#ffffff);font-size:13px;cursor:pointer;transition:background-color 180ms ease,border-color 180ms ease;}.ds-feed-open:hover:not(:disabled){background:var(--accent-hover,#62405c);}.ds-feed-open:focus-visible{outline:2px solid var(--accent,#795271);outline-offset:2px;}.ds-feed-open:active:not(:disabled){transform:translateY(1px);}.ds-feed-open:disabled{opacity:.45;cursor:not-allowed;}@media(max-width:700px){.ds-feed-open{min-height:44px;}}@media(prefers-reduced-motion:reduce){.ds-feed-open{transition:none!important;animation:none!important;}}.ds-feed-discuss{font-family:var(--font-geist-sans,Geist),\"PingFang SC\",\"Microsoft YaHei\",sans-serif;display:inline-flex;align-items:center;justify-content:center;gap:7px;min-height:36px;padding:8px 12px;border:1px solid var(--line-strong,#c9b8c6);border-radius:10px;background:transparent;color:var(--ink,#302b33);font-size:13px;cursor:pointer;transition:background-color 180ms ease,border-color 180ms ease;}.ds-feed-discuss:hover:not(:disabled){background:var(--surface-soft,#f2e9f1);}.ds-feed-discuss:focus-visible{outline:2px solid var(--accent,#795271);outline-offset:2px;}.ds-feed-discuss:active:not(:disabled){transform:translateY(1px);}.ds-feed-discuss:disabled{opacity:.45;cursor:not-allowed;}@media(max-width:700px){.ds-feed-discuss{min-height:44px;}}@media(prefers-reduced-motion:reduce){.ds-feed-discuss{transition:none!important;animation:none!important;}}.ds-feed-open,.ds-feed-discuss{border:0;padding:7px 8px;}@media(max-width:700px){.ds-feed-card{padding:20px;}}"
+    },
+    {
+      "name": "Library text resource card",
+      "kind": "card",
+      "refersTo": "library-card",
+      "description": "White resource grid card with a bounded text excerpt and its saved version; actual content replaces the fixture copy.",
+      "html": "<article class=\"ds-library-card\"><button class=\"ds-library-open\" type=\"button\"><span class=\"ds-library-thumbnail\"><span class=\"ds-library-excerpt\"><strong>体验研究.md</strong><span>研究文档、网页与验收清单已经整理好，等待你核对体验。</span></span></span><span class=\"ds-library-name\"><strong>体验研究.md</strong><small>文档 · 版本 1</small></span></button><span class=\"ds-library-date\">10/22 10:24</span></article>",
+      "css": ".ds-library-card{font-family:var(--font-geist-sans,Geist),\"PingFang SC\",\"Microsoft YaHei\",sans-serif;display:grid;grid-template-columns:minmax(0,1fr) auto;gap:10px;padding:12px 12px 16px;border:1px solid var(--line,#e6dce4);border-radius:18px;background:var(--surface,#ffffff);color:var(--ink,#302b33);transition:border-color 180ms ease,box-shadow 180ms ease;}.ds-library-card:hover{border-color:var(--line-strong,#c9b8c6);box-shadow:0 8px 20px rgb(35 42 36 / .06);}.ds-library-open{font-family:var(--font-geist-sans,Geist),\"PingFang SC\",\"Microsoft YaHei\",sans-serif;display:grid;grid-template-columns:minmax(0,1fr);grid-column:1 / -1;gap:13px;text-align:left;width:100%;min-width:0;padding:0;border:0;background:transparent;color:inherit;cursor:pointer;}.ds-library-open:focus-visible{outline:2px solid var(--accent,#795271);outline-offset:2px;}.ds-library-open:active{transform:translateY(1px);}.ds-library-thumbnail{box-sizing:border-box;display:grid;align-items:start;min-width:0;width:100%;aspect-ratio:1.6;overflow:hidden;border:1px solid var(--line,#e6dce4);border-radius:10px;background:var(--excerpt,#f8f8f3);}.ds-library-excerpt{display:grid;gap:10px;padding:24px;color:var(--ink-soft,#5e5360);}.ds-library-excerpt strong{font-size:15px;font-weight:600;line-height:1.5;}.ds-library-excerpt>span{font-size:11px;line-height:1.8;}.ds-library-excerpt strong,.ds-library-excerpt>span{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:4;overflow:hidden;overflow-wrap:anywhere;}.ds-library-name{display:grid;gap:4px;min-width:0;}.ds-library-name strong{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:14px;font-weight:450;}.ds-library-name small{color:var(--muted,#706271);font-size:11px;}.ds-library-date{color:var(--muted,#706271);font-size:12px;font-variant-numeric:tabular-nums;}@media(max-width:700px){.ds-library-excerpt{padding:14px;}.ds-library-excerpt strong{font-size:13px;}}@media(prefers-reduced-motion:reduce){.ds-library-card{transition:none!important;animation:none!important;}}"
+    },
+    {
+      "name": "Idea workbench and plan",
+      "kind": "custom",
+      "refersTo": "idea-workbench",
+      "description": "Explainable suggestion with source and expected output; the expanded plan asks for scope before an explicit start.",
+      "html": "<article class=\"ds-idea\"><h3>整理近期的阅读与思考</h3><p>把现有资料整理成一份便于回看的清单。</p><div class=\"ds-idea-context\"><span>基于</span><strong>你的资料空间</strong></div><div class=\"ds-idea-outcome\"><span>你会得到</span><p>一份有来源链接的阅读摘要。</p></div><form class=\"ds-idea-plan\"><ol><li>核对指定范围的资料。</li><li>整理摘要与来源。</li></ol><label>先确定任务范围<textarea required maxlength=\"8000\" placeholder=\"例如：只核对现有资料，先处理最重要的一项\"></textarea></label><div class=\"ds-idea-launch\"><p>点击后立即开始一项任务，使用当前模型与权限。成果文件自动收录。</p><button type=\"button\" class=\"ds-idea-start\">开始任务 <svg width=\"16\" height=\"16\" viewBox=\"0 0 256 256\" fill=\"currentColor\" aria-hidden=\"true\"><path d=\"M200,64V168a8,8,0,0,1-16,0V83.31L69.66,197.66a8,8,0,0,1-11.32-11.32L172.69,72H88a8,8,0,0,1,0-16H192A8,8,0,0,1,200,64Z\"/></svg></button></div></form></article>",
+      "css": ".ds-idea{font-family:var(--font-geist-sans,Geist),\"PingFang SC\",\"Microsoft YaHei\",sans-serif;padding:28px;border:1px solid var(--line,#e6dce4);border-radius:18px;background:var(--surface,#ffffff);color:var(--ink,#302b33);}.ds-idea h3{font-size:19px;margin:8px 0 10px;overflow-wrap:anywhere;}.ds-idea p{margin:0;color:var(--ink-soft,#5e5360);font-size:14px;line-height:1.75;}.ds-idea-context{display:flex;gap:8px;align-items:baseline;margin-top:18px;font-size:12px;color:var(--muted,#706271);}.ds-idea-context strong{font-weight:500;color:var(--ink-soft,#5e5360);}.ds-idea-outcome{display:flex;gap:12px;align-items:baseline;margin-top:14px;padding-top:14px;border-top:1px solid var(--line,#e6dce4);font-size:13px;}.ds-idea-outcome>span{flex-shrink:0;color:var(--muted,#706271);font-size:12px;}.ds-idea-plan{margin-top:24px;padding:20px;background:var(--surface-soft,#f2e9f1);border-radius:12px;}.ds-idea-plan ol{margin:0 0 20px;padding-left:22px;color:var(--ink-soft,#5e5360);font-size:14px;line-height:1.75;}.ds-idea-plan li+li{margin-top:8px;}.ds-idea-plan label{display:grid;gap:8px;font-size:13px;}.ds-idea-plan textarea{font-family:var(--font-geist-sans,Geist),\"PingFang SC\",\"Microsoft YaHei\",sans-serif;min-height:88px;resize:vertical;border:1px solid var(--line-strong,#c9b8c6);border-radius:10px;padding:10px 12px;background:var(--page,#faf7f8);color:var(--ink,#302b33);font-size:14px;line-height:1.6;}.ds-idea-plan textarea::placeholder{color:var(--muted,#706271);}.ds-idea-plan textarea:focus-visible{outline:2px solid var(--accent,#795271);outline-offset:2px;}.ds-idea-launch{display:flex;align-items:center;justify-content:space-between;gap:24px;margin-top:16px;}.ds-idea-launch p{max-width:48ch;font-size:12px;color:var(--muted,#706271);}.ds-idea-start{font-family:var(--font-geist-sans,Geist),\"PingFang SC\",\"Microsoft YaHei\",sans-serif;display:inline-flex;align-items:center;justify-content:center;gap:7px;min-height:36px;padding:8px 12px;border:1px solid var(--accent,#795271);border-radius:10px;background:var(--accent,#795271);color:var(--surface,#ffffff);font-size:13px;cursor:pointer;transition:background-color 180ms ease,border-color 180ms ease;}.ds-idea-start:hover:not(:disabled){background:var(--accent-hover,#62405c);}.ds-idea-start:focus-visible{outline:2px solid var(--accent,#795271);outline-offset:2px;}.ds-idea-start:active:not(:disabled){transform:translateY(1px);}.ds-idea-start:disabled{opacity:.45;cursor:not-allowed;}@media(max-width:700px){.ds-idea-start{min-height:44px;}}@media(prefers-reduced-motion:reduce){.ds-idea-start{transition:none!important;animation:none!important;}}.ds-idea-start{min-height:40px;gap:8px;flex-shrink:0;}@media(max-width:700px){.ds-idea{padding:22px;}.ds-idea-start{min-height:44px;}}@media(max-width:640px){.ds-idea-plan{padding:16px;}.ds-idea-launch{align-items:stretch;flex-direction:column;gap:12px;}}"
+    },
+    {
+      "name": "Fixed-version goal result",
+      "kind": "custom",
+      "refersTo": "goal-result",
+      "description": "Goal-detail result row exposes resource type and the displayed revision. Production passes the same resource ID and revision into openResource and subsequent discussion.",
+      "html": "<button type=\"button\" class=\"ds-goal-result\"><svg width=\"21\" height=\"21\" viewBox=\"0 0 256 256\" fill=\"currentColor\" aria-hidden=\"true\"><path d=\"M213.66,82.34l-56-56A8,8,0,0,0,152,24H56A16,16,0,0,0,40,40V216a16,16,0,0,0,16,16H200a16,16,0,0,0,16-16V88A8,8,0,0,0,213.66,82.34ZM160,51.31,188.69,80H160ZM200,216H56V40h88V88a8,8,0,0,0,8,8h48V216Zm-32-80a8,8,0,0,1-8,8H96a8,8,0,0,1,0-16h64A8,8,0,0,1,168,136Zm0,32a8,8,0,0,1-8,8H96a8,8,0,0,1,0-16h64A8,8,0,0,1,168,168Z\"/></svg><span>体验研究.md<small>文档 · 版本 1</small></span><svg width=\"16\" height=\"16\" viewBox=\"0 0 256 256\" fill=\"currentColor\" aria-hidden=\"true\"><path d=\"M200,64V168a8,8,0,0,1-16,0V83.31L69.66,197.66a8,8,0,0,1-11.32-11.32L172.69,72H88a8,8,0,0,1,0-16H192A8,8,0,0,1,200,64Z\"/></svg></button>",
+      "css": ".ds-goal-result{font-family:var(--font-geist-sans,Geist),\"PingFang SC\",\"Microsoft YaHei\",sans-serif;display:flex;align-items:center;gap:7px;width:100%;min-height:36px;justify-content:flex-start;text-align:left;padding:14px 0;border:0;border-bottom:1px solid var(--line,#e6dce4);border-radius:0;background:transparent;color:var(--ink,#302b33);font-size:13px;cursor:pointer;transition:background-color 180ms ease;}.ds-goal-result>span{flex:1;min-width:0;overflow-wrap:anywhere;}.ds-goal-result small{display:block;margin-top:5px;color:var(--muted,#706271);font-size:12px;}.ds-goal-result:hover{background:var(--surface-soft,#f2e9f1);}.ds-goal-result:focus-visible{outline:2px solid var(--accent,#795271);outline-offset:2px;}.ds-goal-result:active{transform:translateY(1px);}@media(max-width:700px){.ds-goal-result{min-height:44px;}}@media(prefers-reduced-motion:reduce){.ds-goal-result{transition:none!important;animation:none!important;}}"
+    },
+    {
+      "name": "Create-and-plan goal panel",
+      "kind": "custom",
+      "refersTo": "panel",
+      "description": "The real goal-creation form asks for title plus optional explanation. Fields scroll while the separated footer keeps the create-and-plan action available. The snippet is a visual sample, not a runtime implementation.",
+      "html": "<section class=\"ds-goal-panel\" aria-labelledby=\"ds-goal-panel-title\"><header><h2 id=\"ds-goal-panel-title\">新建目标</h2><button type=\"button\" class=\"ds-goal-close\" aria-label=\"关闭\"><svg width=\"22\" height=\"22\" viewBox=\"0 0 256 256\" fill=\"currentColor\" aria-hidden=\"true\"><path d=\"M205.66,194.34a8,8,0,0,1-11.32,11.32L128,139.31,61.66,205.66a8,8,0,0,1-11.32-11.32L116.69,128,50.34,61.66A8,8,0,0,1,61.66,50.34L128,116.69l66.34-66.35a8,8,0,0,1,11.32,11.32L139.31,128Z\"/></svg></button></header><form class=\"ds-goal-form\"><p>想完成什么？先告诉 Lumen，一起把第一步想清楚。</p><fieldset class=\"ds-goal-fields\"><label>想达成什么<input required maxlength=\"200\" placeholder=\"例如：完成产品体验改版\"/></label><label>补充说明（可选）<textarea maxlength=\"8000\" placeholder=\"你关心什么，怎样的结果对你有帮助\"></textarea></label></fieldset><footer><p>创建后进入关联对话开始规划。持续推进与定时跟进由你另外启动。</p><button type=\"button\" class=\"ds-goal-create\">创建并规划</button></footer></form></section>",
+      "css": ".ds-goal-panel{box-sizing:border-box;font-family:var(--font-geist-sans,Geist),\"PingFang SC\",\"Microsoft YaHei\",sans-serif;display:flex;flex-direction:column;overflow:hidden;width:min(560px,calc(100vw - 32px));max-height:calc(100dvh - 40px);padding:32px;border:1px solid var(--line,#e6dce4);border-radius:22px;background:var(--surface,#ffffff);color:var(--ink,#302b33);box-shadow:0 24px 80px rgb(35 42 36 / .14);}.ds-goal-panel>header{display:flex;align-items:center;justify-content:space-between;gap:24px;flex-shrink:0;margin-bottom:24px;}.ds-goal-panel h2{font-size:21px;margin:0;}.ds-goal-form{display:flex;flex-direction:column;gap:18px;flex:1;min-height:0;}.ds-goal-form p{margin:0;color:var(--muted,#706271);font-size:12px;font-weight:400;line-height:1.7;}.ds-goal-fields{display:flex;flex-direction:column;gap:24px;flex:1 1 auto;min-width:0;min-height:0;overflow-y:auto;margin:2px -4px 0;border:0;padding:4px;}.ds-goal-fields>label{display:flex;flex-direction:column;gap:8px;flex-shrink:0;font-size:13px;font-weight:500;}.ds-goal-fields input,.ds-goal-fields textarea{font-family:var(--font-geist-sans,Geist),\"PingFang SC\",\"Microsoft YaHei\",sans-serif;min-width:0;padding:10px 12px;font-size:14px;font-weight:400;border:1px solid var(--line-strong,#c9b8c6);border-radius:8px;background:var(--surface,#ffffff);color:var(--ink,#302b33);caret-color:var(--ink,#302b33);}.ds-goal-fields textarea{resize:vertical;min-height:100px;}.ds-goal-fields input:focus-visible,.ds-goal-fields textarea:focus-visible{outline:2px solid var(--accent,#795271);outline-offset:2px;}.ds-goal-form footer{display:flex;flex-direction:column;align-items:flex-end;gap:20px;flex-shrink:0;border-top:1px solid var(--line,#e6dce4);margin-top:6px;padding-top:20px;}.ds-goal-form footer>p{align-self:stretch;}.ds-goal-create{font-family:var(--font-geist-sans,Geist),\"PingFang SC\",\"Microsoft YaHei\",sans-serif;display:inline-flex;align-items:center;justify-content:center;gap:7px;min-height:36px;padding:8px 12px;border:1px solid var(--accent,#795271);border-radius:10px;background:var(--accent,#795271);color:var(--surface,#ffffff);font-size:13px;cursor:pointer;transition:background-color 180ms ease,border-color 180ms ease;}.ds-goal-create:hover:not(:disabled){background:var(--accent-hover,#62405c);}.ds-goal-create:focus-visible{outline:2px solid var(--accent,#795271);outline-offset:2px;}.ds-goal-create:active:not(:disabled){transform:translateY(1px);}.ds-goal-create:disabled{opacity:.45;cursor:not-allowed;}@media(max-width:700px){.ds-goal-create{min-height:44px;}}@media(prefers-reduced-motion:reduce){.ds-goal-create{transition:none!important;animation:none!important;}}.ds-goal-create{min-width:112px;}@media(max-width:700px){.ds-goal-panel{padding:22px 18px;}.ds-goal-fields input,.ds-goal-fields textarea{font-size:16px;}}.ds-goal-close{display:inline-flex;align-items:center;justify-content:center;border:0;border-radius:10px;padding:6px;min-height:36px;background:transparent;color:var(--ink,#302b33);cursor:pointer;transition:background-color 180ms ease;}.ds-goal-close:hover{background:var(--surface-soft,#f2e9f1);}.ds-goal-close:focus-visible{outline:2px solid var(--accent,#795271);outline-offset:2px;}@media(max-width:700px){.ds-goal-close{min-height:44px;}}@media(prefers-reduced-motion:reduce){.ds-goal-close{transition:none!important;}}"
+    }
+  ],
+  "narrative": {
+    "northStar": "The snow-fox Lumen workspace",
+    "overview": "Lumen is a calm place to see what is progressing, read a real result, and choose the next action. Pink-snow canvas surrounds white reading surfaces; muted plum identifies the current destination and deliberate primary actions. Bundled Geist, the original Fold L marks and a regenerated transparent nine-tail snow fox give the Web client its identity.\n\nThe existing workflows make work legible before adding context. Results, source and version identity, explicit state, and recovery actions carry the meaning. The fox stays a quiet companion whose five forms follow an independent light-background preference. Dense controls use solid surfaces and short transitions.",
+    "keyCharacteristics": [
+      "Pink-snow canvas, white reading surfaces, fine boundaries, and muted plum actions.",
+      "One Geist family with Chinese system fallbacks.",
+      "Clear work status, real output previews, and one visible next action.",
+      "Optional context collapses on narrow screens while results remain visible.",
+      "Five regenerated fox forms share one character identity and nine separately visible tail tips."
+    ],
+    "rules": [
+      {
+        "name": "The One Action Accent Rule",
+        "body": "Use muted plum for deliberate primary actions and current navigation; preserve the fox's authored colors.",
+        "section": "colors"
+      },
+      {
+        "name": "The State Has Words Rule",
+        "body": "Color never replaces execution state, source coverage, version identity, or recovery text.",
+        "section": "colors"
+      },
+      {
+        "name": "The First Viewport Rule",
+        "body": "On initial entry, show the current work or latest result and its primary action. On narrow feed views, optional context begins collapsed so the first result remains visible.",
+        "section": "layout"
+      },
+      {
+        "name": "The Quiet Surface Rule",
+        "body": "Reading surfaces stay flat at rest; hover depth is reserved for library previews and temporary layers.",
+        "section": "elevation"
+      },
+      {
+        "name": "The Appearance Rule",
+        "body": "Fox growth follows the selected light-background stop, independently of model, thinking strength, Session or task progress.",
+        "section": "components"
+      }
+    ],
+    "dos": [
+      "**Do** preserve the pink-snow palette, Geist, Fold L marks, and the regenerated fox's detail, nine-tail silhouette and transparency.",
+      "**Do** put actual progress, a real result, and its primary action in the first viewport.",
+      "**Do** keep resource ID and displayed revision together when opening or discussing results.",
+      "**Do** use written status, source information, and explicit recovery actions.",
+      "**Do** preserve draft/request identity, visible focus, safe-area spacing, bounded scrolling, and motion preferences.",
+      "**Do** use real image/text previews with typed fallbacks for stored resources."
+    ],
+    "donts": [
+      "**Don't** import the root Architecture Atlas theme into this app.",
+      "**Don't** use decorative faint gray for body text or a meaning-bearing icon.",
+      "**Don't** expand optional mobile context so it displaces the first result.",
+      "**Don't** add a separate Memory navigation entry or encode state only with color.",
+      "**Don't** replace the corner L marks with the companion, restore archived renderers, or infer model load from fox forms.",
+      "**Don't** treat a prepared result, screenshot, or companion expression as proof of delivery or execution."
+    ]
+  }
+}
