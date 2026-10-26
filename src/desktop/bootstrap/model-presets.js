@@ -1,4 +1,4 @@
-// Reviewed 2026-10-09; official sources and endpoint notes live in docs/desktop.md.
+// Reviewed 2026-10-26; official sources and endpoint notes live in docs/desktop.md.
 export const providers = [
   {name: 'OpenAI', api: 'responses', url: 'https://api.openai.com/v1', key: 'OPENAI_API_KEY',
     description: 'GPT‑6 系列 · Responses 接口支持 Agent 工具调用。',
@@ -9,6 +9,9 @@ export const providers = [
   {name: 'Qwen / 阿里云百炼', api: 'chat', url: 'https://dashscope.aliyuncs.com/compatible-mode/v1', key: 'DASHSCOPE_API_KEY',
     description: '默认中国内地接口；其他地域或业务空间专属地址请在高级设置中修改。',
     models: [['qwen3.8-max', 'Qwen 3.8 Max'], ['qwen3.8-flash', 'Qwen 3.8 Flash']]},
+  {name: 'Kimi Code', api: 'responses', url: 'https://api.kimi.com/coding/v1', key: 'KIMI_API_KEY',
+    description: 'Kimi Coding 订阅 API · 使用 Kimi Code 专属地址与凭据。',
+    models: [['k3.1-pro', 'Kimi K3.1 Pro']]},
   {name: 'Kimi / Moonshot', api: 'chat', url: 'https://api.moonshot.cn/v1', key: 'MOONSHOT_API_KEY',
     description: 'Moonshot 开放平台 API · Coding 订阅请使用其专属地址与凭据。',
     models: [['kimi-k3', 'Kimi K3']]},

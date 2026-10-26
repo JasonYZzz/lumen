@@ -372,7 +372,7 @@ def test_native_web_search_defaults_to_auto_and_rejects_openai_chat_force() -> N
     assert native_web_search_enabled(deepseek) is False
     assert native_web_search_enabled(
         ModelSettingsConfig(
-            id="openai:k3",
+            id="openai:k3.1-pro",
             base_url="https://api.kimi.com/coding/v1",
             api="responses",
         )
@@ -621,7 +621,11 @@ def test_repo_example_config_loads_without_drift(monkeypatch: pytest.MonkeyPatch
     assert policy.context_window_tokens == 1_000_000
     assert policy.architectural_max_output_tokens == 384_000
     assert policy.output_reserve_tokens == 65_536
-    assert config.agent.models["kimi-k3"].input_modalities == ("text", "image")
+    kimi = config.agent.models["k3.1-pro"]
+    assert kimi.id == "openai:k3.1-pro"
+    assert kimi.input_modalities == ("text", "image")
+    assert kimi.context.profile == "k3.1-pro"
+    assert resolve_context_policy(kimi, config.context).profile_id == "k3.1-pro"
     # The example demonstrates tool_risks on optional remote servers.
     tyc = config.mcp_servers["tyc-mcp"]
     assert tyc.tool_risks.get("search_companies") == "read"

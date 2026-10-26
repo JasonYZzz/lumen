@@ -14,6 +14,7 @@ from lumen.context.legacy import ContextStateChange, ContextSummary, merge_conte
         ("openai:deepseek-flash", "deepseek-flash", 1_000_000, "conservative"),
         ("openai:deepseek-v4-flash", "conservative-fallback", 80_000, "conservative"),
         ("openai:kimi-k3", "kimi-k3", 1_000_000, "conservative"),
+        ("openai:k3.1-pro", "k3.1-pro", 1_000_000, "conservative"),
         ("openai:glm-5.2", "glm-5.2", 1_000_000, "conservative"),
         ("anthropic:qwen3.8-max", "alibaba-qwen3.8", 1_000_000, "conservative"),
         ("openai:qwen3.8-flash", "alibaba-qwen3.8", 1_000_000, "conservative"),

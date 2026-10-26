@@ -183,7 +183,7 @@ async def test_responses_adapter_maps_neutral_image_to_input_image() -> None:
 
 async def test_kimi_responses_uses_content_parts_without_mutating_history() -> None:
     model = build_model(ModelSettingsConfig(
-        id="openai:k3", api_key="test", base_url="https://api.kimi.com/coding/v1",
+        id="openai:k3.1-pro", api_key="test", base_url="https://api.kimi.com/coding/v1",
     ))
     assert isinstance(model, OpenAIResponsesModel)
     part = UserPromptPart("北京天气 🌤️")

@@ -103,6 +103,7 @@ def test_unknown_versions_and_endpoints_never_inherit_sdk_name_guesses(model: st
 
 
 @pytest.mark.parametrize(("model", "api", "url"), [
+    ("openai:k3.1-pro", "responses", "https://api.kimi.com/coding/v1"),
     ("openai:k3", "responses", "https://api.kimi.com/coding/v1"),
     (
         "openai:qwen3.8-max",
@@ -257,7 +258,7 @@ agent:
   default_model: deepseek-flash
   models:
     deepseek-flash: {id: openai:deepseek-flash, base_url: https://api.deepseek.com}
-    kimi-k3: {id: openai:k3}
+    k3.1-pro: {id: openai:k3.1-pro}
 """,
         encoding="utf-8",
     )
@@ -371,6 +372,8 @@ async def test_every_catalog_mapping_serializes_through_the_real_sdk(
                 _ = [event async for event in stream.events]
     assert len(bodies) == 1
     body = bodies[0]
+    if protocol is not P.GOOGLE:
+        assert body["model"] == rule.models[0]
     if level is L.PROVIDER_DEFAULT:
         assert "thinking" not in body
         assert "reasoning_effort" not in body

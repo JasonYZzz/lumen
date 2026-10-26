@@ -161,7 +161,7 @@ async def test_kimi_responses_native_search_omits_unsupported_context_size(
         monkeypatch.setattr("lumen.models.OpenAIProvider", configured_provider)
         model = build_model(
             ModelSettingsConfig(
-                id="openai:k3",
+                id="openai:k3.1-pro",
                 api_key="test",
                 base_url="https://api.kimi.com/coding/v1",
                 api="responses",
@@ -174,6 +174,7 @@ async def test_kimi_responses_native_search_omits_unsupported_context_size(
             ),
         )
 
+    assert bodies[0]["model"] == "k3.1-pro"
     assert bodies[0]["tools"] == [{"type": "web_search"}]
     assert bodies[0]["input"] == [
         {"role": "user", "content": [{"type": "input_text", "text": "hello"}]}

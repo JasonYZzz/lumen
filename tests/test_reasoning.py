@@ -29,7 +29,6 @@ from lumen.application import (
     SelectReasoning,
     SetCollaborationMode,
     StartRun,
-    WorkspaceBusyError,
     WorkspaceHost,
 )
 from lumen.collaboration import SessionSettingsState
@@ -144,6 +143,7 @@ def test_audit_snapshot_never_contains_unrelated_settings() -> None:
      "https://example.cn-beijing.maas.aliyuncs.com/api/v2/apps/protocols/compatible-mode/v1", "responses"),
     ("openai:qwen3.8-flash",
      "https://example.cn-beijing.maas.aliyuncs.com/api/v2/apps/protocols/compatible-mode/v1", "responses"),
+    ("openai:k3.1-pro", "https://api.kimi.com/coding/v1", "responses"),
     ("openai:k3", "https://api.kimi.com/coding/v1", "responses"),
     ("anthropic:k3", "https://api.kimi.com/coding", None),
     ("openai:kimi-k3", "https://api.moonshot.cn/v1", "chat"),
@@ -220,7 +220,7 @@ def test_capabilities_require_model_and_endpoint_and_keep_defaults_implicit() ->
     assert resolve_reasoning(config).parameters.settings() == {}
     assert resolve_reasoning(config, Level.MINIMAL).effective is Level.LOW
     with pytest.raises(ValueError, match="unsupported"):
-        ModelSettingsConfig(id="openai:k3", base_url="https://api.kimi.com/coding/v1",
+        ModelSettingsConfig(id="openai:k3.1-pro", base_url="https://api.kimi.com/coding/v1",
                             reasoning_levels=(Level.OFF,))
     with pytest.raises(ValueError, match="extra_body must"):
         resolve_reasoning(config.model_copy(update={"settings": {"extra_body": "bad"}}))
@@ -419,7 +419,7 @@ async def test_default_orchestrator_runs_three_children_with_ordered_spawns(tmp_
 
 @pytest.mark.parametrize("mode", ["default", "plan"])
 @pytest.mark.parametrize("model_name", ["gpt-6-astra", "deepseek-flash"])
-async def test_host_freezes_effort_on_wire_and_refuses_changes_during_run(
+async def test_host_freezes_effort_on_wire_and_saves_changes_for_the_next_run(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mode: Literal["default", "plan"], model_name: str,
 ) -> None:
     entered = asyncio.Event()
@@ -449,8 +449,8 @@ async def test_host_freezes_effort_on_wire_and_refuses_changes_during_run(
             await host.dispatch(SelectReasoning(session.session_id, Level.LOW))
             started = await host.dispatch(StartRun(session.session_id, "inspect", "test"))
             await asyncio.wait_for(entered.wait(), 3)
-            with pytest.raises(WorkspaceBusyError):
-                await host.dispatch(SelectReasoning(session.session_id, Level.HIGH))
+            await host.dispatch(SelectReasoning(session.session_id, Level.HIGH))
+            assert (await host.snapshot(session.session_id)).reasoning.effective is Level.HIGH
             await host.dispatch(CancelRun(started.run_id))
             assert bodies[0]["reasoning"] == {"effort": "low"}
             turn = resources.session_repository.load(session.session_id).turns[0]

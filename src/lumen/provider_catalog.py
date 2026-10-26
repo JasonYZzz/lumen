@@ -13,7 +13,7 @@ from datetime import date
 from enum import StrEnum
 from urllib.parse import urlsplit
 
-CATALOG_REVISION = "2026-09-11.2"
+CATALOG_REVISION = "2026-10-26.1"
 
 
 class ReasoningLevel(StrEnum):
@@ -177,13 +177,16 @@ RULES = (
     ModelReasoningRule("bailian-deepseek-glm", "bailian", BAILIAN_DEEPSEEK_MODELS, (P.ANTHROPIC,),
                        C.ANTHROPIC_EFFORT, (L.OFF, L.HIGH, L.MAX), (BAILIAN,),
                        ((L.LOW, L.HIGH), (L.MEDIUM, L.HIGH), (L.XHIGH, L.MAX)), default_level=L.MAX),
-    ModelReasoningRule("kimi-coding-openai", "kimi-coding", ("k3", "k3-256k"), OPENAI_PROTOCOLS,
-                       C.OPENAI, (L.LOW, L.HIGH, L.MAX), (KIMI,), ((L.MEDIUM, L.HIGH), (L.XHIGH, L.MAX)),
-                       note="off routes to K2.6 and is deliberately unavailable.", default_level=L.HIGH),
-    ModelReasoningRule("kimi-coding-anthropic", "kimi-coding", ("k3", "k3-256k"), (P.ANTHROPIC,),
-                       C.ANTHROPIC_EFFORT, (L.LOW, L.HIGH, L.MAX), (KIMI,),
+    ModelReasoningRule("kimi-coding-openai", "kimi-coding", ("k3.1-pro", "k3", "k3-256k"),
+                       OPENAI_PROTOCOLS, C.OPENAI, (L.LOW, L.HIGH, L.MAX), (KIMI,),
                        ((L.MEDIUM, L.HIGH), (L.XHIGH, L.MAX)),
-                       note="off routes to K2.6.", default_level=L.HIGH),
+                       note="off is rejected for K3.1 Pro and routes other models to K2.8 Preview.",
+                       default_level=L.HIGH, reviewed_on="2026-10-26"),
+    ModelReasoningRule("kimi-coding-anthropic", "kimi-coding", ("k3.1-pro", "k3", "k3-256k"),
+                       (P.ANTHROPIC,), C.ANTHROPIC_EFFORT, (L.LOW, L.HIGH, L.MAX), (KIMI,),
+                       ((L.MEDIUM, L.HIGH), (L.XHIGH, L.MAX)),
+                       note="off is rejected for K3.1 Pro and routes other models to K2.8 Preview.",
+                       default_level=L.HIGH, reviewed_on="2026-10-26"),
     ModelReasoningRule("moonshot-k3", "moonshot", ("kimi-k3",), (P.CHAT,), C.OPENAI,
                        (L.LOW, L.HIGH, L.MAX), (MOONSHOT,), default_level=L.MAX),
     ModelReasoningRule("openai-gpt56-sol", "openai", ("gpt-5.6", "gpt-5.6-sol"), OPENAI_PROTOCOLS,
@@ -210,13 +213,13 @@ NATIVE_WEB_SEARCH_RULES = (
     # ignored. Accepting web_search in a request is not execution support.
     NativeWebSearchRule(
         vendor="kimi-coding",
-        models=("k3",),
+        models=("k3.1-pro", "k3"),
         protocols=(P.RESPONSES,),
         sources=("https://www.kimi.com/code/docs/third-party-tools/codex.html",),
         # Kimi's Responses endpoint accepts {"type": "web_search"} but
         # rejects the optional OpenAI search_context_size extension.
         sends_search_context_size=False,
-        reviewed_on="2026-09-11",
+        reviewed_on="2026-10-26",
     ),
     NativeWebSearchRule(
         vendor="bailian",

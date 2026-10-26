@@ -2,6 +2,11 @@
 
 > 文档复核（2026-10-10）：本文保留原始研究／验收证据；当前实现见[文档地图](../README.md#当前事实)。外部资料与测试结果仍以本文原日期、版本和环境为限。
 
+> 2026-10-26 更新：Kimi Code 当前使用 `k3.1-pro`，原生支持 Responses / Chat Completions / Anthropic；
+> Lumen 示例的配置名称与 context profile 均为 `k3.1-pro`。下文关于 Kimi Code `k3` 和 Responses
+> 的结论保留为历史证据，当前接入以[官方模型配置](https://www.kimi.com/code/docs/en/kimi-code/models.html)
+> 和[当前 Lumen 配置说明](../commands.md#13-web-客户端)为准。Moonshot 开放平台仍是独立线路。
+
 调研日期：2026-08-13  
 范围：Kimi API 开放平台（中国站与国际站）、Kimi Code 官方文档、Kimi 官方 API Reference。  
 证据边界：本次只核查公开的一手资料，未调用任何需要凭据的 endpoint，也未发起真实模型请求；

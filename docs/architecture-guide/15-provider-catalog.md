@@ -46,7 +46,7 @@ DeepSeek、百炼 Qwen/DeepSeek/GLM、Kimi 条目继续保留。移除条目的�
    Kimi Responses 与百炼 Qwen3.8 Responses。百炼 Anthropic 搜索另需客户端握手，当前 Adapter
    未实现该握手，因此不自动声明支持；其普通问答与推理兼容路径保留。DeepSeek 当前 Responses 文档明确说明
    忽略内置工具，不能因请求接受 `web_search` 就登记为支持。目录同时记录 wire 参数差异，
-   例如 Kimi K3 必须省略 `search_context_size`。未登记模型与自定义代理默认关闭；部署者可用
+   例如 Kimi K3.1 Pro 必须省略 `search_context_size`。未登记模型与自定义代理默认关闭；部署者可用
    `enabled` 显式声明其支持，用 `disabled` 强制关闭。
    Kimi 请求 Adapter 同时把用户纯文本编码为 `input_text` content parts；2026-09-11 的实测
    对照中，裸字符串请求未执行原生搜索，content parts 请求返回 `web_search_call`。

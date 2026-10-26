@@ -38,15 +38,15 @@ agent:
       api: responses
       context:
         profile: glm-5.2        # 部署端输出上限可用 max_output_tokens 显式覆盖
-    kimi-k3:
+    k3.1-pro:
       # 可选 reasoning_effort: low/high/max；medium→high，xhigh→max，不提供 off。
-      id: openai:k3
+      id: openai:k3.1-pro
       api_key_env: KIMI_API_KEY
       base_url: https://api.kimi.com/coding/v1
       api: responses
       input_modalities: [text, image]
       context:
-        profile: kimi-k3
+        profile: k3.1-pro
         max_output_tokens: 65536 # 按实际部署能力显式配置
     gpt-5.6:
       id: openai:gpt-5.6
@@ -175,6 +175,10 @@ ui:
   status_line: [mode, state, model, usage, keymap]
 
 sandbox:
+  # workspace_write confines file tools and command cwd to this workspace.
+  # disabled grants full local file access and removes the command OS sandbox by default.
+  # A confirmed session permission preset overrides this default without rewriting this file.
+  # Approval mode is independent: auto alone never expands filesystem access.
   mode: workspace_write
   network: false
   extra_read_paths: []
