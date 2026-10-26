@@ -2,7 +2,10 @@
 
 > **网页版入口：** 直接打开 [`index.html`](index.html)。它是无外部运行时依赖的离线 Architecture Atlas，包含可搜索导航、响应式布局、打印样式、精确技术图，以及在当前页面打开 Markdown 与源码的 Trace Reader。以下 Markdown 文件仍是可审计的文字事实来源。
 
-实现复核：2026-10-10；当前代码基线 `28d1679`，Session schema v12，配置 schema v2。
+v2 增量复核：2026-10-20，未提交的 `2.0.0` 源码；此前整理基线 `28d1679`。
+Session schema v12、配置 schema v2 保持不变；助理 SQLite 为 v2，v1 升级先备份。
+[历史代码审查](../research/2026-10-20-v2-code-review.md)保留原始反例，原四项问题已修复；
+修复、管理与连接恢复的验证和剩余门禁见[实施验收](../research/2026-10-21-v2-product-flow-validation.md)。
 
 Atlas 不维护第二套技术正文。`content.generated.js` 是当前架构/命令/扩展/桌面文档、核心 Python/Web/Rust 源码、
 契约测试和生成契约的确定性只读快照；无论通过 HTTP 还是直接打开 `index.html`，Trace Reader 都读取
@@ -39,10 +42,11 @@ Module、Interface、Seam、状态变化和失败路径展开。
 13. [LumenAgentLoop 单轨决策记录](13-native-agent-loop-migration.md)：自研 Loop 的权威、Driver/能力/恢复契约与旧 Agent graph 删除证据。
 14. [长任务持续执行、恢复与排障](14-long-running-recovery.md)：滑动空闲、重试、同轮压缩、失败续跑、计数语义和踩坑检查。
 15. [Provider 模型能力目录与升级约定](15-provider-catalog.md)：官方档位依据、精确匹配、代理声明、参数映射与目录升级验证。
+16. [v2 个人助理与本地自动化](16-personal-assistant-automations.md)：单 owner、试跑、缩权执行、站内结算、资源索引与恢复边界。
 
 ## 一句话架构
 
-Lumen 是一个本地优先、事件驱动的 coding-agent 框架：`WorkspaceHost` 统一承接客户端命令，`RunCoordinator` 管理可恢复会话，`AgentRuntime` 执行模型—工具循环，`ContextEngine` 在每次模型调用前后管理有界上下文，所有公开状态通过类型化 `RunEvent` 投影给 TUI、Web 和 JSONL 会话仓库。
+Lumen 是一个本地优先、事件驱动的可配置 Agent 框架：`WorkspaceHost` 统一承接客户端命令，`RunCoordinator` 管理可恢复会话，`AgentRuntime` 执行模型—工具循环，普通交互由 `ContextEngine` 管理有界上下文，公开执行状态通过类型化 `RunEvent` 投影给 TUI、Web 和 JSONL 会话仓库。v2 的自动化控制状态由 SQLite 持有，经 Host 调用同一执行链；助理列表从持久查询投影读取。
 
 当前实现还用 Tool Contract V2 统一 canonical 输出、模型文本与客户端展示，用 `RegistrationScope` 管理可逆注册，并将 provider 请求回执、能力观测和 generated contract catalog 作为可审计但非权威的只读投影。
 
@@ -67,6 +71,7 @@ Adapter，不是第二套模型—工具 Loop。
 
 - 单个 workspace 同时只允许一个执行 writer：进程内 active run 由 `WorkspaceHost` 管理，跨进程竞争由
   workspace 级 OS advisory execution lock 阻止；只读 Session/Timeline 操作不受影响。
+- 自动化另有生命周期级 OS owner lock。后台执行固定快照、显式有限预算并移除模型工具；不进入普通交互的 Context prepare／压缩／记忆学习路径，详见第 16 章。
 - 本地 `run_command` 同时经过审批与 OS sandbox：默认 `workspace_write`，macOS 使用 Seatbelt、Linux 使用 bubblewrap；adapter 缺失时 fail closed。只有显式 `sandbox.mode: disabled` 才放弃隔离。
 - 子 Agent 当前是 Session 内持久化的单层 Agent Thread；读任务共享只读工作区，写任务使用隔离 worktree，并由根 Agent 负责协调和综合。
 - TUI 与 Web 共用运行逻辑，但 UI 渲染分别由 Textual 和 Next.js 实现。

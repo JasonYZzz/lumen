@@ -1,6 +1,9 @@
+from __future__ import annotations
+
 import json
 import signal
 import sys
+from contextlib import nullcontext
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -23,6 +26,32 @@ def test_windows_background_status_never_probes_pid_with_kill(monkeypatch: Monke
     monkeypatch.setattr(cli.os, "kill", kill)
     with raises(ConfigLoadError, match="supported on macOS and Linux"):
         cli._pid_is_running(42)
+
+
+def test_background_web_readiness_allows_historical_scan_beyond_five_seconds(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    elapsed = 0.0
+
+    def connect(_address: tuple[str, int], *, timeout: float) -> nullcontext[None]:
+        nonlocal elapsed
+        assert timeout == 0.1
+        if elapsed == 0:
+            elapsed = 6.0
+            raise OSError("Host is still scanning history")
+        return nullcontext()
+
+    def running(_pid: int) -> bool:
+        return True
+
+    def pause(_seconds: float) -> None:
+        pass
+
+    monkeypatch.setattr(cli, "_pid_is_running", running)
+    monkeypatch.setattr(cli.time, "monotonic", lambda: elapsed)
+    monkeypatch.setattr(cli.time, "sleep", pause)
+    monkeypatch.setattr(cli.socket, "create_connection", connect)
+    assert cli._wait_for_web_start(42, "127.0.0.1", 8765)
 
 
 def _minimal_config(name: str = "global") -> str:

@@ -1,6 +1,6 @@
 # 12. 当前实现审计
 
-> 最近复核：2026-10-10（代码基线：`28d1679`；基线审计：2026-09-04）。本文是源码与契约测试的横截面，不是新的架构决策；Accepted 决策以 10、11、13、14.7、15 章为准。
+> v2 增量复核：2026-10-21，未提交的 `2.0.0` 源码；此前整理基线 `28d1679`，基线审计 2026-09-04。本文是横截面，不是新的架构决策；Accepted 决策以 10、11、13、14.7、15、16 章为准。原四项审查问题已修复；目标／资料联动、受限研究及实际验证见[当前记录](../research/2026-10-21-v2-product-flow-validation.md)。
 
 ## 12.1 审计方法
 
@@ -38,6 +38,7 @@
 | Agent Thread 生命周期 | `AgentOrchestrator` | v8+ Agent records | 模型工具、LegacyChildRunAdapter、Host |
 | Live call 生命周期 | `LiveSessionManager` | v9 `live_session` records + live turns | Provider Adapter、Web media client |
 | 长期记忆 | `MemoryManager` + SQLite repository | `memory.sqlite3` | Markdown audit projection |
+| 自动化定义、触发、checkpoint、站内信息流与助理用户状态 | `AutomationStore`；时间协调由 `AutomationEngine` 拥有 | workspace 专属 `state.sqlite3` 与 ArtifactStore | Host commands、Web／桌面助理界面、automation CLI |
 | 可逆注册与后台 task | `RegistrationScope` | 无；仅保留有界关闭 diagnostic | ResourceManager runtime/resource scopes |
 | 工具真实结果 | Tool callable + `ToolOutputSpec` canonical value | tool result / effect records | 模型文本、`ToolCallView/ToolResultView` |
 
@@ -57,6 +58,7 @@
 ### 需要持续控制 Interface 面积
 
 - `WorkspaceHost` 的 Depth 仍成立，但 command union 已覆盖 session、run、context、Agent、Work Product 与 Live。新增客户端行为应扩展现有 command/event，不把内部对象暴露给 UI；同时应避免把纯领域规则继续堆入 `dispatch`。
+- v2 扩展助理 command 与 run-local Host 工具，调度状态留在 `AutomationStore`。`RegistrationScope` 的注册／资源任务与 `AutomationEngine` 的 timer 生命周期各有所有者；不能把定义或 checkpoint 移入 scope。
 - `SessionRepository` 的 append 方法随 schema 增多。其价值来自 append-only 校验、兼容读取与 ownership 检查，而不是方法数量；后续 record 类型增加时应优先保持类型化 append/load 契约，不引入通用“写任意 record”逃生口。
 
 ## 12.4 已确认的实现演进

@@ -2,6 +2,8 @@
 
 本章描述当前源码中的真实组装路径。最重要的结论是：**Lumen 的模型输入不只有一段拼接字符串，Context zone 也不等于 provider role。** `ContextAssembler` 负责预算、来源、信任、保留策略和裁剪；`AgentRuntime` 在 `LumenAgentLoop` 每个请求边界冻结输入，再交给低层 `PydanticAIModelDriver`。
 
+上述组装适用于普通交互。v2 `BackgroundExecution` 使用 Host 固定的有界文件快照和已确认偏好，跳过 Context prepare／压缩与后台记忆学习，不暴露模型工具。偏好仍由 MemoryManager 持有，只有启用召回且非隐私模式下的 active、explicit USER／PROJECT 内容进入快照；PATH、候选或推测内容不进入该路径。设置内确认／编辑／遗忘及自动化指纹规则见[第 16 章](16-personal-assistant-automations.md)。
+
 `ContextEngine.close()` 取消并等待后台压缩，丢弃未发布的候选，关闭后不再调度后台任务。
 ResourceManager 的 runtime scope 在模型切换和 Host 关闭时先关闭 ContextEngine，再释放
 AgentRuntime/ModelDriver；child factory 同样在退出其模型生命周期前关闭独立 ContextEngine。

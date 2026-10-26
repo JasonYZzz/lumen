@@ -104,7 +104,13 @@ AGENT_TOOL_NAMES = frozenset(
         "close_agent",
     }
 )
-RESERVED_TOOL_NAMES = CONTROL_TOOL_NAMES | CHILD_TOOL_NAMES | AGENT_TOOL_NAMES | {"search_tools"}
+ASSISTANT_TOOL_NAMES = frozenset({
+    "inspect_personal_assistant", "manage_automation", "read_assistant_resource", "manage_personal_goal",
+    "report_goal_progress",
+})
+RESERVED_TOOL_NAMES = (
+    CONTROL_TOOL_NAMES | CHILD_TOOL_NAMES | AGENT_TOOL_NAMES | ASSISTANT_TOOL_NAMES | {"search_tools"}
+)
 
 
 class ResourceStartupError(RuntimeError):
@@ -202,6 +208,7 @@ class ResourceManager:
             auto_attach=config.work_products.auto_attach,
             strict=config.work_products.strict,
             max_context_items=config.work_products.max_context_items,
+            allow_external_paths=config.sandbox.mode == "disabled",
             user_skills=Path.home() / ".lumen" / "skills"
             if config.agent.user_skill_install_enabled or config.sandbox.mode == "disabled" else None,
         )
@@ -1151,11 +1158,16 @@ class ResourceManager:
         """Return per-request facts kept outside the stable provider instructions."""
 
         model = self.active_model_config()
+        sandbox = self.sandbox_runner.config
         sections = [
             f"Framework: {FRAMEWORK_NAME}",
             f"当前模型名称: {self._active_model_name}",
             f"当前模型 ID: {model.id}",
             f"工作目录: {self.workspace}",
+            f"本轮 sandbox.mode: {sandbox.mode}",
+            ("文件访问范围: 当前用户可访问的本地目录, 可用绝对路径或 ~。"
+             if self.task_workspace.workspace.allow_external_paths else "文件访问范围: 仅当前工作区。"),
+            f"命令允许联网: {sandbox.mode == 'disabled' or sandbox.network}",
         ]
         if self.mcp_status:
             states = ", ".join(f"{name}={state}" for name, state in sorted(self.mcp_status.items()))

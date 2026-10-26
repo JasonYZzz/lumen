@@ -170,7 +170,9 @@ class ScrollFollowMixin:
         self._loading_older = True
         try:
             anchor = messages.children[0] if messages.children else None
-            anchor_y = anchor.virtual_region.y if anchor is not None else 0
+            self._follow_tail = False
+            self._tail_follow_generation += 1
+            messages.anchor(False)
             page = self.timeline_store.load_older(self.timeline_store.next_cursor, limit=20)
             widgets = [self._timeline_widget(item) for item in page.items]
             widgets = [widget for widget in widgets if widget is not None]
@@ -181,31 +183,17 @@ class ScrollFollowMixin:
                     await messages.mount(*widgets, before=anchor)
                     await self._prune_timeline_widgets(messages, remove_oldest=False)
 
-                    # Paging only starts while the viewport is at its top, so
-                    # the former first widget is the stable visual anchor.
-                    # Session restore previously enabled Textual's tail
-                    # anchor; release it before prepending or a later layout
-                    # pass can discard the compensating relative scroll.
-                    messages.anchor(False)
-                    messages.scroll_to_widget(
-                        anchor,
-                        top=True,
-                        animate=False,
-                        force=True,
-                        immediate=True,
-                    )
-
                     def restore_anchor() -> None:
-                        delta = anchor.virtual_region.y - anchor_y
-                        if abs(anchor.region.y - messages.region.y) <= 1:
-                            return
-                        messages.scroll_relative(
-                            y=delta,
+                        # Re-anchor after layout without applying the prepend offset twice.
+                        messages.scroll_to_widget(
+                            anchor,
+                            top=True,
                             animate=False,
                             force=True,
                             immediate=True,
                         )
 
+                    restore_anchor()
                     self.call_after_refresh(restore_anchor)
         finally:
             self._loading_older = False

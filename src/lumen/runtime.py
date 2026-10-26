@@ -121,6 +121,7 @@ from lumen.events import (
     UsageUpdated,
     WorkProductChanged,
 )
+from lumen.execution import BackgroundExecution
 from lumen.hooks import HookBus, HookEvent
 from lumen.interactive_queue import InteractiveMessageQueue, QueueMode
 from lumen.plan import EvidenceKind, EvidenceReceipt, PlanState
@@ -635,6 +636,10 @@ class AgentRuntime:
         capability_gateway: CapabilityGateway | None = None,
     ) -> None:
         self.limits = limits
+        self._execution: ContextVar[BackgroundExecution | None] = ContextVar(
+            "background_execution", default=None,
+        )
+        self._host_tools: ContextVar[tuple[tuple[ToolSpec, str], ...]] = ContextVar("host_tools", default=())
         self.tool_metadata = tool_metadata
         # Store the instructions text so the context engine can reserve space
         # for them in the assembly budget (they're sent with every request).
@@ -783,7 +788,10 @@ class AgentRuntime:
     def _lumen_tool_schemas(self, discovered: set[str] | None = None) -> list[dict[str, Any]]:
         """Project only gateway-executable capabilities into model-visible schemas."""
 
-        gateway = self._capability_gateway
+        if self._execution.get() is not None:
+            return []
+
+        gateway = self._capability_gateway.derive(self._host_tools.get())
         loaded = discovered or set()
         descriptors = gateway.catalog()
         schemas = [
@@ -866,7 +874,8 @@ class AgentRuntime:
     def _request_instructions(self, tool_schemas: Sequence[dict[str, Any]]) -> str:
         guidance = build_web_guidance(
             visible_tools={str(tool["name"]) for tool in tool_schemas if tool.get("name")},
-            native_search=any(tool.kind == "web_search" for tool in self._native_tools),
+            native_search=(self._execution.get() is None
+                           and any(tool.kind == "web_search" for tool in self._native_tools)),
         )
         return "\n\n".join(value for value in (self.instructions, guidance) if value)
 
@@ -1010,7 +1019,7 @@ class AgentRuntime:
                 instructions=instructions,
                 tools=tuple(tool_schemas),
                 input_manifest=manifest,
-                native_tools=self._native_tools,
+                native_tools=() if self._execution.get() is not None else self._native_tools,
                 settings=settings,
             )
 
@@ -1054,7 +1063,7 @@ class AgentRuntime:
             instructions=instructions,
             tools=tuple(tool_schemas),
             input_manifest=manifest,
-            native_tools=self._native_tools,
+            native_tools=() if self._execution.get() is not None else self._native_tools,
             settings=settings,
         )
 
@@ -1071,7 +1080,7 @@ class AgentRuntime:
                 "type": "native_tool",
                 "search_context_size": tool.search_context_size,
             }
-            for tool in self._native_tools
+            for tool in (() if self._execution.get() is not None else self._native_tools)
         ]
         return [*function_tools, *native]
 
@@ -1122,29 +1131,25 @@ class AgentRuntime:
         completion_policy: CompletionPolicy | None = None,
         attachments: Sequence[AttachmentRef] = (),
         batch_completed: Callable[[PartialRunOutcome], Awaitable[None]] | None = None,
+        execution: BackgroundExecution | None = None,
+        host_tools: tuple[tuple[ToolSpec, str], ...] = (),
     ) -> RunOutcome:
         async with self:
-            return await self._run(
-                prompt,
-                history,
-                emit,
-                approve,
-                approve_batch,
-                plan=plan,
-                previous_summary=previous_summary,
-                previous_checkpoint=previous_checkpoint,
-                compacted_prefix_length=compacted_prefix_length,
-                source_offset=source_offset,
-                source_history=source_history,
-                episode_documents=episode_documents,
-                session_id=session_id,
-                focus=focus,
-                force_compaction=force_compaction,
-                recovery_receipts=recovery_receipts,
-                completion_policy=completion_policy,
-                attachments=attachments,
-                batch_completed=batch_completed,
-            )
+            token = self._execution.set(execution)
+            tools_token = self._host_tools.set(host_tools if execution is None else ())
+            try:
+                return await self._run(
+                    prompt, history, emit, approve, approve_batch,
+                    plan=plan, previous_summary=previous_summary, previous_checkpoint=previous_checkpoint,
+                    compacted_prefix_length=compacted_prefix_length, source_offset=source_offset,
+                    source_history=source_history, episode_documents=episode_documents, session_id=session_id,
+                    focus=focus, force_compaction=force_compaction, recovery_receipts=recovery_receipts,
+                    completion_policy=completion_policy, attachments=attachments,
+                    batch_completed=batch_completed,
+                )
+            finally:
+                self._execution.reset(token)
+                self._host_tools.reset(tools_token)
 
     async def _run(
         self,
@@ -1169,6 +1174,10 @@ class AgentRuntime:
         attachments: Sequence[AttachmentRef] = (),
         batch_completed: Callable[[PartialRunOutcome], Awaitable[None]] | None = None,
     ) -> RunOutcome:
+        background = self._execution.get()
+        execution_limits = self.limits if background is None else self.limits.model_copy(update={
+            "request_count": background.request_limit, "tool_calls": 0,
+        })
         await emit(RunStarted(prompt, tuple(attachments)))
         resolved_session_id = session_id or "default"
         self._active_session_id.set(resolved_session_id)
@@ -1231,7 +1240,7 @@ class AgentRuntime:
         # in this session) lets the summarizer do an iterative update instead of
         # rebuilding from scratch, preventing summary drift on long sessions.
         envelope: ContextEnvelope | None = None
-        if self.context_engine is not None:
+        if self.context_engine is not None and self._execution.get() is None:
             request = ContextRequest(
                 session=SessionRef(id=session_id or "default"),
                 agent=AgentRef(name="lumen"),
@@ -1390,17 +1399,19 @@ class AgentRuntime:
             )
 
         try:
-            context_engine = self.context_engine
+            context_engine = self.context_engine if self._execution.get() is None else None
             model_driver = self._model_driver
             route = self._lumen_model_route
             native_gateway = self._capability_gateway.derive(
-                (),
+                self._host_tools.get(),
                 replay=recovery.replay,
                 record_success=recovery.record_success,
             )
+            if self._execution.get() is not None:
+                native_gateway = native_gateway.narrow(())
             deferred_descriptors = tuple(
                 descriptor
-                for descriptor in self._capability_gateway.catalog()
+                for descriptor in native_gateway.catalog()
                 if descriptor.deferred
             )
             if deferred_descriptors:
@@ -2012,7 +2023,7 @@ class AgentRuntime:
                     await emit(ProgressReported(
                         summary=(
                             f"模型连接中断（{event.category}）；将在 {event.delay_seconds:.1f} 秒后"
-                            f"自动恢复（{event.attempt}/{self.limits.model_retries}）。"
+                            f"自动恢复（{event.attempt}/{execution_limits.model_retries}）。"
                         ),
                         next_action="已保留完成的工具结果，正在替换被中断的响应。",
                     ))
@@ -2027,6 +2038,7 @@ class AgentRuntime:
                     or name in discovered_tools
                 )
 
+            execution = self._execution.get()
             lumen_loop: LumenAgentLoop[ModelMessage] = LumenAgentLoop(
                 model_driver,
                 completion_evaluator=lambda _output: self._completion_gate.assess(
@@ -2036,16 +2048,16 @@ class AgentRuntime:
                     plan_updated=self.controller.plan_updated,
                 ),
                 limits=LoopLimits(
-                    request_count=self.limits.request_count,
-                    tool_calls=self.limits.tool_calls,
+                    request_count=execution.request_limit if execution else execution_limits.request_count,
+                    tool_calls=0 if execution else execution_limits.tool_calls,
                     completion_retries=self._completion_policy.max_retries,
-                    model_retries=self.limits.model_retries,
-                    model_retry_delay_seconds=self.limits.model_retry_delay_seconds,
-                    model_retry_max_delay_seconds=self.limits.model_retry_max_delay_seconds,
-                    output_limit_retries=self.limits.output_limit_retries,
-                    model_request_timeout_seconds=self.limits.model_request_timeout_seconds,
-                    model_stream_idle_timeout_seconds=self.limits.model_stream_idle_timeout_seconds,
-                    parallel_tool_calls=self.limits.parallel_tool_calls != "sequential",
+                    model_retries=execution_limits.model_retries,
+                    model_retry_delay_seconds=execution_limits.model_retry_delay_seconds,
+                    model_retry_max_delay_seconds=execution_limits.model_retry_max_delay_seconds,
+                    output_limit_retries=execution_limits.output_limit_retries,
+                    model_request_timeout_seconds=execution_limits.model_request_timeout_seconds,
+                    model_stream_idle_timeout_seconds=execution_limits.model_stream_idle_timeout_seconds,
+                    parallel_tool_calls=execution_limits.parallel_tool_calls != "sequential",
                 ),
                 capability_gateway=native_gateway,
                 capability_visible=capability_visible,
@@ -2215,6 +2227,11 @@ class AgentRuntime:
                 _build_partial("failed", _friendly_truncation_message(error), retryable=True),
             ) from None
         except LoopBudgetExceeded as error:
+            diagnostics.append({
+                "kind": ("background_capability_denied" if self._execution.get() is not None
+                         and error.limit_kind == "tools" else "budget_reached"),
+                "limit_kind": error.limit_kind,
+            })
             # Budget exhausted — same family: tell the user the limit was hit
             # rather than implying the model misbehaved. We include the
             # configured limits so the user knows exactly what to raise in
@@ -2226,10 +2243,10 @@ class AgentRuntime:
             run_usage.cache_write_tokens = error.usage.cache_write_tokens
             run_usage.requests = error.request_count
             await _flush_response_text(as_final=False)
-            await emit(RunFailed(_friendly_limit_message(error, self.limits)))
+            await emit(RunFailed(_friendly_limit_message(error, execution_limits)))
             raise attach_partial_outcome(
                 error,
-                _build_partial("failed", _friendly_limit_message(error, self.limits), retryable=True),
+                _build_partial("failed", _friendly_limit_message(error, execution_limits), retryable=True),
             ) from None
         except Exception as error:
             # Flush buffered text so the user sees whatever the model produced

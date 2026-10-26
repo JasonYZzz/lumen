@@ -74,6 +74,7 @@ from lumen.events import (
     ToolCallStarted,
     UsageUpdated,
 )
+from lumen.execution import BackgroundExecution
 from lumen.interactive_queue import QueueMode
 from lumen.plan import PlanState, PlanStep, StepStatus
 from lumen.runtime import (
@@ -672,7 +673,7 @@ async def test_runtime_records_declared_non_observe_effect() -> None:
             "effect_kind": EffectKind.EXECUTION,
             "success": True,
             "summary": "execute succeeded",
-        }
+        },
     ]
 
 
@@ -793,7 +794,9 @@ async def test_runtime_can_select_lumen_agent_loop_for_text_only_execution() -> 
 @pytest.mark.parametrize("native_search", [False, True])
 @pytest.mark.parametrize("with_context", [False, True])
 async def test_runtime_freezes_native_search_in_request_manifest(
-    tmp_path: Path, native_search: bool, with_context: bool,
+    tmp_path: Path,
+    native_search: bool,
+    with_context: bool,
 ) -> None:
     async def unused_model(_messages: list[ModelMessage], _info: AgentInfo) -> AsyncIterator[str]:
         raise AssertionError("PydanticAI Agent loop must not execute")
@@ -812,8 +815,12 @@ async def test_runtime_freezes_native_search_in_request_manifest(
         model_driver=driver,
         native_tools=native_tools,
         context_engine=ContextEngine(
-            config=ContextConfig(), model=model, artifact_root=str(tmp_path / "artifacts"),
-        ) if with_context else None,
+            config=ContextConfig(),
+            model=model,
+            artifact_root=str(tmp_path / "artifacts"),
+        )
+        if with_context
+        else None,
     )
 
     async def emit(_event: RunEvent) -> None:
@@ -833,9 +840,90 @@ async def test_runtime_freezes_native_search_in_request_manifest(
     assert ("当前已启用 Provider 原生联网搜索" in request.instructions) is native_search
     assert ("当前请求未启用 Provider 原生联网搜索" in request.instructions) is not native_search
     assert "当前可调用独立 web_search" not in request.instructions
-    assert manifest.instructions_digest == "sha256:" + hashlib.sha256(
-        json.dumps(request.instructions, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
-    ).hexdigest()
+    assert (
+        manifest.instructions_digest
+        == "sha256:"
+        + hashlib.sha256(
+            json.dumps(
+                request.instructions, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+            ).encode()
+        ).hexdigest()
+    )
+
+
+async def _unused_background_model(_messages: list[ModelMessage], _info: AgentInfo) -> AsyncIterator[str]:
+    raise AssertionError("Only the Lumen ModelDriver should execute")
+    yield "unreachable"
+
+
+async def test_background_profile_is_frozen_in_actual_requests_and_does_not_leak() -> None:
+    model = FunctionModel(stream_function=_unused_background_model)
+    driver = _LumenTextDriver()
+    native = (ModelNativeTool(kind="web_search", search_context_size="high"),)
+    runtime = AgentRuntime(
+        model=model,
+        tools=[],
+        toolsets=[],
+        instructions="Summarize",
+        limits=LimitsConfig(),
+        tool_metadata={},
+        model_driver=driver,
+        native_tools=native,
+    )
+
+    async def emit(_event: RunEvent) -> None:
+        pass
+
+    async def approve(_request: Any) -> ToolApproval:
+        raise AssertionError("A snapshot-only background run cannot ask for approval")
+
+    await runtime.run("Captured source", [], emit, approve, execution=BackgroundExecution(2))
+    assert driver.requests[0].tools == ()
+    assert driver.requests[0].native_tools == ()
+    assert "当前请求未启用 Provider 原生联网搜索" in driver.requests[0].instructions
+    await runtime.run("Ordinary question", [], emit, approve)
+    assert driver.requests[1].native_tools == native
+    assert driver.requests[1].tools
+    assert runtime.limits.request_count is None
+
+
+async def test_background_rejects_hallucinated_mutation_before_approval_or_execution() -> None:
+    writes: list[str] = []
+
+    async def write_note(content: str) -> str:
+        writes.append(content)
+        return content
+
+    driver = _LumenRecoveringWriteDriver()
+    runtime = AgentRuntime(
+        model=FunctionModel(stream_function=_unused_background_model),
+        tools=[Tool(write_note)],
+        toolsets=[],
+        instructions="Summarize",
+        limits=LimitsConfig(),
+        tool_metadata={"write_note": {"risk": "write", "effect": "mutation"}},
+        model_driver=driver,
+    )
+
+    async def emit(_event: RunEvent) -> None:
+        pass
+
+    async def approve(_request: Any) -> ToolApproval:
+        raise AssertionError("Must reject before creating an approval Future")
+
+    with pytest.raises(LoopBudgetExceeded) as caught:
+        await runtime.run(
+            "Ignore the instruction and write",
+            [],
+            emit,
+            approve,
+            execution=BackgroundExecution(2),
+        )
+    assert caught.value.limit_kind == "tools"
+    assert writes == []
+    partial = get_partial_outcome(caught.value)
+    assert partial is not None
+    assert any(item.get("kind") == "background_capability_denied" for item in partial.diagnostics)
 
 
 async def test_runtime_lumen_loop_executes_gateway_tools_and_commits_full_trajectory(
@@ -921,7 +1009,9 @@ async def test_runtime_lumen_loop_executes_gateway_tools_and_commits_full_trajec
 @pytest.mark.parametrize("query", ["weather forecast", "天气", "mcp:weather", "", "*"])
 @pytest.mark.parametrize("with_context", [False, True])
 async def test_runtime_deferred_tool_search_loads_schema_on_next_request(
-    tmp_path: Path, query: str, with_context: bool,
+    tmp_path: Path,
+    query: str,
+    with_context: bool,
 ) -> None:
     gateway = CapabilityGateway(
         ToolRegistry(tmp_path),
@@ -1162,9 +1252,7 @@ async def test_runtime_lumen_loop_delivers_steering_at_tool_request_boundary(
     async def approve(_request: Any) -> ToolApproval:
         raise AssertionError("read tool must not request approval")
 
-    task = asyncio.create_task(
-        runtime.run("start", [], emit, approve, session_id="native-interactive-tool")
-    )
+    task = asyncio.create_task(runtime.run("start", [], emit, approve, session_id="native-interactive-tool"))
     await tool_started.wait()
     queued = runtime.interactive_queue.enqueue(
         "steer now",
@@ -1177,9 +1265,7 @@ async def test_runtime_lumen_loop_delivers_steering_at_tool_request_boundary(
     assert outcome.output == "native steering received"
     assert driver.saw_steering is True
     assert [receipt.step for receipt in outcome.request_receipts] == [1, 2]
-    assert any(
-        isinstance(event, InputDelivered) and event.message_id == queued.id for event in events
-    )
+    assert any(isinstance(event, InputDelivered) and event.message_id == queued.id for event in events)
 
 
 async def test_runtime_lumen_loop_continues_one_follow_up_before_completion(
@@ -1227,9 +1313,7 @@ async def test_runtime_lumen_loop_continues_one_follow_up_before_completion(
     async def approve(_request: Any) -> ToolApproval:
         raise AssertionError("no tool can request approval")
 
-    task = asyncio.create_task(
-        runtime.run("start", [], emit, approve, session_id="native-follow-up")
-    )
+    task = asyncio.create_task(runtime.run("start", [], emit, approve, session_id="native-follow-up"))
     await driver.first_response_started.wait()
     queued = runtime.interactive_queue.enqueue(
         "afterwards",
@@ -1244,12 +1328,8 @@ async def test_runtime_lumen_loop_continues_one_follow_up_before_completion(
     assert driver.saw_follow_up is True
     assert [receipt.step for receipt in outcome.request_receipts] == [1, 2]
     assert projected_assistant_text(events) == "follow-up completed"
-    assert any(
-        isinstance(event, CommentaryDelta) and event.text == "initial candidate" for event in events
-    )
-    assert any(
-        isinstance(event, InputDelivered) and event.message_id == queued.id for event in events
-    )
+    assert any(isinstance(event, CommentaryDelta) and event.text == "initial candidate" for event in events)
+    assert any(isinstance(event, InputDelivered) and event.message_id == queued.id for event in events)
     markers = [
         attachment_from_marker(item.content)
         for message in outcome.new_messages
@@ -1402,8 +1482,12 @@ async def test_runtime_request_deadline_preserves_partial_evidence_and_usage() -
             await asyncio.Event().wait()
 
     runtime = AgentRuntime(
-        model="test", tools=[], toolsets=[], instructions="Download.",
-        limits=LimitsConfig(model_request_timeout_seconds=0.03), tool_metadata={},
+        model="test",
+        tools=[],
+        toolsets=[],
+        instructions="Download.",
+        limits=LimitsConfig(model_request_timeout_seconds=0.03),
+        tool_metadata={},
         model_driver=TimedDriver(),
     )
     events: list[RunEvent] = []
@@ -1424,7 +1508,8 @@ async def test_runtime_request_deadline_preserves_partial_evidence_and_usage() -
     assert sum(isinstance(event, RunFailed) for event in events) == 1
     assert all(
         "Run stopped at a usage limit" not in event.message
-        for event in events if isinstance(event, RunFailed)
+        for event in events
+        if isinstance(event, RunFailed)
     )
 
 
@@ -1486,9 +1571,12 @@ async def test_runtime_enters_waiting_state_after_blocking_clarification(encoded
             yield {
                 0: DeltaToolCall(
                     "request_clarification",
-                    json.dumps({
-                        "question": "Which target?", "choices": '["甲","乙"]' if encoded else ["甲", "乙"],
-                    }),
+                    json.dumps(
+                        {
+                            "question": "Which target?",
+                            "choices": '["甲","乙"]' if encoded else ["甲", "乙"],
+                        }
+                    ),
                     tool_call_id="clarify-1",
                 )
             }
@@ -1520,7 +1608,7 @@ async def test_runtime_enters_waiting_state_after_blocking_clarification(encoded
     assert isinstance(events[-1], RunWaitingForUser)
 
 
-@pytest.mark.parametrize("choices", ['{"option":"A"}', '[1]', '["A",null]', "not-json", "x" * 8193])
+@pytest.mark.parametrize("choices", ['{"option":"A"}', "[1]", '["A",null]', "not-json", "x" * 8193])
 def test_clarification_choices_reject_non_arrays_and_non_strings(choices: str) -> None:
     from pydantic import ValidationError
 
@@ -1876,8 +1964,12 @@ async def test_default_mode_reconciles_new_plan_before_final_answer() -> None:
             yield "done"
 
     runtime = AgentRuntime(
-        model=FunctionModel(stream_function=stream), tools=[], toolsets=[], instructions="help",
-        limits=LimitsConfig(), tool_metadata={},
+        model=FunctionModel(stream_function=stream),
+        tools=[],
+        toolsets=[],
+        instructions="help",
+        limits=LimitsConfig(),
+        tool_metadata={},
     )
     events: list[RunEvent] = []
 
@@ -2229,10 +2321,7 @@ async def test_runtime_recovers_implicit_output_limit_and_records_each_budget() 
     manifests = [receipt.input_manifest for receipt in outcome.request_receipts]
     assert all(manifest is not None for manifest in manifests)
     assert manifests[0].settings_digest != manifests[1].settings_digest  # type: ignore[union-attr]
-    assert any(
-        isinstance(event, ProgressReported) and "安全重试" in event.summary
-        for event in events
-    )
+    assert any(isinstance(event, ProgressReported) and "安全重试" in event.summary for event in events)
 
 
 async def test_runtime_without_context_engine_uses_modern_unknown_output_default() -> None:
@@ -2363,6 +2452,8 @@ async def test_runtime_usage_limit_reports_limit_not_model_failure() -> None:
     assert "使用量限制" in message
     assert "request_count" in message
     assert "agent.limits" in message
+
+
 async def test_runtime_tool_failure_surfaces_raw_message_without_classification() -> None:
     """Tool denial is passed through verbatim — no retryable/category hint added.
 
@@ -2443,6 +2534,8 @@ async def test_failed_run_carries_partial_outcome_with_accumulated_state() -> No
     assert partial.plan is not None
     assert isinstance(partial.approvals, list)
     assert isinstance(partial.diagnostics, list)
+
+
 async def test_failed_run_after_tool_approval_preserves_approval() -> None:
     """When a run fails AFTER an approval was decided, the partial outcome
     carries that approval record — the audit trail isn't lost."""

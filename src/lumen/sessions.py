@@ -398,6 +398,12 @@ class SessionRepository:
                         raise OSError("session append made no progress")
                     view = view[written:]
                 os.fsync(descriptor)
+                if create and os.name != "nt":
+                    directory = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
+                    try:
+                        os.fsync(directory)
+                    finally:
+                        os.close(directory)
                 after = _file_identity(os.fstat(descriptor))
                 with self._projection_lock:
                     cached = self._projection_cache.get(path)
@@ -413,8 +419,10 @@ class SessionRepository:
             finally:
                 os.close(descriptor)
 
-    def create(self, *, agent_name: str, model_id: str) -> SessionMetadata:
-        session_id = str(uuid4())
+    def create(
+        self, *, agent_name: str, model_id: str, session_id: str | None = None,
+    ) -> SessionMetadata:
+        session_id = str(UUID(session_id)) if session_id is not None else str(uuid4())
         path = self._path(session_id)
         created_at = self._now()
         self._append(
@@ -468,7 +476,7 @@ class SessionRepository:
                 request_receipts=turn.request_receipts,
                 attachments=turn.attachments,
             )
-        settings = source.settings
+        settings = source.settings.model_copy(update={"sandbox_mode": "workspace_write"})
         if not include_turn:
             # A replacement prompt must receive its own plan review, never an
             # execution approval belonging to a discarded conversation suffix.

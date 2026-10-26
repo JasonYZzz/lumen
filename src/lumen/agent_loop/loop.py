@@ -419,7 +419,12 @@ class LoopProtocolError(LumenAgentLoopError):
 
 
 class LoopBudgetExceeded(LumenAgentLoopError):
-    pass
+    def __init__(
+        self, message: str, *, partial_output: str = "",
+        limit_kind: Literal["requests", "tools"] = "requests",
+    ) -> None:
+        super().__init__(message, partial_output=partial_output)
+        self.limit_kind = limit_kind
 
 
 class LoopProviderFailure(LumenAgentLoopError):
@@ -1532,6 +1537,7 @@ class LumenAgentLoop(Generic[MessageT]):
                             LoopBudgetExceeded(
                                 f"tool call limit reached: {self._limits.tool_calls}",
                                 partial_output=partial_output + candidate,
+                                limit_kind="tools",
                             ),
                             sink,
                         )

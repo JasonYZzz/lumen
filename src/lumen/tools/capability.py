@@ -1,8 +1,8 @@
-"""Workspace-scoped write, exact edit, and argv command tools.
+"""Write, exact edit, and argv command tools with configured path permissions.
 
 These are the workspace capability tools the model uses to actually act on the
 project: writing files, editing files by exact match, and running commands
-without going through a shell. All three are workspace-scoped and the model is
+without going through a shell. All three use the workspace's path policy and the model is
 gated by the standard permission system before any of them can execute.
 """
 
@@ -94,6 +94,7 @@ def build_capability_specs(
     max_timeout: float,
     sandbox_config: SandboxConfig | None = None,
     task_workspace: TaskWorkspace | None = None,
+    workspace: Workspace | None = None,
 ) -> list[ToolSpec]:
     """Build the workspace write/edit/exec specs.
 
@@ -101,14 +102,22 @@ def build_capability_specs(
     ``timeout`` argument; clamping happens inside ``run_command``.
     """
 
-    workspace = Workspace(root)
+    if workspace is None:
+        workspace = task_workspace.workspace if task_workspace is not None else Workspace(
+            root, allow_external_paths=sandbox_config is not None and sandbox_config.mode == "disabled",
+            use_session_permissions=True,
+        )
     sandbox = SandboxRunner(
         workspace.root,
         sandbox_config or SandboxConfig(mode="disabled"),
     )
+    path_scope = (
+        "路径相对工作区解析；实际访问范围见当前运行上下文。完全访问时可用绝对路径或 ~ 访问其他本地目录。"
+        if workspace.use_session_permissions else "路径必须位于工作区内，不能通过父会话授权越界。"
+    )
 
     def write_file(path: str, content: str, overwrite: bool = False) -> str:
-        """Write UTF-8 text to ``path`` inside the workspace.
+        """Write UTF-8 text to ``path`` within the configured file access scope.
 
         Use ``outputs/<descriptive-name>`` for generated reports, exports, and
         other deliverables when the user did not provide an explicit path.
@@ -209,18 +218,18 @@ def build_capability_specs(
         ToolSpec(
             write_file,
             description=(
-                "把 UTF-8 文本写入工作区内的相对路径。缺失的父目录会自动创建；已有文件默认拒绝"
+                "把 UTF-8 文本写入指定路径。缺失的父目录会自动创建；已有文件默认拒绝"
                 "覆盖，只有 overwrite=true 时才替换。用户未指定交付路径时，报告或导出写入 outputs/。"
-            ),
+            ) + path_scope,
             risk=Risk.WRITE,
             effect_kind=EffectKind.MUTATION,
         ),
         ToolSpec(
             edit_file,
             description=(
-                "在工作区文件中把唯一一次精确匹配的 find 替换为 replace。匹配为零或多于一次时"
+                "在文件中把唯一一次精确匹配的 find 替换为 replace。匹配为零或多于一次时"
                 "安全失败；应先读取或搜索文件以取得唯一、稳定的上下文片段。"
-            ),
+            ) + path_scope,
             risk=Risk.WRITE,
             effect_kind=EffectKind.MUTATION,
         ),
@@ -228,12 +237,12 @@ def build_capability_specs(
             run_command,
             description=(
                 (run_command.__doc__ or "")
-                + f"\n执行策略: sandbox.mode={sandbox.config.mode}; "
-                + f"命令允许联网={sandbox.config.mode == 'disabled' or sandbox.config.network}。"
+                + "\n沙箱和联网策略使用当前会话权限，见运行上下文和结果中的 sandbox 字段。"
                 + "此策略只适用于本子进程，不适用于单独配置的 MCP/Web 工具。命令失败后检查 "
                 + "stderr 和 exit_code，不要据此推断全局网络可用性。"
                 + f"已知 Python 解释器: {sys.executable}。"
                 + "工作区外已发现的 Skill 请使用 load_skill/read_skill_resource。"
+                + path_scope
             ),
             risk=Risk.EXECUTE,
             effect_kind=EffectKind.EXECUTION,

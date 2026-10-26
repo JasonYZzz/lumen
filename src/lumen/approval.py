@@ -91,8 +91,8 @@ class ApprovalPolicy:
         """Recognize Claude-style common file commands without path escape.
 
         ``run_command`` never invokes a shell, so rejecting absolute paths and
-        ``..`` components is sufficient to keep these convenience commands
-        under their already workspace-bounded cwd.
+        ``..`` components keeps these convenience commands under their already
+        authorized cwd. Workspace path permissions determine its allowed scope.
         """
 
         if request.origin != "builtin" or request.name != "run_command":

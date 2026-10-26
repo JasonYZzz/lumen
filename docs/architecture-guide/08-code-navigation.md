@@ -27,6 +27,11 @@
 | Web 抓取被拒绝或搜索未注册 | `tools/web/`（`fetch.py`、`search/`） | `resources.py`、`config.py`、DNS/redirect SSRF 校验 |
 | Live 语音连接、工具或恢复异常 | `live/manager.py` | `live/router.py`、`live/protocol.py`、Provider Adapter、`tools/gateway.py`、Web media client |
 | 长期记忆污染 | `context/memory/manager.py` | `extraction.py`、`redaction.py`、`records.py` |
+| 自动化排队、启停、漏跑与重复执行 | `automation/engine.py`、`automation/store.py` | `automation/models.py`、`application/host.py`、`tests/test_automation.py` |
+| 后台权限、预算或来源覆盖异常 | `application/host.py`（`_automation_sources`／`_run_automation`） | `execution.py`、`runtime.py`、`tools/gateway.py` |
+| 信息流、灵感、目标或资源库不一致 | `application/host.py`、`automation/store.py` | `api/app.py`、`src/web/src/components/assistant-workspace.tsx` |
+| Web 刷新后认证失效或跨端口串登录 | `api/auth.py`、`api/app.py` | `cli.py`、Web `lib/api/errors.ts` 与 `lumen-app.tsx` 的连接恢复状态 |
+| 设置内偏好确认、编辑或遗忘异常 | `context/memory/manager.py`、`application/host.py` | `src/web/src/components/personal-preferences.tsx` |
 | 子 Agent 行为异常 | `agents/orchestrator.py` | `agents/runtime_factory.py`、`resources.py`、`sessions.py` |
 | macOS 原生启动、IPC、凭据或退出异常 | `src/desktop/src/main.rs`、`desktop.py` | `trust.py`、`config_resolver.py`、`tests/test_desktop.py`、`docs/desktop.md` |
 | 首次配置模型预设或启动页表单异常 | `src/desktop/bootstrap/` | `src/web/src/desktop-bootstrap.test.js`、`docs/desktop.md` |
@@ -59,6 +64,7 @@ cli.py
 - adapter：FastAPI endpoint、Web reducer、Textual snapshot；
 - packaging：OpenAPI schema、Next build、wheel 内置静态资源和 Skills。
 - desktop：私有启动管道、首次配置、Rust 来源／生命周期单元检查，以及 app/DMG 冻结冒烟；真实 Keychain／媒体需独立实机验收。
+- automation：`tests/test_automation.py` 穿过 Host／Coordinator／Gateway／journal；UI 见 `assistant-workspace.test.tsx`。当前遗漏的四个反例见[v2 代码审查](../research/2026-10-20-v2-code-review.md)，现有测试通过不代表这些反例已覆盖。
 
 常用质量门：
 

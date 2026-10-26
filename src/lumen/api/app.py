@@ -3,6 +3,7 @@ from __future__ import annotations
 # FastAPI consumes decorated route functions through its registry.
 # pyright: reportUnusedFunction=false
 import asyncio
+import hashlib
 import json
 import secrets
 from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable
@@ -11,6 +12,7 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Any, cast
 from urllib.parse import quote, urlencode
+from uuid import UUID
 
 from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.exceptions import RequestValidationError
@@ -19,6 +21,8 @@ from fastapi.staticfiles import StaticFiles
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from lumen.application import (
+    ApplyAutomationCommand,
+    ApplyPreferenceCommand,
     ApplyTurnRestore,
     ApprovalStateError,
     ApproveAgentImport,
@@ -33,15 +37,23 @@ from lumen.application import (
     ConfigurationConflictHostError,
     ContextControl,
     ContinueAgent,
+    ContinueAssistantDiscussion,
+    ControlGoal,
     CreateSession,
     DecideApproval,
     DeleteModelConfiguration,
     DeleteSession,
     DequeueRunInputs,
+    EditAssistant,
     EndLiveSession,
     ForkSessionAtTurn,
+    GetAssistantOccurrence,
+    GetAssistantPage,
+    GetAssistantPreferences,
+    GetAssistantState,
     GetBootstrap,
     GetConfiguration,
+    GetGoalDetail,
     GetInstructions,
     InspectReasoning,
     InspectSessionRepair,
@@ -58,7 +70,9 @@ from lumen.application import (
     ListMcpPrompts,
     ListSessions,
     PreviewTurnRestore,
+    PublishAssistantResource,
     QueueRunInput,
+    ReadAssistantResource,
     RejectAgentImport,
     RejectChildImport,
     RejectPlan,
@@ -74,6 +88,7 @@ from lumen.application import (
     SetCollaborationMode,
     SetContextSource,
     SetMcpServerEnabled,
+    SetPermissionPreset,
     SetSessionArchived,
     SetTranscriptDensity,
     StartLiveSession,
@@ -85,7 +100,23 @@ from lumen.application import (
     WorkspaceHost,
     WorkspaceHostError,
 )
+from lumen.automation.models import (
+    AssistantEdit,
+    AssistantState,
+    AutomationCommand,
+    ContextRef,
+    DiscussionInput,
+    FeedPage,
+    GoalCommand,
+    GoalDetail,
+    Occurrence,
+    PreferenceCommand,
+    PublishInput,
+    Resource,
+    ResourcePage,
+)
 from lumen.files import search_files
+from lumen.files.documents import MAX_DOCUMENT_BYTES
 
 from .schemas import (
     AgentActionBody,
@@ -110,8 +141,6 @@ from .schemas import (
     WorkspaceSettingsBody,
 )
 
-_COOKIE = "lumen_web_session"
-
 
 def _error(code: str, message: str, *, details: Any = None, status: int) -> JSONResponse:
     return JSONResponse(
@@ -132,6 +161,8 @@ def _camel_snapshot(value: Any) -> dict[str, Any]:
         "lastUserInput": raw["last_user_input"],
         "activeRunId": raw["active_run_id"],
         "approvalMode": raw["approval_mode"],
+        "sandboxMode": raw["sandbox_mode"],
+        "filesystemScope": raw["filesystem_scope"],
         "collaborationMode": raw["collaboration_mode"],
         "planReviewStatus": raw["plan_review_status"],
         "transcriptDensity": raw["transcript_density"],
@@ -202,8 +233,11 @@ def create_web_app(
     static_dir: Path | None = None,
     api_only: bool = False,
     allowed_hosts: set[str] | None = None,
+    session_secret: str | None = None,
 ) -> FastAPI:
-    session_secret = secrets.token_urlsafe(32)
+    session_secret = session_secret or secrets.token_urlsafe(32)
+    # Cookies ignore ports; isolate each workspace/server, including disposable desktop Hosts.
+    cookie_name = f"lumen_web_{hashlib.sha256(session_secret.encode()).hexdigest()[:24]}"
     token_unused = True
     accepted_hosts = allowed_hosts or {"127.0.0.1", "localhost", "[::1]", "testserver"}
 
@@ -229,7 +263,7 @@ def create_web_app(
         if path.startswith("/api/") and not public:
             if request.headers.get("host", "") not in accepted_hosts:
                 return _error("invalid_host", "request host is not allowed", status=403)
-            cookie = request.cookies.get(_COOKIE, "")
+            cookie = request.cookies.get(cookie_name, "")
             if not secrets.compare_digest(cookie, session_secret):
                 return _error("unauthorized", "authentication required", status=401)
             if request.method in {"POST", "PUT", "PATCH", "DELETE"}:
@@ -253,7 +287,8 @@ def create_web_app(
 
     @app.exception_handler(RequestValidationError)
     async def validation_error(_request: Request, error: RequestValidationError) -> JSONResponse:
-        return _error("validation_error", "request validation failed", details=error.errors(), status=422)
+        details = [{key: item[key] for key in ("type", "loc", "msg")} for item in error.errors()]
+        return _error("validation_error", "request validation failed", details=details, status=422)
 
     @app.exception_handler(StarletteHTTPException)
     async def http_error(_request: Request, error: StarletteHTTPException) -> JSONResponse:
@@ -261,9 +296,9 @@ def create_web_app(
         return _error(code, str(error.detail), status=error.status_code)
 
     def exchange_response() -> Response:
-        response = Response(status_code=204)
+        response = Response(status_code=204, headers={"Cache-Control": "no-store"})
         response.set_cookie(
-            _COOKIE,
+            cookie_name,
             session_secret,
             httponly=True,
             samesite="strict",
@@ -295,13 +330,17 @@ def create_web_app(
             "modelId": raw["model_id"],
             "inputModalities": raw["input_modalities"],
             "availableModels": raw["available_models"],
+            "modelIds": raw["model_ids"],
             "approvalMode": raw["approval_mode"],
+            "sandboxMode": raw["sandbox_mode"],
+            "filesystemScope": raw["filesystem_scope"],
             "collaborationMode": raw["collaboration_mode"],
             "tools": raw["tools"],
             "mcp": raw["mcp"],
             "skills": raw["skills"],
             "warnings": raw["warnings"],
             "activeRunId": raw["active_run_id"],
+            "pendingModel": raw["pending_model"],
             "liveEnabled": raw["live_enabled"],
             "reasoning": result.reasoning.model_dump(mode="json"),
         }
@@ -318,6 +357,99 @@ def create_web_app(
     async def capability_inventory() -> dict[str, Any]:
         return host.capabilities()
 
+    @app.get("/api/v1/assistant", response_model=AssistantState)
+    async def get_assistant() -> dict[str, Any]:
+        return (await host.dispatch(GetAssistantState())).data
+
+    @app.get("/api/v1/assistant/feed", response_model=FeedPage)
+    async def get_assistant_feed(
+        before: int | None = None, category: str = "all", limit: int = 50,
+    ) -> dict[str, Any]:
+        return (await host.dispatch(GetAssistantPage(
+            "feed", before=before, category=category, limit=limit,
+        ))).data
+
+    @app.get("/api/v1/assistant/occurrences/{occurrence_id}", response_model=Occurrence)
+    async def get_assistant_occurrence(occurrence_id: str) -> dict[str, Any]:
+        return (await host.dispatch(GetAssistantOccurrence(occurrence_id))).data
+
+    @app.get("/api/v1/assistant/resources", response_model=ResourcePage)
+    async def list_assistant_resources(
+        before: int | None = None, query: str = "", category: str = "all", limit: int = 50,
+        session_id: str | None = None,
+    ) -> dict[str, Any]:
+        return (await host.dispatch(GetAssistantPage(
+            "resource", before=before, query=query, category=category, limit=limit,
+            session_id=session_id,
+        ))).data
+
+    @app.post("/api/v1/assistant/resources/import", response_model=Resource)
+    async def import_assistant_file(request: Request, filename: str, identity: UUID) -> Resource:
+        content = bytearray()
+        async for chunk in request.stream():
+            if len(content) + len(chunk) > MAX_DOCUMENT_BYTES:
+                raise StarletteHTTPException(413, "File exceeds the 20 MiB limit")
+            content.extend(chunk)
+        return await host.import_resource_file(filename, bytes(content), str(identity))
+
+    @app.get("/api/v1/assistant/resources/{resource_id}/content", response_class=Response)
+    async def assistant_file_content(resource_id: str, revision: int | None = None) -> Response:
+        resource, body = await host.read_resource_document(resource_id, revision)
+        filename = quote(Path(resource.file_path or resource.title).name, safe="")
+        return Response(body, media_type="application/octet-stream", headers={
+            "Content-Disposition": f"attachment; filename*=UTF-8''{filename}",
+            "Content-Security-Policy": "sandbox; default-src 'none'",
+            "X-Content-Type-Options": "nosniff", "Cache-Control": "no-store",
+        })
+
+    @app.get("/api/v1/assistant/preferences")
+    async def get_assistant_preferences() -> dict[str, Any]:
+        return (await host.dispatch(GetAssistantPreferences())).data
+
+    @app.post("/api/v1/assistant/preferences")
+    async def apply_preference(body: PreferenceCommand) -> dict[str, str]:
+        await host.dispatch(ApplyPreferenceCommand(body))
+        return {"status": "saved"}
+
+    @app.post("/api/v1/assistant/automations", status_code=202)
+    async def apply_automation(body: AutomationCommand) -> dict[str, Any]:
+        return (await host.dispatch(ApplyAutomationCommand(body))).data
+
+    @app.post("/api/v1/assistant/state")
+    async def edit_assistant(body: AssistantEdit) -> dict[str, str]:
+        await host.dispatch(EditAssistant(body))
+        return {"status": "saved"}
+
+    @app.get("/api/v1/assistant/resources/{resource_id}")
+    async def read_assistant_resource(
+        resource_id: str, historical: bool = False, revision: int | None = None
+    ) -> dict[str, Any]:
+        return (
+            await host.dispatch(ReadAssistantResource(resource_id, historical=historical, revision=revision))
+        ).data
+
+    @app.get("/api/v1/assistant/goals/{goal_id}", response_model=GoalDetail)
+    async def get_goal_detail(goal_id: str) -> dict[str, Any]:
+        return (await host.dispatch(GetGoalDetail(goal_id))).data
+
+    @app.post("/api/v1/assistant/discussions")
+    async def continue_assistant_discussion(body: DiscussionInput) -> dict[str, Any]:
+        return (await host.dispatch(ContinueAssistantDiscussion(body.context))).data
+
+    @app.post("/api/v1/assistant/goals/control", response_model=GoalDetail)
+    async def control_goal(body: GoalCommand) -> dict[str, Any]:
+        return (await host.dispatch(ControlGoal(body))).data
+
+    @app.get("/api/v1/assistant/discussions/{session_id}")
+    async def get_discussion_context(session_id: str) -> dict[str, Any]:
+        return (
+            await host.dispatch(ContinueAssistantDiscussion(ContextRef(kind="session", id=session_id)))
+        ).data
+
+    @app.post("/api/v1/assistant/publications")
+    async def publish_assistant_resource(body: PublishInput) -> dict[str, Any]:
+        return (await host.dispatch(PublishAssistantResource(body))).data
+
     @app.get("/api/v1/configuration")
     async def get_configuration() -> dict[str, Any]:
         result = await host.dispatch(GetConfiguration())
@@ -325,8 +457,9 @@ def create_web_app(
 
     @app.post("/api/v1/configuration/reasoning")
     async def inspect_reasoning(body: ModelConfigurationBody) -> dict[str, Any]:
-        definition = body.model_dump(mode="json", by_alias=False,
-                                     exclude={"expected_revision", "set_default"}, exclude_none=True)
+        definition = body.model_dump(
+            mode="json", by_alias=False, exclude={"expected_revision", "set_default"}, exclude_none=True
+        )
         result = await host.dispatch(InspectReasoning(definition))
         return result.data
 
@@ -381,6 +514,11 @@ def create_web_app(
     @app.patch("/api/v1/sessions/{session_id}/settings")
     async def update_session_settings(session_id: str, body: SessionSettingsBody) -> dict[str, Any]:
         changed: dict[str, Any] = {}
+        if body.permission_preset is not None:
+            result = await host.dispatch(SetPermissionPreset(
+                session_id, body.permission_preset, body.confirm_full_access,
+            ))
+            return {"status": result.status, **result.data}
         if body.reasoning_effort is not None:
             result = await host.dispatch(SelectReasoning(session_id, body.reasoning_effort))
             changed.update(cast(Any, result).data)
@@ -455,6 +593,8 @@ def create_web_app(
                 body.client_request_id,
                 attachments=tuple(item.model_dump() for item in body.attachments),
                 regenerate_from_turn=body.regenerate_from_turn,
+                context_refs=body.context_refs,
+                publish_result=body.publish_result,
             )
         )
         return {
@@ -542,7 +682,7 @@ def create_web_app(
     @app.websocket("/api/v1/live/{live_session_id}/media")
     async def live_media(websocket: WebSocket, live_session_id: str) -> None:
         host_header = websocket.headers.get("host", "")
-        cookie = websocket.cookies.get(_COOKIE, "")
+        cookie = websocket.cookies.get(cookie_name, "")
         origin = websocket.headers.get("origin", "")
         expected_scheme = "https" if websocket.url.scheme == "wss" else "http"
         expected_origin = f"{expected_scheme}://{host_header}"
@@ -908,24 +1048,27 @@ def create_web_app(
             token = request.query_params.get("token")
             if token is not None:
                 nonlocal token_unused
-                if not token_unused or not secrets.compare_digest(token, launch_token):
-                    return _error("invalid_token", "launch token is invalid or already used", status=401)
-                token_unused = False
+                authenticated = secrets.compare_digest(request.cookies.get(cookie_name, ""), session_secret)
+                valid_token = token_unused and secrets.compare_digest(token, launch_token)
+                if valid_token:
+                    token_unused = False
                 query = [(key, value) for key, value in request.query_params.multi_items() if key != "token"]
                 target = f"/?{urlencode(query)}" if query else "/"
-                response = RedirectResponse(target, status_code=303)
-                response.set_cookie(
-                    _COOKIE,
-                    session_secret,
-                    httponly=True,
-                    samesite="strict",
-                    secure=False,
-                    path="/",
-                )
+                response = RedirectResponse(target, status_code=303, headers={"Cache-Control": "no-store"})
+                # An invalid/consumed link opens the recovery UI without granting authentication.
+                if valid_token or authenticated:
+                    response.set_cookie(
+                        cookie_name,
+                        session_secret,
+                        httponly=True,
+                        samesite="strict",
+                        secure=False,
+                        path="/",
+                    )
                 return response
             if not index.is_file():
                 return _error("web_assets_missing", "Lumen Web assets are not built", status=503)
-            return Response(index.read_bytes(), media_type="text/html")
+            return Response(index.read_bytes(), media_type="text/html", headers={"Cache-Control": "no-store"})
 
         app.mount(
             "/",

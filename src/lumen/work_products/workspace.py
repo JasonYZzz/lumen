@@ -18,7 +18,7 @@ from lumen.completion import CompletionBlocker
 from lumen.context.artifacts import ArtifactStore
 from lumen.io import run_io
 from lumen.tools.spec import EffectKind
-from lumen.tools.workspace import Workspace
+from lumen.tools.workspace import Workspace, WorkspaceViolation
 
 from .adapters import AdapterError, ResourceAdapter, StructuredResourceAdapter, TextResourceAdapter
 from .directories import USER_SKILLS_PREFIX, DirectoryResourceAdapter
@@ -67,8 +67,11 @@ class TaskWorkspace:
         strict: bool = True,
         max_context_items: int = 8,
         user_skills: Path | None = None,
+        allow_external_paths: bool = False,
     ) -> None:
-        self.workspace = Workspace(root)
+        self.workspace = Workspace(
+            root, allow_external_paths=allow_external_paths, use_session_permissions=True,
+        )
         self.artifacts = artifacts
         self.repository = repository
         self.enabled = enabled
@@ -144,7 +147,7 @@ class TaskWorkspace:
         kind: str | None = None,
         selector: str | None = None,
     ) -> dict[str, Any]:
-        """打开一个工作区资源，并可选地在其中定位目标。"""
+        """打开资源并可选地定位目标；工作区外路径需要当前会话的完全访问授权。"""
 
         self._require_enabled()
         resource = self._canonical_resource(resource)
@@ -709,7 +712,13 @@ class TaskWorkspace:
                 updated = self._reconciled_effect(effect, EffectStatus.RECONCILIATION_REQUIRED)
             else:
                 adapter = self._adapters[product.kind]
-                actual = adapter.snapshot(effect.resource)
+                try:
+                    actual = adapter.snapshot(effect.resource)
+                except WorkspaceViolation as error:
+                    updated = self._reconciled_effect(effect, EffectStatus.RECONCILIATION_REQUIRED)
+                    self._save_effect(resolved, updated.model_copy(update={"error": str(error)}))
+                    state = self._state(resolved)
+                    continue
                 if effect.after is not None and actual.revision == effect.after.revision:
                     if effect.operation == "restore_work_product":
                         verification = VerificationResult(
@@ -881,6 +890,8 @@ class TaskWorkspace:
                 and effect.effect_kind is EffectKind.EXECUTION
             ):
                 model_recoverable = effect.work_product_id is not None
+                if model_recoverable and effect.resource is not None:
+                    model_recoverable = self._can_access_resource(effect.resource)
                 recovery = (
                     "Inspect the work product and verify or restore its actual contents."
                     if model_recoverable else
@@ -902,11 +913,17 @@ class TaskWorkspace:
                 )
             ):
                 issues.append(CompletionBlocker(
-                    f"effect {effect.id} ({effect.operation}) failed after mutation"
+                    f"effect {effect.id} ({effect.operation}) failed after mutation",
+                    model_recoverable=(
+                        effect.resource is None or self._can_access_resource(effect.resource)
+                    ),
                 ))
         for product in state.work_products:
             if product.status is WorkProductStatus.RECONCILIATION_REQUIRED:
-                issues.append(CompletionBlocker(f"work product {product.id} requires reconciliation"))
+                issues.append(CompletionBlocker(
+                    f"work product {product.id} requires reconciliation",
+                    model_recoverable=self._can_access_resource(product.resource),
+                ))
         return issues
 
     def waive_effects(self, session_id: str, scope: tuple[str, ...], reason: str) -> int:
@@ -944,7 +961,11 @@ class TaskWorkspace:
                 current_state = self._state(session_id)
                 product = current_state.product(effect.work_product_id)
                 if product is not None and product.status is WorkProductStatus.RECONCILIATION_REQUIRED:
-                    actual = self._adapters[product.kind].snapshot(product.resource)
+                    try:
+                        actual = self._adapters[product.kind].snapshot(product.resource)
+                    except WorkspaceViolation:
+                        # An explicit waiver accepts the last known state without restoring path access.
+                        actual = product.current
                     accepted = product.model_copy(
                         update={
                             "current": actual,
@@ -1099,7 +1120,14 @@ class TaskWorkspace:
             assert isinstance(adapter, DirectoryResourceAdapter)
             adapter.path(resource)
             return resource
-        return self.workspace.resolve_for_mutation(resource).relative_to(self.workspace.root).as_posix()
+        return self.workspace.resource_path(self.workspace.resolve_for_mutation(resource))
+
+    def _can_access_resource(self, resource: str) -> bool:
+        try:
+            self._canonical_resource(resource)
+        except WorkspaceViolation:
+            return False
+        return True
 
     def _store_change(self, change: Any, kind: WorkProductKind) -> tuple[str, str]:
         if kind is WorkProductKind.TEXT and isinstance(change, str):

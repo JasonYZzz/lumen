@@ -7,10 +7,37 @@ import platform
 import shutil
 import sys
 import tempfile
+from collections.abc import Generator
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal
 
 from lumen.config import SandboxConfig
+
+SandboxMode = Literal["workspace_write", "disabled"]
+# A Host-derived execution projection; asyncio tasks and run_io inherit it without global config mutation.
+session_sandbox_mode: ContextVar[SandboxMode | None] = ContextVar("lumen_session_sandbox_mode", default=None)
+
+
+@contextmanager
+def sandbox_scope(mode: SandboxMode | None) -> Generator[None]:
+    token = session_sandbox_mode.set(mode)
+    try:
+        yield
+    finally:
+        session_sandbox_mode.reset(token)
+
+
+def effective_sandbox_config(config: SandboxConfig) -> SandboxConfig:
+    mode = session_sandbox_mode.get()
+    if mode is None:
+        return config
+    return config.model_copy(update={
+        "mode": mode,
+        **({"extra_read_paths": [], "extra_write_paths": []} if mode == "workspace_write" else {}),
+    })
 
 
 class SandboxUnavailableError(RuntimeError):
@@ -30,9 +57,16 @@ class PreparedSandboxCommand:
 class SandboxRunner:
     """Build Seatbelt/bubblewrap commands without granting model escalation."""
 
-    def __init__(self, workspace: str | Path, config: SandboxConfig) -> None:
+    def __init__(
+        self, workspace: str | Path, config: SandboxConfig, *, use_session_permissions: bool = True,
+    ) -> None:
         self.workspace = Path(workspace).resolve()
-        self.config = config
+        self._config = config
+        self.use_session_permissions = use_session_permissions
+
+    @property
+    def config(self) -> SandboxConfig:
+        return effective_sandbox_config(self._config) if self.use_session_permissions else self._config
 
     def prepare(
         self,

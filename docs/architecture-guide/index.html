@@ -62,6 +62,7 @@
         <a href="12-current-implementation-audit.md" data-inspect-path="docs/architecture-guide/12-current-implementation-audit.md"><span>当前实现审计</span><small>MD · 当前页预览</small></a>
         <a href="../README.md" data-inspect-path="docs/README.md"><span>文档事实分层</span><small>当前 / 研究 / 计划</small></a>
         <a href="../desktop.md" data-inspect-path="docs/desktop.md"><span>macOS 桌面 Beta</span><small>原生启动 · 凭据 · 构建</small></a>
+        <a href="16-personal-assistant-automations.md" data-inspect-path="docs/architecture-guide/16-personal-assistant-automations.md"><span>v2 个人助理与自动化</span><small>Host 命令 · 本地调度 · 站内结算</small></a>
       </div>
     </aside>
 
@@ -69,7 +70,7 @@
       <section id="overview" class="hero searchable" data-title="系统全景 architecture overview">
         <div class="hero-copy hero-board">
           <div class="hero-titleline"><h1>Lumen Architecture Atlas</h1><span>权威运行拓扑 · AUTHORITY MAP</span></div>
-          <p class="hero-lede">一次 Prompt 穿过唯一权威 Module 的实际路径；实线是执行，双线是读写，虚线是事件与恢复。</p>
+          <p class="hero-lede">一次 Prompt 穿过唯一权威 Module 的实际路径；实线是执行，双线是读写，虚线是事件与恢复。v2 自动化经 Host 接入同一执行链，控制状态另由 AutomationStore 持有。</p>
           <div class="hero-topology" role="img" aria-label="从客户端到 WorkspaceHost、RunCoordinator、AgentRuntime、ContextEngine 与持久状态的权威拓扑">
             <div class="topology-clients">
               <div><b>Textual TUI</b><small>client adapter</small></div>
@@ -105,10 +106,11 @@
           </div>
         </div>
         <div class="hero-ledger glass" aria-label="当前架构契约摘要">
-          <div class="ledger-head"><span>AUTHORITY LEDGER</span><strong>REV · 2026.09</strong></div>
+          <div class="ledger-head"><span>AUTHORITY LEDGER</span><strong>REV · 2026.10</strong></div>
           <dl>
             <div><dt>Session</dt><dd>v12 · append-only</dd></div>
             <div><dt>Config</dt><dd>v2 · strict</dd></div>
+            <div><dt>Automation</dt><dd>local owner · SQLite v2</dd></div>
             <div><dt>Sandbox</dt><dd>workspace_write</dd></div>
             <div><dt>Tool contract</dt><dd>V2 · 3 projections</dd></div>
             <div><dt>Catalog</dt><dd>contracts.json · v7</dd></div>
@@ -214,7 +216,7 @@
             <div class="seq-row warning"><i>6</i><b style="--from:4;--to:6">Hook → 参数冻结 → 审批 → ToolGuard → 执行 ↻</b><em>同一 validated invocation · canonical 结果回到模型</em></div>
             <div class="seq-row accent"><i>7</i><b style="--from:4;--to:5">提交新消息 commit(...) →</b><em>ToolCallView / ToolResultView 只做展示</em></div>
             <div class="seq-row"><i>8</i><b style="--from:4;--to:3">运行结果 RunOutcome ←</b><em>turn + receipts append + fsync</em></div>
-            <div class="seq-row success"><i>9</i><b style="--from:3;--to:1">唯一终止事件 + 最终结果 ←</b><em>turn fsync 后发布 terminal 与 CoordinatorState</em></div>
+            <div class="seq-row success"><i>9</i><b style="--from:3;--to:1">唯一终止事件 + 最终结果 ←</b><em>turn fsync · Host 收录文件并释放占用后发布 terminal</em></div>
           </div>
         </figure>
 
@@ -350,7 +352,7 @@
           <div><b>审批</b><span>是否允许此次操作</span></div><div class="plus">+</div>
           <div><b>Confinement</b><span>文件工具能访问哪里</span></div><div class="not-equal">≠</div>
           <div><b>OS Sandbox</b><span>进程真实系统与网络权限</span></div>
-          <p>三层均已实现：默认 workspace_write 使用 Seatbelt / bubblewrap，adapter 缺失时 fail closed；仅显式 disabled 才放弃 OS 隔离。</p>
+          <p>三层均已实现：默认 workspace_write 使用 Seatbelt / bubblewrap，adapter 缺失时 fail closed；会话“完全访问”经明确确认解除路径与 OS 隔离，其他会话范围不变。</p>
         </div>
         <div class="three-cols contract-notes">
           <article class="info-panel glass"><h3>Expected revision</h3><p>文件 mutation 先取得 <code>sha256:</code> revision 或 <code>missing</code>；冲突返回 <code>STALE_RESOURCE</code>，不会猜测覆盖。</p><code>tools/workspace.py</code></article>
@@ -360,7 +362,7 @@
       </section>
 
       <section id="sessions" class="searchable" data-title="会话 事件 EventJournal SSE JSONL TUI Web session resume">
-        <header class="section-heading"><div><span class="section-index">06</span><h2>会话、事件与客户端</h2></div><p>所有用户可见状态都由类型化事件驱动，同一事件流同时服务实时 UI、重连和审计。</p></header>
+        <header class="section-heading"><div><span class="section-index">06</span><h2>会话、事件与客户端</h2></div><p>执行状态由类型化事件驱动，同一事件流服务实时 UI、重连和审计；v2 助理列表从持久查询投影读取。</p></header>
         <figure class="diagram glass event-board">
           <figcaption><strong>事件溯源交互 · Event-Sourced Interaction</strong><span>sequence 是实时订阅、SSE 重连与 timeline 恢复的共同坐标。</span></figcaption>
           <div class="event-top"><div class="node cyan">Textual TUI</div><div class="node cyan">FastAPI / SSE</div><div class="node cyan">Next.js Web</div></div>
@@ -380,6 +382,7 @@
         <div class="data-record glass" aria-label="客户端能力矩阵">
           <div><span>Core shared</span><code>Session / Run / Approval</code><code>Skill / MCP / Context</code><code>AttachmentRef 图片</code></div>
           <div><span>Web / Desktop Beta</span><code>Realtime voice（桌面实机待验收）</code><code>图片选择 / 拖放 / 剪贴板</code></div>
+          <div><span>Web authentication</span><code>一次性链接 → HttpOnly Cookie</code><code>CLI 工作区／地址隔离 · 重启保留登录</code><code>401 独立恢复 · 不重发任务</code></div>
           <div><span>TUI-only</span><code>! command</code><code>@图片路径 / 路径粘贴</code></div>
           <div><span>Unsupported / Planned</span><code>终端二进制剪贴板</code><code>图片预览与裁剪</code></div>
         </div>
@@ -500,7 +503,8 @@
           <div><b>agent</b><span>model profiles · overrides · limits · skills</span></div><div><b>tools</b><span>builtin · plugins · web fetch/search</span></div><div><b>mcp_servers</b><span>transport · risk · OAuth</span></div><div><b>permissions</b><span>mode · allow/deny · project rules</span></div><div><b>context</b><span>ratio policy · recent · summary · background</span></div><div><b>memory</b><span>recall · learn · work queue</span></div><div><b>agents</b><span>profiles · concurrency · run limits</span></div><div><b>sandbox / live</b><span>OS isolation · Realtime routes</span></div>
         </div>
         <div class="three-cols contract-notes">
-          <article class="info-panel glass"><h3>长任务持续执行</h3><p>默认无次数与模型总时限硬墙；300 秒流空闲随数据延续。同轮压缩，断流安全重试，完整工具批次可恢复。</p><a href="14-long-running-recovery.md">配置、故障分类与踩坑记录 →</a></article>
+          <article class="info-panel glass"><h3>长任务持续执行</h3><p>普通交互默认无次数与模型总时限硬墙；300 秒流空闲随数据延续。同轮压缩，断流安全重试，完整工具批次可恢复。</p><a href="14-long-running-recovery.md">配置、故障分类与踩坑记录 →</a></article>
+          <article class="info-panel glass"><h3>v2 目标、灵感与持续跟进</h3><p>目标保留原讨论；明确成功标准后由 Host 逐轮推进与提交验收，可暂停，重启需恢复。灵感展示来源与方案，明确开始任务才执行。定期跟进另行试跑启用；后台模型仍无工具，默认 6 步、180 秒。</p><a href="16-personal-assistant-automations.md">目标推进、资料与来源边界 →</a></article>
           <article class="info-panel glass"><h3>RegistrationScope</h3><p>只拥有 disposer 与后台 task；关闭时取消并等待 task，再按 LIFO 撤销注册。它不保存任何领域状态。</p><code>lifecycle.py</code></article>
           <article class="info-panel glass"><h3>Capability observation</h3><p>CLI、TUI、Web 共用一个只读投影，解释 tool/skill/MCP/profile 的实际可见性，不参与授权。</p><code>GET /api/v1/capabilities</code></article>
           <article class="info-panel glass"><h3>Generated catalog</h3><p>从运行时类型确定性生成；CI 检查 freshness，删除后可重建，不能反向成为运行 schema。</p><code>docs/generated/contracts.json</code></article>

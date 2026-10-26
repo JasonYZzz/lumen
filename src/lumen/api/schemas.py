@@ -2,8 +2,9 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from lumen.automation.models import ContextRef
 from lumen.reasoning import ReasoningLevel
 
 
@@ -24,6 +25,8 @@ class StartRunBody(WebModel):
     client_request_id: str = Field(alias="clientRequestId", min_length=1, max_length=200)
     attachments: list[AttachmentBody] = Field(default_factory=list[AttachmentBody], max_length=8)
     regenerate_from_turn: int | None = Field(default=None, alias="regenerateFromTurn", ge=0)
+    context_refs: tuple[ContextRef, ...] = Field(default=(), alias="contextRefs", max_length=16)
+    publish_result: bool = Field(default=False, alias="publishResult")
 
 
 class RetryRunBody(WebModel):
@@ -54,13 +57,16 @@ class WorkspaceSettingsBody(WebModel):
 class ModelConfigurationBody(WebModel):
     expected_revision: str = Field(alias="expectedRevision", min_length=8, max_length=100)
     id: str = Field(min_length=1, max_length=300)
-    api: Literal[
-        "chat",
-        "responses",
-        "openai-completions",
-        "openai-responses",
-        "chat-completions",
-    ] | None = None
+    api: (
+        Literal[
+            "chat",
+            "responses",
+            "openai-completions",
+            "openai-responses",
+            "chat-completions",
+        ]
+        | None
+    ) = None
     base_url: str | None = Field(default=None, alias="baseUrl", max_length=2000)
     api_key_env: str | None = Field(
         default=None,
@@ -75,9 +81,7 @@ class ModelConfigurationBody(WebModel):
     input_modalities: list[Literal["text", "image"]] = Field(
         default_factory=lambda: ["text"], alias="inputModalities"
     )
-    native_web_search: dict[str, Any] = Field(
-        default_factory=dict[str, Any], alias="nativeWebSearch"
-    )
+    native_web_search: dict[str, Any] = Field(default_factory=dict[str, Any], alias="nativeWebSearch")
     set_default: bool = Field(default=False, alias="setDefault")
 
 
@@ -91,12 +95,30 @@ class ConfigurationRevisionBody(WebModel):
 
 
 class SessionSettingsBody(WebModel):
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    permission_preset: Literal["manual", "accept_edits", "workspace_auto", "full_access"] | None = Field(
+        default=None, alias="permissionPreset",
+    )
+    confirm_full_access: bool = Field(default=False, alias="confirmFullAccess", strict=True)
     reasoning_effort: ReasoningLevel | None = Field(default=None, alias="reasoningEffort")
     approval_mode: Literal["manual", "accept_edits", "auto"] | None = Field(
         default=None, alias="approvalMode"
     )
     collaboration_mode: Literal["default", "plan"] | None = Field(default=None, alias="collaborationMode")
     transcript_density: Literal["normal", "verbose"] | None = Field(default=None, alias="transcriptDensity")
+
+    @model_validator(mode="after")
+    def validate_permission_preset(self) -> SessionSettingsBody:
+        if self.permission_preset is not None and any(value is not None for value in (
+            self.approval_mode, self.collaboration_mode, self.reasoning_effort, self.transcript_density,
+        )):
+            raise ValueError("permissionPreset must be updated separately from other session settings")
+        if self.permission_preset == "full_access" and not self.confirm_full_access:
+            raise ValueError("full_access requires explicit confirmFullAccess")
+        if self.confirm_full_access and self.permission_preset != "full_access":
+            raise ValueError("confirmFullAccess requires the full_access preset")
+        return self
 
 
 class RenameSessionBody(WebModel):

@@ -71,6 +71,7 @@ def build_builtin_specs(
     max_timeout: float = 60.0,
     sandbox_config: SandboxConfig | None = None,
     task_workspace: TaskWorkspace | None = None,
+    workspace: Workspace | None = None,
 ) -> list[ToolSpec]:
     """Return the read-only builtins followed by the capability tools.
 
@@ -79,14 +80,22 @@ def build_builtin_specs(
     execute them after approval by default.
     """
 
-    workspace = Workspace(root)
+    if workspace is None:
+        workspace = task_workspace.workspace if task_workspace is not None else Workspace(
+            root, allow_external_paths=sandbox_config is not None and sandbox_config.mode == "disabled",
+            use_session_permissions=True,
+        )
+    path_scope = (
+        "路径相对工作区解析；实际访问范围见当前运行上下文。完全访问时可用绝对路径或 ~ 访问其他本地目录。"
+        if workspace.use_session_permissions else "路径必须位于工作区内，不能通过父会话授权越界。"
+    )
 
     def read_file(
-        path: Annotated[str, Field(description="工作区内 UTF-8 文件的相对路径。")],
+        path: Annotated[str, Field(description="UTF-8 文件路径；可访问范围见工具说明。")],
         start_line: Annotated[int, Field(description="从 1 开始的起始行号。", ge=1)] = 1,
         max_lines: Annotated[int, Field(description="本次最多返回的行数。", ge=1)] = 400,
     ) -> ReadFileResult:
-        """分页读取工作区内的一个 UTF-8 文本文件，并返回续读元数据。
+        """分页读取一个有权限访问的 UTF-8 文本文件，并返回续读元数据。
 
         结果包含 content、start_line、end_line、lines_returned、has_more、
         next_start_line、total_lines（到达文件末尾时）和 truncated_reason。
@@ -196,10 +205,10 @@ def build_builtin_specs(
         }
 
     def list_directory(
-        path: Annotated[str, Field(description="工作区内目录的相对路径。")] = ".",
+        path: Annotated[str, Field(description="目录路径；可访问范围见工具说明。")] = ".",
         depth: Annotated[int, Field(description="列出的目录层级，范围为 1 到 4。", ge=1, le=4)] = 1,
     ) -> str:
-        """按目录顺序列出工作区；depth 限制遍历，不深入默认忽略目录。"""
+        """按目录顺序列出有权限访问的目录；depth 限制遍历，不深入默认忽略目录。"""
         if not 1 <= depth <= 4:
             raise ValueError("depth 必须在 1 到 4 之间")
         resolved = workspace.resolve(path)
@@ -218,7 +227,7 @@ def build_builtin_specs(
             for name in entries:
                 safe_entry = workspace.resolve(parent / name)
                 suffix = "/" if safe_entry.is_dir() else ""
-                row = f"{safe_entry.relative_to(workspace.root).as_posix()}{suffix}"
+                row = f"{workspace.resource_path(safe_entry)}{suffix}"
                 rows.append(row)
                 output_bytes += len(row.encode("utf-8")) + 1
                 if output_bytes > MAX_OUTPUT_BYTES:
@@ -237,7 +246,7 @@ def build_builtin_specs(
         ],
         path: Annotated[
             str,
-            Field(description="工作区内现有文件或目录的相对路径；传入文件时只搜索该文件。"),
+            Field(description="现有文件或目录的路径；传入文件时只搜索该文件，可访问范围见工具说明。"),
         ] = ".",
         glob: Annotated[
             str,
@@ -245,7 +254,7 @@ def build_builtin_specs(
         ] = "**/*",
         max_results: Annotated[int, Field(description="本次最多返回的匹配数。", ge=1)] = 100,
     ) -> str:
-        """用正则表达式搜索工作区文本；path 可以是一个文件或目录。"""
+        """用正则表达式搜索有权限访问的文本；path 可以是一个文件或目录。"""
         if max_results < 1:
             raise ValueError("max_results 必须是正整数")
         pattern = re.compile(query)
@@ -275,7 +284,7 @@ def build_builtin_specs(
                         line_number += 1
                         if len(line) > MAX_OUTPUT_BYTES and not line.endswith("\n"):
                             raise ValueError(
-                                f"{safe_file.relative_to(workspace.root)}:{line_number} "
+                                f"{workspace.resource_path(safe_file)}:{line_number} "
                                 f"超过 search_text 的 {MAX_OUTPUT_BYTES} 字符行上限；请缩小读取范围"
                             )
                         text = line.rstrip("\r\n")
@@ -285,7 +294,7 @@ def build_builtin_specs(
                             truncated = True
                             break
                         row = (
-                            f"{safe_file.relative_to(workspace.root).as_posix()}:{line_number}:"
+                            f"{workspace.resource_path(safe_file)}:{line_number}:"
                             f"{text}"
                         )
                         matches.append(row)
@@ -303,16 +312,19 @@ def build_builtin_specs(
     read_specs = [
         ToolSpec(
             read_file,
+            description=(read_file.__doc__ or "") + "\n" + path_scope,
             risk=Risk.READ,
             concurrency=lambda _args: ToolConcurrency.PARALLEL_SAFE,
         ),
         ToolSpec(
             list_directory,
+            description=(list_directory.__doc__ or "") + "\n" + path_scope,
             risk=Risk.READ,
             concurrency=lambda _args: ToolConcurrency.PARALLEL_SAFE,
         ),
         ToolSpec(
             search_text,
+            description=(search_text.__doc__ or "") + "\n" + path_scope,
             risk=Risk.READ,
             concurrency=lambda _args: ToolConcurrency.PARALLEL_SAFE,
         ),
@@ -324,6 +336,7 @@ def build_builtin_specs(
             max_timeout=max_timeout,
             sandbox_config=sandbox_config,
             task_workspace=task_workspace,
+            workspace=workspace,
         ),
         *build_git_specs(
             root,

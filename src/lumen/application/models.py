@@ -5,6 +5,14 @@ from datetime import UTC, datetime
 from typing import Any, Literal, TypeAlias
 
 from lumen.attachments import AttachmentRef
+from lumen.automation.models import (
+    AssistantEdit,
+    AutomationCommand,
+    ContextRef,
+    GoalCommand,
+    PreferenceCommand,
+    PublishInput,
+)
 from lumen.reasoning import ReasoningLevel, ReasoningSelection
 from lumen.timeline import TimelineItem
 
@@ -12,6 +20,83 @@ from lumen.timeline import TimelineItem
 @dataclass(frozen=True, slots=True)
 class CreateSession:
     type: Literal["create_session"] = "create_session"
+
+
+@dataclass(frozen=True, slots=True)
+class GetAssistantState:
+    type: Literal["get_assistant_state"] = "get_assistant_state"
+
+
+@dataclass(frozen=True, slots=True)
+class GetAssistantPage:
+    kind: Literal["feed", "resource"]
+    before: int | None = None
+    query: str = ""
+    category: str = "all"
+    limit: int = 50
+    session_id: str | None = None
+    type: Literal["get_assistant_page"] = "get_assistant_page"
+
+
+@dataclass(frozen=True, slots=True)
+class GetAssistantOccurrence:
+    occurrence_id: str
+    type: Literal["get_assistant_occurrence"] = "get_assistant_occurrence"
+
+
+@dataclass(frozen=True, slots=True)
+class GetAssistantPreferences:
+    type: Literal["get_assistant_preferences"] = "get_assistant_preferences"
+
+
+@dataclass(frozen=True, slots=True)
+class ApplyPreferenceCommand:
+    command: PreferenceCommand
+    type: Literal["apply_preference_command"] = "apply_preference_command"
+
+
+@dataclass(frozen=True, slots=True)
+class ApplyAutomationCommand:
+    command: AutomationCommand
+    type: Literal["apply_automation_command"] = "apply_automation_command"
+
+
+@dataclass(frozen=True, slots=True)
+class EditAssistant:
+    edit: AssistantEdit
+    type: Literal["edit_assistant"] = "edit_assistant"
+
+
+@dataclass(frozen=True, slots=True)
+class ReadAssistantResource:
+    resource_id: str
+    historical: bool = False
+    revision: int | None = None
+    type: Literal["read_assistant_resource"] = "read_assistant_resource"
+
+
+@dataclass(frozen=True, slots=True)
+class ContinueAssistantDiscussion:
+    context: ContextRef
+    type: Literal["continue_assistant_discussion"] = "continue_assistant_discussion"
+
+
+@dataclass(frozen=True, slots=True)
+class GetGoalDetail:
+    goal_id: str
+    type: Literal["get_goal_detail"] = "get_goal_detail"
+
+
+@dataclass(frozen=True, slots=True)
+class ControlGoal:
+    command: GoalCommand
+    type: Literal["control_goal"] = "control_goal"
+
+
+@dataclass(frozen=True, slots=True)
+class PublishAssistantResource:
+    publication: PublishInput
+    type: Literal["publish_assistant_resource"] = "publish_assistant_resource"
 
 
 @dataclass(frozen=True, slots=True)
@@ -93,6 +178,8 @@ class StartRun:
     model_prompt: str | None = None
     attachments: tuple[AttachmentRef | dict[str, Any], ...] = ()
     regenerate_from_turn: int | None = None
+    context_refs: tuple[ContextRef, ...] = ()
+    publish_result: bool = False
     type: Literal["start_run"] = "start_run"
 
 
@@ -161,6 +248,14 @@ class SetApprovalMode:
     session_id: str
     mode: Literal["manual", "accept_edits", "auto"]
     type: Literal["set_approval_mode"] = "set_approval_mode"
+
+
+@dataclass(frozen=True, slots=True)
+class SetPermissionPreset:
+    session_id: str
+    preset: Literal["manual", "accept_edits", "workspace_auto", "full_access"]
+    confirmed: bool = False
+    type: Literal["set_permission_preset"] = "set_permission_preset"
 
 
 @dataclass(frozen=True, slots=True)
@@ -426,6 +521,18 @@ class ImportAttachmentPath:
 
 WorkspaceCommand: TypeAlias = (
     CreateSession
+    | GetAssistantState
+    | GetAssistantPage
+    | GetAssistantOccurrence
+    | GetAssistantPreferences
+    | ApplyPreferenceCommand
+    | ApplyAutomationCommand
+    | EditAssistant
+    | ReadAssistantResource
+    | ContinueAssistantDiscussion
+    | GetGoalDetail
+    | ControlGoal
+    | PublishAssistantResource
     | GetBootstrap
     | GetConfiguration
     | GetInstructions
@@ -447,6 +554,7 @@ WorkspaceCommand: TypeAlias = (
     | QueueRunInput
     | DequeueRunInputs
     | SetApprovalMode
+    | SetPermissionPreset
     | SetCollaborationMode
     | SetTranscriptDensity
     | ApprovePlan
@@ -529,6 +637,10 @@ class WorkspaceBootstrap:
     skills: list[dict[str, str]]
     warnings: list[str]
     active_run_id: str | None
+    model_ids: dict[str, str] = field(default_factory=dict[str, str])
+    pending_model: str | None = None
+    sandbox_mode: Literal["workspace_write", "disabled"] = "workspace_write"
+    filesystem_scope: Literal["workspace", "configured", "full"] = "workspace"
     live_enabled: bool = False
     reasoning: ReasoningSelection = field(default_factory=ReasoningSelection)
 
@@ -579,6 +691,8 @@ class SessionSnapshot:
     last_user_input: str | None
     active_run_id: str | None
     approval_mode: str = "manual"
+    sandbox_mode: Literal["workspace_write", "disabled"] = "workspace_write"
+    filesystem_scope: Literal["workspace", "configured", "full"] = "workspace"
     collaboration_mode: str = "default"
     plan_review_status: str = "none"
     transcript_density: str = "normal"

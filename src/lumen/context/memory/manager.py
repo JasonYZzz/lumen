@@ -231,6 +231,27 @@ class MemoryManager:
         record = self._editable_record(target)
         return self.apply_edit(target, draft=self._render_edit_draft(record, content))
 
+    def confirm(self, target: str) -> MemoryRecord:
+        """Confirm a visible candidate without changing its identity or provenance."""
+        record = self._editable_record(target)
+        now = datetime.now(UTC)
+        if record.status is MemoryStatus.EXPIRED or (
+            record.valid_until is not None and record.valid_until < now
+        ):
+            raise ValueError("Preference expired; write a new explicit preference instead")
+        stored = self._repo.remember(
+            record.model_copy(
+                update={
+                    "source_kind": MemorySource.EXPLICIT,
+                    "status": MemoryStatus.ACTIVE,
+                    "confidence": 1.0,
+                    "updated_at": now,
+                }
+            )
+        )
+        self.rebuild_projection()
+        return stored
+
     # -- recall -----------------------------------------------------------
 
     def recall(

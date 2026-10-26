@@ -28,16 +28,18 @@ from lumen.context.artifacts import ArtifactStore
 from lumen.context.instructions import InstructionSource
 from lumen.events import ApprovalRequest, ProgressReported, ToolCallStarted
 from lumen.interactive_queue import QueueMode
+from lumen.io import run_io
 from lumen.models import build_model, build_native_tools
 from lumen.reasoning import ReasoningSelection, resolve_reasoning
 from lumen.runtime import AgentRuntime, ApprovalHandler, CompletionPolicy, ToolApproval
-from lumen.sandbox import SandboxRunner
+from lumen.sandbox import SandboxRunner, effective_sandbox_config, sandbox_scope
 from lumen.task_control import CONTROL_TOOL_NAMES
 from lumen.tools.builtin import build_builtin_specs
 from lumen.tools.capability import run_prepared_command
 from lumen.tools.gateway import CapabilityGateway
 from lumen.tools.registry import PermissionPolicy, ToolRegistry
 from lumen.tools.spec import EffectKind, Risk, ToolConcurrency, ToolSpec
+from lumen.tools.workspace import Workspace
 from lumen.work_products import EffectReceipt, EffectStatus, TaskWorkspace
 
 from .orchestrator import AgentRuntimeFactory
@@ -197,7 +199,8 @@ class NativeAgentRuntimeFactory(AgentRuntimeFactory):
                 for name in sorted(candidates)
             ),
             approval_mode=approval_mode,
-            sandbox_mode=self.sandbox.mode,
+            sandbox_mode=("workspace_write" if profile.workspace_mode is WorkspaceMode.WORKTREE
+                          else effective_sandbox_config(self.sandbox).mode),
             workspace_mode=profile.workspace_mode,
             cwd=str(self.workspace),
             request_limit=min(request_limits) if request_limits else None,
@@ -213,8 +216,18 @@ class NativeAgentRuntimeFactory(AgentRuntimeFactory):
         messages: Sequence[AgentMessage],
     ) -> AgentExecutionResult:
         if thread.config.workspace_mode is WorkspaceMode.WORKTREE:
-            return await self._execute_worktree(thread, profile, messages)
-        return await self._execute_runtime(thread, profile, messages, self.workspace)
+            with sandbox_scope("workspace_write"):
+                return await self._execute_worktree(thread, profile, messages)
+        settings = (await run_io(
+            self.task_workspace.repository.load, thread.ref.parent_session_id,
+        )).settings if self.task_workspace is not None else None
+        parent_mode = settings.sandbox_mode if settings is not None else None
+        with sandbox_scope(parent_mode):
+            full_access = (thread.config.sandbox_mode == "disabled"
+                           and effective_sandbox_config(self.sandbox).mode == "disabled")
+        mode = "disabled" if full_access else "workspace_write"
+        with sandbox_scope(mode):
+            return await self._execute_runtime(thread, profile, messages, self.workspace)
 
     async def import_changes(self, thread: AgentThreadState) -> AgentExecutionResult:
         started = time.monotonic()
@@ -730,6 +743,7 @@ class NativeAgentRuntimeFactory(AgentRuntimeFactory):
                 cwd,
                 max_timeout=self.limits.tool_timeout_seconds,
                 sandbox_config=self.sandbox,
+                workspace=Workspace(cwd),
             )
         }
         for name in self.enabled_builtins:
@@ -782,7 +796,7 @@ class NativeAgentRuntimeFactory(AgentRuntimeFactory):
     async def _git_result(self, cwd: Path, *args: str) -> subprocess.CompletedProcess[str]:
         # Host-owned lifecycle Git commands are serialized. Child model tools
         # retain their separately narrowed sandbox and approval policy.
-        sandbox = SandboxRunner(cwd, SandboxConfig(mode="disabled"))
+        sandbox = SandboxRunner(cwd, SandboxConfig(mode="disabled"), use_session_permissions=False)
         argv = ["git", *args]
         async with self._git_lock:
             result = await run_prepared_command(

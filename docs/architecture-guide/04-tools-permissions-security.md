@@ -10,6 +10,10 @@ macOS 桌面不会放宽这些边界。原生启动页只负责信任、凭据�
 WorkspaceHost 和 Gateway。Python Plugin/Hook 仍是显式信任的进程内代码，冻结包不自动安装
 额外依赖；外部 MCP／命令执行器的安装和授权见[桌面指南](../desktop.md)。
 
+v2 根文字交互按 run 派生 `inspect_personal_assistant`、`read_assistant_resource` 两个 read／observe 工具，和 `manage_automation`、`manage_personal_goal` 两个 confirm／mutation 工具。后两者仍需每次明确审批，Plan 模式拒绝非 read 契约。后台、child 和 Live 不获得这些工具。当前新增名称未进入 ResourceManager 的保留名集合，插件重名会导致根对话失败，见[代码审查问题 4](../research/2026-10-20-v2-code-review.md#4-p2-host-工具重名会阻断普通对话)。
+
+后台来源读取通过父 Gateway 收窄到内建 read_file，并保留权限、Hook 和安全文件边界；模型本身的工具集合为空。具体范围和故障处理见[第 16 章](16-personal-assistant-automations.md)。
+
 ## 4.1 工具从定义到执行
 
 ```mermaid
@@ -62,6 +66,13 @@ flowchart LR
 对 `run_command` 的永久放行静默发布版本历史。`confirm` 仍只决定审批，不推导副作用；
 未显式声明 EffectKind 的 confirm 工具按 unknown 处理。
 
+Host 的会话授权与项目授权复用同一 capability key。项目授权写入成功后同步进程内规则集合，
+因此不依赖 actor 是否已创建；同批等待的匹配请求会重新判定并唤醒，不要求逐项重复点击。
+`run_command` key 包含规范化完整参数的 SHA-256，仍不放宽到 executable／命令前缀；
+原始命令参数不写入授权规则。`confirm` 始终忽略记忆 scope。Web 只为可记忆请求展示会话／项目选项，
+并说明命令匹配范围。审批模式可在运行中调整，持久化后重新判定尚未执行的请求；
+已经通过 Gateway 并开始执行的动作不撤回，Plan 的只读契约不变。
+
 ## 4.3 审批模式
 
 ```mermaid
@@ -89,15 +100,43 @@ Plan 只信任 Capability Contract 自己声明的 `Risk=read`。不再根据 `r
 
 ## 4.4 工作区约束
 
-本地文件工具通过 `Workspace` 解析路径：
+本地文件工具与 TaskWorkspace 共用 `Workspace` 路径权限。默认 `sandbox.mode: workspace_write`：
 
-- 拒绝绝对路径和 `..` 逃逸；
+- 相对路径以工作区为基准，绝对路径也必须位于工作区内；拒绝 `..` 逃逸；
 - resolve 后再次检查，阻断符号链接越界；
 - mutation 路径逐级拒绝任何既有符号链接，并在创建父目录后再次解析；
 - 调用方先取得 `sha256:` revision 或 `missing`，发布时必须传入同一个 `expected_revision`；
 - 新建文件以 no-replace hard-link 发布，目标抢先出现时返回 `STALE_RESOURCE`；替换文件在临时文件 `fsync` 后再次校验 revision，再执行 `os.replace`；
 - legacy `write_file/edit_file` 与 Work Product Adapter 共用 `Workspace.atomic_write`，不会形成第二条写入语义；
 - 精确编辑要求目标文本只出现一次。
+
+操作者可在 Web 权限入口明确确认当前会话的“完全访问”，或通过配置默认值
+`sandbox.mode: disabled` 授予完全本地访问：
+`read_file`、`list_directory`、`search_text`、`write_file`、`edit_file`、`download_file`、
+工作对象资源和 `run_command.cwd` 可使用工作区外的绝对路径、`~` 或相对路径。
+工作区内资源 ID 保持相对路径，外部资源 ID 使用规范化绝对路径，文件 mutation 仍走同一
+revision、snapshot、apply、verify 与 restore 流程，写入仍拒绝符号链接；目录替换不能覆盖
+工作区本身或其祖先。会话预设保存在 `SessionSettingsState.sandbox_mode`，旧记录缺失该字段时
+继承配置默认值；恢复会话保留已明确选择的预设，fork 将范围收回工作区。切回工作区预设后，
+外部文件不能再读写，未完成的外部 mutation 保留为待对账，不能据历史授权自动访问。
+
+`SetPermissionPreset` 是 Host 的原子 Interface，一次 journal append 同时保存 sandbox 与 approval；
+完全访问要求 `confirmed=True`，修改范围必须通过工作区 writer lease 和 Agent／Live 生命周期检查。
+配置中的默认范围不被重写。Host 把当前设置派生为 task-local `sandbox_scope`；run、工具 worker、
+command Hook 和 Live 的异步任务继承该投影，调用结束后恢复原上下文。Workspace 文件工具和
+SandboxRunner 消费同一范围，不通过修改共享对象放宽其他会话。模型运行上下文报告实际范围
+和命令网络策略，工具说明不缓存启动时权限。后台受管理会话明确限定工作区。
+
+`permissions.default_mode: auto` 只控制审批，不授予完整文件访问；项目配置受信也不等于
+关闭沙箱。配置默认值变更在重启工作区进程后生效，不会覆盖会话已保存的明确预设。
+“每次确认／自动改文件／工作区内自动执行”均使用工作区范围，并移除配置的额外读写目录授权；
+命令网络仍沿用配置。继承额外目录配置时，客户端显示自定义范围。旧 `SetApprovalMode` 继续只
+改变审批，不会隐式授权路径；模型、Skill 和审批记忆规则均不能开启新范围。
+可写 child 的内建文件工具和 cwd 仍绑定独立 worktree，命令强制使用 workspace_write；只读 child
+按 spawn snapshot 与父会话当前范围的交集执行，续跑不恢复已经撤回的路径授权。Host-owned
+worktree Git 生命周期仍使用自己的受信执行 Seam，不从模型的临时范围推导注册或发布权限。
+结构化 Git 工具的目标仍是当前仓库；Web 文档预览／下载与后台来源快照继续使用受限的
+descriptor/no-follow Interface，不通过完全授权开放任意浏览器文件读取。
 
 `run_command` 使用 argv 直接执行，不经过 shell；stdout/stderr 并发 drain，只保留有界头尾，同时记录总字节数。取消或超时时，POSIX 用进程组信号清理；显式无沙箱的 Windows 执行使用系统目录中的 `taskkill /T /F` 清理进程树，helper 有界等待并回收，失败时尽力终止直接子进程。Windows 尚无内置 workspace_write sandbox，默认配置仍 fail closed；不能将 taskkill 的尽力清理描述为 OS Job Object 级隔离保证。
 
@@ -106,16 +145,17 @@ Plan 只信任 Capability Contract 自己声明的 `Risk=read`。不再根据 `r
 macOS 上的 Homebrew executable 可读取已安装 formula 的动态库目录（`opt/*/lib` 的真实路径）；
 该例外不授予整个 Homebrew prefix，尤其不增加其 etc/var 中配置或私有数据的读取权限。
 
-Git mutation 不通过通用命令放宽 `.git`。可选 builtin `git_status`、`git_diff`、`git_stage`、
+工作区范围下，Git mutation 不通过通用命令放宽 `.git`。可选 builtin `git_status`、`git_diff`、`git_stage`、
 `git_commit`、`git_push` 由 Host-owned `GitWorkspace` 实现：stage 只接受显式普通文件相对路径或删除，
 通过不执行 clean/process filter 的 plumbing 更新 index，目录和符号链接安全失败；commit
 核对 HEAD 与暂存区 fingerprint；push 核对 HEAD、分支、remote 名与脱敏 URL fingerprint，
-只接受无内嵌密码的 HTTPS/SSH remote。所有 Git 进程禁用 repository hooks，仍在 workspace
-OS sandbox 内执行，并禁用 fsmonitor 与自动维护；push 额外禁用 credential helper、代理、HTTP 重定向及非 HTTPS/SSH protocol，
+只接受无内嵌密码的 HTTPS/SSH remote。所有 Git 进程禁用 repository hooks，使用当前会话的
+OS sandbox 策略执行，并禁用 fsmonitor 与自动维护；push 额外禁用 credential helper、代理、HTTP 重定向及非 HTTPS/SSH protocol，
 SSH 只使用 batch mode、已知主机文件与现有 SSH agent；需认证的 HTTPS push 在引入 Host credential
 broker 前应使用 SSH agent。Git 子进程设置 `GIT_CONFIG_NOSYSTEM=1`，不读取工作区/显式用户配置
 之外的系统 Git 配置（包括 Homebrew etc/gitconfig），不为此扩张 sandbox read roots。
-只有 push 获得该次调用的网络能力。commit/push 始终要求显式审批，
+工作区范围下只有 push 获得该次调用的网络能力。完全访问的命令不再受 OS 文件或网络隔离，
+不能把内建工具的审批契约当作对任意脚本的强制拦截。内建 commit/push 始终要求显式审批，
 外部 push 继续产生可恢复的 external-action receipt。
 
 `web_fetch` 与按配置注册的 `web_search` 属于 `Risk=external`、`EffectKind=observe`，当前默认
@@ -161,13 +201,18 @@ pre-invoke Adapter 意外抛出，`CapabilityGateway` 仍会 fail closed。
 
 ## 4.6 安全边界
 
+Web 浏览器认证与工具审批是独立边界：一次性启动链接换取 HttpOnly／SameSite=Strict Cookie，
+受保护 API 校验 Host，写请求同时校验 Origin，Live media 校验同源。CLI 按工作区／地址保存私有密钥，
+使用不同 Cookie 名称隔离后台；401 仅要求重新登录，不放宽审批或创建失败 turn。
+认证撤销、重启和桌面 IPC 的差异见[客户端指南](05-sessions-events-clients.md#56-web-adapter)。
+
 必须区分三个概念：
 
 1. **审批**：用户是否同意某次操作；
 2. **路径 confinement**：文件工具能访问的目录；
 3. **OS sandbox**：进程实际能访问的系统资源和网络。
 
-Lumen 当前三项都实现，但保证不同：审批是意图授权，`Workspace` 是路径解析约束，Seatbelt/bubblewrap 是 OS 强制。显式 `sandbox.mode: disabled` 会移除第三层，因此只应在受信环境使用；角色、Skill 与 child Agent 都不能扩大父级 sandbox 权限。Python plugin/hook 在加载前必须由操作者信任，因为它们与其他 Python import 一样运行在 Host 进程内。
+Lumen 当前三项都实现，但保证不同：审批是意图授权，`Workspace` 是路径解析约束，Seatbelt/bubblewrap 是 OS 强制。显式 `sandbox.mode: disabled` 会解除根文件工具的工作区路径限制和子进程 OS sandbox，但保留审批、写入完整性与验证，因此只应在受信环境使用；命令实际具备当前用户的本地文件与网络权限。角色、Skill 与 child Agent 都不能扩大父级 sandbox 权限。Python plugin/hook 在加载前必须由操作者信任，因为它们与其他 Python import 一样运行在 Host 进程内。
 
 `sandbox.network` 约束 `run_command` / Skill 脚本等 SandboxRunner 子进程，不是整个 Host 的网络开关。
 已配置 MCP transport 与内置 web 工具使用各自 Interface、审批和访问约束。命令内 curl 的失败不能

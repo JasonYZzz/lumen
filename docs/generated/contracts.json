@@ -2905,7 +2905,7 @@
       "openai-gpt56-luna",
       "openai-gpt6-astra"
     ],
-    "revision": "2026-09-11.2"
+    "revision": "2026-10-26.1"
   },
   "run_events": {
     "$defs": {
@@ -5037,6 +5037,42 @@
   },
   "workspace_commands": {
     "$defs": {
+      "ApplyAutomationCommand": {
+        "properties": {
+          "command": {
+            "$ref": "#/$defs/AutomationCommand"
+          },
+          "type": {
+            "const": "apply_automation_command",
+            "default": "apply_automation_command",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "command"
+        ],
+        "title": "ApplyAutomationCommand",
+        "type": "object"
+      },
+      "ApplyPreferenceCommand": {
+        "properties": {
+          "command": {
+            "$ref": "#/$defs/PreferenceCommand"
+          },
+          "type": {
+            "const": "apply_preference_command",
+            "default": "apply_preference_command",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "command"
+        ],
+        "title": "ApplyPreferenceCommand",
+        "type": "object"
+      },
       "ApplyTurnRestore": {
         "properties": {
           "before_turn": {
@@ -5143,6 +5179,146 @@
         "title": "ApprovePlan",
         "type": "object"
       },
+      "AssistantEdit": {
+        "additionalProperties": false,
+        "properties": {
+          "action": {
+            "enum": [
+              "save",
+              "read",
+              "idea",
+              "goal",
+              "note",
+              "edit_resource",
+              "visibility",
+              "link_resource",
+              "collection",
+              "collect",
+              "trash_resource",
+              "restore_resource",
+              "rename_resource",
+              "trash_goal",
+              "restore_goal",
+              "delete_collection"
+            ],
+            "title": "Action",
+            "type": "string"
+          },
+          "collection_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Collection Id"
+          },
+          "content": {
+            "default": "",
+            "maxLength": 100000,
+            "title": "Content",
+            "type": "string"
+          },
+          "expected_revision": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Expected Revision"
+          },
+          "follow_up_policy": {
+            "anyOf": [
+              {
+                "enum": [
+                  "pause",
+                  "keep"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Follow Up Policy"
+          },
+          "goal": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/GoalInput"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "goal_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Goal Id"
+          },
+          "id": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Id",
+            "type": "string"
+          },
+          "role": {
+            "default": "context",
+            "enum": [
+              "context",
+              "output"
+            ],
+            "title": "Role",
+            "type": "string"
+          },
+          "source_session_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Source Session Id"
+          },
+          "title": {
+            "default": "",
+            "maxLength": 200,
+            "title": "Title",
+            "type": "string"
+          },
+          "value": {
+            "default": true,
+            "title": "Value",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "action",
+          "id"
+        ],
+        "title": "AssistantEdit",
+        "type": "object"
+      },
       "AttachmentRef": {
         "additionalProperties": false,
         "description": "Provider-neutral reference to one immutable user attachment.",
@@ -5182,6 +5358,168 @@
           "byte_size"
         ],
         "title": "AttachmentRef",
+        "type": "object"
+      },
+      "AutomationCommand": {
+        "additionalProperties": false,
+        "properties": {
+          "action": {
+            "enum": [
+              "create",
+              "update",
+              "enable",
+              "pause",
+              "run",
+              "trial"
+            ],
+            "title": "Action",
+            "type": "string"
+          },
+          "expected_revision": {
+            "anyOf": [
+              {
+                "minimum": 1,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Expected Revision"
+          },
+          "goal_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Goal Id"
+          },
+          "id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Id"
+          },
+          "request_id": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Request Id",
+            "type": "string"
+          },
+          "spec": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/AutomationInput"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          }
+        },
+        "required": [
+          "request_id",
+          "action"
+        ],
+        "title": "AutomationCommand",
+        "type": "object"
+      },
+      "AutomationInput": {
+        "additionalProperties": false,
+        "properties": {
+          "context_refs": {
+            "default": [],
+            "items": {
+              "$ref": "#/$defs/ContextRef"
+            },
+            "maxItems": 16,
+            "title": "Context Refs",
+            "type": "array"
+          },
+          "end_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "End At"
+          },
+          "intent": {
+            "maxLength": 8000,
+            "minLength": 1,
+            "title": "Intent",
+            "type": "string"
+          },
+          "name": {
+            "maxLength": 160,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          },
+          "notify": {
+            "default": true,
+            "title": "Notify",
+            "type": "boolean"
+          },
+          "paths": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 16,
+            "title": "Paths",
+            "type": "array"
+          },
+          "profile": {
+            "default": "workspace_snapshot",
+            "enum": [
+              "workspace_snapshot",
+              "research_readonly"
+            ],
+            "title": "Profile",
+            "type": "string"
+          },
+          "request_limit": {
+            "default": 6,
+            "maximum": 50,
+            "minimum": 1,
+            "title": "Request Limit",
+            "type": "integer"
+          },
+          "schedule": {
+            "$ref": "#/$defs/Schedule"
+          },
+          "timeout_seconds": {
+            "default": 180,
+            "maximum": 1800,
+            "minimum": 10,
+            "title": "Timeout Seconds",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "name",
+          "intent"
+        ],
+        "title": "AutomationInput",
         "type": "object"
       },
       "CancelChildRun": {
@@ -5361,6 +5699,45 @@
         "title": "ContextControl",
         "type": "object"
       },
+      "ContextRef": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Id",
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "goal",
+              "resource",
+              "session"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "revision": {
+            "anyOf": [
+              {
+                "minimum": 1,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Revision"
+          }
+        },
+        "required": [
+          "kind",
+          "id"
+        ],
+        "title": "ContextRef",
+        "type": "object"
+      },
       "ContinueAgent": {
         "properties": {
           "agent_id": {
@@ -5383,6 +5760,42 @@
           "task"
         ],
         "title": "ContinueAgent",
+        "type": "object"
+      },
+      "ContinueAssistantDiscussion": {
+        "properties": {
+          "context": {
+            "$ref": "#/$defs/ContextRef"
+          },
+          "type": {
+            "const": "continue_assistant_discussion",
+            "default": "continue_assistant_discussion",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "context"
+        ],
+        "title": "ContinueAssistantDiscussion",
+        "type": "object"
+      },
+      "ControlGoal": {
+        "properties": {
+          "command": {
+            "$ref": "#/$defs/GoalCommand"
+          },
+          "type": {
+            "const": "control_goal",
+            "default": "control_goal",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "command"
+        ],
+        "title": "ControlGoal",
         "type": "object"
       },
       "CreateSession": {
@@ -5498,6 +5911,24 @@
         "title": "DequeueRunInputs",
         "type": "object"
       },
+      "EditAssistant": {
+        "properties": {
+          "edit": {
+            "$ref": "#/$defs/AssistantEdit"
+          },
+          "type": {
+            "const": "edit_assistant",
+            "default": "edit_assistant",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "edit"
+        ],
+        "title": "EditAssistant",
+        "type": "object"
+      },
       "EndLiveSession": {
         "properties": {
           "live_session_id": {
@@ -5558,6 +5989,111 @@
         "title": "ForkSessionAtTurn",
         "type": "object"
       },
+      "GetAssistantOccurrence": {
+        "properties": {
+          "occurrence_id": {
+            "title": "Occurrence Id",
+            "type": "string"
+          },
+          "type": {
+            "const": "get_assistant_occurrence",
+            "default": "get_assistant_occurrence",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "occurrence_id"
+        ],
+        "title": "GetAssistantOccurrence",
+        "type": "object"
+      },
+      "GetAssistantPage": {
+        "properties": {
+          "before": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Before"
+          },
+          "category": {
+            "default": "all",
+            "title": "Category",
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "feed",
+              "resource"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "limit": {
+            "default": 50,
+            "title": "Limit",
+            "type": "integer"
+          },
+          "query": {
+            "default": "",
+            "title": "Query",
+            "type": "string"
+          },
+          "session_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Session Id"
+          },
+          "type": {
+            "const": "get_assistant_page",
+            "default": "get_assistant_page",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind"
+        ],
+        "title": "GetAssistantPage",
+        "type": "object"
+      },
+      "GetAssistantPreferences": {
+        "properties": {
+          "type": {
+            "const": "get_assistant_preferences",
+            "default": "get_assistant_preferences",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "title": "GetAssistantPreferences",
+        "type": "object"
+      },
+      "GetAssistantState": {
+        "properties": {
+          "type": {
+            "const": "get_assistant_state",
+            "default": "get_assistant_state",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "title": "GetAssistantState",
+        "type": "object"
+      },
       "GetBootstrap": {
         "properties": {
           "type": {
@@ -5582,6 +6118,25 @@
         "title": "GetConfiguration",
         "type": "object"
       },
+      "GetGoalDetail": {
+        "properties": {
+          "goal_id": {
+            "title": "Goal Id",
+            "type": "string"
+          },
+          "type": {
+            "const": "get_goal_detail",
+            "default": "get_goal_detail",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "goal_id"
+        ],
+        "title": "GetGoalDetail",
+        "type": "object"
+      },
       "GetInstructions": {
         "properties": {
           "type": {
@@ -5592,6 +6147,112 @@
           }
         },
         "title": "GetInstructions",
+        "type": "object"
+      },
+      "GoalCommand": {
+        "additionalProperties": false,
+        "properties": {
+          "action": {
+            "enum": [
+              "start",
+              "resume",
+              "pause"
+            ],
+            "title": "Action",
+            "type": "string"
+          },
+          "criteria": {
+            "default": "",
+            "maxLength": 8000,
+            "title": "Criteria",
+            "type": "string"
+          },
+          "expected_revision": {
+            "minimum": 1,
+            "title": "Expected Revision",
+            "type": "integer"
+          },
+          "goal_id": {
+            "title": "Goal Id",
+            "type": "string"
+          },
+          "request_id": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Request Id",
+            "type": "string"
+          },
+          "turn_limit": {
+            "anyOf": [
+              {
+                "maximum": 100,
+                "minimum": 1,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Turn Limit"
+          }
+        },
+        "required": [
+          "action",
+          "goal_id",
+          "request_id",
+          "expected_revision"
+        ],
+        "title": "GoalCommand",
+        "type": "object"
+      },
+      "GoalInput": {
+        "additionalProperties": false,
+        "properties": {
+          "automation_ids": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Automation Ids",
+            "type": "array"
+          },
+          "intent": {
+            "default": "",
+            "maxLength": 8000,
+            "title": "Intent",
+            "type": "string"
+          },
+          "milestones": {
+            "default": [],
+            "items": {
+              "$ref": "#/$defs/Milestone"
+            },
+            "maxItems": 30,
+            "title": "Milestones",
+            "type": "array"
+          },
+          "status": {
+            "default": "active",
+            "enum": [
+              "active",
+              "completed",
+              "archived"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "title": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Title",
+            "type": "string"
+          }
+        },
+        "required": [
+          "title"
+        ],
+        "title": "GoalInput",
         "type": "object"
       },
       "ImportAttachmentPath": {
@@ -5931,6 +6592,93 @@
         "title": "ListSessions",
         "type": "object"
       },
+      "Milestone": {
+        "additionalProperties": false,
+        "properties": {
+          "done": {
+            "default": false,
+            "title": "Done",
+            "type": "boolean"
+          },
+          "id": {
+            "maxLength": 100,
+            "minLength": 1,
+            "title": "Id",
+            "type": "string"
+          },
+          "title": {
+            "maxLength": 300,
+            "minLength": 1,
+            "title": "Title",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "title"
+        ],
+        "title": "Milestone",
+        "type": "object"
+      },
+      "PreferenceCommand": {
+        "additionalProperties": false,
+        "properties": {
+          "action": {
+            "enum": [
+              "remember",
+              "edit",
+              "forget",
+              "confirm"
+            ],
+            "title": "Action",
+            "type": "string"
+          },
+          "content": {
+            "default": "",
+            "maxLength": 4000,
+            "title": "Content",
+            "type": "string"
+          },
+          "expected_updated_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Expected Updated At"
+          },
+          "id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Id"
+          },
+          "scope": {
+            "default": "project",
+            "enum": [
+              "user",
+              "project"
+            ],
+            "title": "Scope",
+            "type": "string"
+          }
+        },
+        "required": [
+          "action"
+        ],
+        "title": "PreferenceCommand",
+        "type": "object"
+      },
       "PreviewTurnRestore": {
         "properties": {
           "before_turn": {
@@ -5953,6 +6701,91 @@
           "before_turn"
         ],
         "title": "PreviewTurnRestore",
+        "type": "object"
+      },
+      "PublishAssistantResource": {
+        "properties": {
+          "publication": {
+            "$ref": "#/$defs/PublishInput"
+          },
+          "type": {
+            "const": "publish_assistant_resource",
+            "default": "publish_assistant_resource",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "publication"
+        ],
+        "title": "PublishAssistantResource",
+        "type": "object"
+      },
+      "PublishInput": {
+        "additionalProperties": false,
+        "properties": {
+          "expected_revision": {
+            "anyOf": [
+              {
+                "minimum": 1,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Expected Revision"
+          },
+          "goal_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Goal Id"
+          },
+          "interaction_id": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Interaction Id",
+            "type": "string"
+          },
+          "session_id": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Session Id",
+            "type": "string"
+          },
+          "target_resource_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Target Resource Id"
+          },
+          "title": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Title",
+            "type": "string"
+          }
+        },
+        "required": [
+          "session_id",
+          "interaction_id",
+          "title"
+        ],
+        "title": "PublishInput",
         "type": "object"
       },
       "QueueRunInput": {
@@ -6014,6 +6847,42 @@
           "mode"
         ],
         "title": "QueueRunInput",
+        "type": "object"
+      },
+      "ReadAssistantResource": {
+        "properties": {
+          "historical": {
+            "default": false,
+            "title": "Historical",
+            "type": "boolean"
+          },
+          "resource_id": {
+            "title": "Resource Id",
+            "type": "string"
+          },
+          "revision": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Revision"
+          },
+          "type": {
+            "const": "read_assistant_resource",
+            "default": "read_assistant_resource",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "resource_id"
+        ],
+        "title": "ReadAssistantResource",
         "type": "object"
       },
       "ReasoningLevel": {
@@ -6211,6 +7080,49 @@
         "title": "RunDirectCommand",
         "type": "object"
       },
+      "Schedule": {
+        "additionalProperties": false,
+        "properties": {
+          "hour": {
+            "default": 8,
+            "maximum": 23,
+            "minimum": 0,
+            "title": "Hour",
+            "type": "integer"
+          },
+          "kind": {
+            "default": "weekdays",
+            "enum": [
+              "daily",
+              "weekdays",
+              "weekly"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "minute": {
+            "default": 30,
+            "maximum": 59,
+            "minimum": 0,
+            "title": "Minute",
+            "type": "integer"
+          },
+          "timezone": {
+            "default": "Asia/Shanghai",
+            "title": "Timezone",
+            "type": "string"
+          },
+          "weekday": {
+            "default": 0,
+            "maximum": 6,
+            "minimum": 0,
+            "title": "Weekday",
+            "type": "integer"
+          }
+        },
+        "title": "Schedule",
+        "type": "object"
+      },
       "SelectModel": {
         "properties": {
           "model": {
@@ -6401,6 +7313,41 @@
         "title": "SetMcpServerEnabled",
         "type": "object"
       },
+      "SetPermissionPreset": {
+        "properties": {
+          "confirmed": {
+            "default": false,
+            "title": "Confirmed",
+            "type": "boolean"
+          },
+          "preset": {
+            "enum": [
+              "manual",
+              "accept_edits",
+              "workspace_auto",
+              "full_access"
+            ],
+            "title": "Preset",
+            "type": "string"
+          },
+          "session_id": {
+            "title": "Session Id",
+            "type": "string"
+          },
+          "type": {
+            "const": "set_permission_preset",
+            "default": "set_permission_preset",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "session_id",
+          "preset"
+        ],
+        "title": "SetPermissionPreset",
+        "type": "object"
+      },
       "SetSessionArchived": {
         "properties": {
           "archived": {
@@ -6523,6 +7470,14 @@
             "title": "Client Request Id",
             "type": "string"
           },
+          "context_refs": {
+            "default": [],
+            "items": {
+              "$ref": "#/$defs/ContextRef"
+            },
+            "title": "Context Refs",
+            "type": "array"
+          },
           "input": {
             "title": "Input",
             "type": "string"
@@ -6538,6 +7493,11 @@
             ],
             "default": null,
             "title": "Model Prompt"
+          },
+          "publish_result": {
+            "default": false,
+            "title": "Publish Result",
+            "type": "boolean"
           },
           "regenerate_from_turn": {
             "anyOf": [
@@ -6673,6 +7633,42 @@
         "$ref": "#/$defs/CreateSession"
       },
       {
+        "$ref": "#/$defs/GetAssistantState"
+      },
+      {
+        "$ref": "#/$defs/GetAssistantPage"
+      },
+      {
+        "$ref": "#/$defs/GetAssistantOccurrence"
+      },
+      {
+        "$ref": "#/$defs/GetAssistantPreferences"
+      },
+      {
+        "$ref": "#/$defs/ApplyPreferenceCommand"
+      },
+      {
+        "$ref": "#/$defs/ApplyAutomationCommand"
+      },
+      {
+        "$ref": "#/$defs/EditAssistant"
+      },
+      {
+        "$ref": "#/$defs/ReadAssistantResource"
+      },
+      {
+        "$ref": "#/$defs/ContinueAssistantDiscussion"
+      },
+      {
+        "$ref": "#/$defs/GetGoalDetail"
+      },
+      {
+        "$ref": "#/$defs/ControlGoal"
+      },
+      {
+        "$ref": "#/$defs/PublishAssistantResource"
+      },
+      {
         "$ref": "#/$defs/GetBootstrap"
       },
       {
@@ -6734,6 +7730,9 @@
       },
       {
         "$ref": "#/$defs/SetApprovalMode"
+      },
+      {
+        "$ref": "#/$defs/SetPermissionPreset"
       },
       {
         "$ref": "#/$defs/SetCollaborationMode"
@@ -7352,6 +8351,16 @@
             "title": "Collaboration Mode",
             "type": "string"
           },
+          "filesystem_scope": {
+            "default": "workspace",
+            "enum": [
+              "workspace",
+              "configured",
+              "full"
+            ],
+            "title": "Filesystem Scope",
+            "type": "string"
+          },
           "input_modalities": {
             "items": {
               "type": "string"
@@ -7376,8 +8385,36 @@
             "title": "Model Id",
             "type": "string"
           },
+          "model_ids": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "title": "Model Ids",
+            "type": "object"
+          },
+          "pending_model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Pending Model"
+          },
           "reasoning": {
             "$ref": "#/$defs/ReasoningSelection"
+          },
+          "sandbox_mode": {
+            "default": "workspace_write",
+            "enum": [
+              "workspace_write",
+              "disabled"
+            ],
+            "title": "Sandbox Mode",
+            "type": "string"
           },
           "skills": {
             "items": {

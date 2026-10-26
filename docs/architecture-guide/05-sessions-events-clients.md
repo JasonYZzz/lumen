@@ -16,6 +16,8 @@ flowchart TB
 
 TUI 与 Web 不各自维护一套 Agent 状态。它们通过 `WorkspaceHost` 看到同一 session、run、approval 和 event sequence。
 
+v2 助理控制面同样通过 Host：`GetAssistantState/Page/Occurrence`、`ApplyAutomationCommand`、`EditAssistant`、`ReadAssistantResource` 和偏好命令是公共 Interface。Web／桌面通过 `/api/v1/assistant` 下的端点查询持久列表与提交操作；当前每 3 秒在可见页面轮询概览，信息流／资源库使用服务端游标分页。它们不把 SSE 当作调度队列。单次执行仍使用原 RunEvent 和 Session v12；自动化实例以固定 interaction UUID 关联 turn。TUI 没有新增同等助理面板，CLI 使用 `lumen automation`，详见[命令指南](../commands.md#14-个人助理与本地自动化)。
+
 Apple Silicon 桌面客户端位于 `src/desktop/`：Tauri 管理窗口、目录选择、Keychain 和它拥有的
 Python 子进程，主 WebView 使用该进程的同源 loopback Web/API。`lumen.desktop` 通过既有 Host
 命令和 snapshot 检查状态、取消 run、结束 Live；不另写 timeline、Plan 或 Agent 状态。
@@ -139,10 +141,19 @@ FastAPI 提供 bootstrap、session、run、approval、context 和文件搜索端
 
 - 默认只监听 loopback；
 - 一次性启动 token 换取 HttpOnly cookie；
+- CLI 的 `api/auth.py` 使用工作区内、按监听地址隔离的私有密钥文件保持重启后的浏览器认证；
+  Cookie 名称由密钥摘要隔离，避免浏览器不按端口隔离 Cookie 导致串用；桌面私有后台仍使用进程级密钥；
+- 认证交换与入口 HTML 禁止缓存；入口移除 token 并保留 session/view/id，过期 token 不签发 Cookie；
+- API 401 进入独立连接恢复状态，不追加失败 turn；重试只恢复读取与事件订阅，不重放用户操作；
 - SSE 通过 sequence 恢复；
 - 浏览器刷新不取消后台 run；
 - bootstrap 投影当前模型的 `inputModalities`，Web 在上传前禁用不受支持的图片输入；
 - OpenAPI schema 生成 TypeScript contract，CI 检查漂移。
+
+CLI 密钥不进入配置、Session、事件、后台 `web.json` 或日志；POSIX 校验所有者与私有权限，
+使用有界读取并拒绝目录／文件符号链接，损坏时明确失败而不覆盖旧密钥。新启动 token 每次随机生成，
+Host／Origin 校验与 Live WebSocket 同源认证保持一致。浏览器 Cookie 被清除时仍需一次性启动链接，
+不因 loopback 地址自动登录。首次修复升级无法恢复旧进程已丢弃的密钥，须重新登录一次。
 
 Web Composer 支持图片选择、拖放和剪贴板图片。浏览器使用原始二进制请求上传，Host 校验格式、大小和
 magic signature 后写入 ArtifactStore；`StartRun` / `QueueRunInput` 只携带 AttachmentRef。
@@ -169,7 +180,15 @@ Session/Timeline 操作不受影响。
 有界错误类别，不复制 prompt、模型输出、工具参数、错误正文或未知 usage 字段；非工具耗时明确标为
 model/context/Host 的估算，不能伪装成精确 provider latency。
 
-Web Adapter 将每个用户 turn 的 timeline 投影为前景回答、可读活动与原始详情：assistant 最终输出、澄清与错误保留在前景；commentary、progress 和工具动作进入活动层；thinking、压缩、Work Product 与非待处理 Agent 事件进入按需展开的原始详情。`readableActivity` 只合并连续、成功且 `callView` 声明可分组的工具，不跨失败或其他事件边界。所有正在执行的工具均标记为活动，摘要阶段来自实际工具事件。新待审批动作默认展开，审批卡片独立于折叠区域；成功 terminal 默认折叠但尊重用户手动选择，失败或中断默认展开。完成后的计划通过默认折叠的详情复用 `PlanPanel`；Plan 方案确认入口仍独立保留。该分组是纯客户端 presentation，不修改 Session journal 或恢复权威。
+Web Adapter 将每个用户 turn 的 timeline 投影为前景回答、可读活动与原始详情：assistant 最终输出、澄清与错误保留在前景；commentary、progress 和工具动作进入活动层；thinking、压缩、Work Product 与非待处理 Agent 事件进入按需展开的原始详情。`readableActivity` 只合并连续、成功且 `callView` 声明可分组的工具，不跨失败或其他事件边界。所有正在执行的工具均标记为活动，摘要阶段来自实际工具事件。待审批卡片在 composer 上方的有界滚动区保持可操作，不随正文或过程折叠消失；成功 terminal 默认折叠但尊重用户手动选择，失败或中断默认展开。完成后的计划通过默认折叠的详情复用 `PlanPanel`；Plan 方案确认入口仍独立保留。该分组是纯客户端 presentation，不修改 Session journal 或恢复权威。
+
+Web 回答使用连续阅读正文、按文件类型的成果卡片和每轮单一复制入口；不重复助手身份，
+不把整段回答自动保存为资料。资料卡片来自当前 interaction 的持久资源，刷新后仍可读取对应文件版本。
+
+Host 缓存 Coordinator 的 terminal 候选，完成 Work Product 索引同步、文件快照收录、目标输出关联、运行绑定清理与
+排队模型切换后，释放 actor／workspace 占用，再发布唯一 terminal 并关闭 replay journal。
+直接命令复用同一收尾 Interface；terminal 到达时客户端立即读取 bootstrap 不再读到该 run 的旧占用。
+Web 对其他会话的 active run 定期刷新，避免仅订阅当前会话而永久保留其他会话的 busy 状态。
 
 `toolOutput` 仅解码已知内置搜索、网页读取、文件读取与命令结果契约；未知或失败结果保留原始展示，截断与分页状态明确标记。`TurnSourcesProvider` 从成功检索、网页片段和 Markdown AST 中的正文链接派生去重来源，分别记录 retrieved/read/linked，不推断证据有效性。网页链接提供预览与来源面板，长回答和 Markdown 文档复用带目录的 `MarkdownReport`；嵌套模态只由顶层浮层处理 Escape/Tab。排队和送达反馈由既有 Host input 事件派生，临时回执不写 timeline。
 

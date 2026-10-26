@@ -244,8 +244,8 @@ class DirectoryResourceAdapter:
     def _publish(self, resource: str, bundle: DirectoryBundle | None, *, expected_revision: str) -> None:
         decoded = bundle.validated_files() if bundle is not None else {}
         target = self.path(resource)
-        if target == self.workspace.root:
-            raise WorkspaceViolation("cannot replace the workspace root")
+        if self.workspace.root.is_relative_to(target):
+            raise WorkspaceViolation("cannot replace the workspace root or its ancestors")
         target.parent.mkdir(parents=True, exist_ok=True)
         # Temporary trees are siblings: publication stays on one filesystem.
         stage = Path(tempfile.mkdtemp(prefix=".lumen-install-", dir=target.parent))

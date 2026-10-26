@@ -6,7 +6,21 @@ from pathlib import Path
 
 import pytest
 
-from lumen.files.documents import MAX_DOCUMENT_BYTES, read_workspace_document
+from lumen.files.documents import MAX_DOCUMENT_BYTES, linked_document_paths, read_workspace_document
+
+
+def test_explicit_local_attachments_are_bounded_and_not_remote_or_hidden(tmp_path: Path) -> None:
+    text = ("[Report](docs/report.md) ![Image](images/art.png) [Space](<docs/my report.pdf>) "
+            "[Duplicate](docs/report.md) [Secret](.env) [Escape](../x.md) "
+            "[URL](https://example.com/report.pdf) [Invalid](http://[broken) "
+            "[Numbered](docs/report(1).html) [Nested](docs/report(a(2)).html) "
+            r"[Escaped](docs/report\(3\).html) "
+            f"[Absolute]({tmp_path / 'out/report.md'})")
+    assert linked_document_paths(text, tmp_path) == (
+        "docs/report.md", "images/art.png", "docs/my report.pdf", "docs/report(1).html",
+        "docs/report(a(2)).html", "docs/report(3).html", "out/report.md",
+    )
+    assert len(linked_document_paths(" ".join(f"[f](file-{i}.pdf)" for i in range(100)), tmp_path)) == 32
 
 
 def test_secure_document_read_fails_closed_without_posix_support(
@@ -29,6 +43,8 @@ def test_document_read_is_bounded_and_rejects_escapes(tmp_path: Path) -> None:
             read_workspace_document(tmp_path, "report.md")
         return
     assert read_workspace_document(tmp_path, "report.md") == "# 报告".encode()
+    with pytest.raises(ValueError, match="not produced"):
+        read_workspace_document(tmp_path, "report.md", modified_since=10**12)
     for path in ("../report.md", ".env", str(tmp_path / "report.md"), "a/../report.md"):
         with pytest.raises(ValueError):
             read_workspace_document(tmp_path, path)

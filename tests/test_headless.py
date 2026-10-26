@@ -39,6 +39,7 @@ class LocalResources:
         self.skills: list[object] = []
         self.agent_orchestrator: Any = None
         self.configuration: Any = None
+        self.model_registry: Any = {"test": SimpleNamespace(id="test-model")}
 
     async def open(self) -> LocalResources:
         return self

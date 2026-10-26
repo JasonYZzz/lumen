@@ -39,8 +39,11 @@ class WorkspaceRunLock:
     workspace and Session journal.
     """
 
-    def __init__(self, workspace: Path) -> None:
+    def __init__(self, workspace: Path, *, name: str = "run") -> None:
+        if name not in {"run", "automation"}:
+            raise ValueError("Unknown workspace lock")
         self._workspace = Workspace(workspace)
+        self._name = name
         self._descriptor: int | None = None
 
     @property
@@ -50,9 +53,9 @@ class WorkspaceRunLock:
     def acquire(self) -> bool:
         if self._descriptor is not None:
             return True
-        lock_path = self._workspace.resolve_for_mutation(".lumen/run.lock")
+        lock_path = self._workspace.resolve_for_mutation(f".lumen/{self._name}.lock")
         lock_path.parent.mkdir(parents=True, exist_ok=True)
-        lock_path = self._workspace.resolve_for_mutation(".lumen/run.lock")
+        lock_path = self._workspace.resolve_for_mutation(f".lumen/{self._name}.lock")
         descriptor = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o600)
         try:
             _acquire_descriptor(descriptor)

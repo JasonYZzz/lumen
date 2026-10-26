@@ -42,12 +42,13 @@ flowchart TB
     Tools --> Scope["RegistrationScope"]
 ```
 
-系统可以理解为六层：
+系统按职责组织如下：
 
 | 层 | 主要职责 | 关键源码 |
 |---|---|---|
 | 交互层 | 输入、展示、审批交互、SSE/WebRTC 断线重连与原生启动 | `src/lumen/ui/`、`src/web/`、`src/lumen/api/app.py`、`src/desktop/` |
 | 应用层 | 命令分派、workspace 并发规则、run 生命周期 | `application/host.py` |
+| 自动化控制面 | 定义、定时排队、来源 checkpoint 与站内结算 | `automation/engine.py`、`automation/store.py` |
 | 会话层 | 恢复、交互队列、turn 持久化 | `run_coordinator.py`、`sessions.py` |
 | Agent 层 | 模型调用、工具循环、流式输出、重试 | `runtime.py` |
 | 上下文层 | token 预算、压缩、记忆、artifact | `context/` |
@@ -57,7 +58,7 @@ flowchart TB
 
 ![Lumen 当前系统底层技术架构图](images/current-system-architecture.svg)
 
-这张图按运行时责任而不是源码目录组织当前实现：
+这张图展示主执行路径；v2 新增的定时控制面通过 Host 接入该路径，详见[第 16 章](16-personal-assistant-automations.md)。按运行时责任理解：
 
 - **应用控制面只有一个入口。** TUI、Web、headless、macOS 桌面与 Realtime 的客户端差异止于 Adapter；命令、
   进程内 active run、跨进程 OS advisory execution lock、审批和公开事件统一由 `WorkspaceHost` 管理。
@@ -67,7 +68,7 @@ flowchart TB
 - **多 Agent 和 Work Product 各有唯一权威。** `AgentOrchestrator` 拥有线程、证据、送达与导入状态；
   `TaskWorkspace` 拥有 mutation journal、验证、回滚和恢复。`AgentRuntimeFactory` 只创建权限收窄的
   child runtime，不复制生命周期状态。
-- **持久事实与可重建投影分离。** Session v12 JSONL、ArtifactStore 和 Memory repository 保存事实或大正文；
+- **持久事实与可重建投影分离。** Session v12 JSONL、ArtifactStore、Memory repository 和自动化 SQLite 保存各自事实或大正文；
   Timeline、UI reducer、capability report、OpenAPI 和 contract catalog 都是可重建的只读投影。
 - **完成是跨 Module 的联合门禁。** Plan evidence、TaskWorkspace verification 或 AgentOrchestrator 的
   unresolved state 任一未满足时，文字与严格 Realtime 路径都不能声明完成。
@@ -107,6 +108,13 @@ flowchart TB
 契约时仍 fail closed。Hook、blocking clarification、steer/follow-up 与 recovery receipt 共用现有
 权威。生产路径没有 engine selector；Provider conformance、provider-private/suspended part、deferred
 MCP 与各 Surface 通过同一 Lumen Loop 契约验证。
+
+### 本地自动化
+
+`AutomationEngine` 只负责时间、排队和结算协调，通过 Host 的执行席位进入原 Coordinator／Runtime。
+`AutomationStore` 用一个 SQLite 事务维护定义、实例、checkpoint、资源引用和信息流；Session journal 仍拥有模型执行事实。
+后台使用有界只读快照，不获得模型工具或原生联网能力，也不额外调用模型压缩或学习记忆。
+当前实现限制及已复现问题见[第 16 章](16-personal-assistant-automations.md)，不能据架构分层推断业务闭环已全部验证。
 
 ### ContextEngine
 

@@ -50,7 +50,7 @@ def build_download_file_spec(
     Network reads use the web permission path, independent of subprocess
     networking. Local publication uses TaskWorkspace's existing journal.
     """
-    workspace = Workspace(root)
+    workspace = task_workspace.workspace if task_workspace is not None else Workspace(root)
     if retry_attempts < 1 or retry_backoff_seconds < 0:
         raise ValueError("retry_attempts must be positive and retry_backoff_seconds cannot be negative")
     total_timeout = tool_timeout(timeout, retry_attempts, retry_backoff_seconds)
@@ -58,7 +58,7 @@ def build_download_file_spec(
     async def download_file(
         url: str, path: str, overwrite: bool = False, sha256: str | None = None,
     ) -> dict[str, Any]:
-        """Download a public URL's exact UTF-8 source bytes to a workspace file.
+        """Download a public URL's exact UTF-8 source bytes to an authorized file path.
 
         Use this only when the resource must be saved exactly. Use web_fetch
         to read webpages, APIs, JSON or RSS/XML without creating a file.
@@ -68,7 +68,7 @@ def build_download_file_spec(
         Parent directories are created; existing files require overwrite=True.
         Returns only path, byte size and SHA-256, not the downloaded body.
         Optionally require an expected sha256. Binary files are rejected.
-        This tool cannot write global home paths. Use list_skills to refresh
+        Paths outside the workspace require explicit full local access. Use list_skills to refresh
         the catalog after manually downloading a skill's complete resources.
         """
         resolved = workspace.resolve_for_mutation(path)
@@ -174,11 +174,11 @@ def build_download_file_spec(
     return ToolSpec(
         download_file,
         description=(
-            "仅当用户需要把已知原始 URL 的完整 UTF-8 文件保存到工作区时使用。不要用它阅读"
+            "仅当用户需要把已知原始 URL 的完整 UTF-8 文件保存到有权限访问的路径时使用。不要用它阅读"
             "网页、API、JSON 或 RSS/XML；这些任务应使用 web_fetch。HTML 页面和二进制文件会被"
             "拒绝；临时网络错误会自动重试。已有文件只有 overwrite=true 时才覆盖，可用 sha256 "
             "校验内容。结果只返回路径、字节数和 SHA-256。"
-        ),
+        ) + "实际路径范围见当前会话运行上下文；工作区外路径需要完全访问授权。",
         risk=Risk.EXTERNAL,
         effect_kind=EffectKind.MUTATION,
         timeout=total_timeout,

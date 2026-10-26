@@ -6,6 +6,8 @@ import secrets
 from dataclasses import dataclass
 from pathlib import Path
 
+from lumen.sandbox import session_sandbox_mode
+
 
 class WorkspaceViolation(ValueError):
     """Raised when a tool path escapes its configured workspace."""
@@ -18,16 +20,27 @@ class StaleWorkspaceResource(ValueError):
 @dataclass(frozen=True, slots=True)
 class Workspace:
     root: Path
+    _allow_external_paths: bool
+    use_session_permissions: bool
 
-    def __init__(self, root: str | Path) -> None:
+    def __init__(
+        self, root: str | Path, *, allow_external_paths: bool = False, use_session_permissions: bool = False,
+    ) -> None:
         object.__setattr__(self, "root", Path(root).expanduser().resolve())
+        object.__setattr__(self, "_allow_external_paths", allow_external_paths)
+        object.__setattr__(self, "use_session_permissions", use_session_permissions)
+
+    @property
+    def allow_external_paths(self) -> bool:
+        mode = session_sandbox_mode.get() if self.use_session_permissions else None
+        return self._allow_external_paths if mode is None else mode == "disabled"
 
     def resolve(self, path: str | Path) -> Path:
         candidate = Path(path).expanduser()
         if not candidate.is_absolute():
             candidate = self.root / candidate
         resolved = candidate.resolve(strict=False)
-        if not resolved.is_relative_to(self.root):
+        if not self.allow_external_paths and not resolved.is_relative_to(self.root):
             raise WorkspaceViolation(f"path escapes workspace {self.root}: {path}")
         return resolved
 
@@ -38,17 +51,27 @@ class Workspace:
         if not candidate.is_absolute():
             candidate = self.root / candidate
         lexical = Path(os.path.abspath(candidate))
-        if not lexical.is_relative_to(self.root):
+        if not self.allow_external_paths and not lexical.is_relative_to(self.root):
             raise WorkspaceViolation(f"path escapes workspace {self.root}: {path}")
         current = lexical
-        while current != self.root:
+        boundary = Path(lexical.anchor) if self.allow_external_paths else self.root
+        while current != boundary:
             if current.is_symlink():
                 raise WorkspaceViolation(f"mutation path contains a symbolic link: {path}")
             current = current.parent
         resolved = lexical.resolve(strict=False)
-        if not resolved.is_relative_to(self.root):
+        if not self.allow_external_paths and not resolved.is_relative_to(self.root):
             raise WorkspaceViolation(f"path escapes workspace {self.root}: {path}")
         return lexical
+
+    def resource_path(self, path: str | Path) -> str:
+        """Keep local resource IDs relative and authorized external IDs absolute."""
+        resolved = self.resolve(path)
+        return (
+            resolved.relative_to(self.root).as_posix()
+            if resolved.is_relative_to(self.root)
+            else resolved.as_posix()
+        )
 
     def revision(self, path: str | Path) -> str:
         target = self.resolve_for_mutation(path)
@@ -118,7 +141,7 @@ class Workspace:
         if actual != expected_revision:
             raise StaleWorkspaceResource(
                 "STALE_RESOURCE: expected "
-                f"{expected_revision}, found {actual} at {target.relative_to(self.root)}"
+                f"{expected_revision}, found {actual} at {self.resource_path(target)}"
             )
 
     @staticmethod

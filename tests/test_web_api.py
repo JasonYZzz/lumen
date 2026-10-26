@@ -234,7 +234,7 @@ class ApiResources:
         self.skills: list[object] = []
         self.live_manager: LiveSessionManager | None = None
         self._active_model = "test"
-        self._model_registry = {
+        self.model_registry = {
             "test": ModelSettingsConfig(id="test-model", input_modalities=("text", "image"))
         }
 
@@ -245,13 +245,13 @@ class ApiResources:
         return None
 
     def active_model_config(self) -> Any:
-        return self._model_registry[self._active_model]
+        return self.model_registry[self._active_model]
 
     def active_model_name(self) -> str:
         return self._active_model
 
     def available_models(self) -> list[str]:
-        return sorted(self._model_registry)
+        return sorted(self.model_registry)
 
     async def apply_model_configuration(
         self,
@@ -259,7 +259,7 @@ class ApiResources:
         *,
         active_model_name: str | None = None,
     ) -> None:
-        self._model_registry = agent.model_registry()
+        self.model_registry = agent.model_registry()
         self._active_model = active_model_name or agent.default_model_name()
 
     def mcp_summary(self) -> list[dict[str, object]]:
@@ -485,7 +485,7 @@ def test_reasoning_preview_uses_draft_model_and_does_not_change_configuration(tm
         assert capability["provider"] == "deepseek"
         assert capability["capability_documents"][0].startswith("https://api-docs.deepseek.com/")
         assert capability["requested"] is None
-        body.update(id="openai:k3", baseUrl="https://api.kimi.com/coding/v1")
+        body.update(id="openai:k3.1-pro", baseUrl="https://api.kimi.com/coding/v1")
         capability = client.post(endpoint, headers=headers, json=body).json()["reasoning"]
         assert "off" not in capability["supported_levels"]
         assert capability["level_map"]["xhigh"] == "max"
@@ -525,6 +525,7 @@ def test_web_api_authenticates_and_streams_a_run(tmp_path: Path) -> None:
         bootstrap = client.get("/api/v1/bootstrap")
         assert bootstrap.status_code == 200
         assert bootstrap.json()["activeModel"] == "test"
+        assert bootstrap.json()["modelIds"] == {"test": "test-model"}
         assert bootstrap.json()["inputModalities"] == ["text", "image"]
         assert bootstrap.json()["approvalMode"] == "manual"
         assert bootstrap.json()["liveEnabled"] is False
@@ -968,11 +969,46 @@ def test_web_api_serves_static_export_and_preserves_resume_query(tmp_path: Path)
         )
         page = client.get(launched.headers["location"])
         script = client.get("/_next/asset.js")
+        reopened = client.get("/?token=launch-secret&view=library", follow_redirects=False)
+        cookie_header = launched.headers["set-cookie"]
 
     assert launched.status_code == 303
     assert launched.headers["location"] == "/?session=resume-me"
     assert page.text == "<main>Lumen Web</main>"
     assert script.text == "window.LUMEN = true"
+    assert reopened.status_code == 303
+    assert reopened.headers["location"] == "/?view=library"
+    assert "HttpOnly" in cookie_header and "SameSite=strict" in cookie_header
+    with TestClient(app) as other_browser:
+        invalid = other_browser.get("/?token=launch-secret&view=library", follow_redirects=False)
+        assert invalid.status_code == 303
+        assert invalid.headers["location"] == "/?view=library"
+        assert "set-cookie" not in invalid.headers
+        assert other_browser.get("/api/v1/bootstrap").status_code == 401
+        assert other_browser.get("/auth/exchange?token=launch-secret").status_code == 401
+
+
+def test_web_browser_cookies_survive_restart_without_colliding(tmp_path: Path) -> None:
+    def application(secret: str, token: str):
+        return create_web_app(
+            WorkspaceHost(ApiResources(tmp_path)),  # type: ignore[arg-type]
+            launch_token=token, session_secret=secret, api_only=True,
+        )
+
+    with TestClient(application("workspace-a", "first")) as first:
+        assert first.get("/auth/exchange?token=first").status_code == 204
+        cookies = dict(first.cookies)
+    with TestClient(application("workspace-b", "other")) as other:
+        assert other.get("/auth/exchange?token=other").status_code == 204
+        assert set(cookies).isdisjoint(other.cookies.keys())
+        other.cookies.update(cookies)
+        assert other.get("/api/v1/bootstrap").status_code == 200
+        cookies.update(other.cookies)
+    with TestClient(application("workspace-a", "after-restart")) as restarted:
+        restarted.cookies.update(cookies)
+        assert restarted.get("/api/v1/bootstrap").status_code == 200
+        assert restarted.post("/api/v1/sessions").status_code == 403
+        assert restarted.get("/api/v1/bootstrap", headers={"Host": "attacker.test"}).status_code == 403
 
 
 def test_web_api_exposes_command_data_and_runs_mcp_prompt(tmp_path: Path) -> None:

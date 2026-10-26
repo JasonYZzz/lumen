@@ -21,6 +21,7 @@ from lumen.events import (
     RunWaitingForUser,
     TimelineEventRecord,
 )
+from lumen.execution import BackgroundExecution
 from lumen.interactive_queue import QueuedMessage, QueueMode
 from lumen.io import run_io
 from lumen.plan import PlanState
@@ -41,6 +42,7 @@ from lumen.sessions import (
     recoverable_orphaned_input,
     turn_message_digest,
 )
+from lumen.tools.spec import ToolSpec
 
 
 @dataclass(frozen=True, slots=True)
@@ -65,6 +67,8 @@ class RunInput:
     is_retry: bool = False
     interaction_id: str | None = None
     attachments: tuple[AttachmentRef, ...] = ()
+    execution: BackgroundExecution | None = None
+    host_tools: tuple[tuple[ToolSpec, str], ...] = ()
 
 
 class RunCoordinator:
@@ -91,8 +95,10 @@ class RunCoordinator:
             raise RuntimeError("run coordinator has no active session")
         return self._state
 
-    def new_session(self) -> CoordinatorState:
-        session = self._repository.create(agent_name=self._agent_name, model_id=self._model_id())
+    def new_session(self, *, session_id: str | None = None) -> CoordinatorState:
+        session = self._repository.create(
+            agent_name=self._agent_name, model_id=self._model_id(), session_id=session_id,
+        )
         self._state = CoordinatorState(session=session)
         return self._state
 
@@ -312,6 +318,8 @@ class RunCoordinator:
                 completion_policy=completion_policy,
                 attachments=run_input.attachments,
                 batch_completed=persist_batch,
+                execution=run_input.execution,
+                host_tools=run_input.host_tools,
             )
         except asyncio.CancelledError as error:
             terminal = terminal_event or RunCancelled("cancelled")
@@ -427,7 +435,8 @@ class RunCoordinator:
                 outcome.new_messages,
             )
         self._state = next_state
-        if runtime.context_engine is not None and runtime.context_engine.memory is not None:
+        if (run_input.execution is None and runtime.context_engine is not None
+                and runtime.context_engine.memory is not None):
             runtime.context_engine.memory.schedule_session(state.session.id)
         await emit(terminal_event)
         return outcome

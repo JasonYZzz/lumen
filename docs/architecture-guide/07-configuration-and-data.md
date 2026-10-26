@@ -61,7 +61,7 @@ CLI 默认使用进程环境。首次配置通过 `O_CREAT | O_EXCL` 与 `0600` 
 | `context` | ratio 阈值、recent 上限、summary 与后台压缩策略 |
 | `memory` | recall、自动学习、队列重试 |
 | `agents` | 原生 Agent Profile、并发、每 Run 数量与用量限制；`delegation` 仅为弃用兼容输入 |
-| `sandbox` | `workspace_write` / `disabled` 与平台 Adapter 配置 |
+| `sandbox` | 未选会话预设时的默认范围；`workspace_write` 限定工作区，`disabled` 完全本地访问；审批独立 |
 | `live` | Realtime Route、provider、媒体与严格 completion |
 | `hooks` | 生命周期 hook adapter |
 
@@ -75,6 +75,8 @@ CLI 默认使用进程环境。首次配置通过 `O_CREAT | O_EXCL` 与 `0600` 
 
 这些设置不会热替换正在运行的 Python 类；源码升级后需重启 Lumen 进程。
 
+v2 自动化不新增配置 schema：定义通过 Host command 持久化，每次执行默认 6 个逻辑模型步骤、180 秒墙钟时限和 0 个模型工具调用。普通交互的无限次数默认值不适用于该路径；步骤内 transport／输出限制重试仍由 Loop 计量，不能据此声称硬美元预算。
+
 `agent.limits.parallel_tool_calls` 默认 `parallel_safe`。只有已明确声明 PARALLEL_SAFE 的
 调用可重叠；控制工具、未知副作用和 exclusive 调用仍作为有序屏障。
 显式 `sequential` 配置保持有效，加载旧配置不会改写文件。
@@ -83,7 +85,7 @@ CLI 默认使用进程环境。首次配置通过 `O_CREAT | O_EXCL` 与 `0600` 
 
 模型配置新增 `reasoning_effort` 和可选 `reasoning_levels`。档位为
 `provider_default/off/minimal/low/medium/high/xhigh/max`；可选集合由模型、协议、端点对应的
-Provider 显式目录或部署能力声明决定；不再使用 SDK 宽泛名称推断。DeepSeek Flash、Kimi K3 和百炼
+Provider 显式目录或部署能力声明决定；不再使用 SDK 宽泛名称推断。DeepSeek Flash、Kimi K3.1 Pro 和百炼
 Anthropic 路由的 Qwen 3.8 有专门映射；不能仅凭 `anthropic:` 前缀认定兼容模型支持 Claude 档位。
 未知模型标记“推理控制未配置”，已知不支持的模型标记“不支持调节”，单一默认选项不可点击。
 `level_map` 向客户端提供别名与实际强度，例如 DeepSeek `medium → high`、Qwen `high → xhigh`。
@@ -123,9 +125,9 @@ Live Realtime 的 `reasoning_effort` 仍属于独立协议。
 
 模型还可配置 `native_web_search.mode: auto|enabled|disabled` 与
 `search_context_size: low|medium|high`。`auto` 只开启 Provider Catalog 精确核对的路由；当前为
-DeepSeek Flash Responses、Kimi Code K3 Responses，以及百炼 Qwen3.8 Max / Flash
+DeepSeek Flash Responses、Kimi Code K3.1 Pro Responses，以及百炼 Qwen3.8 Max / Flash
 Anthropic 端点。该配置随模型定义保存并进入冻结 Driver 请求，不复用 MCP 开关或 ToolRegistry
-状态。目录还拥有可选字段兼容性：Kimi K3 保留 `web_search`，但在 wire request 中省略其拒绝的
+状态。目录还拥有可选字段兼容性：Kimi K3.1 Pro 保留 `web_search`，但在 wire request 中省略其拒绝的
 `search_context_size`。
 
 MCP server 的定义仍在 `mcp_servers.<name>`，启停策略单独保存在 `mcp.enabled.<name>`。
@@ -158,7 +160,11 @@ stateDiagram-v2
 
 | 数据 | 默认位置 | 语义 |
 |---|---|---|
+| CLI Web authentication | `<workspace>/.lumen/web-auth-<endpoint-hash>.key` | 按工作区／地址保存浏览器认证密钥；POSIX 0600，重启保留登录；不进入 Session 或配置 |
 | session | `.lumen/sessions/*.jsonl` | append-only 对话事实 |
+| assistant control | `<sessions.directory>/assistant/<workspace-hash>/state.sqlite3` | v2 SQLite schema；定义、触发、checkpoint、关系、版本与站内用户状态权威；v1 升级先备份 |
+| assistant artifacts | 同上 workspace-hash 目录内的 `artifacts/` | 来源快照、结果和笔记正文；独立于全局工具 artifact 存储 |
+| automation owner | `<workspace>/.lumen/automation.lock` | OS advisory 生命周期锁；执行另取现有 `run.lock` |
 | artifacts | `~/.lumen/artifacts/` | 大型工具输出内容寻址存储 |
 | memory authority | `~/.lumen/state/memory.sqlite3` | 长期记忆权威库 |
 | memory queue | `~/.lumen/state/memory-work.sqlite3` | 后台提取任务 |
@@ -167,6 +173,8 @@ stateDiagram-v2
 | Web managed config | `.lumen/agent.web.yaml` | 机器管理的模型覆盖；不保存密钥明文 |
 | MCP OAuth | session credential root 下的受限文件 | refresh/access token |
 | contract catalog | `docs/generated/contracts.json` | 可重建的 schema/枚举导航投影，不是运行权威 |
+
+`workspace-hash` 由 `digest(str(workspace.resolve()))[:24]` 计算，digest 对 JSON 序列化的路径字符串做 SHA-256。Host 在资源打开后启动 AutomationEngine，先恢复已 admission 的实例再启动 timer；关闭先取消并等待自动化任务，再关闭其 SQLite 和 owner lock，随后清理其余执行及资源。完整备份需包含配置的 Session 目录内的助理子目录和 artifacts，不能只拷贝 JSONL。数据库损坏时保留原文件并停止新自动化，普通对话继续可用；升级回退见[第 16 章](16-personal-assistant-automations.md)。
 
 ## 7.5 数据信任级别
 

@@ -28,6 +28,7 @@ class SessionSettingsState(BaseModel):
 
     collaboration_mode: CollaborationMode = CollaborationMode.DEFAULT
     approval_mode: str = "manual"
+    sandbox_mode: Literal["workspace_write", "disabled"] | None = None
     plan_review_status: PlanReviewStatus = PlanReviewStatus.NONE
     reviewed_revision: int | None = None
     review_client_request_id: str | None = None

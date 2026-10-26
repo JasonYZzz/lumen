@@ -22,8 +22,10 @@ from urllib.parse import urlencode
 import typer
 
 from lumen.api import create_web_app
-from lumen.application import WorkspaceHost
+from lumen.api.auth import web_session_secret
+from lumen.application import ApplyAutomationCommand, GetAssistantState, WorkspaceHost
 from lumen.approval import ApprovalMode
+from lumen.automation.models import AutomationCommand, AutomationInput
 from lumen.branding import FRAMEWORK_NAME, FRAMEWORK_SLUG
 from lumen.config import AppConfig, ConfigLoadError, create_config_file
 from lumen.config_resolver import ConfigResolution, ConfigResolver, ConfigScope
@@ -51,7 +53,7 @@ def _package_version() -> str:
     try:
         return importlib.metadata.version("lumen-agent")
     except importlib.metadata.PackageNotFoundError:
-        return "0.1.0"
+        return "2.0.0"
 
 
 def _version_callback(value: bool) -> None:
@@ -222,7 +224,7 @@ def _background_web_process(
     os._exit(exit_code)
 
 
-def _wait_for_web_start(pid: int, host: str, port: int, *, timeout: float = 5.0) -> bool:
+def _wait_for_web_start(pid: int, host: str, port: int, *, timeout: float = 60.0) -> bool:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         if not _pid_is_running(pid):
@@ -537,6 +539,7 @@ def web(
             static_dir=static_dir,
             api_only=api_only,
             allowed_hosts={f"{url_host}:{port}", url_host},
+            session_secret=web_session_secret(workspace, f"{host}:{port}"),
         )
         query = {"token": launch_token}
         if resume is not None:
@@ -813,6 +816,75 @@ def mcp_reset(
     except (ConfigLoadError, OSError, ValueError) as error:
         typer.echo(f"Error: {error}", err=True)
         raise typer.Exit(1) from error
+
+
+@app.command("automation")
+def automation(
+    action: Annotated[
+        str, typer.Argument(help="status, list, create, update, trial, enable, pause, run, serve"),
+    ] = "status",
+    identity: Annotated[str | None, typer.Option("--id")] = None,
+    revision: Annotated[int | None, typer.Option("--revision", min=1)] = None,
+    specification: Annotated[Path | None, typer.Option("--spec", help="Strict automation JSON input")] = None,
+    request_id: Annotated[str | None, typer.Option("--request-id")] = None,
+    cwd: Annotated[Path, typer.Option("--cwd")] = Path("."),
+    config_path: Annotated[Path | None, typer.Option("--config", "-c")] = None,
+) -> None:
+    """Inspect durable automations or run their local Host; no external destination is enabled."""
+    from uuid import uuid4
+
+    from lumen.application import GetAssistantOccurrence, WorkspaceHostError
+    from lumen.automation.models import Occurrence, Phase
+
+    async def execute(manager: ResourceManager, command: AutomationCommand | None) -> None:
+        host = WorkspaceHost(manager)
+        await host.open(automation_owner=action not in {"status", "list"})
+        try:
+            if action == "serve":
+                if not host.automations.owner:
+                    raise ValueError("Another Host owns these automations")
+                typer.echo(
+                    "Automation Host running; press Ctrl+C to stop. Sleep and shutdown suspend execution.",
+                )
+                await asyncio.Event().wait()
+            elif command is not None:
+                result = await host.dispatch(ApplyAutomationCommand(command))
+                if action in {"trial", "run"}:
+                    while True:
+                        occurrence = Occurrence.model_validate(
+                            (await host.dispatch(GetAssistantOccurrence(result.data["id"]))).data,
+                        )
+                        if occurrence.phase is Phase.SETTLED:
+                            typer.echo(occurrence.model_dump_json(indent=2))
+                            break
+                        await asyncio.sleep(0.2)
+                else:
+                    typer.echo(json.dumps(result.data, ensure_ascii=False))
+            else:
+                result = await host.dispatch(GetAssistantState())
+                typer.echo(json.dumps(result.data, ensure_ascii=False, indent=2))
+        finally:
+            await host.close()
+
+    try:
+        if action not in {"status", "list", "create", "update", "trial", "enable", "pause", "run", "serve"}:
+            raise ValueError("Unknown automation action")
+        workspace = _workspace(cwd)
+        config = _resolve_for_workspace(workspace, config_path, approve_mcp=False)
+        command = None
+        if action not in {"status", "list", "serve"}:
+            spec = AutomationInput.model_validate_json(specification.read_text()) if specification else None
+            command = AutomationCommand.model_validate({
+                "action": action, "id": identity, "expected_revision": revision,
+                "spec": spec, "request_id": request_id or str(uuid4()),
+            })
+        asyncio.run(execute(ResourceManager(config, workspace=workspace), command))
+    except (ConfigLoadError, OSError, ValueError, WorkspaceHostError):
+        typer.echo(
+            "Automation command failed. Check the configuration, owner Host, revision and source paths. "
+            "Instructions and source contents were omitted from this diagnostic.", err=True,
+        )
+        raise typer.Exit(1) from None
 
 
 if __name__ == "__main__":

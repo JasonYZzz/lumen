@@ -25,12 +25,14 @@ from lumen.application import (
     DeleteSession,
     EventEnvelope,
     ForkSessionAtTurn,
+    GetBootstrap,
     InvalidStateError,
     InvokeSkill,
     ListSessions,
     RenameSession,
     RetryRun,
     RunDirectCommand,
+    SelectModel,
     SessionNotFoundError,
     SetApprovalMode,
     SetCollaborationMode,
@@ -43,7 +45,7 @@ from lumen.application import (
 )
 from lumen.application.run_lock import WorkspaceRunLock
 from lumen.attachments import AttachmentRef, AttachmentStore
-from lumen.config import LimitsConfig, PermissionsConfig
+from lumen.config import LimitsConfig, ModelSettingsConfig, PermissionsConfig
 from lumen.context import ArtifactStore
 from lumen.events import ApprovalRequest
 from lumen.plan import EvidenceKind, EvidenceReceipt, PlanState, PlanStep, StepStatus
@@ -78,6 +80,7 @@ class LocalResources:
         self.tool_metadata: dict[str, dict[str, str]] = {}
         self.warnings: list[str] = []
         self.skills: list[object] = []
+        self.model_registry = {"test": ModelSettingsConfig(id="test-model")}
         self.task_workspace: TaskWorkspace | None = None
         self.capability_gateway: CapabilityGateway | None = None
 
@@ -107,6 +110,19 @@ class LocalResources:
 
     def load_skill_by_name(self, name: str) -> object | None:
         return next((skill for skill in self.skills if getattr(skill, "name", None) == name), None)
+
+
+async def test_bootstrap_exposes_configured_model_ids(tmp_path: Path) -> None:
+    resources = LocalResources(tmp_path, _runtime())
+    resources.model_registry["k3.1-pro"] = ModelSettingsConfig(id="openai:k3.1-pro")
+    host = WorkspaceHost(resources)  # type: ignore[arg-type]
+    await host.open()
+    try:
+        bootstrap = await host.dispatch(GetBootstrap())
+        assert bootstrap.model_ids == {"test": "test-model", "k3.1-pro": "openai:k3.1-pro"}
+        assert bootstrap.active_model == "test"
+    finally:
+        await host.close()
 
 
 def _runtime(output: str = "web ready") -> AgentRuntime:
@@ -1336,6 +1352,144 @@ async def test_workspace_host_manual_approval_can_be_resolved_from_another_reque
     assert executed is False
     assert any(event.type == "approval.resolved" and not event.data["approved"] for event in seen)
     assert turn.approvals[0]["approved"] is False
+
+
+@pytest.mark.parametrize("action", ["session", "always", "auto", "once_confirm"])
+async def test_pending_batch_reuses_consent_without_weakening_fresh_confirmations(
+    tmp_path: Path, action: str,
+) -> None:
+    executions: list[str] = []
+    step = 0
+
+    def write_note(content: str) -> str:
+        executions.append(content)
+        return content
+
+    async def stream(_messages: list[ModelMessage], _info: AgentInfo):  # type: ignore[no-untyped-def]
+        nonlocal step
+        step += 1
+        if step % 2:
+            yield {
+                i: DeltaToolCall("write_note", f'{{"content":"note-{i}"}}', tool_call_id=f"call-{step}-{i}")
+                for i in range(2)
+            }
+        else:
+            yield "done"
+
+    runtime = AgentRuntime(
+        model=FunctionModel(stream_function=stream),
+        tools=[Tool(write_note, requires_approval=True)], toolsets=[], instructions="help",
+        limits=LimitsConfig(),
+        tool_metadata={"write_note": {"origin": "plugin:test", "risk": (
+            "confirm" if action == "once_confirm" else "write"
+        )}},
+    )
+    resources = LocalResources(tmp_path, runtime)
+    host = WorkspaceHost(resources)  # type: ignore[arg-type]
+    await host.open()
+    try:
+        first = await host.dispatch(CreateSession())
+        # Cache this actor before the project rule is written.
+        other = await host.dispatch(CreateSession())
+        pending_count = 0
+        for session in (first, other) if action == "always" else (first,):
+            started = await host.dispatch(StartRun(session.session_id, "write twice", "batch"))
+            async with asyncio.timeout(5):
+                async for event in host.subscribe(started.run_id):
+                    if event.type != "approval.batch_pending":
+                        continue
+                    pending_count += 1
+                    requests = event.data["requests"]
+                    if action == "auto":
+                        result = await host.dispatch(SetApprovalMode(session.session_id, "auto"))
+                        assert len(result.data["resolved_call_ids"]) == 2
+                    elif action == "once_confirm":
+                        for request in requests:
+                            result = await host.dispatch(
+                                DecideApproval(started.run_id, request["call_id"], True, "always")
+                            )
+                            assert result.data["resolved_call_ids"] == [request["call_id"]]
+                    else:
+                        scope: Literal["session", "always"] = "always" if action == "always" else "session"
+                        result = await host.dispatch(
+                            DecideApproval(started.run_id, requests[0]["call_id"], True, scope)
+                        )
+                        assert len(result.data["resolved_call_ids"]) == 2
+        assert pending_count == 1
+        assert len(executions) == (4 if action == "always" else 2)
+    finally:
+        await host.close()
+
+
+@pytest.mark.parametrize("direct", [False, True])
+@pytest.mark.parametrize("model_action", ["switch", "cancel", "fail"])
+async def test_terminal_event_observes_released_workspace_and_applied_model_switch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, direct: bool, model_action: str,
+) -> None:
+    entered, release = asyncio.Event(), asyncio.Event()
+    resources = LocalResources(tmp_path, _runtime())
+    if direct:
+        resources.capability_gateway = _direct_gateway(tmp_path, [])
+    active = "test"
+
+    async def select_model(name: str) -> None:
+        nonlocal active
+        assert release.is_set()
+        if model_action == "fail":
+            raise RuntimeError("candidate model unavailable")
+        active = name
+
+    monkeypatch.setattr(resources, "select_model", select_model, raising=False)
+    monkeypatch.setattr(resources, "active_model_name", lambda: active)
+    monkeypatch.setattr(resources, "available_models", lambda: ["test", "second"])
+    host = WorkspaceHost(resources)  # type: ignore[arg-type]
+    sync = host._sync_assistant_products  # pyright: ignore[reportPrivateUsage]
+
+    async def sync_products(session_id: str) -> None:
+        entered.set()
+        await release.wait()
+        await sync(session_id)
+
+    await host.open()
+    try:
+        session = await host.dispatch(CreateSession())
+        monkeypatch.setattr(host, "_sync_assistant_products", sync_products)
+        await host.dispatch(SetApprovalMode(session.session_id, "auto"))
+        started = await host.dispatch(
+            RunDirectCommand(session.session_id, ("echo", "test"), "terminal")
+            if direct else StartRun(session.session_id, "test", "terminal")
+        )
+        await asyncio.wait_for(entered.wait(), 3)
+        assert (await host.dispatch(SelectModel("second"))).status == "queued"
+        bootstrap = await host.dispatch(GetBootstrap())
+        assert bootstrap.active_run_id == started.run_id
+        assert bootstrap.active_model == "test"
+        assert bootstrap.pending_model == "second"
+        if model_action == "cancel":
+            await host.dispatch(SelectModel("test"))
+            assert (await host.dispatch(GetBootstrap())).pending_model is None
+        # Buffered replay must also withhold terminal until finalization is complete.
+        assert all(
+            not event.type.startswith("run.") or event.type == "run.started"
+            for event in host._runs[started.run_id].journal.events  # pyright: ignore[reportPrivateUsage]
+        )
+        cancel = asyncio.create_task(host.dispatch(CancelRun(started.run_id)))
+        await asyncio.sleep(0)
+        assert not cancel.done()
+        release.set()
+        async for event in host.subscribe(started.run_id):
+            if event.type == "run.completed":
+                bootstrap = await host.dispatch(GetBootstrap())
+                assert bootstrap.active_run_id is None
+                assert bootstrap.active_model == ("second" if model_action == "switch" else "test")
+                assert bootstrap.pending_model is None
+                assert (await host.snapshot(session.session_id)).active_run_id is None
+                assert not host._workspace_run_lock.held  # pyright: ignore[reportPrivateUsage]
+        assert (await cancel).status == "completed"
+        assert bool(resources.warnings) is (model_action == "fail")
+    finally:
+        release.set()
+        await host.close()
 
 
 async def test_workspace_host_remembers_bounded_approval_for_the_session(
