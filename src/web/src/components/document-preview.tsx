@@ -4,7 +4,8 @@ import { ArrowDown, ArrowClockwise, CircleNotch, FileText, X } from '@phosphor-i
 import dynamic from 'next/dynamic'
 import { createContext, useContext, useEffect, useState, type ReactNode } from 'react'
 import { lumenApi } from '../lib/api/client'
-import type { TimelineEntry } from '../lib/api/types'
+import type { AssistantResource, TimelineEntry } from '../lib/api/types'
+import { ResourceIcon, resourceTypeLabel } from './resource-icon'
 import { MarkdownReport } from './markdown-report'
 import { useModalFocus } from './use-modal-focus'
 import { WebLink } from './web-link'
@@ -321,31 +322,37 @@ async function excelPreview(buffer: ArrayBuffer): Promise<{ sheets: TableSheet[]
 export function DocumentLink({ href, children }: { href: string; children: ReactNode }) {
   const context = useContext(Documents)
   const path = context && documentPath(href, context.workspace, context.base)
-  return path ? <button type="button" className="document-link" onClick={() => context!.open(path)}><FileText size={15} aria-hidden="true" />{children}</button>
+  return path ? <button type="button" className="document-link" title={path} onClick={() => context!.open(path)}><FileText size={15} aria-hidden="true" />{typeof children === 'string' && documentPath(children, context!.workspace, context!.base) === path ? path.split('/').at(-1) : children}</button>
     : <WebLink href={href}>{children}</WebLink>
 }
 
 export function DocumentCode({ children, className }: { children?: ReactNode; className?: string }) {
   const context = useContext(Documents)
   const path = !className && typeof children === 'string' && context && documentPath(children, context.workspace, context.base)
-  return path ? <button type="button" className="document-link" onClick={() => context!.open(path)}><FileText size={15} aria-hidden="true" />{children}</button>
+  return path ? <button type="button" className="document-link" title={path} onClick={() => context!.open(path)}><FileText size={15} aria-hidden="true" />{path.split('/').at(-1)}</button>
     : <code className={className}>{children}</code>
 }
 
-export function DocumentResults({ entries }: { entries: TimelineEntry[] }) {
+export function DocumentResults({ entries, resources = [] }: { entries: TimelineEntry[]; resources?: AssistantResource[] }) {
   const context = useContext(Documents)
+  const [preview, setPreview] = useState<AssistantResource | null>(null)
   if (!context) return null
   const paths = [...new Set(entries.flatMap((entry) => {
     if (entry.kind !== 'tool' || entry.isError || !['completed', 'ok', 'success'].includes(entry.status ?? '')
       || !['write_file', 'edit_file'].includes(entry.toolName ?? '') || typeof entry.args?.path !== 'string') return []
     const path = documentPath(entry.args.path, context.workspace)
     return path ? [path] : []
-  }))]
-  return paths.length ? <div className="document-results" aria-label="本轮文件">
+  }))].filter(path => !resources.some(resource => resource.file_path === path))
+  return paths.length || resources.length ? <><div className="document-results" aria-label="本轮文件">
+    {resources.map(resource => <button type="button" className="document-card" key={resource.id} onClick={() => setPreview(resource)}>
+      <ResourceIcon type={resource.file_type} size={26} />
+      <span><strong>{resource.title}</strong>
+        <small>{resourceTypeLabel(resource)} · 版本 {resource.revision} · 已自动收录</small></span><span>查看成果</span>
+    </button>)}
     {paths.map((path) => <button type="button" className="document-card" key={path} onClick={() => context.open(path)}>
       <FileText size={24} aria-hidden="true" /><span><strong>{path.split('/').at(-1)}</strong><small>{path}</small></span><span>预览</span>
     </button>)}
-  </div> : null
+  </div>{preview?.file_path && <DocumentPreview path={preview.file_path} resource={preview} onClose={() => setPreview(null)} />}</> : null
 }
 
 export function DocumentProvider({ workspace, children }: { workspace: string; children: ReactNode }) {
@@ -355,7 +362,9 @@ export function DocumentProvider({ workspace, children }: { workspace: string; c
   </Documents.Provider>
 }
 
-function DocumentPreview({ path, onClose }: { path: string; onClose: () => void }) {
+export function DocumentPreview({ path, resource, actions, onClose }: {
+  path: string; resource?: AssistantResource; actions?: ReactNode; onClose: () => void
+}) {
   const context = useContext(Documents)
   const ref = useModalFocus(onClose)
   const [result, setResult] = useState<PreviewResult | null>(null)
@@ -366,7 +375,7 @@ function DocumentPreview({ path, onClose }: { path: string; onClose: () => void 
   const extension = path.split('.').at(-1)!.toLowerCase()
   const markdown = ['md', 'markdown'].includes(extension)
   const html = ['html', 'htm'].includes(extension)
-  const image = ['png', 'jpg', 'jpeg', 'webp', 'gif'].includes(extension)
+  const image = ['png', 'jpg', 'jpeg', 'webp', 'gif', 'svg', 'avif'].includes(extension)
   const pdf = extension === 'pdf'
   const word = extension === 'docx'
   const excel = extension === 'xlsx'
@@ -378,10 +387,12 @@ function DocumentPreview({ path, onClose }: { path: string; onClose: () => void 
     let url: string | undefined
     setError('')
     setResult(null)
-    void lumenApi.readDocument(path, controller.signal).then(async (blob) => {
+    const read = resource ? lumenApi.readResourceFile(resource.id, resource.revision, controller.signal)
+      : lumenApi.readDocument(path, controller.signal)
+    void read.then(async (blob) => {
       const text = !image && !pdf && !binary && blob.size <= 1024 * 1024 ? await blob.text() : null
       if (controller.signal.aborted) return
-      url = URL.createObjectURL(new Blob([blob], { type: pdf ? 'application/pdf' : image ? `image/${extension === 'jpg' ? 'jpeg' : extension}` : 'application/octet-stream' }))
+      url = URL.createObjectURL(new Blob([blob], { type: pdf ? 'application/pdf' : image ? `image/${extension === 'jpg' ? 'jpeg' : extension === 'svg' ? 'svg+xml' : extension}` : 'application/octet-stream' }))
       if (model) {
         const modelBuffer = await blob.arrayBuffer()
         if (!controller.signal.aborted) setResult({ text: null, url, modelBuffer })
@@ -432,13 +443,14 @@ function DocumentPreview({ path, onClose }: { path: string; onClose: () => void 
       }
     }).catch((cause: unknown) => { if (!controller.signal.aborted) setError(cause instanceof Error ? cause.message : '读取失败') })
     return () => { controller.abort(); if (url) URL.revokeObjectURL(url) }
-  }, [attempt, path, image, pdf, binary, word, excel, model, delimited, html, extension])
+  }, [attempt, path, resource?.id, resource?.revision, image, pdf, binary, word, excel, model, delimited, html, extension])
   return <div className="document-preview-backdrop" onClick={(event) => { if (event.target === event.currentTarget) onClose() }}>
     <section ref={ref} className="document-preview" role="dialog" aria-modal="true" aria-label={`文档预览：${path}`} tabIndex={-1}>
-      <header><div><strong>{path.split('/').at(-1)}</strong><small>{path} · 当前文件</small></div>
+      <header><div><strong title={path}>{resource?.title || path.split('/').at(-1)}</strong><small title={path}>{resource ? `${resourceTypeLabel(resource)} · 版本 ${resource.revision}` : `${path} · 当前文件`}</small></div>
+        {actions}
         {result && result.text !== null && (markdown || html) && <button type="button" onClick={() => setSource(!source)}>{source ? '预览' : '源码'}</button>}
         {result && <a href={result.url} download={path.split('/').at(-1)}><ArrowDown size={16} />下载</a>}
-        <button type="button" aria-label="关闭文档预览" onClick={onClose}><X size={20} /></button></header>
+        <button type="button" className="document-preview-close" aria-label="关闭文档预览" onClick={onClose}><X size={20} /></button></header>
       <div className="document-preview-body">
         {error ? <div role="alert"><p>{error}</p><button type="button" onClick={() => setAttempt(attempt + 1)}><ArrowClockwise size={16} />重新读取</button></div>
           : !result ? <div className="document-preview-loading" role="status">
@@ -460,6 +472,7 @@ function DocumentPreview({ path, onClose }: { path: string; onClose: () => void 
           : source ? <pre>{result.text}</pre>
           : html ? <><p className="document-preview-note">
               <span>静态安全预览 · 脚本和网络访问已禁用</span>
+              {resource && <span>正文为所选版本，关联资源来自当前工作区。</span>}
               <span>{result.inlinedResources ?? 0} 个工作区资源已内联
                 {result.omittedResources ? ` · ${result.omittedResources} 个资源不可用` : ''}</span>
               {result.warning && <span>{result.warning}</span>}

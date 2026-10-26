@@ -15,7 +15,7 @@ const CONTROL_TOOL_NAMES = new Set([
 ])
 
 export interface RunState {
-  sessionSettings: Pick<SessionSnapshot, 'sessionId' | 'approvalMode' | 'collaborationMode'> | null
+  sessionSettings: Pick<SessionSnapshot, 'sessionId' | 'approvalMode' | 'collaborationMode' | 'sandboxMode' | 'filesystemScope'> | null
   timeline: TimelineEntry[]
   plan: PlanState | null
   planReviewStatus: string | null
@@ -55,7 +55,8 @@ export const initialRunState: RunState = {
 }
 
 export type RunAction =
-  | { type: 'session-settings'; sessionId: string; settings: Partial<Pick<SessionSnapshot, 'approvalMode' | 'collaborationMode'>> }
+  | { type: 'approval-decided'; callIds: string[]; approved: boolean }
+  | { type: 'session-settings'; sessionId: string; settings: Partial<Pick<SessionSnapshot, 'approvalMode' | 'collaborationMode' | 'sandboxMode' | 'filesystemScope'>> }
   | { type: 'event'; event: EventEnvelope }
   | { type: 'snapshot'; snapshot: SessionSnapshot }
   | { type: 'run-registered'; runId: string }
@@ -102,12 +103,13 @@ function appendText(
   timeline: TimelineEntry[],
   kind: 'assistant' | 'commentary' | 'thinking',
   text: string,
+  interactionId?: string,
 ) {
   const last = timeline.at(-1)
-  if (last?.kind === kind) {
+  if (last?.kind === kind && last.interactionId === interactionId) {
     return [...timeline.slice(0, -1), { ...last, text: `${last.text}${text}` }]
   }
-  return [...timeline, { id: `${kind}-${timeline.length + 1}`, kind, text }]
+  return [...timeline, { id: `${kind}-${timeline.length + 1}`, kind, text, interactionId }]
 }
 
 function upsertPlan(timeline: TimelineEntry[], plan: PlanState, sequence: number) {
@@ -147,6 +149,7 @@ function snapshotTimeline(items: Array<Record<string, unknown>>): TimelineEntry[
     callId: string(item.call_id ?? item.callId) || undefined,
     toolName: string(item.tool_name ?? item.toolName) || undefined,
     origin: string(item.origin) || undefined,
+    risk: string(item.risk) || undefined,
     args: object(item.args),
     result: item.result == null ? null : string(item.result),
     preview: item.preview == null ? null : string(item.preview),
@@ -162,6 +165,11 @@ function snapshotTimeline(items: Array<Record<string, unknown>>): TimelineEntry[
 }
 
 export function runReducer(state: RunState, action: RunAction): RunState {
+  if (action.type === 'approval-decided') {
+    return { ...state, timeline: state.timeline.map(item => action.callIds.includes(item.callId ?? '')
+      ? { ...item, pendingApproval: false, approved: action.approved, status: action.approved ? 'approved' : 'denied' }
+      : item) }
+  }
   if (action.type === 'reset') return initialRunState
   if (action.type === 'session-settings') {
     if (state.sessionSettings?.sessionId !== action.sessionId) return state
@@ -208,6 +216,8 @@ export function runReducer(state: RunState, action: RunAction): RunState {
       sessionSettings: {
         sessionId: action.snapshot.sessionId,
         approvalMode: action.snapshot.approvalMode,
+        sandboxMode: action.snapshot.sandboxMode,
+        filesystemScope: action.snapshot.filesystemScope,
         collaborationMode: action.snapshot.collaborationMode,
       },
       timeline: snapshotTimeline(action.snapshot.timeline),
@@ -228,6 +238,10 @@ export function runReducer(state: RunState, action: RunAction): RunState {
 
   const { event } = action
   const data = event.data
+  if (['run.completed', 'run.waiting_for_user', 'run.failed', 'run.cancelled'].includes(event.type)) {
+    state = { ...state, timeline: state.timeline.map(item => item.pendingApproval
+      ? { ...item, pendingApproval: false, status: 'cancelled' } : item) }
+  }
   if (event.type === 'run.started') {
     const restored = state.timeline.findIndex((item) => item.kind === 'user'
       && item.turnIndex !== undefined && item.interactionId === event.runId)
@@ -249,7 +263,7 @@ export function runReducer(state: RunState, action: RunAction): RunState {
     }
   }
   if (event.type === 'assistant.delta') {
-    return { ...state, timeline: appendText(state.timeline, 'assistant', string(data.text)) }
+    return { ...state, timeline: appendText(state.timeline, 'assistant', string(data.text), event.runId) }
   }
   if (event.type === 'assistant.retracted') {
     const characters = typeof data.characters === 'number' ? data.characters : 0
@@ -356,6 +370,7 @@ export function runReducer(state: RunState, action: RunAction): RunState {
           callId: string(data.call_id),
           toolName: string(data.name),
           origin: string(data.origin) || undefined,
+          risk: string(data.risk) || undefined,
           args: object(data.args),
           status: 'running',
           callView: object(data.call_view),
@@ -367,6 +382,8 @@ export function runReducer(state: RunState, action: RunAction): RunState {
     const callId = string(data.call_id)
     const presentation = object(data.presentation)
     const entry = {
+      risk: string(data.risk) || undefined,
+      origin: string(data.origin) || undefined,
       presentation: {
         title: string(presentation.title),
         preview: string(presentation.preview),
@@ -408,6 +425,8 @@ export function runReducer(state: RunState, action: RunAction): RunState {
         text: '',
         callId,
         toolName: string(request.name),
+        risk: string(request.risk) || undefined,
+        origin: string(request.origin) || undefined,
         args: object(request.args),
         pendingApproval: true,
         status: 'pending',

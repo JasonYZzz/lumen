@@ -124,6 +124,21 @@ export interface ActivityGroup {
   label: string | null
 }
 
+function completedToolsLabel(entries: TimelineEntry[]) {
+  const counts = new Map<string, { verb: string; unit: string; count: number }>()
+  for (const item of entries) {
+    const webRead = item.toolName === 'web_fetch' && (!item.origin || item.origin.startsWith('builtin'))
+    const verb = webRead ? '已阅读网页' : String(item.callView?.completed_verb ?? '已使用工具')
+    const plural = item.callView?.plural
+    const unit = webRead ? '个网页' : typeof plural === 'string' && plural !== 'calls' ? plural : '次'
+    const key = `${verb}:${unit}`
+    const previous = counts.get(key)
+    if (previous) previous.count += 1
+    else counts.set(key, { verb, unit, count: 1 })
+  }
+  return Array.from(counts.values(), ({ verb, count, unit }) => `${verb} ${count} ${unit}`).join(' · ')
+}
+
 /** A reading projection only: all original events remain available in the transcript. */
 export function readableActivity(activity: TimelineEntry[]) {
   const groups: ActivityGroup[] = []
@@ -157,22 +172,18 @@ export function readableActivity(activity: TimelineEntry[]) {
       if (normalized === previousText) continue
       previousText = normalized
     } else previousText = ''
-    const key = item.kind === 'tool' && item.callView?.groupable === true
-      && typeof item.callView.group_key === 'string' && item.callView.group_key
+    // This is a disclosure of completed receipts, independent of execution concurrency or risk.
+    const key = item.kind === 'tool'
       && !item.pendingApproval && !item.isError && ['completed', 'ok', 'success'].includes(item.status ?? '')
-      ? item.callView.group_key : null
+      ? 'completed-tools' : null
     const previous = groups.at(-1)
     if (key && key === previousKey && previous) {
       previous.entries.push(item)
-      // Mixed file/directory inspection needs a neutral, accurate unit.
-      const sameFamily = previous.entries.every((entry) => callFamily(entry) === callFamily(item))
-      const webRead = sameFamily && callFamily(item) === 'web' && previous.entries.some((entry) => entry.toolName === 'web_fetch')
-      const declaredUnit = typeof item.callView?.plural === 'string' ? item.callView.plural : '次操作'
-      const unit = webRead ? '次网页操作' : sameFamily ? declaredUnit === 'calls' ? '次调用' : declaredUnit : '项只读操作'
-      const verb = webRead ? '已完成' : sameFamily ? String(item.callView?.completed_verb ?? '已完成') : '已检查'
-      previous.label = `${verb} ${previous.entries.length} ${unit}`
     } else groups.push({ id: item.id, entries: [item], label: null })
     previousKey = key
+  }
+  for (const group of groups) {
+    if (group.entries.length > 1) group.label = completedToolsLabel(group.entries)
   }
   return { groups, diagnostics }
 }
@@ -201,7 +212,9 @@ export function toolActivityLabel(item: TimelineEntry) {
   const succeeded = !item.isError && ['completed', 'ok', 'success'].includes(item.status ?? '')
   const failed = item.isError || ['error', 'failed', 'denied'].includes(item.status ?? '')
   const webRead = item.toolName === 'web_fetch' && (!item.origin || item.origin.startsWith('builtin'))
-  const verb = failed ? '操作未完成' : webRead ? succeeded ? '已阅读网页' : '正在阅读网页'
+  const verb = failed ? '操作未完成' : item.pendingApproval ? '等待确认'
+    : item.status === 'cancelled' ? '操作已取消' : item.status === 'interrupted' ? '操作已中断'
+    : webRead ? succeeded ? '已阅读网页' : '正在阅读网页'
     : succeeded ? item.callView?.completed_verb : item.callView?.active_verb
   const title = typeof verb === 'string' && verb ? verb : item.callView?.title ?? item.toolName ?? '工具'
   let detail = item.callView?.detail

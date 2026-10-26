@@ -12,7 +12,7 @@ export function ModelIcon({ model }: { model: string }) {
   const name = model.toLowerCase()
   const Icon = /deepseek/.test(name) ? DeepSeek
     : /qwen/.test(name) ? Qwen
-      : /kimi|moonshot/.test(name) ? Kimi
+      : /kimi|moonshot|^k3(?:[.-]|$)/.test(name) ? Kimi
         : /glm|zhipu/.test(name) ? Zhipu
           : /claude|anthropic/.test(name) ? Anthropic
             : /gemini|google/.test(name) ? Gemini

@@ -1,4 +1,13 @@
 import type {
+  AssistantState,
+  AssistantContextRef,
+  AssistantGoalDetail,
+  AutomationAction,
+  AssistantEdit,
+  AssistantResource,
+  AssistantFeedPage,
+  AssistantResourcePage,
+  AutomationOccurrence,
   ApprovalMode,
   ApprovalScope,
   AttachmentRef,
@@ -26,7 +35,13 @@ import type {
   TurnRestorePreview,
 } from './types'
 
+import { checkAuthentication } from './errors'
+
 const apiBaseUrl = process.env.NEXT_PUBLIC_LUMEN_API_BASE?.replace(/\/$/, '') ?? ''
+
+export function resourceFileUrl(id: string, revision: number) {
+  return `${apiBaseUrl}/api/v1/assistant/resources/${encodeURIComponent(id)}/content?revision=${revision}`
+}
 
 export function liveMediaWebSocketUrl(path: string): string {
   const base = apiBaseUrl || window.location.origin
@@ -45,6 +60,7 @@ async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
     },
   })
   if (!response.ok) {
+    checkAuthentication(response)
     let message = `请求失败 (${response.status})`
     try {
       const body = (await response.json()) as ApiErrorBody
@@ -64,22 +80,82 @@ export async function exchangeLaunchToken() {
   const response = await fetch(`${apiBaseUrl}/auth/exchange?token=${encodeURIComponent(token)}`, {
     credentials: 'include',
   })
-  if (!response.ok) throw new Error('启动链接已失效，请重新运行 lumen web')
+  if (!response.ok) {
+    if (response.status !== 401) throw new Error(`无法连接 Lumen (${response.status})`)
+    // A consumed launch link is harmless when this browser already has a valid cookie.
+    const authenticated = await fetch(`${apiBaseUrl}/api/v1/bootstrap`, {credentials: 'include'})
+    checkAuthentication(authenticated)
+    if (!authenticated.ok) throw new Error('无法连接 Lumen，请稍后重试。')
+  }
   url.searchParams.delete('token')
   window.history.replaceState({}, '', `${url.pathname}${url.search}${url.hash}`)
 }
 
 export const lumenApi = {
+  preferences: () => requestJson<{ available: boolean; records: Array<{
+    id: string; content: string; scope: string; source_kind: string; status: string; updated_at: string
+  }> }>('/api/v1/assistant/preferences'),
+  editPreference: (body: {
+    action: 'remember' | 'edit' | 'forget' | 'confirm'; id?: string; content?: string
+    scope?: 'user' | 'project'; expected_updated_at?: string
+  }) => requestJson<{ status: string }>('/api/v1/assistant/preferences', {
+    method: 'POST', body: JSON.stringify(body),
+  }),
+  assistant: () => requestJson<AssistantState>('/api/v1/assistant'),
+  assistantGoal: (id: string) => requestJson<AssistantGoalDetail>(`/api/v1/assistant/goals/${encodeURIComponent(id)}`),
+  controlGoal: (body: import('./types').GoalCommand) => requestJson<AssistantGoalDetail>('/api/v1/assistant/goals/control', {method: 'POST', body: JSON.stringify(body)}),
+  assistantDiscussion: (context: AssistantContextRef) => requestJson<{session_id: string; context_refs: AssistantContextRef[]}>(
+    '/api/v1/assistant/discussions', {method: 'POST', body: JSON.stringify({context})},
+  ),
+  assistantContext: (id: string) => requestJson<{session_id: string; context_refs: AssistantContextRef[]}>(`/api/v1/assistant/discussions/${encodeURIComponent(id)}`),
+  publishAnswer: (body: {session_id: string; interaction_id: string; title: string; goal_id?: string; target_resource_id?: string; expected_revision?: number}) =>
+    requestJson<{resource: AssistantResource}>('/api/v1/assistant/publications', {method: 'POST', body: JSON.stringify(body)}),
+  assistantOccurrence: (id: string) => requestJson<AutomationOccurrence>(
+    `/api/v1/assistant/occurrences/${encodeURIComponent(id)}`,
+  ),
+  assistantFeed: (category = 'all', before?: number) => requestJson<AssistantFeedPage>(
+    `/api/v1/assistant/feed?${new URLSearchParams({ category, ...(before ? { before: String(before) } : {}) })}`,
+  ),
+  assistantResources: (query = '', category = 'all', before?: number, sessionId?: string) => requestJson<AssistantResourcePage>(
+    `/api/v1/assistant/resources?${new URLSearchParams({ query, category, ...(before ? { before: String(before) } : {}), ...(sessionId ? {session_id: sessionId} : {}) })}`,
+  ),
+  readResourceFile: async (id: string, revision: number, signal?: AbortSignal) => {
+    const response = await fetch(resourceFileUrl(id, revision), {credentials: 'include', signal})
+    checkAuthentication(response)
+    if (!response.ok) throw new Error('资料文件暂不可用，请返回资料空间后重试。')
+    return response.blob()
+  },
+  importResourceFile: async (file: File, identity: string): Promise<AssistantResource> => {
+    const response = await fetch(`${apiBaseUrl}/api/v1/assistant/resources/import?${new URLSearchParams({filename: file.name, identity})}`, {
+      method: 'POST', credentials: 'include', headers: {'Content-Type': 'application/octet-stream'}, body: file,
+    })
+    checkAuthentication(response)
+    if (!response.ok) throw new Error(response.status === 413 ? '文件超过 20 MiB 上限。' : '文件导入失败，请检查文件名与内容后重试。')
+    return response.json()
+  },
+  automation: (body: Pick<AutomationAction, 'action' | 'request_id'> & Partial<AutomationAction>) =>
+    requestJson<{ id: string }>('/api/v1/assistant/automations', {
+      method: 'POST', body: JSON.stringify(body),
+    }),
+  editAssistant: (body: Pick<AssistantEdit, 'action' | 'id'> & Partial<AssistantEdit>) =>
+    requestJson<{ status: string }>('/api/v1/assistant/state', {
+      method: 'POST', body: JSON.stringify(body),
+    }),
+  assistantResource: (id: string, historical = false, revision?: number) => requestJson<{resource: AssistantResource; content: string; historical: boolean; goal_ids?: string[]; collection_ids?: string[]}>(
+    `/api/v1/assistant/resources/${encodeURIComponent(id)}?${new URLSearchParams({historical: String(historical), ...(revision ? {revision: String(revision)} : {})})}`,
+  ),
   readAttachment: async (attachment: AttachmentRef, signal?: AbortSignal): Promise<Blob> => {
     const response = await fetch(`${apiBaseUrl}/api/v1/attachments/content`, {
       method: 'POST', credentials: 'include', signal,
       headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(attachment),
     })
+    checkAuthentication(response)
     if (!response.ok) throw new Error(`图片读取失败 (${response.status})`)
     return response.blob()
   },
   readDocument: async (path: string, signal?: AbortSignal): Promise<Blob> => {
     const response = await fetch(`${apiBaseUrl}/api/v1/files/content?path=${encodeURIComponent(path)}`, { credentials: 'include', signal })
+    checkAuthentication(response)
     if (!response.ok) {
       const body = await response.json().catch(() => null) as ApiErrorBody | null
       throw new Error(body?.error?.message || `文档读取失败 (${response.status})`)
@@ -164,10 +240,12 @@ export const lumenApi = {
     clientRequestId: string,
     attachments: AttachmentRef[] = [],
     regenerateFromTurn?: number,
+    contextRefs: AssistantContextRef[] = [],
+    publishResult = false,
   ) =>
     requestJson<RunStartedResponse>(`/api/v1/sessions/${sessionId}/runs`, {
       method: 'POST',
-      body: JSON.stringify({ input, clientRequestId, attachments, regenerateFromTurn }),
+      body: JSON.stringify({ input, clientRequestId, attachments, regenerateFromTurn, contextRefs, publishResult }),
     }),
   retryRun: (sessionId: string, clientRequestId: string) =>
     requestJson<RunStartedResponse>(`/api/v1/sessions/${sessionId}/retry`, {
@@ -219,7 +297,7 @@ export const lumenApi = {
     approved: boolean,
     scope: ApprovalScope = 'once',
   ) =>
-    requestJson<{ status: string }>(`/api/v1/runs/${runId}/approvals/${callId}`, {
+    requestJson<{ status: string; resolved_call_ids?: string[] }>(`/api/v1/runs/${runId}/approvals/${callId}`, {
       method: 'POST',
       body: JSON.stringify({ approved, scope }),
     }),
@@ -232,6 +310,8 @@ export const lumenApi = {
     sessionId: string,
     settings: {
       approvalMode?: ApprovalMode
+      permissionPreset?: import('./types').PermissionPreset
+      confirmFullAccess?: boolean
       collaborationMode?: CollaborationMode
       transcriptDensity?: 'normal' | 'verbose'
       reasoningEffort?: import('./types').ReasoningLevel

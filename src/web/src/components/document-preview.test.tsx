@@ -12,7 +12,7 @@ const renderers = vi.hoisted(() => ({
   loadWorkbook: vi.fn(),
 }))
 
-vi.mock('../lib/api/client', () => ({ lumenApi: { readDocument: vi.fn() } }))
+vi.mock('../lib/api/client', () => ({ lumenApi: { readDocument: vi.fn(), readResourceFile: vi.fn() } }))
 vi.mock('./model-preview', () => ({ ModelPreview: ({ buffer }: { buffer: ArrayBuffer }) => <div data-testid="model-preview">模型字节：{buffer.byteLength}</div> }))
 vi.mock('mammoth', () => ({ default: {
   convertToHtml: renderers.convertToHtml,
@@ -56,6 +56,24 @@ async function render(path: string) {
 }
 
 describe('workspace document preview', () => {
+  it('opens an automatically collected file at its stored revision and deduplicates the workspace result', async () => {
+    vi.mocked(lumenApi.readResourceFile).mockResolvedValue(new Blob(['# Stored document\n\nSnapshot content']))
+    await act(async () => root.render(<DocumentProvider workspace="/project"><DocumentResults
+      entries={[{id: 'write', kind: 'tool', text: '', toolName: 'write_file', status: 'completed', args: {path: 'report.md'}}]}
+      resources={[{id: 'file:one', title: '已确认的报告', kind: 'file', file_path: 'report.md', file_type: 'document',
+        artifact_ref: 'sha256:file', revision: 2, created_at: '', status: 'active', published: true, saved: false}]} />
+    </DocumentProvider>))
+    expect(container.querySelectorAll('.document-card')).toHaveLength(1)
+    await act(async () => container.querySelector<HTMLButtonElement>('.document-card')!.click())
+    expect(lumenApi.readResourceFile).toHaveBeenCalledWith('file:one', 2, expect.any(AbortSignal))
+    expect(lumenApi.readDocument).not.toHaveBeenCalled()
+    expect(container.querySelector('[role="dialog"]')?.textContent).toContain('Snapshot content')
+    expect(container.querySelector('.document-preview > header strong')?.textContent).toBe('已确认的报告')
+    expect(container.querySelector('a[download]')?.getAttribute('download')).toBe('report.md')
+    const signal = vi.mocked(lumenApi.readResourceFile).mock.calls[0][2]!
+    await click('关闭文档预览')
+    expect(signal.aborted).toBe(true)
+  })
   it('recognizes GLB workspace paths, preserves binary bytes and download, and aborts/revokes on close', async () => {
     const bytes = new Uint8Array([103, 108, 84, 70, 0, 255, 0, 128])
     vi.mocked(lumenApi.readDocument).mockResolvedValue(new Blob([bytes]))
@@ -91,6 +109,17 @@ describe('workspace document preview', () => {
     for (const path of ['/project-other/report.md', '../report.md', '%2e%2e/report.md', '.env', 'https://example.com/a.md', '//host/a.md', 'docs\\a.md']) {
       expect(documentPath(path, '/project')).toBeNull()
     }
+  })
+  it('shows file names for path labels and inline paths while retaining descriptive labels and targets', async () => {
+    await act(async () => root.render(<DocumentProvider workspace="/project"><MarkdownMessage content={
+      '[/project/docs/工作周报.md](/project/docs/工作周报.md)\n\n`docs/工作周报.md`\n\n[查看完整周报](docs/工作周报.md)'
+    } /></DocumentProvider>))
+    const links = Array.from(container.querySelectorAll<HTMLButtonElement>('.document-link'))
+    expect(links.map(link => link.textContent)).toEqual(['工作周报.md', '工作周报.md', '查看完整周报'])
+    expect(links.map(link => link.title)).toEqual(Array(3).fill('docs/工作周报.md'))
+    vi.mocked(lumenApi.readDocument).mockResolvedValue(new Blob(['# 周报']))
+    await act(async () => links[0].click())
+    expect(lumenApi.readDocument).toHaveBeenCalledWith('docs/工作周报.md', expect.any(AbortSignal))
   })
   it('reads only on click, renders Markdown, switches source, downloads, and releases its object URL', async () => {
     vi.mocked(lumenApi.readDocument).mockResolvedValue(new Blob(['# 测试报告\n\n内容']))

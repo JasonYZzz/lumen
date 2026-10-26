@@ -1,6 +1,8 @@
 // @vitest-environment jsdom
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
+import { renderToStaticMarkup } from 'react-dom/server'
+import { BookOpen, Images, PencilSimpleLine, TerminalWindow, Wrench } from '@phosphor-icons/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { TimelineEntry } from '../lib/api/types'
 import { ConversationTurn, TranscriptInspector } from './lumen-app'
@@ -18,6 +20,11 @@ const answer: TimelineEntry = { id: 'answer', kind: 'assistant', text: '这是�
 
 function summary() { return container.querySelector<HTMLButtonElement>('.turn-activity-summary')! }
 function content() { return container.querySelector<HTMLDivElement>('.turn-activity-list')! }
+function iconPaths(Icon: typeof BookOpen) {
+  const node = document.createElement('div')
+  node.innerHTML = renderToStaticMarkup(<Icon />)
+  return node.querySelector('svg')!.innerHTML
+}
 async function render(response: TimelineEntry[], active: boolean, elapsedSeconds?: number) {
   await act(async () => root.render(<ConversationTurn
     turn={{ id: 'turn', user: { id: 'user', kind: 'user', text: '研究这个问题', elapsedSeconds }, response }}
@@ -170,8 +177,9 @@ describe('conversation process disclosure', () => {
     expect(content().querySelector('.web-tool-card.is-live')).not.toBeNull()
     expect(container.querySelector('.turn-live-placeholder')).toBeNull()
     expect(summary().textContent).toContain('正在阅读文件')
-    expect(summary().querySelector('img.thinking-orb')?.getAttribute('src'))
-      .toBe('/lumen-claude-amber.svg')
+    expect(summary().querySelector('img.thinking-orb')).toBeNull()
+    expect(summary().querySelector('.tool-glyph svg')?.innerHTML)
+      .toBe(iconPaths(BookOpen))
     expect(content().querySelector('.tool-title-line')?.textContent).toBe('正在读取 · README.md')
     // Receiving the final answer does not collapse while the run is still active.
     await render([thought, { ...tool, status: 'completed' }, answer], true)
@@ -313,14 +321,33 @@ describe('conversation process disclosure', () => {
     expect(container.querySelector('.turn-activity-preview .process-live-text')).toBeNull()
   })
 
-  it('does not fold long progress text or successful grouped tools during execution', async () => {
+  it('keeps progress visible and summarizes completed tools with expandable individual receipts', async () => {
     const long: TimelineEntry = { id: 'long', kind: 'commentary', text: '正在检查完整资料。'.repeat(80) }
     const done = { ...tool, status: 'completed', callView: { ...tool.callView, groupable: true, group_key: 'reads', plural: '个文件' } }
     await render([long, done, { ...done, id: 'another', callId: 'call-2' }], true)
     expect(content().textContent).toContain(long.text)
     expect(content().querySelector('.process-long-note')).toBeNull()
-    expect(content().querySelector('.activity-tool-group')).toBeNull()
+    const group = content().querySelector<HTMLDetailsElement>('.activity-tool-group')!
+    expect(group.open).toBe(false)
+    expect(group.querySelector('summary')?.textContent).toBe('已读取 2 个文件')
+    await click(group.querySelector('summary')!)
+    expect(group.open).toBe(true)
     expect(content().querySelectorAll('.web-tool-card')).toHaveLength(2)
+    await click(group.querySelector<HTMLButtonElement>('.tool-summary')!)
+    expect(group.querySelector('.tool-summary')?.getAttribute('aria-expanded')).toBe('true')
+  })
+
+  it('uses declared tool families before legacy names and shows commands and unknown tools distinctly', async () => {
+    for (const [family, toolName, Icon] of [
+      ['edit', 'search_file', PencilSimpleLine], ['command', 'read_results', TerminalWindow],
+      ['read', 'custom_reader', BookOpen], ['other', 'custom_action', Wrench],
+      ['other', 'search_tools', Wrench], ['read', 'view_image', Images],
+    ] as const) {
+      await render([{ ...tool, toolName, callView: { family } }], true)
+      const expected = iconPaths(Icon)
+      expect(content().querySelector('.tool-glyph svg')?.innerHTML).toBe(expected)
+      expect(summary().querySelector('.tool-glyph svg')?.innerHTML).toBe(expected)
+    }
   })
 
   it('does not create an empty process for plain answers or invent a duration for older records', async () => {

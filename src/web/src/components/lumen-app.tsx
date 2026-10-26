@@ -5,6 +5,7 @@ import {
   ArrowDown,
   ArrowCounterClockwise,
   ArrowsClockwise,
+  BookOpen,
   CaretDown,
   Check,
   CheckCircle,
@@ -12,13 +13,13 @@ import {
   ClockCounterClockwise,
   Copy,
   DotsThree,
-  FileCode,
   FolderSimple,
   FolderOpen,
   GearSix,
   Globe,
   HardDrives,
   Info,
+  Images,
   List,
   ListChecks,
   ListMagnifyingGlass,
@@ -35,13 +36,19 @@ import {
   TreeStructure,
   Trash,
   WarningCircle,
+  Wrench,
   X,
 } from '@phosphor-icons/react'
 import { useCallback, useEffect, useId, useMemo, useReducer, useRef, useState, type MouseEvent } from 'react'
 import { exchangeLaunchToken, lumenApi, subscribeRun } from '@/lib/api/client'
+import { AuthenticationError } from '@/lib/api/errors'
 import type {
   AgentRecord,
+  AssistantResource,
   ApprovalMode,
+  PermissionPreset,
+  SandboxMode,
+  FilesystemScope,
   AttachmentRef,
   Bootstrap,
   CapabilityInventory,
@@ -63,6 +70,10 @@ import {
   parsePromptInvocation,
 } from '@/lib/slash-commands'
 import { Composer } from './composer'
+import { useAppearance } from './appearance-control'
+import { AssistantWorkspace, assistantPages, goalStatusLabels, goalExecutionLabels, type AssistantPage, type AssistantDiscussion, type AssistantView } from './assistant-workspace'
+import type { AssistantContextRef, AssistantIdea } from '@/lib/api/types'
+import { PersonalPreferences } from './personal-preferences'
 import { ClarificationPrompt } from './clarification-prompt'
 import { CopyButton } from './copy-button'
 import { UserMessage } from './user-message'
@@ -74,8 +85,8 @@ import { LumenLogo, LumenMark } from './lumen-logo'
 import { MarkdownMessage } from './markdown-message'
 import { ReportReadingButton } from './markdown-report'
 import { PlanPanel, PlanProgress, PlanProposal, PlanReview } from './plan-panel'
-import { ModelIcon } from './model-icon'
-import { DocumentProvider, DocumentResults } from './document-preview'
+import { DocumentPreview, DocumentProvider, DocumentResults } from './document-preview'
+import { resourceTypeLabel } from './resource-icon'
 import { SessionActionsMenu } from './session-actions-menu'
 import { SessionSearchDialog } from './session-search-dialog'
 import { ThinkingOrb } from './thinking-orb'
@@ -97,15 +108,17 @@ import {
   type TurnPresentation,
 } from '@/lib/turn-activity'
 import { useModalFocus } from './use-modal-focus'
+import { ModelSettingsControl, modelDisplayName, type ModelSettingsView } from './model-settings-control'
 
 function requestId() {
   return crypto.randomUUID()
 }
 
-const approvalChoices: Array<ChoiceOption<ApprovalMode>> = [
-  { value: 'manual', label: '每次确认', description: '工具执行前逐项确认，适合审慎操作。' },
-  { value: 'accept_edits', label: '自动改文件', description: '文件修改自动允许，其他动作仍按规则确认。' },
-  { value: 'auto', label: '自动执行', description: '在权限与 Sandbox 约束内持续执行。' },
+const permissionChoices: Array<ChoiceOption<PermissionPreset | 'custom'>> = [
+  { value: 'manual', label: '每次确认', description: '仅限工作区。读取通常免确认，修改和执行按规则确认。' },
+  { value: 'accept_edits', label: '自动改文件', description: '仅限工作区。文件修改自动允许，其他动作按规则确认。' },
+  { value: 'workspace_auto', label: '工作区内自动执行', compactLabel: '工作区自动', description: '在工作区沙箱内自动执行常规操作，命令联网沿用配置。' },
+  { value: 'full_access', label: '完全访问', description: '可操作本机其他目录、命令可联网。内建提交、推送仍每次确认。' },
 ]
 
 function reasoningOptions(selection?: ReasoningSelection | null, requested = selection?.requested) {
@@ -127,6 +140,33 @@ function reasoningOptions(selection?: ReasoningSelection | null, requested = sel
 }
 
 export function LumenApp() {
+  const appearance = useAppearance()
+  const [assistantPage, setAssistantPage] = useState<AssistantPage>('chat')
+  const [automationIntent, setAutomationIntent] = useState('')
+  const [goalSourceSessionId, setGoalSourceSessionId] = useState<string | undefined>()
+  const [assistantObjectId, setAssistantObjectId] = useState<string | undefined>()
+  const [assistantContext, setAssistantContext] = useState<AssistantContextRef[]>([])
+  const [contextResource, setContextResource] = useState<Awaited<ReturnType<typeof lumenApi.assistantResource>> | null>(null)
+  const [contextTab, setContextTab] = useState<'content' | 'discussion'>('discussion')
+  const [contextFile, setContextFile] = useState<AssistantResource | null>(null)
+  useEffect(() => setContextFile(null), [contextResource?.resource.id, contextResource?.resource.revision])
+  const [assistantNotice, setAssistantNotice] = useState('')
+  const [publishing, setPublishing] = useState(false)
+  const [sessionFiles, setSessionFiles] = useState<AssistantResource[]>([])
+  const [contextGoal, setContextGoal] = useState<Awaited<ReturnType<typeof lumenApi.assistantGoal>>['goal'] | null>(null)
+  const [approvalSubmitting, setApprovalSubmitting] = useState(false)
+  const [approvalError, setApprovalError] = useState('')
+  const approvalRequestRef = useRef(false)
+  const discussionDrafts = useRef(new Map<string, string>())
+  const assistantViews = useRef(new Map<string, AssistantView>())
+  const navigateAssistant = useCallback((page: AssistantPage, id?: string) => {
+    setAssistantPage(page); setAssistantObjectId(id); setAutomationIntent(''); setGoalSourceSessionId(undefined); setSidebarOpen(false)
+    setAssistantNotice('')
+    const url = new URL(window.location.href)
+    url.searchParams.set('view', page === 'goals' && id ? 'goal' : page === 'library' && id ? 'resource' : page)
+    if (id) url.searchParams.set('id', id); else url.searchParams.delete('id')
+    if (url.href !== window.location.href) window.history.pushState({}, '', url.pathname + url.search)
+  }, [])
   const [bootstrap, setBootstrap] = useState<Bootstrap | null>(null)
   const [sessions, setSessions] = useState<SessionSummary[]>([])
   const [sessionId, setSessionId] = useState<string | null>(null)
@@ -142,9 +182,13 @@ export function LumenApp() {
   const [sessionManagementBusy, setSessionManagementBusy] = useState(false)
   const [run, dispatch] = useReducer(runReducer, initialRunState)
   const [input, setInput] = useState('')
+  useEffect(() => { discussionDrafts.current.set(sessionId ?? 'new', input) }, [sessionId, input])
   const [attachments, setAttachments] = useState<AttachmentRef[]>([])
   const [queueMode, setQueueMode] = useState<QueueMode>('steer')
   const [loading, setLoading] = useState(true)
+  const [authenticationRequired, setAuthenticationRequired] = useState(false)
+  const [connectionError, setConnectionError] = useState('')
+  const [connectionAttempt, setConnectionAttempt] = useState(0)
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const [sessionSearchOpen, setSessionSearchOpen] = useState(false)
@@ -189,6 +233,7 @@ export function LumenApp() {
     return () => media?.removeEventListener('change', changed)
   }, [])
   const [confirmAuto, setConfirmAuto] = useState<string | null>(null)
+  const [confirmPreset, setConfirmPreset] = useState<PermissionPreset | null>(null)
   const [autoError, setAutoError] = useState('')
   const [approvalChanging, setApprovalChanging] = useState(false)
   const approvalChangeRef = useRef(false)
@@ -201,19 +246,30 @@ export function LumenApp() {
   const [checkpointsOpen, setCheckpointsOpen] = useState(false)
   const [transcriptOpen, setTranscriptOpen] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
-  const [modelMenuOpen, setModelMenuOpen] = useState(false)
-  const [thinkingMenuOpen, setThinkingMenuOpen] = useState(false)
+  const [modelSettingsView, setModelSettingsView] = useState<ModelSettingsView>(null)
   const [reasoning, setReasoning] = useState<ReasoningSelection | null>(null)
   const [modeMenuOpen, setModeMenuOpen] = useState(false)
   const [modelChanging, setModelChanging] = useState(false)
   const modelChangeRef = useRef(false)
+  const queuedModelRef = useRef<string | null>(null)
   const [settingsNotice, setSettingsNotice] = useState('')
+  useEffect(() => {
+    const requested = queuedModelRef.current
+    queuedModelRef.current = bootstrap?.pendingModel ?? null
+    if (requested && bootstrap && !bootstrap.pendingModel) {
+      const currentModel = modelDisplayName(bootstrap.modelId, bootstrap.activeModel)
+      setSettingsNotice(bootstrap.activeModel === requested
+        ? `已切换到 ${currentModel}，用于下一轮对话。`
+        : `未能切换到 ${requested}，仍在使用 ${currentModel}。请重新选择模型重试。`)
+    }
+  }, [bootstrap?.pendingModel, bootstrap?.activeModel, bootstrap?.modelId])
   const [checkpoints, setCheckpoints] = useState<CheckpointRecord[]>([])
   const [controlBusy, setControlBusy] = useState(false)
   const [stopping, setStopping] = useState(false)
   const [stopError, setStopError] = useState('')
   const stoppingRef = useRef<string | null>(null)
   const editingRef = useRef(false)
+  const submitRequestRef = useRef(false)
   const [messageEditing, setMessageEditing] = useState(false)
   const selectedSessionRef = useRef<string | null>(null)
   const editRequestRef = useRef<{
@@ -236,7 +292,14 @@ export function LumenApp() {
       refreshSessions(),
     ])
     setBootstrap(nextBootstrap)
+    return nextBootstrap
   }, [refreshSessions])
+
+  useEffect(() => {
+    if (!bootstrap?.activeRunId || bootstrap.activeRunId === run.runId) return
+    const timer = setInterval(() => { void refreshChrome().catch(() => {}) }, 1500)
+    return () => clearInterval(timer)
+  }, [bootstrap?.activeRunId, run.runId, refreshChrome])
 
   const pendingTitles = sessions.filter((item) => item.titlePending).map((item) => item.sessionId).join(',')
   useEffect(() => {
@@ -257,6 +320,7 @@ export function LumenApp() {
       closeStreamRef.current = subscribeRun(
         runId,
         (event: EventEnvelope) => {
+          if (selectedSessionRef.current !== event.sessionId) return
           dispatch({ type: 'event', event })
           if (
             event.type === 'run.completed' ||
@@ -287,11 +351,15 @@ export function LumenApp() {
     dispatch({ type: 'snapshot', snapshot })
     const url = new URL(window.location.href)
     url.searchParams.set('session', snapshot.sessionId)
+    url.searchParams.delete('view'); url.searchParams.delete('id')
     window.history.replaceState({}, '', `${url.pathname}${url.search}`)
   }, [])
 
   const openSession = useCallback(
     async (id: string) => {
+      setAssistantPage('chat')
+      setAssistantContext([]); setContextResource(null); setAssistantNotice('')
+      setContextTab('discussion')
       selectedSessionRef.current = id
       setConfirmAuto(null)
       setAutoError('')
@@ -309,23 +377,65 @@ export function LumenApp() {
         const snapshot = await lumenApi.session(id)
         if (selectedSessionRef.current !== id) return
         applySessionSnapshot(snapshot)
+        if (lumenApi.assistantContext) void lumenApi.assistantContext(id).then(value => {
+          if (selectedSessionRef.current !== id) return
+          setAssistantContext(value.context_refs)
+          const resourceRef = value.context_refs.find(r => r.kind === 'resource')
+          if (resourceRef) void lumenApi.assistantResource(resourceRef.id, false, resourceRef.revision ?? undefined).then(resource => {
+            if (selectedSessionRef.current === id) setContextResource(resource)
+          }).catch(() => {
+            if (selectedSessionRef.current === id) setAssistantNotice('关联资料暂不可用，可回资料空间重新选择。')
+          })
+        }).catch(() => { /* Ordinary sessions do not depend on assistant storage. */ })
         if (snapshot.activeRunId) attachRun(snapshot.activeRunId)
       } catch (error) {
+        if (error instanceof AuthenticationError) {
+          setAuthenticationRequired(true)
+          return
+        }
         dispatch({
           type: 'local-error',
           message: error instanceof Error ? error.message : '无法恢复会话',
         })
       } finally {
-        setLoading(false)
-        setSidebarOpen(false)
+        if (selectedSessionRef.current === id) { setLoading(false); setSidebarOpen(false) }
       }
     },
     [applySessionSnapshot, attachRun],
   )
 
   useEffect(() => {
+    const restore = () => {
+      setAssistantNotice(''); setContextTab('discussion')
+      const url = new URL(window.location.href)
+      const view = url.searchParams.get('view')
+      const page = view === 'goal' ? 'goals' : view === 'resource' ? 'library' : view
+      if (assistantPages.some(p => p.id === page)) {
+        setAssistantPage(page as AssistantPage)
+        setAssistantObjectId(url.searchParams.get('id') ?? undefined)
+      } else {
+        setAssistantPage('chat')
+        const id = url.searchParams.get('session')
+        if (id && id !== selectedSessionRef.current) void openSession(id)
+      }
+    }
+    restore(); window.addEventListener('popstate', restore)
+    return () => window.removeEventListener('popstate', restore)
+  }, [openSession])
+
+  useEffect(() => {
+    const requireAuthentication = () => {
+      setAuthenticationRequired(true)
+      closeStreamRef.current?.()
+    }
+    window.addEventListener('lumen:authentication-required', requireAuthentication)
+    return () => window.removeEventListener('lumen:authentication-required', requireAuthentication)
+  }, [])
+
+  useEffect(() => {
     let disposed = false
     const initialise = async () => {
+      setLoading(true)
       try {
         await exchangeLaunchToken()
         const [nextBootstrap, nextSessions] = await Promise.all([
@@ -333,16 +443,18 @@ export function LumenApp() {
           lumenApi.listSessions(true),
         ])
         if (disposed) return
+        setAuthenticationRequired(false)
+        setConnectionError('')
         setBootstrap(nextBootstrap)
         setSessions(nextSessions)
         const requested = new URL(window.location.href).searchParams.get('session')
-        if (requested) await openSession(requested)
+        const view = new URL(window.location.href).searchParams.get('view')
+        if (requested && (!view || view === 'chat')) await openSession(requested)
       } catch (error) {
         if (!disposed) {
-          dispatch({
-            type: 'local-error',
-            message: error instanceof Error ? error.message : '无法连接 Lumen Web',
-          })
+          if (error instanceof AuthenticationError) setAuthenticationRequired(true)
+          else setConnectionError(error instanceof TypeError ? '请确认 Lumen 服务正在运行，然后重试。'
+            : error instanceof Error ? error.message : '无法连接 Lumen Web')
         }
       } finally {
         if (!disposed) setLoading(false)
@@ -353,7 +465,7 @@ export function LumenApp() {
       disposed = true
       closeStreamRef.current?.()
     }
-  }, [openSession])
+  }, [openSession, connectionAttempt])
 
   const createSession = useCallback(async () => {
     const created = await lumenApi.createSession()
@@ -366,26 +478,83 @@ export function LumenApp() {
     targetSession: string,
     settings: Parameters<typeof lumenApi.updateSessionSettings>[1],
   ) => {
-    await lumenApi.updateSessionSettings(targetSession, settings)
+    let result: Record<string, unknown>
+    try {
+      result = await lumenApi.updateSessionSettings(targetSession, settings)
+      if (settings.permissionPreset && (
+        !['manual', 'accept_edits', 'auto'].includes(String(result.approval_mode))
+        || !['workspace_write', 'disabled'].includes(String(result.sandbox_mode))
+      )) throw new Error('权限更新结果不完整，请刷新当前对话后重试。')
+    } catch (error) {
+      if (!settings.permissionPreset) throw error
+      let snapshot: SessionSnapshot
+      try { snapshot = await lumenApi.session(targetSession) }
+      catch {
+        if (selectedSessionRef.current === targetSession) {
+          setConfirmAuto(null)
+          setConnectionError('权限切换结果尚未核实，请重新连接并读取当前对话后再执行。')
+        }
+        throw error
+      }
+      if (selectedSessionRef.current === targetSession) applySessionSnapshot(snapshot)
+      const expectedApproval = ['workspace_auto', 'full_access'].includes(settings.permissionPreset)
+        ? 'auto' : settings.permissionPreset
+      const expectedSandbox = settings.permissionPreset === 'full_access' ? 'disabled' : 'workspace_write'
+      if (snapshot.approvalMode !== expectedApproval || snapshot.sandboxMode !== expectedSandbox) throw error
+      result = { approval_mode: snapshot.approvalMode, sandbox_mode: snapshot.sandboxMode,
+        filesystem_scope: snapshot.filesystemScope }
+    }
+    const applied = settings.permissionPreset ? {
+      approvalMode: result.approval_mode as ApprovalMode,
+      sandboxMode: result.sandbox_mode as SandboxMode,
+      filesystemScope: (result.filesystem_scope ?? (result.sandbox_mode === 'disabled' ? 'full' : 'workspace')) as FilesystemScope,
+    } : settings
     // Workspace bootstrap contains defaults, never the selected Session's modes.
-    dispatch({ type: 'session-settings', sessionId: targetSession, settings })
-  }, [])
+    dispatch({ type: 'session-settings', sessionId: targetSession, settings: applied })
+    if (selectedSessionRef.current === targetSession && Array.isArray(result.resolved_call_ids)) {
+      dispatch({ type: 'approval-decided', callIds: result.resolved_call_ids as string[], approved: true })
+    }
+  }, [applySessionSnapshot])
 
   const setApprovalMode = useCallback(async (mode: ApprovalMode, resetCollaboration = false) => {
-    if (bootstrap?.activeRunId || run.runId || approvalChangeRef.current) {
-      throw new Error('请等待当前操作结束，再切换审批模式。')
+    if (approvalChangeRef.current) {
+      throw new Error('正在更新审批模式，请稍候。')
     }
     const targetSession = sessionId ?? (await createSession())
     setAutoError('')
+    setConfirmPreset(null)
     if (mode === 'auto') {
       setConfirmAuto(targetSession)
       return
     }
     setConfirmAuto(null)
-    await updateSessionSettings(targetSession, {
-      approvalMode: mode,
-      ...(resetCollaboration ? { collaborationMode: 'default' as const } : {}),
-    })
+    approvalChangeRef.current = true
+    setApprovalChanging(true)
+    try {
+      await updateSessionSettings(targetSession, {
+        approvalMode: mode,
+        ...(resetCollaboration && !run.runId ? { collaborationMode: 'default' as const } : {}),
+      })
+    } finally { approvalChangeRef.current = false; setApprovalChanging(false) }
+  }, [createSession, run.runId, sessionId, updateSessionSettings])
+
+  const setPermissionPreset = useCallback(async (preset: PermissionPreset | 'custom') => {
+    if (preset === 'custom') return
+    if (approvalChangeRef.current) throw new Error('正在更新权限，请稍候。')
+    if (bootstrap?.activeRunId || run.runId) throw new Error('请先停止运行，再切换访问范围。')
+    const targetSession = sessionId ?? (await createSession())
+    setAutoError('')
+    if (preset === 'workspace_auto' || preset === 'full_access') {
+      setConfirmPreset(preset)
+      setConfirmAuto(targetSession)
+      return
+    }
+    setConfirmAuto(null)
+    approvalChangeRef.current = true
+    setApprovalChanging(true)
+    try {
+      await updateSessionSettings(targetSession, { permissionPreset: preset })
+    } finally { approvalChangeRef.current = false; setApprovalChanging(false) }
   }, [bootstrap?.activeRunId, createSession, run.runId, sessionId, updateSessionSettings])
 
   const setCollaborationMode = useCallback(async (mode: 'default' | 'plan') => {
@@ -436,6 +605,7 @@ export function LumenApp() {
       await lumenApi.agentAction(agent.id, action, payload)
       await refreshSessionCapabilities()
     } catch (error) {
+      if (error instanceof AuthenticationError) return
       dispatch({
         type: 'local-error',
         message: error instanceof Error ? error.message : 'Agent 操作失败',
@@ -490,34 +660,37 @@ export function LumenApp() {
   }, [refreshSessionCapabilities, sessionId, run.runId, bootstrap?.activeRunId])
 
   const selectModel = useCallback(async (model: string) => {
-    if (modelChangeRef.current || bootstrap?.activeRunId || run.runId) {
-      throw new Error('请等待当前操作结束，或停止运行后再切换模型。')
+    if (modelChangeRef.current) {
+      throw new Error('正在更新模型，请稍候。')
     }
-    if (model === bootstrap?.activeModel) return
+    if (model === (bootstrap?.pendingModel ?? bootstrap?.activeModel)) return
     if (!bootstrap?.availableModels.includes(model)) throw new Error(`未配置的模型：${model}`)
     modelChangeRef.current = true
     setModelChanging(true)
     setSettingsNotice('')
     try {
-      await lumenApi.updateWorkspaceSettings({ model })
-      setReasoning(null)
-      await refreshChrome()
+      const result = await lumenApi.updateWorkspaceSettings({ model })
+      queuedModelRef.current = typeof result.pending_model === 'string' ? result.pending_model : null
+      if (!result.pending_model) setReasoning(null)
+      const nextBootstrap = await refreshChrome()
+      if (!result.pending_model) {
+        setSettingsNotice(`已切换到 ${modelDisplayName(nextBootstrap.modelId, model)}，用于下一轮对话。`)
+      }
       const target = selectedSessionRef.current
       if (target) {
         const snapshot = await lumenApi.session(target)
         if (selectedSessionRef.current === target) setReasoning(snapshot.reasoning ?? null)
       }
-      setSettingsNotice(`已切换到 ${model}，用于下一轮对话。`)
     } finally {
       modelChangeRef.current = false
       setModelChanging(false)
     }
-  }, [bootstrap, refreshChrome, run.runId])
+  }, [bootstrap, refreshChrome])
 
   const selectThinking = useCallback(async (level: string) => {
     if (level === 'configured') return
-    if (modelChangeRef.current || bootstrap?.activeRunId || run.runId) {
-      throw new Error('请等待运行结束后再切换推理强度。')
+    if (modelChangeRef.current || bootstrap?.pendingModel) {
+      throw new Error('请等待模型切换完成后再设置推理强度。')
     }
     const available = (sessionId ? reasoning : null)?.supported_levels
       ?? bootstrap?.reasoning?.supported_levels ?? ['provider_default']
@@ -534,7 +707,7 @@ export function LumenApp() {
       modelChangeRef.current = false
       setModelChanging(false)
     }
-  }, [bootstrap, reasoning, run.runId, sessionId, createSession])
+  }, [bootstrap, reasoning, sessionId, createSession])
 
   const handleSlashCommand = useCallback(
     async (command: string): Promise<boolean> => {
@@ -605,7 +778,7 @@ export function LumenApp() {
       }
       if (name === '/model') {
         if (!argument) {
-          setModelMenuOpen(true)
+          setModelSettingsView('models')
         } else {
           await selectModel(argument)
         }
@@ -613,7 +786,7 @@ export function LumenApp() {
         return true
       }
       if (name === '/thinking') {
-        if (!argument) setThinkingMenuOpen(true)
+        if (!argument) setModelSettingsView('settings')
         else await selectThinking(argument)
         setInput('')
         return true
@@ -863,14 +1036,17 @@ export function LumenApp() {
         setInput(draft)
       }
     } catch (error) {
+      if (error instanceof AuthenticationError) return
       dispatch({ type: 'local-error', message: error instanceof Error ? error.message : '命令执行失败' })
     }
   }, [handleSlashCommand, input])
 
   const submit = useCallback(async () => {
-    if (modelChangeRef.current || approvalChangeRef.current || editingRef.current || stoppingRef.current || planReviewRequest.current) return
+    if (submitRequestRef.current || modelChangeRef.current || approvalChangeRef.current || editingRef.current || stoppingRef.current || planReviewRequest.current) return
     const prompt = input.trim() || (attachments.length ? '请分析这些图片。' : '')
     if (!prompt) return
+    submitRequestRef.current = true
+    let targetSession = sessionId
     try {
       if (prompt.startsWith('/') && (await handleSlashCommand(prompt))) return
       if (attachments.length && !bootstrap?.inputModalities.includes('image')) {
@@ -879,25 +1055,36 @@ export function LumenApp() {
       }
       if (run.runId) {
         await lumenApi.queueInput(run.runId, prompt, queueMode, attachments)
-        setInput('')
-        setAttachments([])
+        if (selectedSessionRef.current !== targetSession) return
+        setInput(current => current === input ? '' : current)
+        setAttachments(current => current === attachments ? [] : current)
         return
       }
-      const targetSession = sessionId ?? (await createSession())
-      const started = await lumenApi.startRun(targetSession, prompt, requestId(), attachments)
+      targetSession = sessionId ?? (await createSession())
+      const started = await lumenApi.startRun(targetSession, prompt, requestId(), attachments, undefined, assistantContext)
+      if (selectedSessionRef.current !== targetSession) { void refreshChrome(); return }
+      if (['completed', 'failed', 'cancelled'].includes(started.status)) {
+        await openSession(targetSession)
+        return
+      }
       dispatch({ type: 'run-registered', runId: started.runId })
       attachRun(started.runId)
       await refreshChrome()
-      setInput('')
-      setAttachments([])
+      if (selectedSessionRef.current === targetSession) {
+        setInput(current => current === input ? '' : current)
+        setAttachments(current => current === attachments ? [] : current)
+      }
     } catch (error) {
-      dispatch({
+      if (error instanceof AuthenticationError) return
+      if (selectedSessionRef.current === targetSession) dispatch({
         type: 'local-error',
         message: error instanceof Error ? error.message : '无法启动运行',
       })
-    }
+    } finally { submitRequestRef.current = false }
   }, [
     attachRun,
+    assistantContext,
+    openSession,
     attachments,
     bootstrap?.inputModalities,
     createSession,
@@ -984,8 +1171,10 @@ export function LumenApp() {
             sourceId, text, intent.runRequestId, original?.attachments ?? [], recorded.turn_index,
           )
       if (selectedSessionRef.current === sourceId) {
+        const snapshot = await lumenApi.session(sourceId)
+        if (selectedSessionRef.current !== sourceId) return
         closeStreamRef.current?.()
-        applySessionSnapshot(await lumenApi.session(sourceId))
+        applySessionSnapshot(snapshot)
         dispatch({ type: 'run-registered', runId: started.runId })
         stickToLatestRef.current = true
         attachRun(started.runId)
@@ -1005,7 +1194,10 @@ export function LumenApp() {
     setApprovalChanging(true)
     setAutoError('')
     try {
-      await updateSessionSettings(confirmAuto, { approvalMode: 'auto' })
+      await updateSessionSettings(confirmAuto, confirmPreset ? {
+        permissionPreset: confirmPreset,
+        ...(confirmPreset === 'full_access' ? { confirmFullAccess: true } : {}),
+      } : { approvalMode: 'auto' })
       setConfirmAuto((current) => current === confirmAuto ? null : current)
     } catch (error) {
       setAutoError(error instanceof Error ? error.message : '切换失败，请重试。')
@@ -1013,7 +1205,7 @@ export function LumenApp() {
       approvalChangeRef.current = false
       setApprovalChanging(false)
     }
-  }, [confirmAuto, sessionId, updateSessionSettings])
+  }, [confirmAuto, confirmPreset, sessionId, updateSessionSettings])
 
   const reviewPlan = useCallback(async (action: 'approve' | 'reject') => {
     if (!sessionId || selectedSessionRef.current !== sessionId || !run.planReviewRevision
@@ -1043,6 +1235,7 @@ export function LumenApp() {
       setPlanFeedback('')
       attachRun(started.runId)
     } catch (error) {
+      if (error instanceof AuthenticationError) return
       if (selectedSessionRef.current !== sessionId || planReviewRequest.current !== operation) return
       dispatch({
         type: 'local-error',
@@ -1057,6 +1250,9 @@ export function LumenApp() {
   }, [attachRun, bootstrap?.activeRunId, planFeedback, run.planReviewRevision, run.planReviewStatus, run.runId, sessionId])
 
   const leaveSession = useCallback(() => {
+    setAssistantPage('chat')
+    setAssistantContext([]); setContextResource(null); setAssistantNotice('')
+    setContextTab('discussion')
     planReviewRequest.current = null
     setPlanReviewBusy(false)
     setPlanFeedback('')
@@ -1068,14 +1264,169 @@ export function LumenApp() {
     closeStreamRef.current = null
     setSessionId(null)
     setReasoning(null)
-    setThinkingMenuOpen(false)
+    setModelSettingsView(null)
     selectedSessionRef.current = null
     setSessionMenu(null)
     dispatch({ type: 'reset' })
     const url = new URL(window.location.href)
     url.searchParams.delete('session')
+    url.searchParams.delete('view'); url.searchParams.delete('id')
     window.history.replaceState({}, '', `${url.pathname}${url.search}`)
   }, [])
+
+  const discussAssistant = async ({intent, context}: AssistantDiscussion) => {
+    try {
+      if (context) {
+        const discussion = await lumenApi.assistantDiscussion(context)
+        await openSession(discussion.session_id)
+        setAssistantContext(discussion.context_refs)
+        if (context.kind === 'resource') setContextResource(await lumenApi.assistantResource(context.id, false, context.revision ?? undefined))
+        const draft = discussionDrafts.current.get(discussion.session_id) ?? ''
+        setInput(draft)
+        if (intent) setInput(draft ? `${draft}\n\n${intent}` : intent)
+        else if (!draft && context.kind === 'goal') setInput('请根据这个目标，与我一起确认现状、成功标准和下一步。')
+      } else {
+        leaveSession()
+        if (intent) setInput(current => current ? `${current}\n\n${intent}` : intent)
+      }
+    } catch (error) {
+      setAssistantNotice(error instanceof Error ? error.message : '无法继续讨论')
+    }
+  }
+  const planningAttempts = useRef(new Set<string>())
+  const planGoal = async (goalId: string, identity: string) => {
+    if (submitRequestRef.current || modelChangeRef.current || approvalChangeRef.current || editingRef.current
+      || stoppingRef.current || planReviewRequest.current || (!planningAttempts.current.has(identity) && (bootstrap?.activeRunId || run.runId))) {
+      throw new Error('工作区正在处理其他操作，请结束后重试规划。')
+    }
+    submitRequestRef.current = true
+    const originView = window.location.href
+    try {
+      const discussion = await lumenApi.assistantDiscussion({kind: 'goal', id: goalId})
+      planningAttempts.current.add(identity)
+      const started = await lumenApi.startRun(discussion.session_id,
+        '请围绕关联目标，与我一起确认现状、可验证的成功标准和第一步。已有说明与原对话约束继续有效。先提出规划；不要自行启用持续推进或定时跟进。',
+        `goal-plan:${identity}`, [], undefined, discussion.context_refs)
+      if (window.location.href !== originView) { void refreshChrome(); return }
+      const draft = discussionDrafts.current.get(discussion.session_id) ?? ''
+      await openSession(discussion.session_id)
+      if (selectedSessionRef.current === discussion.session_id) {
+        setAssistantContext(discussion.context_refs)
+        setInput(draft)
+        if (!['completed', 'failed', 'cancelled'].includes(started.status)) {
+          dispatch({type: 'run-registered', runId: started.runId})
+          attachRun(started.runId)
+        }
+      }
+      await refreshChrome()
+    } finally { submitRequestRef.current = false }
+  }
+  const ideaAttempts = useRef(new Map<string, {sessionId: string; requestId: string; refs: AssistantContextRef[]}>())
+  const startIdea = async (idea: AssistantIdea, prompt: string) => {
+    if (submitRequestRef.current || modelChangeRef.current || approvalChangeRef.current || editingRef.current
+      || stoppingRef.current || planReviewRequest.current || bootstrap?.activeRunId) {
+      throw new Error('工作区正在处理其他操作，请结束后再开始这项任务。')
+    }
+    submitRequestRef.current = true
+    const originView = window.location.href
+    try {
+      const current = (await lumenApi.assistant()).ideas.find(item => item.id === idea.id && !item.dismissed)
+      if (!current || current.intent !== idea.intent || JSON.stringify(current.context_refs) !== JSON.stringify(idea.context_refs))
+        throw new Error('这条建议已更新或撤回，请刷新灵感后重新查看方案。')
+      const key = JSON.stringify([idea.id, prompt])
+      let attempt = ideaAttempts.current.get(key)
+      if (!attempt) {
+        const discussion = current.context_refs?.length
+          ? await lumenApi.assistantDiscussion(current.context_refs[0]) : null
+        const sessionId = discussion?.session_id ?? (await lumenApi.createSession()).sessionId
+        attempt = {sessionId, requestId: requestId(), refs: discussion?.context_refs ?? []}
+        ideaAttempts.current.set(key, attempt)
+      }
+      const started = await lumenApi.startRun(attempt.sessionId, prompt, attempt.requestId, [], undefined, attempt.refs)
+      if (window.location.href !== originView) { void refreshChrome(); return }
+      // Navigation happens after admission: a failed start keeps the proposal and retry identity.
+      const draft = discussionDrafts.current.get(attempt.sessionId) ?? ''
+      await openSession(attempt.sessionId)
+      if (selectedSessionRef.current === attempt.sessionId) {
+        setInput(draft)
+        if (!['completed', 'failed', 'cancelled'].includes(started.status)) {
+          dispatch({type: 'run-registered', runId: started.runId})
+          attachRun(started.runId)
+        }
+      }
+      await refreshChrome()
+    } finally { submitRequestRef.current = false }
+  }
+  const publishableInteractionId = groupTimelineByTurn(run.timeline)
+    .findLast(turn => turn.response.some(item => item.kind === 'assistant'))?.user?.interactionId
+  const goalId = assistantContext.find(ref => ref.kind === 'goal')?.id
+  useEffect(() => {
+    let disposed = false
+    setContextGoal(null)
+    if (!goalId || !lumenApi.assistantGoal) return
+    const refresh = async () => {
+      try {
+        const detail = await lumenApi.assistantGoal(goalId)
+        if (disposed) return
+        setContextGoal(detail.goal)
+        const execution = detail.goal.execution
+        if (assistantPage === 'chat' && execution?.status === 'active' && execution.run_id && execution.run_id !== run.runId
+          && detail.goal.primary_session_id && detail.goal.primary_session_id === selectedSessionRef.current) {
+          const snapshot = await lumenApi.session(detail.goal.primary_session_id)
+          if (!disposed && snapshot.sessionId === selectedSessionRef.current && snapshot.activeRunId === execution.run_id) {
+            applySessionSnapshot(snapshot)
+            attachRun(execution.run_id)
+          }
+        }
+      } catch { /* Re-read after the next status update without changing the conversation. */ }
+    }
+    void refresh()
+    const timer = setInterval(() => {if (!document.hidden) void refresh()}, 1500)
+    return () => { disposed = true; clearInterval(timer) }
+  }, [goalId, run.runId, run.status, assistantPage, applySessionSnapshot, attachRun])
+  useEffect(() => setSessionFiles([]), [sessionId])
+  useEffect(() => {
+    let disposed = false
+    if (sessionId && lumenApi.assistantResources) {
+      void lumenApi.assistantResources('', 'all', undefined, sessionId).then(value => {
+        if (!disposed) setSessionFiles(value.items.filter(resource => resource.file_path && resource.session_id === sessionId))
+      }).catch(() => { /* Existing file links remain available if the index cannot be read. */ })
+    }
+    return () => { disposed = true }
+  }, [run.runId, sessionId])
+  const applyResourceAnswer = async () => {
+    if (!sessionId || !publishableInteractionId || publishing || !contextResource || contextResource.resource.file_path) return
+    setPublishing(true); setAssistantNotice('')
+    try {
+      const result = await lumenApi.publishAnswer({session_id: sessionId, interaction_id: publishableInteractionId,
+        title: contextResource.resource.title,
+        target_resource_id: contextResource.resource.id,
+        expected_revision: contextResource.resource.revision,
+      })
+      if (selectedSessionRef.current !== sessionId) return
+      const next = await lumenApi.assistantResource(result.resource.id)
+      if (selectedSessionRef.current !== sessionId) return
+      setContextResource(next)
+      setAssistantContext([{kind: 'resource', id: next.resource.id, revision: next.resource.revision}])
+      setAssistantNotice('修改已应用，原版本仍可查看。')
+    } catch (error) {
+      if (selectedSessionRef.current === sessionId) setAssistantNotice(error instanceof Error ? error.message : '保存失败，可保留回答后重试')
+    } finally { setPublishing(false) }
+  }
+
+  const decideApproval = async (callId: string, approved: boolean, scope?: 'once' | 'session' | 'always') => {
+    if (!run.runId || approvalRequestRef.current) return
+    approvalRequestRef.current = true
+    setApprovalSubmitting(true); setApprovalError('')
+    try {
+      const result = await lumenApi.decideApproval(run.runId, callId, approved, scope)
+      if (selectedSessionRef.current !== sessionId) return
+      dispatch({type: 'approval-decided', callIds: result.resolved_call_ids ?? [callId], approved})
+    } catch (error) {
+      if (selectedSessionRef.current === sessionId) setApprovalError(error instanceof Error ? error.message : '授权未送达，请重试。')
+    } finally { approvalRequestRef.current = false; setApprovalSubmitting(false) }
+  }
+  useEffect(() => { setApprovalError('') }, [sessionId, run.runId])
 
   const setArchived = useCallback(async (session: SessionSummary, archived: boolean) => {
     setSessionManagementBusy(true)
@@ -1089,6 +1440,7 @@ export function LumenApp() {
       setSessionMenu(null)
       await refreshChrome()
     } catch (error) {
+      if (error instanceof AuthenticationError) return
       dispatch({
         type: 'local-error',
         message: error instanceof Error ? error.message : archived ? '归档失败' : '恢复失败',
@@ -1112,6 +1464,7 @@ export function LumenApp() {
       setSessionMenu(null)
       await refreshChrome()
     } catch (error) {
+      if (error instanceof AuthenticationError) return
       dispatch({
         type: 'local-error',
         message: error instanceof Error ? error.message : '任务管理操作失败',
@@ -1152,7 +1505,15 @@ export function LumenApp() {
   const sessionIsArchived = Boolean(activeSession?.archived)
   const visibleSessions = sessions.filter((item) => item.archived === (sessionView === 'archived'))
   const workspaceBusy = Boolean(bootstrap?.activeRunId || run.runId || messageEditing || planReviewBusy)
+  const pendingApprovals = run.runId ? run.timeline.filter(item => item.pendingApproval) : []
   const approvalMode = run.sessionSettings?.approvalMode ?? bootstrap?.approvalMode ?? 'manual'
+  const sandboxMode = run.sessionSettings?.sandboxMode ?? bootstrap?.sandboxMode ?? 'workspace_write'
+  const filesystemScope = run.sessionSettings?.filesystemScope ?? bootstrap?.filesystemScope
+    ?? (sandboxMode === 'disabled' ? 'full' : 'workspace')
+  const permissionPreset = filesystemScope === 'configured' ? 'custom' : approvalMode === 'auto'
+    ? (sandboxMode === 'disabled' ? 'full_access' : 'workspace_auto')
+    : sandboxMode === 'disabled' ? 'custom' : approvalMode
+  const accessScope = filesystemScope === 'configured' ? '配置目录' : sandboxMode === 'disabled' ? '本机文件' : '仅工作区'
   const collaborationMode = run.sessionSettings?.collaborationMode ?? bootstrap?.collaborationMode ?? 'default'
   const awaitingPlanReview = (run.planReviewStatus === 'review_pending' || run.planReviewStatus === 'approved_waiting_to_execute')
     && Boolean(run.planReviewRevision)
@@ -1164,9 +1525,10 @@ export function LumenApp() {
     && run.timeline.length === 0
     && !run.runId
     && run.queuedInputs.length === 0
-  const statusLabel = planReviewBusy ? '正在提交方案' : messageEditing ? '正在重新生成'
+  const statusLabel = authenticationRequired ? '等待重新连接' : connectionError ? '连接中断'
+    : planReviewBusy ? '正在提交方案' : messageEditing ? '正在重新生成'
     : run.runId
-    ? '运行中'
+    ? pendingApprovals.length ? '等待授权' : '运行中'
     : workspaceBusy
       ? '其他会话运行中'
       : run.status === 'failed'
@@ -1183,35 +1545,28 @@ export function LumenApp() {
   const thinkingAvailable = (thinkingSelection?.supported_levels.length ?? 0) > 1
   const thinkingUnavailable = thinkingSelection?.capability_status === 'unsupported'
     ? '不支持调节' : '推理控制未配置'
+  const activeModelName = modelDisplayName(bootstrap?.modelId, bootstrap?.activeModel ?? '')
+  const pendingModelName = modelDisplayName(bootstrap?.modelIds?.[bootstrap?.pendingModel ?? ''], bootstrap?.pendingModel ?? '')
   const composerSettings = (
     <div className="composer-settings">
-      <ChoiceMenu
-        className="is-model"
-        label="模型"
-        open={modelMenuOpen}
-        onOpenChange={setModelMenuOpen}
-        searchable
-        alignToComposer
-        value={bootstrap?.activeModel ?? ''}
-        disabled={!bootstrap || workspaceBusy || modelChanging}
-        icon={<ModelIcon model={bootstrap?.activeModel ?? bootstrap?.modelId ?? ''} />}
-        options={(bootstrap?.availableModels ?? []).map((model) => ({
-          value: model,
-          label: model,
-          icon: <ModelIcon model={model} />,
-        }))}
-        onChange={selectModel}
-      />
-      <ChoiceMenu
-        label="推理强度"
-        open={thinkingMenuOpen}
-        onOpenChange={setThinkingMenuOpen}
+      <ModelSettingsControl
+        view={modelSettingsView}
+        onViewChange={setModelSettingsView}
+        model={bootstrap?.activeModel ?? ''}
+        modelId={bootstrap?.modelId}
+        pendingModel={bootstrap?.pendingModel}
+        models={bootstrap?.availableModels ?? []}
+        modelIds={bootstrap?.modelIds}
+        disabled={!bootstrap || loading || messageEditing || planReviewBusy || modelChanging}
+        modelNotice={bootstrap?.pendingModel ? `本轮继续使用 ${activeModelName}；结束后切换到 ${pendingModelName}。` : '用于下一轮对话；运行中切换模型会在本轮结束后生效。'}
+        onModelChange={selectModel}
+        defaultLevel={thinkingSelection?.provider_default_level}
         value={thinkingSelection?.requested
           ?? (thinkingSelection?.mapping === 'unverified' ? 'configured' : 'provider_default')}
-        disabled={!bootstrap || workspaceBusy || modelChanging || !thinkingAvailable}
+        reasoningDisabled={Boolean(bootstrap?.pendingModel) || !thinkingAvailable}
         description={thinkingSelection?.mapping === 'unverified'
           ? '当前沿用原始配置，无法确认有效档位。选择档位将使用已校验的设置。'
-          : `${bootstrap?.activeModel ?? ''} · 用于下一轮对话。跟随供应商默认时不发送推理参数；`
+          : `${activeModelName} · 用于下一轮对话。跟随供应商默认时不发送推理参数；`
             + (thinkingSelection?.provider_default_level
               ? `官方文档默认 ${thinkingSelection.provider_default_level}。`
               : '此路由的默认档位尚未确认。')}
@@ -1227,16 +1582,22 @@ export function LumenApp() {
       {collaborationMode === 'plan' && <span className="composer-plan-indicator" role="status">
         <ListChecks size={14} aria-hidden="true" /> Plan
       </span>}
+      <div className="composer-permissions">
+      <span className="composer-permission-scope">{accessScope}</span>
       <ChoiceMenu
-        label="审批模式"
+        label="权限"
         open={modeMenuOpen}
         onOpenChange={setModeMenuOpen}
-        value={approvalMode}
+        value={permissionPreset}
         disabled={!bootstrap || loading || workspaceBusy || approvalChanging}
+        description={`当前访问范围：${accessScope}。仅影响当前对话；切换访问范围前请结束运行。内建提交、推送仍每次确认。`}
         icon={<ShieldCheck size={14} />}
-        options={approvalChoices}
-        onChange={setApprovalMode}
+        options={permissionPreset === 'custom' ? [...permissionChoices, {
+          value: 'custom', label: '自定义权限', description: `${accessScope}访问；审批方式：${approvalMode === 'manual' ? '修改与执行按规则确认' : approvalMode === 'auto' ? '常规操作自动执行' : '自动改文件'}。`,
+        }] : permissionChoices}
+        onChange={setPermissionPreset}
       />
+      </div>
     </div>
   )
 
@@ -1263,6 +1624,14 @@ export function LumenApp() {
         <button className="new-session" type="button" onClick={leaveSession}>
           <NotePencil size={18} aria-hidden="true" /> 新建任务
         </button>
+        <nav className="assistant-navigation" aria-label="个人助理">
+          {assistantPages.filter(item => item.id !== 'automations').map(item => <button key={item.id} type="button"
+            className={assistantPage === item.id ? 'is-active' : ''}
+            aria-current={assistantPage === item.id ? 'page' : undefined}
+            onClick={() => navigateAssistant(item.id)}>
+            <item.icon size={18} aria-hidden="true" />{item.label}
+          </button>)}
+        </nav>
         <nav className="session-list" aria-label="历史任务">
           <div className="session-view-tabs" role="tablist" aria-label="任务视图">
             <button
@@ -1365,15 +1734,28 @@ export function LumenApp() {
               <SidebarSimple size={21} aria-hidden="true" />
             </button>
             <div>
-              <h1>{activeSession?.title ?? '新对话'}</h1>
-              {(workspaceBusy || run.status === 'failed' || run.status === 'cancelled') && <p>
-                <span className={workspaceBusy ? 'status-dot is-busy' : 'status-dot'} />
-                {statusLabel}{usageLabel(run.usage)}
+              {assistantPage === 'chat' ? <h1>{activeSession?.title ?? '新对话'}</h1>
+                : <span>{assistantPages.find(item => item.id === assistantPage)?.label}</span>}
+              {(authenticationRequired || connectionError || (assistantPage === 'chat' && (workspaceBusy || run.status === 'failed' || run.status === 'cancelled'))) && <p>
+                <span className={authenticationRequired || connectionError ? 'status-dot is-disconnected' : workspaceBusy ? 'status-dot is-busy' : 'status-dot'} />
+                {statusLabel}{!authenticationRequired && !connectionError && usageLabel(run.usage)}
               </p>}
             </div>
           </div>
           <div className="workspace-controls" aria-label="工作区工具">
-            {sessionId && <>
+            <button type="button" className="assistant-presence" aria-label="活动与持续跟进" title="查看工作状态与持续跟进" onClick={() => navigateAssistant('automations')}>
+              <LumenMark className="assistant-presence-mark" />
+              <span><strong>Lumen</strong><small><i className={`status-dot ${workspaceBusy ? 'is-busy' : ''}`} />{authenticationRequired || connectionError ? '等待连接' : workspaceBusy ? '正在为你工作' : '随时可以开始'}</small></span>
+            </button>
+            {assistantPage === 'chat' && <button type="button" className="header-action"
+              aria-label="将意图设为目标" title="设为目标" disabled={!sessionId && !input.trim()} onClick={() => {
+                const latest = run.timeline.findLast(item => item.kind === 'user')
+                setAutomationIntent(input.trim() || (latest?.kind === 'user' ? latest.text : ''))
+                setGoalSourceSessionId(sessionId ?? undefined)
+                setAssistantObjectId(undefined)
+                setAssistantPage('goals')
+              }}><ClockCounterClockwise size={17} aria-hidden="true" /></button>}
+            {assistantPage === 'chat' && sessionId && <details className="workspace-tools-menu"><summary aria-label="更多工作区工具"><DotsThree size={20} /></summary><div>
               <button
                 type="button"
                 className="header-action"
@@ -1406,7 +1788,7 @@ export function LumenApp() {
                 <ListMagnifyingGlass size={16} aria-hidden="true" />
               </button>
               <span className="workspace-controls-divider" aria-hidden="true" />
-            </>}
+            </div></details>}
             <button
               type="button"
               className="header-action"
@@ -1493,16 +1875,59 @@ export function LumenApp() {
 
         {confirmAuto && (
           <AutoModeDialog
-            busy={approvalChanging || workspaceBusy || loading}
+            preset={confirmPreset}
+            busy={approvalChanging || loading}
             error={autoError}
             onClose={() => setConfirmAuto(null)}
             onConfirm={() => void approveAuto()}
           />
         )}
 
+        {assistantNotice && <p role="status" className="assistant-global-notice">{assistantNotice}</p>}
+        {authenticationRequired || connectionError ? <section className="workspace-connection-state" aria-labelledby="connection-title" role="alert">
+          {authenticationRequired ? <ShieldCheck size={30} aria-hidden="true" /> : <PlugsConnected size={30} aria-hidden="true" />}
+          <h2 id="connection-title">{authenticationRequired ? '重新连接 Lumen' : '暂时无法连接工作区'}</h2>
+          <p>{authenticationRequired ? '此浏览器的登录凭据已失效。请从启动 Lumen 时提供的专属链接重新打开工作区。' : connectionError}</p>
+          {authenticationRequired && <details><summary>如何获取新的启动链接</summary>
+            <p>在工作区目录的终端依次运行以下命令，再打开终端输出的完整链接。停止服务前，请确认没有正在执行的任务。</p>
+            <pre><code>{'lumen web --stop\nlumen web --background'}</code></pre>
+            <p>首次升级需要重新登录一次；之后同一工作区和地址的刷新、服务重启会保留登录。无痕窗口或清除 Cookie 后需重新登录。</p>
+          </details>}
+          <button type="button" className="report-reading-button" disabled={loading} onClick={() => setConnectionAttempt(value => value + 1)}>
+            <ArrowsClockwise size={17} className={loading ? 'spin' : ''} aria-hidden="true" />{loading ? '正在连接' : '重新连接'}
+          </button>
+        </section> : loading && !bootstrap ? <div className="loading-state"><CircleNotch size={22} className="spin" /> 正在连接工作区</div>
+        : assistantPage !== 'chat' ? <AssistantWorkspace page={assistantPage} initialIntent={automationIntent} objectId={assistantObjectId}
+          sourceSessionId={goalSourceSessionId} onGoalCreated={() => {setGoalSourceSessionId(undefined); setAutomationIntent('')}}
+          viewState={assistantViews.current} onNavigate={navigateAssistant} onDiscuss={discussion => void discussAssistant(discussion)} onStartIdea={startIdea} onPlanGoal={planGoal} onOpenSession={id => void openSession(id)} /> :
+        <div className={`assistant-conversation-layout ${contextResource ? 'has-content' : ''} mobile-${contextTab}`}>
+          {assistantContext.length > 0 && <div className="assistant-context-bar">
+            <span>{contextResource ? `正在讨论：${contextResource.resource.title} · 版本 ${contextResource.resource.revision}`
+              : contextGoal ? `关联目标：${contextGoal.title} · ${goalStatusLabels[contextGoal.status]}${contextGoal.execution ? ` · ${goalExecutionLabels[contextGoal.execution.status]}` : ' · 尚未启动'}` : '关联目标'}</span>
+            <button onClick={() => navigateAssistant(assistantContext[0].kind === 'goal' ? 'goals' : 'library', assistantContext[0].id)}>打开详情</button>
+            {contextGoal?.execution?.status === 'active' && <button disabled={approvalSubmitting} onClick={() => void (async () => {
+              setApprovalSubmitting(true)
+              try {const detail = await lumenApi.controlGoal({action: 'pause', goal_id: contextGoal.id, expected_revision: contextGoal.revision, request_id: crypto.randomUUID(), criteria: ''}); setContextGoal(detail.goal)}
+              catch (error) {setAssistantNotice(error instanceof Error ? error.message : '暂停失败，请重新读取目标')}
+              finally {setApprovalSubmitting(false)}
+            })()}>暂停目标推进</button>}
+            {contextResource && <button className="assistant-mobile-content-toggle" onClick={() => setContextTab(contextTab === 'content' ? 'discussion' : 'content')}>{contextTab === 'content' ? '返回讨论' : '查看资料'}</button>}
+          </div>}
+          {contextResource && <aside className="assistant-discussion-content" aria-label="关联资料正文">
+            {!contextResource.content.trimStart().startsWith(`# ${contextResource.resource.title}\n`) && <h2>{contextResource.resource.title}</h2>}
+            {contextResource.resource.file_path ? <>
+              <p>{resourceTypeLabel(contextResource.resource)} · 版本 {contextResource.resource.revision}</p>
+              <button className="report-reading-button" onClick={() => setContextFile(contextResource.resource)}>打开文件预览</button>
+              {/\.(md|markdown|txt)$/i.test(contextResource.resource.file_path) && <MarkdownMessage content={contextResource.content} />}
+            </> : <MarkdownMessage content={contextResource.content} />}
+          </aside>}
+          {contextFile?.file_path && <DocumentPreview path={contextFile.file_path} resource={contextFile} onClose={() => setContextFile(null)} />}
         <div className={`conversation-stage ${isLanding ? 'is-landing' : ''}`}>
           {isLanding ? (
             <LandingEntry
+              stage={appearance.stage}
+              onAppearanceChange={appearance.selectStage}
+              appearanceNote={appearance.storageAvailable ? undefined : '浏览器无法保存外观，刷新后可能恢复默认。'}
               value={input}
               busy={false}
               queueMode={queueMode}
@@ -1543,22 +1968,25 @@ export function LumenApp() {
                     <ConversationTurn
                       key={turn.id}
                       turn={turn}
-                      active={Boolean(run.runId) && index === turns.length - 1}
+                      active={Boolean(run.runId) && index === turns.length - 1
+                        && (!turn.user?.interactionId || turn.user.interactionId === run.runId)}
                       clarification={index === turns.length - 1 ? run.pendingClarification : null}
                       clarificationAnswered={index < turns.length - 1}
                       onAnswer={answerClarification}
                       answerDisabled={Boolean(run.runId) || sessionIsArchived || modelChanging || approvalChanging}
                       onEdit={editMessage}
                       editDisabled={messageEditing ? '正在重新生成消息' : workspaceBusy ? '请先停止或等待当前运行结束' : sessionIsArchived ? '恢复任务后可编辑消息' : modelChanging || approvalChanging ? '正在更新设置，请稍候' : undefined}
-                      onApproval={(callId, approved, scope) => {
-                        if (run.runId) {
-                          void lumenApi.decideApproval(run.runId, callId, approved, scope)
-                        }
-                      }}
+                      approvalDocked={Boolean(run.runId)}
+                      files={sessionFiles.filter(resource => resource.interaction_id === turn.user?.interactionId)}
+                      onApproval={decideApproval}
                     />
                   ))
                 )}
                 {awaitingPlanReview && run.plan && <PlanProposal plan={run.plan} />}
+                {!run.runId && publishableInteractionId && contextResource && !contextResource.resource.file_path && contextResource.resource.kind !== 'work_product' && <div className="assistant-answer-actions">
+                  <button disabled={publishing} onClick={() => void applyResourceAnswer()}>将最新回答应用为资料新版本</button>
+                  <span>核对后应用，原版本会保留。</span>
+                </div>}
                 <div className="timeline-end" aria-hidden="true" />
               </section>
 
@@ -1587,6 +2015,13 @@ export function LumenApp() {
                 </div>
               ) : (
                 <footer className="workspace-composer">
+                {pendingApprovals.length > 0 && <section className="composer-approvals" aria-label="需要确认的操作">
+                  <p role="status">{approvalSubmitting ? '正在提交授权…' : `需要确认 ${pendingApprovals.length} 项操作`}</p>
+                  <fieldset disabled={approvalSubmitting}>
+                    {pendingApprovals.map(item => <TimelineRow key={`${run.runId}:${item.id}`} item={item} onApproval={decideApproval} />)}
+                  </fieldset>
+                </section>}
+                {approvalError && <p className="approval-error" role="alert">{approvalError}</p>}
                 {awaitingPlanReview && run.planReviewRevision && <PlanReview
                   key={`${sessionId}:${run.planReviewRevision}`}
                   revision={run.planReviewRevision} waiting={run.planReviewStatus === 'approved_waiting_to_execute'}
@@ -1629,15 +2064,25 @@ export function LumenApp() {
                     />
                   )}
                 />
-                {settingsNotice && <div className="composer-context-notice">
+                {(settingsNotice || bootstrap?.pendingModel) && <div className="composer-context-notice">
+                  {bootstrap?.pendingModel && <p className="composer-notice" role="status">
+                    已选择 {bootstrap.pendingModel}，当前运行结束后切换；本轮继续使用 {activeModelName}。
+                  </p>}
                   {settingsNotice && <p className="composer-notice" role="status">{settingsNotice}</p>}
                 </div>}
                 </footer>
               )}
             </>
           )}
-        </div>
+        </div></div>}
       </section>
+      <nav className="assistant-mobile-navigation" aria-label="主导航" inert={sidebarOpen || sessionSearchOpen}>
+        {assistantPages.filter(item => item.id !== 'automations').map(item => <button key={item.id} type="button"
+          aria-current={assistantPage === item.id ? 'page' : undefined} onClick={() => navigateAssistant(item.id)}>
+          <item.icon size={21} weight={assistantPage === item.id ? 'duotone' : 'regular'} aria-hidden="true" />
+          <span>{item.label}</span>
+        </button>)}
+      </nav>
       {sessionSearchOpen && <SessionSearchDialog sessions={sessions} loading={loading} returnFocusRef={sessionSearchReturnFocusRef}
         onClose={() => setSessionSearchOpen(false)} onSelect={(id) => {
           setSessionSearchOpen(false)
@@ -1647,7 +2092,7 @@ export function LumenApp() {
   )
 }
 
-type SettingsSection = 'overview' | 'models' | 'extensions' | 'agents'
+type SettingsSection = 'overview' | 'models' | 'extensions' | 'agents' | 'preferences'
 
 interface ModelDraft {
   reasoningProfile: string
@@ -1942,6 +2387,7 @@ function SettingsDialog({
       icon: PlugsConnected,
     },
     { id: 'agents', label: 'Agent 预设', icon: Robot },
+    { id: 'preferences', label: '个性化偏好', icon: Sparkle },
   ]
 
   return (
@@ -2018,7 +2464,7 @@ function SettingsDialog({
                 <span>{error}</span>
                 <button type="button" onClick={() => void load()}>重试</button>
               </div>
-            ) : section === 'overview' ? (
+            ) : section === 'preferences' ? <PersonalPreferences /> : section === 'overview' ? (
               <SettingsOverview
                 configuration={configuration}
                 capabilities={capabilities}
@@ -2367,7 +2813,8 @@ function SessionManagementDialog({
   )
 }
 
-function AutoModeDialog({ busy, error, onClose, onConfirm }: {
+function AutoModeDialog({ preset, busy, error, onClose, onConfirm }: {
+  preset: PermissionPreset | null
   busy: boolean
   error: string
   onClose: () => void
@@ -2386,8 +2833,7 @@ function AutoModeDialog({ busy, error, onClose, onConfirm }: {
       <section className="session-management-dialog auto-confirm-dialog">
         <header>
           <div>
-            <strong id="auto-confirm-title">开启自动执行？</strong>
-            <span>审批模式</span>
+            <strong id="auto-confirm-title">{preset === 'full_access' ? '允许完全访问本机？' : '开启自动执行？'}</strong>
           </div>
           <button type="button" aria-label="关闭" disabled={busy} onClick={onClose}>
             <X size={16} aria-hidden="true" />
@@ -2396,14 +2842,18 @@ function AutoModeDialog({ busy, error, onClose, onConfirm }: {
         <div className="auto-confirm-content">
           <ShieldCheck size={20} aria-hidden="true" />
           <div>
-            <strong>减少逐次确认</strong>
-            <p>已分类的写入、执行和外部工具将自动运行，仍然遵守当前权限与 Sandbox 限制。</p>
+            <strong>{preset === 'full_access' ? '当前对话可操作其他本地目录' : '减少逐次确认'}</strong>
+            <p>{preset === 'full_access'
+              ? '可读取、修改当前用户有权限访问的本机文件，命令可联网，常规操作自动执行。内建提交、推送仍每次确认。仅影响当前对话，可在运行结束后切回工作区范围。'
+              : preset === 'workspace_auto'
+                ? '常规操作在工作区沙箱内自动执行，命令联网沿用工作区配置。内建提交、推送仍每次确认。'
+                : '仅改变审批策略，保留当前访问范围。已分类的写入、执行和外部工具自动运行；内建提交、推送仍每次确认。'}</p>
           </div>
         </div>
         {error && <div className="auto-confirm-error" role="alert"><WarningCircle size={16} aria-hidden="true" />{error}</div>}
         <footer>
           <button type="button" className="quiet" disabled={busy} onClick={onClose}>取消</button>
-          <button type="button" disabled={busy} onClick={onConfirm}>{busy ? '正在切换…' : '确认开启'}</button>
+          <button type="button" disabled={busy} onClick={onConfirm}>{busy ? '正在切换…' : preset === 'full_access' ? '允许完全访问' : '确认开启'}</button>
         </footer>
       </section>
     </div>
@@ -2743,6 +3193,8 @@ export function ConversationTurn({
   onAnswer,
   answerDisabled,
   clarificationAnswered,
+  approvalDocked = false,
+  files = [],
 }: {
   turn: ConversationTurnState
   active: boolean
@@ -2752,6 +3204,8 @@ export function ConversationTurn({
   onAnswer?: (answer: string) => Promise<void>
   answerDisabled?: boolean
   clarificationAnswered?: boolean
+  approvalDocked?: boolean
+  files?: AssistantResource[]
   onApproval: (callId: string, approved: boolean, scope?: 'once' | 'session' | 'always') => void
 }) {
   const presentation = turnPresentation(turn.response, turn.user?.text, active, clarificationAnswered)
@@ -2763,15 +3217,9 @@ export function ConversationTurn({
       {turn.user && <UserMessage item={turn.user} onEdit={onEdit} editDisabled={editDisabled} />}
       {(turn.response.length > 0 || active) && (
         <div className="assistant-turn" aria-label="Lumen 回答">
-          <header className="assistant-identity">
-            <span className="assistant-mark">
-              <LumenMark className="assistant-logo" />
-            </span>
-            <strong>Lumen</strong>
-          </header>
           <TurnSourcesProvider entries={turn.response} answer={answerText}>
           <div className="assistant-turn-body">
-            {presentation.activity.some((item) => item.pendingApproval) && <div className="turn-attention" aria-label="需要确认的操作">
+            {!approvalDocked && presentation.activity.some((item) => item.pendingApproval) && <div className="turn-attention" aria-label="需要确认的操作">
               {presentation.activity.filter((item) => item.pendingApproval).map((item) => <TimelineRow key={item.id} item={item} onApproval={onApproval} />)}
             </div>}
             {presentation.activity.length > 0 && (
@@ -2791,8 +3239,11 @@ export function ConversationTurn({
             )}
             {active && !presentation.requiresAttention && !liveToolId
               && presentation.activity.length === 0 && <LiveThinkingIndicator />}
-            {!active && <DocumentResults entries={turn.response} />}
-            {!active && <ReportReadingButton content={answerText} entries={turn.response} />}
+            {!active && <DocumentResults entries={turn.response} resources={files} />}
+            {!active && answerText && <footer className="answer-toolbar" aria-label="回答操作">
+              <CopyButton text={answerText} />
+              <ReportReadingButton content={answerText} entries={turn.response} />
+            </footer>}
             {!active && <TurnSourcesSummary />}
             {!active && recordedPlan && <details className="completed-plan"><summary>查看本轮计划</summary>
               <PlanPanel plan={recordedPlan} />
@@ -2878,7 +3329,9 @@ function TurnActivity({
         onClick={() => setManualExpanded({ phase, expanded: !expanded })}
       >
         <span className={`turn-activity-heading ${active && !presentation.requiresAttention ? 'is-live' : ''}`}>
-          {active && !presentation.requiresAttention && <ThinkingOrb />}
+          {active && !presentation.requiresAttention && (runningTools.length > 0
+            ? <span className="tool-glyph" aria-hidden="true"><ToolGlyph item={runningTools[0]} /></span>
+            : <ThinkingOrb />)}
           <strong>{!active && phase === 'completed' && duration ? `思考了 ${duration}` : activityTitle(presentation, active)}</strong>
         </span>
         {active && presentation.toolCount > 0 && <span className="turn-activity-count">{presentation.toolCount} 次工具调用</span>}
@@ -2901,8 +3354,19 @@ function TurnActivity({
         onBlurCapture={(event) => {
           if (event.relatedTarget && !event.currentTarget.contains(event.relatedTarget as Node)) previewFocused.current = false
         }}>
-        {entries.map((item) => <TimelineRow key={item.id} item={item} onApproval={onApproval} process
-          live={active && !presentation.requiresAttention && (isRunningTool(item) || item.id === liveThoughtId)} />)}
+        {reading.groups.map((group) => group.label ? (
+          <details className="activity-tool-group" key={group.id}>
+            <summary>
+              <span className="tool-glyph" aria-hidden="true"><ToolGlyph item={group.entries[0]} /></span>
+              <span>{group.label}</span>
+              <CaretDown size={14} aria-hidden="true" />
+            </summary>
+            {group.entries.map((item) => <TimelineRow key={item.id} item={item} onApproval={onApproval} process />)}
+          </details>
+        ) : group.entries.filter((item) => !item.pendingApproval).map((item) => (
+          <TimelineRow key={item.id} item={item} onApproval={onApproval} process
+            live={active && !presentation.requiresAttention && (isRunningTool(item) || item.id === liveThoughtId)} />
+        )))}
         {reading.diagnostics.length > 0 && <details className="process-diagnostics">
           <summary>运行事件 <span>{reading.diagnostics.length}</span></summary>
           <p className="process-diagnostics-note">上下文、工作对象及后台事件；完整记录可在运行记录中查看。</p>
@@ -2941,7 +3405,6 @@ function TimelineRow({
       <article className="timeline-assistant">
         <div className="assistant-content">
           <MarkdownMessage content={item.text} />
-          <CopyButton text={item.text} />
         </div>
       </article>
     )
@@ -2963,7 +3426,7 @@ function TimelineRow({
           title={process ? toolActivityLabel(item) : undefined}
           onClick={() => setExpanded((value) => !value)}
         >
-          <span className={`tool-glyph ${live ? 'is-running' : ''}`} aria-hidden="true"><ToolGlyph item={item} /></span>
+          <span className="tool-glyph" aria-hidden="true"><ToolGlyph item={item} /></span>
           <span>
             <span className="tool-title-line">
               <strong className={live ? 'process-live-text' : undefined}>{process ? toolActivityLabel(item) : String(item.callView?.title ?? item.toolName ?? '')}</strong>
@@ -2975,15 +3438,22 @@ function TimelineRow({
           <CaretDown size={14} className={expanded ? 'is-expanded' : ''} aria-hidden="true" />
         </button>
         <div id={detailId} hidden={!expanded && !item.pendingApproval}>
-          {item.presentation && (expanded || item.pendingApproval) && (
+          {(item.presentation || item.pendingApproval) && (expanded || item.pendingApproval) && (
             <div className="approval-request">
-              <strong>{item.presentation.title}</strong>
-              <pre>{expanded ? item.presentation.full_text : item.presentation.preview}</pre>
+              <strong>{item.presentation?.title ?? item.toolName}</strong>
+              <pre>{item.presentation ? expanded ? item.presentation.full_text : item.presentation.preview : JSON.stringify(item.args, null, 2)}</pre>
+              {item.pendingApproval && <p className="approval-scope-note">{item.risk === 'confirm'
+                ? '此敏感操作必须每次确认，不能记住授权。'
+                : item.toolName === 'run_command'
+                  ? '记住授权仅适用于完全相同的命令、参数与目录；不同命令仍需确认。'
+                  : '记住授权适用于同一来源的此工具；会话授权限当前会话，项目授权跨会话生效。'}</p>}
               {item.pendingApproval && item.callId && (
                 <div>
                   <button type="button" onClick={() => onApproval(item.callId!, true, 'once')}>允许一次</button>
-                  <button type="button" onClick={() => onApproval(item.callId!, true, 'session')}>本会话始终允许</button>
-                  <button type="button" onClick={() => onApproval(item.callId!, true, 'always')}>本项目始终允许</button>
+                  {item.risk !== 'confirm' && <>
+                    <button type="button" onClick={() => onApproval(item.callId!, true, 'session')}>本会话始终允许</button>
+                    <button type="button" onClick={() => onApproval(item.callId!, true, 'always')}>本项目始终允许</button>
+                  </>}
                   <button type="button" className="deny" onClick={() => onApproval(item.callId!, false)}>拒绝</button>
                 </div>
               )}
@@ -3014,19 +3484,29 @@ function TimelineRow({
 
 function ToolGlyph({ item }: { item: TimelineEntry }) {
   const family = String(item.callView?.family ?? '').toLowerCase()
+  if (item.toolName === 'view_image' && ['', 'other', 'read'].includes(family)) return <Images size={18} />
+  if (item.toolName === 'search_tools' && ['', 'other'].includes(family)) return <Wrench size={18} />
+  if (family === 'read') return <BookOpen size={18} />
+  if (family === 'list') return <FolderOpen size={18} />
+  if (family === 'search') return <MagnifyingGlass size={18} />
+  if (family === 'edit') return <PencilSimpleLine size={18} />
+  if (family === 'command') return <TerminalWindow size={18} />
+  if (family === 'plan') return <ListChecks size={18} />
   if (family === 'mcp') return <PlugsConnected size={18} />
-  if (family === 'skill') return <Sparkle size={17} />
+  if (family === 'skill') return <Sparkle size={18} />
   if (family === 'web') return <Globe size={18} />
-  const name = item.toolName ?? ''
-  const normalized = name.toLowerCase()
-  if (normalized.includes('search') || normalized.includes('find')) return <MagnifyingGlass size={17} />
-  if (normalized.includes('edit') || normalized.includes('write') || normalized.includes('patch')) return <PencilSimpleLine size={17} />
-  if (normalized.includes('list') || normalized.includes('directory')) return <FolderOpen size={17} />
-  if (normalized.includes('read') || normalized.includes('file')) return <FileCode size={17} />
-  return <TerminalWindow size={17} />
+  if (family) return <Wrench size={18} />
+  const normalized = (item.toolName ?? '').toLowerCase()
+  if (normalized.includes('search') || normalized.includes('find')) return <MagnifyingGlass size={18} />
+  if (normalized.includes('edit') || normalized.includes('write') || normalized.includes('patch')) return <PencilSimpleLine size={18} />
+  if (normalized.includes('list') || normalized.includes('directory')) return <FolderOpen size={18} />
+  if (normalized.includes('read') || normalized.includes('file')) return <BookOpen size={18} />
+  if (normalized.includes('command') || normalized.includes('exec')) return <TerminalWindow size={18} />
+  return <Wrench size={18} />
 }
 
 function toolStatus(item: TimelineEntry) {
+  if (item.status === 'cancelled') return '已取消'
   if (item.pendingApproval) return '等待审批'
   if (item.status === 'denied') return '已拒绝'
   if (item.isError || item.status === 'error' || item.status === 'failed') return '失败'

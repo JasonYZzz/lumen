@@ -1,0 +1,9 @@
+{
+  "name": "@designcodeio/threeui",
+  "version": "0.0.0-ashen-press.5fe2554e578a",
+  "private": true,
+  "exports": {
+    ".": "./ashen-press/AshenPress.tsx",
+    "./style.css": "./threeui.css"
+  }
+}

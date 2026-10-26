@@ -6,6 +6,7 @@ export type MascotGesture = 'idle' | 'alert' | 'stretch' | 'submit'
 
 export interface MascotSceneProps {
   activity: MascotActivity
+  stage?: number
   motionMode?: MascotMotionMode
   className?: string
 }

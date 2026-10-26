@@ -28,6 +28,8 @@ node_modules/
 # Lumen runtime state and local QA/build artifacts
 /.lumen/
 /outputs/
+# Archived identity assets and UI snapshots stay local and outside the public bundle.
+/local-backups/
 /snapshot_report.html
 /.qa-*/
 # Blender's automatic save backup is local-only; the authored .blend remains versioned.

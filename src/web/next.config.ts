@@ -5,6 +5,16 @@ const nextConfig: NextConfig = {
   poweredByHeader: false,
   output: process.env.NODE_ENV === 'production' ? 'export' : undefined,
   images: { unoptimized: true },
+  transpilePackages: ['@designcodeio/threeui'],
+  turbopack: {
+    rules: {
+      '*.html': { loaders: ['raw-loader'], as: '*.js' },
+    },
+  },
+  webpack(config) {
+    config.module.rules.push({ test: /\.html$/, type: 'asset/source' })
+    return config
+  },
 }
 
 if (process.env.NODE_ENV !== 'production') {

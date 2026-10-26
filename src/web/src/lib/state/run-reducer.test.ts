@@ -15,6 +15,24 @@ function event(type: EventEnvelope['type'], data: Record<string, unknown>, seque
 }
 
 describe('runReducer', () => {
+  it.each(['run.completed', 'run.waiting_for_user', 'run.failed', 'run.cancelled'] as const)(
+    'removes ended approvals on %s so they cannot reappear in another run', (type) => {
+      let state = runReducer(initialRunState, {type: 'event', event: event('approval.pending', {
+        call_id: 'old', name: 'run_command', risk: 'confirm', args: {},
+      })})
+      state = runReducer(state, {type: 'event', event: event(type, {})})
+      state = runReducer(state, {type: 'run-registered', runId: 'new'})
+      expect(state.timeline.some(item => item.pendingApproval)).toBe(false)
+      expect(state.timeline[0].risk).toBe('confirm')
+    },
+  )
+  it('retains the interaction identity on streamed answers for publication', () => {
+    let state = runReducer(initialRunState, {type: 'event', event: event('run.started', {prompt: 'Report'})})
+    state = runReducer(state, {type: 'event', event: event('assistant.delta', {text: 'A result'}, 2)})
+    state = runReducer(state, {type: 'event', event: event('assistant.delta', {text: ' to save'}, 3)})
+    state = runReducer(state, {type: 'event', event: event('run.completed', {}, 4)})
+    expect(state.timeline.find(item => item.kind === 'assistant')).toMatchObject({interactionId: 'run-1', text: 'A result to save'})
+  })
   it('shows a delivery receipt only after a delivered event and clears it on a new run', () => {
     const data = { message_id: 'one', text: '补充信息', mode: 'steer' }
     const queued = runReducer(initialRunState, { type: 'event', event: event('input.queued', data) })

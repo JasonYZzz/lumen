@@ -1,7 +1,7 @@
 {
   "name": "lumen-web",
   "description": "Lumen Web client sharing WorkspaceHost sessions, tools, approvals, and runtime events",
-  "version": "0.1.0",
+  "version": "2.0.0",
   "private": true,
   "scripts": {
     "dev": "next dev --turbopack",
@@ -13,6 +13,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@designcodeio/threeui": "file:./src/shaders",
     "@lobehub/icons": "^5.18.0",
     "@phosphor-icons/react": "^2.1.10",
     "@react-three/drei": "^10.7.8",
@@ -38,6 +39,7 @@
     "@types/three": "^0.186.0",
     "jsdom": "^30.0.1",
     "openapi-typescript": "^7.9.1",
+    "raw-loader": "^4.0.2",
     "typescript": "^5.8.3",
     "vitest": "^3.2.4"
   },

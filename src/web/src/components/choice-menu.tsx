@@ -24,8 +24,6 @@ export function ChoiceMenu<T extends string>({
   className = '',
   open: controlledOpen,
   onOpenChange,
-  searchable = false,
-  alignToComposer = false,
   description,
   onChange,
 }: {
@@ -38,31 +36,23 @@ export function ChoiceMenu<T extends string>({
   className?: string
   open?: boolean
   onOpenChange?: (open: boolean) => void
-  searchable?: boolean
-  alignToComposer?: boolean
   description?: string
   onChange: (value: T) => void | Promise<void>
 }) {
   const [localOpen, setLocalOpen] = useState(false)
   const open = controlledOpen ?? localOpen
   const setOpen = (next: boolean) => { setLocalOpen(next); onOpenChange?.(next) }
-  const [query, setQuery] = useState('')
   const [pending, setPending] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const triggerRef = useRef<HTMLButtonElement>(null)
   const menuRef = useRef<HTMLDivElement>(null)
-  const searchRef = useRef<HTMLInputElement>(null)
   const menuId = useId()
   const selected = options.find((option) => option.value === value)
-  const matches = options.filter((option) => `${option.label} ${option.description ?? ''}`.toLowerCase().includes(query.trim().toLowerCase()))
   const position = useAnchoredPopover({
     open,
-    anchor: alignToComposer
-      ? triggerRef.current?.closest('.composer-shell')?.querySelector<HTMLElement>('.composer') ?? triggerRef.current
-      : triggerRef.current,
+    anchor: triggerRef.current,
     popoverRef: menuRef,
     width: menuWidth,
-    matchAnchorWidth: alignToComposer,
   })
 
   const close = (restoreFocus = false) => {
@@ -92,10 +82,9 @@ export function ChoiceMenu<T extends string>({
 
   useEffect(() => {
     if (!open) return
-    setQuery('')
     setError(null)
     const frame = window.requestAnimationFrame(() => {
-      const target = searchRef.current ?? menuRef.current?.querySelector<HTMLElement>('[aria-selected="true"]')
+      const target = menuRef.current?.querySelector<HTMLElement>('[aria-selected="true"]')
         ?? menuRef.current?.querySelector<HTMLElement>('[role="option"]')
       target?.focus({ preventScroll: true })
     })
@@ -115,10 +104,6 @@ export function ChoiceMenu<T extends string>({
     else if (event.key === 'Tab') {
       event.preventDefault()
       close(true)
-      return
-    } else if (event.key === 'Enter' && document.activeElement === searchRef.current) {
-      event.preventDefault()
-      items[0]?.click()
       return
     } else return
     event.preventDefault()
@@ -152,16 +137,13 @@ export function ChoiceMenu<T extends string>({
       {open && createPortal(
         <div
           ref={menuRef}
-          className={`choice-menu-popover ${alignToComposer ? 'is-model-picker' : ''}`}
+          className="choice-menu-popover"
           style={position}
           onKeyDown={handleMenuKeyDown}
         >
-          {!searchable && <div className="choice-menu-caption">{label}</div>}
-          {searchable && <label className="choice-menu-search">
-            <input ref={searchRef} value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索" aria-label={`搜索${label}`} aria-controls={menuId} />
-          </label>}
+          <div className="choice-menu-caption">{label}</div>
           <div id={menuId} role="listbox" aria-label={label} aria-busy={pending}>
-          {matches.map((option) => (
+          {options.map((option) => (
             <button
               key={option.value}
               type="button"
@@ -184,7 +166,7 @@ export function ChoiceMenu<T extends string>({
                 }
               }}
             >
-              {(option.icon || (alignToComposer && icon)) && <span className="choice-option-icon" aria-hidden="true">{option.icon ?? icon}</span>}
+              {option.icon && <span className="choice-option-icon" aria-hidden="true">{option.icon}</span>}
               <span>
                 <strong>{option.label}</strong>
                 {option.description && <small>{option.description}</small>}
@@ -193,7 +175,7 @@ export function ChoiceMenu<T extends string>({
             </button>
           ))}
           </div>
-          {!matches.length && <p className="choice-menu-empty">{options.length ? '没有匹配项，请尝试其他名称' : '暂无可用选项'}</p>}
+          {!options.length && <p className="choice-menu-empty">暂无可用选项</p>}
           {(description || pending) && <p className="choice-menu-description" role="status">{pending ? <><CircleNotch size={14} className="spin" /> 正在切换…</> : description}</p>}
           {error && <p className="choice-menu-error" role="alert">{error}</p>}
         </div>,

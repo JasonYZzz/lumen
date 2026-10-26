@@ -1,8 +1,26 @@
 import type { components } from './schema.generated'
 
+export type AssistantState = components['schemas']['AssistantState']
+export type AutomationDefinition = components['schemas']['Definition']
+export type AutomationSpec = components['schemas']['AutomationInput']
+export type AutomationAction = components['schemas']['AutomationCommand']
+export type AssistantEdit = components['schemas']['AssistantEdit']
+export type AssistantResource = components['schemas']['Resource']
+export type AssistantGoal = components['schemas']['Goal']
+export type AssistantIdea = components['schemas']['Idea']
+export type AssistantContextRef = components['schemas']['ContextRef']
+export type AssistantGoalDetail = components['schemas']['GoalDetail']
+export type GoalCommand = components['schemas']['GoalCommand']
+export type AssistantFeedPage = components['schemas']['FeedPage']
+export type AssistantResourcePage = components['schemas']['ResourcePage']
+export type AutomationOccurrence = components['schemas']['Occurrence']
+
 export type ApprovalMode = NonNullable<
   components['schemas']['SessionSettingsBody']['approvalMode']
 >
+export type PermissionPreset = NonNullable<components['schemas']['SessionSettingsBody']['permissionPreset']>
+export type SandboxMode = 'workspace_write' | 'disabled'
+export type FilesystemScope = 'workspace' | 'configured' | 'full'
 export type CollaborationMode = NonNullable<
   components['schemas']['SessionSettingsBody']['collaborationMode']
 >
@@ -62,10 +80,14 @@ export interface Bootstrap {
   agent: string
   workspace: string
   activeModel: string
+  pendingModel?: string | null
   modelId: string
   inputModalities: Array<'text' | 'image'>
   availableModels: string[]
+  modelIds?: Record<string, string>
   approvalMode: ApprovalMode
+  sandboxMode?: SandboxMode
+  filesystemScope?: FilesystemScope
   collaborationMode: CollaborationMode
   tools: Array<{ name: string; origin: string; risk: string; effect?: string }>
   mcp: Array<Record<string, unknown>>
@@ -234,6 +256,7 @@ export interface TimelineEntry {
   callId?: string
   toolName?: string
   origin?: string
+  risk?: string
   args?: Record<string, unknown>
   result?: string | null
   preview?: string | null
@@ -257,6 +280,8 @@ export interface SessionSnapshot {
   lastUserInput: string | null
   activeRunId: string | null
   approvalMode: ApprovalMode
+  sandboxMode?: SandboxMode
+  filesystemScope?: FilesystemScope
   collaborationMode: CollaborationMode
   planReviewStatus: string
   transcriptDensity: 'normal' | 'verbose'

@@ -1,30 +1,24 @@
 'use client'
 
 import { Archive, ArrowCounterClockwise, PencilSimpleLine, Trash } from '@phosphor-icons/react'
-import type { KeyboardEvent } from 'react'
+import type { KeyboardEvent, ReactNode } from 'react'
 import { useEffect, useRef } from 'react'
 import { createPortal } from 'react-dom'
 import type { SessionSummary } from '@/lib/api/types'
 import { useAnchoredPopover } from './use-anchored-popover'
 
-export function SessionActionsMenu({
+export function ActionsMenu({
   anchor,
-  session,
-  busy,
-  blocked,
+  label,
+  className = '',
   onClose,
-  onRename,
-  onArchive,
-  onDelete,
+  children,
 }: {
   anchor: HTMLElement
-  session: SessionSummary
-  busy: boolean
-  blocked: boolean
+  label: string
+  className?: string
   onClose: () => void
-  onRename: () => void
-  onArchive: () => void
-  onDelete: () => void
+  children: ReactNode
 }) {
   const menuRef = useRef<HTMLDivElement>(null)
   const position = useAnchoredPopover({
@@ -79,12 +73,23 @@ export function SessionActionsMenu({
   return createPortal(
     <div
       ref={menuRef}
-      className="session-actions-popover"
+      className={`session-actions-popover ${className}`}
       role="menu"
-      aria-label={`管理任务：${session.title}`}
+      aria-label={label}
       style={position}
       onKeyDown={handleMenuKeyDown}
     >
+      {children}
+    </div>,
+    document.body,
+  )
+}
+
+export function SessionActionsMenu({anchor, session, busy, blocked, onClose, onRename, onArchive, onDelete}: {
+  anchor: HTMLElement; session: SessionSummary; busy: boolean; blocked: boolean
+  onClose: () => void; onRename: () => void; onArchive: () => void; onDelete: () => void
+}) {
+  return <ActionsMenu anchor={anchor} label={`管理任务：${session.title}`} onClose={onClose}>
       <button type="button" role="menuitem" onClick={onRename}>
         <PencilSimpleLine size={17} aria-hidden="true" />
         <span><strong>重命名</strong><small>修改任务标题</small></span>
@@ -109,7 +114,5 @@ export function SessionActionsMenu({
         <Trash size={17} aria-hidden="true" />
         <span><strong>删除任务</strong><small>从客户端列表中移除</small></span>
       </button>
-    </div>,
-    document.body,
-  )
+  </ActionsMenu>
 }

@@ -8,6 +8,7 @@ import {
   transcriptEventLabel,
   timelineNoteLabel,
   toolSourceLabel,
+  toolActivityLabel,
   turnPresentation,
 } from './turn-activity'
 
@@ -16,7 +17,7 @@ function entry(kind: TimelineEntry['kind'], overrides: Partial<TimelineEntry> = 
 }
 
 describe('turn activity presentation', () => {
-  it('groups only consecutive declared groupable completed calls and preserves diagnostics', () => {
+  it('summarizes consecutive successful receipts across families and preserves diagnostics', () => {
     const read = (id: string, overrides: Partial<TimelineEntry> = {}) => entry('tool', { id, status: 'completed',
       callView: { family: 'read', groupable: true, group_key: 'files', plural: '个文件', completed_verb: '已读取' }, ...overrides })
     const original = [read('one'), read('two'), read('write', { callView: { family: 'edit' } }), read('three'),
@@ -24,14 +25,36 @@ describe('turn activity presentation', () => {
       entry('progress', { text: '正在准备工具调用: read_file\n正在核对资料' })]
     const saved = JSON.stringify(original)
     const reading = readableActivity(original)
-    expect(reading.groups[0].entries.map((item) => item.id)).toEqual(['one', 'two'])
-    expect(reading.groups[0].label).toBe('已读取 2 个文件')
+    expect(reading.groups[0].entries.map((item) => item.id)).toEqual(['one', 'two', 'write', 'three'])
+    expect(reading.groups[0].label).toBe('已读取 3 个文件 · 已使用工具 1 次')
     expect(reading.groups.slice(1).every((group) => group.entries.length === 1)).toBe(true)
     expect(reading.diagnostics.map((item) => item.kind)).toEqual(['progress'])
     expect(reading.groups.flatMap((group) => group.entries).map((item) => item.id))
       .toEqual(['one', 'two', 'write', 'three', 'failed', 'four', 'thinking-entry', 'five', 'progress-entry'])
     expect(reading.groups.at(-1)?.entries[0].text).toBe('正在核对资料')
     expect(JSON.stringify(original)).toBe(saved)
+  })
+  it('keeps failures, cancellations, approvals and active calls outside completed summaries', () => {
+    const done = entry('tool', { id: 'done', status: 'completed',
+      callView: { family: 'command', completed_verb: '已运行命令' } })
+    for (const boundary of [{ status: 'failed' }, { status: 'cancelled' }, { status: 'running' },
+      { status: 'approved' }, { pendingApproval: true, status: 'completed' }, { isError: true, status: 'completed' }]) {
+      const result = readableActivity([done, { ...done, id: 'boundary', ...boundary }, { ...done, id: 'next' }])
+      expect(result.groups.map((group) => group.entries.length)).toEqual([1, 1, 1])
+    }
+    const command = { ...done, id: 'command2' }
+    expect(readableActivity([done, command]).groups[0].label).toBe('已运行命令 2 次')
+    expect(readableActivity([done, entry('commentary', { text: '检查结果' }), command]).groups).toHaveLength(3)
+  })
+
+  it('uses receipt outcomes for cancelled and pending labels and distinguishes fetched pages in summaries', () => {
+    expect(toolActivityLabel(entry('tool', { status: 'cancelled', callView: { active_verb: '正在写入' } })))
+      .toBe('操作已取消')
+    expect(toolActivityLabel(entry('tool', { pendingApproval: true, callView: { active_verb: '正在写入' } })))
+      .toBe('等待确认')
+    const web = entry('tool', { toolName: 'web_fetch', status: 'completed',
+      callView: { family: 'web', completed_verb: '已搜索网络', plural: '次搜索' } })
+    expect(readableActivity([web, { ...web, id: 'next' }]).groups[0].label).toBe('已阅读网页 2 个网页')
   })
   it('describes concurrent active calls and answer generation from actual events', () => {
     const running = entry('tool', { status: 'running', callView: { family: 'read' } })

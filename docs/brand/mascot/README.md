@@ -1,55 +1,71 @@
-# 首页狐狸连续动画
+# 九尾狐外观与成长
 
-2026-09-04：按 meoo.com 的“预渲染角色动画 + 页面交互”方向制作；没有复制其角色素材。
-当前默认不使用实时 3D，也不再依靠多张整身 PNG 切换来表现动作。
+2026-10-22 v2：参考用户提供的基础幼狐，通过内置 image_gen 重新生成五种同一角色的
+九尾形态，并为基础形象生成一张闭眼帧。每种形态都要求九个分离可数的尾尖。
+左上、右上和 favicon 使用 Lumen Fold 的 L 标志；九尾狐作为首页陪伴形象，随独立的外观档位变化。
 
-## 素材与播放
+## 来源与备份
 
-- 原角色：`src/web/public/lumen-fox-complete-idle-9tail.png`，保持未改动。
-- `fox-video-reference.png`：使用 imagegen 准备的同角色绿幕首尾帧；生成过程会存在细节差异，不承诺像素级复刻。
-- 极客智坊 `MiniMax-H3`：分别生成待机、回应两条视频。请求 6 秒、768P、首尾同图、无水印、无自动重试；输出约 6.58 秒、768×768、24fps。
-- 发布素材：`src/web/public/mascot/fox-{idle,react}.alpha.mp4` 和 `fox-poster.png`。视频去掉音轨，512×512 RGB 与灰度 alpha 横向拼接为 1024×512 H.264，合计约 1.65 MiB。海报约 238 KiB。
-- 浏览器用原生视频解码 + WebGL 两次纹理采样恢复透明度，没有逐帧 React 更新或 CPU 抠图。
-- `MascotPlayback` 是动作切换的唯一权威：待机循环；点击或输入焦点变化排队回应；完成动作后回待机；重复触发合并，不打断动作。响应可能等待剩余循环，最多约 6.6 秒。这不是即时自由操控的骨骼角色。
-- 页面隐藏/离屏暂停、回来继续；减少动态/静态模式使用海报；视频加载、自动播放或 WebGL 失败安全降级为海报。无音频。
-- 保留旧实现作为显式回退：构建时设置 `NEXT_PUBLIC_MASCOT_RENDERER=layered` 或 `rive`。旧导演与视频播放不会同时运行。此次未删除旧素材或旧实现。
+- 原生透明 PNG 为 1254×1254，保存在 [`sources-v2/`](sources-v2/)；这不是 2K 输出，也未插值放大。
+- 完整提示词保存在 [`fox-v2-prompts.md`](fox-v2-prompts.md)。提示词中的目标尺寸不代表实际输出尺寸。
+- 用户提供的五张中文名 PNG 仍保留在 [`src/web/public/new-design/`](../../../src/web/public/new-design/)，作为输入参考。
+- 第一轮视频、分层、Rive 与旧 3D 方案保留在 `local-backups/identity-before-snow-fox-2026-10-22/`，共 57 个文件。
+- 本轮开始前的页面、组件与旧版 WebP 保留在 `local-backups/identity-before-retina-motion-2026-10-22/`，共 42 个文件。
 
-## 本地验收
+两轮备份均带 `manifest.json` SHA-256 清单，由根 `.gitignore` 排除，不位于 public 中，不应提交或推送。
 
-`/mascot-preview` 提供 168px 原尺寸、336px 放大、半速、暂停、深色背景和静态模式。
-通过 Lumen 的静态文件入口访问构建产物时使用 `/mascot-preview.html`。
-重点看脸型是否漂移、尾巴是否粘连、循环接缝是否明显；不要用静态截图代替动态验收。
-首页 `MascotScene` 已默认使用同一播放器，原有输入焦点与提交活动仍通过原 Interface 接入。
+## 素材
 
-## 密钥与制作脚本
+运行 `node src/web/scripts/convert-fox-assets.mjs`，从 `sources-v2/` 生成 lossless WebP：
 
-只在离线制作阶段调用商业 API，前端、浏览器和线上首页不接触密钥，也不会按访问次数调用生成接口。
-从环境变量 `GEEKAI_API_KEY` 或 macOS 钥匙串读取（service `lumen.geekai.video`，account `lumen`）。
-不得把真实密钥写到本文件、`.env`、命令历史或仓库。已在聊天中暴露过的密钥建议轮换。
+- `fox-stage-01-v2.webp` 至 `fox-stage-05-v2.webp`：保留 1254×1254 原生尺寸，供下载。
+- `-960.webp` 和 `-480.webp`：首页响应式形象与预览；`srcSet` 的 960w/480w 与文件实际宽度一致。
+- `-160.webp`：设置缩略图。思考图标使用 `lumen-claude-amber.svg` 及原有呼吸摆动动画，不使用角色形象。
+- `fox-stage-01-v2-blink.webp`：960×960 闭眼帧，运行时仅裁出眼部作为眨眼补丁。
 
-在 `src/web` 运行，`$PRODUCTION_DIR` 应为仓库之外的私有绝对路径：
+五种形态各四档尺寸，加一张眨眼帧，共 21 张 WebP，合计约 12.16 MiB；运行时只请求所需文件。
+转换不放大，保留透明通道；脚本断言五组素材齐全、输出格式、宽度和 alpha。
+首页 CSS 尺寸为桌面 240px、手机 168px；视口高度不超过 700px 时缩为 144px。
+桌面 DPR2 使用 480px 候选即可覆盖实际显示尺寸，更高 DPR 可选择 960px 候选。
 
-```sh
-node scripts/generate-mascot-video.mjs --action model
-node scripts/generate-mascot-video.mjs --action submit --clip idle --image ../../docs/brand/mascot/fox-video-reference.png --out "$PRODUCTION_DIR"
-node scripts/generate-mascot-video.mjs --action status --clip idle --out "$PRODUCTION_DIR"
-node scripts/generate-mascot-video.mjs --action download --clip idle --out "$PRODUCTION_DIR"
-node scripts/pack-mascot-video.mjs --input "$PRODUCTION_DIR/idle.original.mp4" --output public/mascot/fox-idle.alpha.mp4 --poster public/mascot/fox-poster.png
-```
+## 五档浅色外观
 
-互动素材将 `idle` 改为 `react`，且不再生成海报。打包需本机 `ffmpeg`，可用 `FFMPEG_PATH` 指定，不新增前端依赖。
-脚本拒绝覆盖目标输出。提交前独占写入回执，避免超时后重复付费；结果不明确时必须人工核对平台账单，不删除回执重试。
-本轮共提交两次付费生成。模型查询单价 ¥0.5/请求秒，按 2×6 秒预估 ¥6；实际以平台结算为准。
-响应中的 `video_result` 实测为数组，脚本兼容数组/单对象。输出 CDN 下载不发送 API Authorization。
+| 档位 | 背景 | 页面底色 | 素材文件 |
+|---|---|---|---|
+| 1 | 樱粉（默认） | `#faf7f8` | `fox-stage-01-v2.webp` |
+| 2 | 杏白 | `#fdf5eb` | `fox-stage-02-v2.webp` |
+| 3 | 薄荷 | `#eff8f4` | `fox-stage-03-v2.webp` |
+| 4 | 雾蓝 | `#f0f6fc` | `fox-stage-04-v2.webp` |
+| 5 | 浅紫 | `#f5f1fb` | `fox-stage-05-v2.webp` |
 
-参考接口：[极客智坊 MiniMax-H3](https://docs.geekai.co/cn/docs/video/minimax/MiniMax-H3)。
-未来若需即时跟随、任意转身或丰富情绪组合，再评估专用 2D 骨骼/3D 模型；框架升级本身不能改善素材动作质量。
+首页输入框下方直接提供「外观」滑杆，不再打开单独页面；系统设置已移除「背景与形象」。
+参考本地 3080 页的短滑轨即时变换交互，五个刻度支持拖动、点击轨道及方向键；背景、侧栏和柔和表面随档位协调变化，
+白色阅读面板与深色文字保持。小狐狸按素材顺序从幼态成长至成熟形态，五档都有完整九尾。
+界面显示当前颜色名，辅助技术可读取 1 / 5 档位，不恢复幻想阶段名称。
 
-## 本轮验证记录
+`fox-growth.ts` 只定义五种外观与素材路径；`appearance-control.tsx` 拥有浏览器外观选择。
+拖动即时预览并保存颜色 ID 到 `localStorage` 的 `lumen.appearance`，刷新后恢复，其他标签页同步。
+未知旧值回落樱粉基础图；存储不可用时本次仍可使用，并提示无法保存。
+外观完全脱离模型和思考强度，不写模型配置、Session 设置，不提交任务，不累计经验或推测负载。
+「模型与思考」不再显示形象；调整模型、推理强度或切换会话均不改变已选择的外观。
 
-- Web 全量 Vitest：19 文件、140 测试通过，其中宠物相关 22 测试。
-- TypeScript typecheck、Next production build、两个制作脚本的 `node --check` 通过。
-- Chrome 宽屏实际首页：确认 idle 时间连续推进，点击后切换 react，并返回 idle。
-- 预览页：168px/336px、浅色/深色背景、暂停位置保持、静态降级已检查；没有明显绿底残留。
-- 两段视频抽帧检查了脸、尾巴与首尾姿态，编码产物为 H.264、24fps、无音轨。AI 生成的小幅细节变化仍应由用户动态验收。
-- 尚未实机测试 Safari/iOS；采用 H.264 + WebGL 是兼容方案选择，不代表已完成跨浏览器验收。
+首页采用居中形象、问候与输入区域；外层纵向滚动，entry 不被压缩，短屏仍可到达完整输入区。
+空状态和思考中的小图标保留基础形象。左上、右上 L 标志和 favicon 保持不变。
+
+## 动效范围
+
+新形态先预载响应式图片，加载完成后用 320ms 交叉淡入；失败保留当前图，快速切换取消过时回调。
+static/reduced 或不可见时不执行过渡。CSS 另提供 5.6s 轻呼吸、650ms 打招呼（700ms timer 清理）、
+输入聚焦时的轻微关注姿态，以及目标区域内约 ±2.5° 的指针关注，指针离开后复位。
+基础形象每 6.8s 眨眼约 136ms，仅显示闭眼帧的眼部补丁，避免切换整张图造成身体与尾巴漂移。
+其余四种图片没有生成眨眼帧，仅保留呼吸、轻点等 CSS 动作；当前没有骨骼或独立尾巴动画。
+
+页面隐藏、离屏、减少动态或静态模式停止动效；inactive、static/reduced 或形态过渡中不挂载眨眼图片。
+初始素材失败回退至基础图，不再加载视频、WebGL 或旧渲染器。
+
+## 验收入口
+
+`/mascot-preview`（静态导出为 `/mascot-preview.html`）复用同一个五档浅色外观控件，
+可切换静态模式及下载高清 WebP。此页只预览，不修改已保存外观或会话设置。
+[`前一轮测试与构建记录`](../../research/2026-10-22-snow-fox-identity-validation.md)保留为历史，
+不代表本轮 v2 素材、动效或浏览器适配已经完成验收。
