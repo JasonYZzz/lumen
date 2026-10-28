@@ -11,7 +11,7 @@
 | 官方原文 | Meta Newsroom、由其直接链接的 introducing.muse.ai；ChatGPT Learn 的 Space 文档；Claude 原文 | 发布者说明的产品行为和约束，不能证明账号实际可用范围 |
 | 当前界面观察 | 已登录 ChatGPT Space；本地 Lumen 8765；截图与可见 DOM | 本次账号和页面实际显示的入口与字段，不外推其他套餐和版本 |
 | 当前源码 | Goal、AutomationInput、Resource、Host、Runtime 和 React 页面 | Lumen 真实状态及联动缺口，不以原型替代实现 |
-| 用户提供的独立原型 | design/Muse_UI_原型设计 | 设计参考和模拟交互；不是 Meta 生产应用 |
+| 旧独立原型（已清理） | 曾提供设计参考和模拟交互；不是 Meta 生产应用；当前以 [Accepted 实现](../architecture-guide/16-personal-assistant-automations.md) 为准 |
 | 本文与实施计划的建议 | 从上述事实推导的 Lumen 方案 | 拟采用的设计，不声称属于 Muse 或 ChatGPT |
 
 此前原型说明引用的 `introducing-muse.com` 不再作为本轮权威。此次从 [Meta 官方发布文](https://about.fb.com/news/2026/09/introducing-muse-personal-ai-agent/)的 “How We Designed Muse” 链接实际打开的是 [introducing.muse.ai](https://introducing.muse.ai/)，官方安全文章链接实际落到 [Meta AI Research](https://research.meta.ai/blog/security-and-safety-for-ai-agents-our-approach-with-muse)。本轮不依赖第三方镜像或演示分析来确认产品行为。
@@ -82,7 +82,7 @@ Lumen 首轮仍是本地单用户，不因此新增团队权限、云端同步�
 
 当前已存在的新闻整理目标，只有里程碑勾选和“关联自动化：暂无”。没有打开目标详情、继续推进、立即执行、关联资料或查看本目标结果的入口。菜单切换成功，但工作在这里中断。
 
-![Lumen 当前目标页](../../.impeccable/review/lumen-v2-product-research-2026-10-21/03-lumen-goals.jpg)
+![Lumen 当前目标页](../../.impeccable/review/lumen-v2-product-research-2026-10-21/03-lumen-goals.webp)
 
 源码对应：[目标渲染](../../src/web/src/components/assistant-workspace.tsx)、[GoalInput](../../src/lumen/automation/models.py)。当前 Goal 只有 title、milestones、automation_ids，加 id／revision；没有主对话、用户意图正文和成果关系。
 
@@ -90,7 +90,7 @@ Lumen 首轮仍是本地单用户，不因此新增团队权限、云端同步�
 
 目标表单没有文件字段，必填的是目标名称和里程碑，并提供关联自动化。因此“目标本身强制选文件”不符合当前契约；更准确的问题是，用户必须自己写计划，保存后仍没有 Agent 推进路径。
 
-![Lumen 当前目标表单](../../.impeccable/review/lumen-v2-product-research-2026-10-21/04-lumen-goal-form.jpg)
+![Lumen 当前目标表单](../../.impeccable/review/lumen-v2-product-research-2026-10-21/04-lumen-goal-form.webp)
 
 后端允许空 milestones，前端却要求填写。这进一步把“帮我规划”变成“先由用户写好规划”。该要求应在新的目标创建流程中取消，保留用户确认里程碑的能力。
 
@@ -106,7 +106,7 @@ Lumen 首轮仍是本地单用户，不因此新增团队权限、云端同步�
 
 本轮列表前部实际显示报告，也显示临时校验脚本、staging 文件和抓取中间件材料。它们来自 Work Product 索引，不代表用户想保留的成果。分类目前主要是来源种类，缺少资料集合与明确的发布／收录动作。
 
-![Lumen 当前资源库](../../.impeccable/review/lumen-v2-product-research-2026-10-21/06-lumen-library.jpg)
+![Lumen 当前资源库](../../.impeccable/review/lumen-v2-product-research-2026-10-21/06-lumen-library.webp)
 
 源码对应：[Store.index_work_products](../../src/lumen/automation/store.py)、[Host._sync_assistant_products](../../src/lumen/application/host.py)。解决办法不是删除这些文件或恢复记录，而是把“执行记录中的文件”和“收录到资料空间的成果”分开投影。
 

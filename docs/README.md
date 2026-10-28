@@ -11,7 +11,7 @@ schema，其次是 Accepted 决策记录；计划和研究不能反向定义运�
 | 范围 | 当前实现与入口 |
 | --- | --- |
 | 客户端 | Textual TUI、Next.js Web、headless CLI、Tauri 2 Apple Silicon macOS Beta，共用 WorkspaceHost |
-| 持久化 | Session schema v12，兼容读取 v1–v11；配置 schema v2，v1 只在内存迁移 |
+| 持久化 | Session schema v13，兼容读取 v1–v12；配置 schema v2，v1 只在内存迁移 |
 | 运行时 | LumenAgentLoop 是唯一主 Loop；完整批次 checkpoint、显式损坏尾行维修、文件恢复预览／确认 |
 | 性能与生命周期 | 身份绑定的增量 Session 投影、按字节有界的事件内存尾部及临时磁盘回放；磁盘容量和冷读取仍有约束 |
 | 模型配置 | Runtime Provider Catalog 定义已核对能力；桌面模型预设只提供首次连接配置，不携带凭据 |
@@ -40,7 +40,6 @@ schema，其次是 Accepted 决策记录；计划和研究不能反向定义运�
 - [2026-10-21 产品研究与联动审计](research/2026-10-21-muse-chatgpt-space-product-research.md)及[优化实施计划](plans/2026-10-21-lumen-v2-product-flow-upgrade.md)：保留升级前证据、设计意图与分阶段实施状态；当前契约以上方架构说明和验证为准。
 - [`plans/`](plans/README.md)：仍有未完成发布验证或条件式后续工作的活动计划。计划不等于已实现。
 - [`research/`](research/README.md)：固定日期、版本或 commit 的外部研究快照。结论可能被后续实现取代。
-- [`spikes/`](spikes/langgraph-context-resume.md)：隔离技术验证，不属于生产依赖。
 - 阶段交付按主题合并；已被替代的图、原型和外部页面不再保留并列入口。
   删除依据与迁入的验收门槛见[当前实现审计](architecture-guide/12-current-implementation-audit.md#129-文档合并与清理2026-10-10)。
 

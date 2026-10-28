@@ -16,7 +16,7 @@
 
 | 来源 | 用途与边界 |
 | --- | --- |
-| [Muse 本地原型](../Muse_UI_原型设计/muse_ui_prototype.html)与[说明](../Muse_UI_原型设计/Muse_UI_设计调研与交互说明.md) | 用户提供的独立研究原型；参考导航与交互，不声称是官方应用源码 |
+| [已批准的 r2 原型](README.md) | 当前生产构图依据；旧独立 Muse 原型已清理，不再保留无效入口 |
 | [Muse 设计文章](https://introducing-muse.com/) | 持续目标、适度主动性、活动透明度与确定性审批的产品参考；已在前一轮读取 |
 | [Claude 自动化文章](https://claude.dev/blog/building-effective-agent-automations/) | 主要技术参考；结果真实性、持久状态、可靠投递与明确边界，不要求替换 Lumen 运行时 |
 | `src/web/src/app/globals.css` | 当前 Lumen 的真实 token 与组件样式。优先于第一轮提案的 DESIGN.md |
