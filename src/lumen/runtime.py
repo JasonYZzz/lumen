@@ -138,6 +138,8 @@ from lumen.tools.gateway import (
     CapabilityReplay,
     CapabilityResult,
     CapabilityStatus,
+    ToolExecutionIdentity,
+    ToolGuardDecision,
 )
 from lumen.tools.presentation import ToolPresentationCatalog
 from lumen.tools.registry import PermissionPolicy, ToolRegistry
@@ -371,8 +373,8 @@ class RecoveryReceiptLedger:
     """Replay exact successful side-effect calls during an explicit retry.
 
     Read-only and control tools intentionally bypass this layer. A receipt is
-    reusable only when both the tool name and canonical validated arguments
-    match, so a changed retry request executes normally.
+    used only when both the tool name and canonical validated arguments match,
+    and each is consumed at most once, so changed or additional calls execute.
     """
 
     def __init__(
@@ -381,11 +383,10 @@ class RecoveryReceiptLedger:
         receipts: Sequence[Mapping[str, object]],
     ) -> None:
         self.tool_metadata = tool_metadata
-        self.prior = {
-            str(receipt.get("signature")): dict(receipt)
-            for receipt in receipts
-            if receipt.get("signature") and receipt.get("status") == "success"
-        }
+        self.prior: dict[str, list[dict[str, object]]] = {}
+        for receipt in receipts:
+            if receipt.get("signature") and receipt.get("status") == "success":
+                self.prior.setdefault(str(receipt["signature"]), []).append(dict(receipt))
         self.completed: list[dict[str, object]] = []
 
     def _bypasses_recovery(self, name: str) -> bool:
@@ -400,31 +401,34 @@ class RecoveryReceiptLedger:
         if self._bypasses_recovery(invocation.name):
             return None
         signature, _safe_args = _recovery_signature(invocation.name, invocation.arguments)
-        receipt = self.prior.get(signature)
-        if receipt is None:
+        receipts = self.prior.get(signature)
+        if not receipts:
             return None
+        receipt = receipts.pop(0)
         self.completed.append({**receipt, "replayed": True})
         return CapabilityReplay(receipt.get("result"))
 
-    def record_success(self, invocation: CapabilityInvocation, result: object) -> None:
+    def record_success(
+        self, invocation: CapabilityInvocation, result: object,
+    ) -> dict[str, object] | None:
         """Record one newly executed Native-loop side effect for an explicit retry."""
 
         if self._bypasses_recovery(invocation.name):
-            return
+            return None
         signature, safe_args = _recovery_signature(invocation.name, invocation.arguments)
         metadata = self.tool_metadata.get(invocation.name, {})
-        self.completed.append(
-            {
-                "signature": signature,
-                "tool_name": invocation.name,
-                "args": safe_args,
-                "result": _json_safe_result(result),
-                "status": "success",
-                "origin": metadata.get("origin", "unregistered tool"),
-                "risk": metadata.get("risk", "external_unknown"),
-                "replayed": False,
-            }
-        )
+        receipt = {
+            "signature": signature,
+            "tool_name": invocation.name,
+            "args": safe_args,
+            "result": _json_safe_result(result),
+            "status": "success",
+            "origin": metadata.get("origin", "unregistered tool"),
+            "risk": metadata.get("risk", "external_unknown"),
+            "replayed": False,
+        }
+        self.completed.append(receipt)
+        return receipt
 
 @dataclass(frozen=True, slots=True)
 class ToolApproval:
@@ -1402,10 +1406,17 @@ class AgentRuntime:
             context_engine = self.context_engine if self._execution.get() is None else None
             model_driver = self._model_driver
             route = self._lumen_model_route
+
+            def execution_guard(identity: ToolExecutionIdentity) -> ToolGuardDecision:
+                if self._completion_policy.require_reviewable_plan and identity.risk != Risk.READ.value:
+                    return ToolGuardDecision.DENY
+                return ToolGuardDecision.ABSTAIN
+
             native_gateway = self._capability_gateway.derive(
                 self._host_tools.get(),
                 replay=recovery.replay,
                 record_success=recovery.record_success,
+                guards=(execution_guard,),
             )
             if self._execution.get() is not None:
                 native_gateway = native_gateway.narrow(())

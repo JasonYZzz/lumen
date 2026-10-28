@@ -79,8 +79,10 @@ Provider、region、media kind 和 completion control snapshot；原始音频仍
 Host WebSocket 断开会结束对应 Provider call，避免百炼连接继续计费。主动 rollover 仍由浏览器建立
 新 call；Route selection 重新执行，但旧 call 的副作用不会转移或重放。
 
-Manager 在 Provider connection 已建立后的 admission 失败或取消时关闭连接；百炼 Adapter
-在初始 `session.update` 失败或取消时关闭尚未注册的 WebSocket，避免遗漏清理。
+完整转写 turn 先追加并 fsync 到 Session，Manager 才增加完成计数并发布
+`live.response.completed` / `live.response.approved`；写盘失败改为 `reconciliation_required`，
+不向客户端提前公开完成。Manager 在 Provider connection 已建立后的 admission 失败或取消时关闭连接；
+百炼 Adapter 在初始 `session.update` 失败或取消时关闭尚未注册的 WebSocket，避免遗漏清理。
 输出音频队列最多保留 64 个 chunk；慢客户端或未连接的客户端导致队列满时丢弃最旧 chunk，
 不阻塞同一 Provider 流的工具与控制事件。结束调用丢弃剩余播放队列并立即发出结束标记，
 不会等待 media consumer；原始音频仍不持久化。

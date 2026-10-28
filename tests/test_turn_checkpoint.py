@@ -14,7 +14,13 @@ from pydantic_ai.messages import (
     UserPromptPart,
 )
 
-from lumen.sessions import SessionCorruptError, SessionRepository, TurnCheckpointBoundary, turn_message_digest
+from lumen.sessions import (
+    SCHEMA_VERSION,
+    SessionCorruptError,
+    SessionRepository,
+    TurnCheckpointBoundary,
+    turn_message_digest,
+)
 
 
 def batch(call_id: str) -> list[ModelMessage]:
@@ -22,13 +28,15 @@ def batch(call_id: str) -> list[ModelMessage]:
             ModelRequest(parts=[ToolReturnPart("read_file", "synthetic", call_id)])]
 
 
-@pytest.mark.parametrize("version", range(1, 12))
+@pytest.mark.parametrize("version", range(1, SCHEMA_VERSION))
 def test_batch_checkpoint_recovery_and_terminal_supersession_are_append_only(
     tmp_path: Path, version: int,
 ) -> None:
     repo = SessionRepository(tmp_path)
     session = repo.create(agent_name="test", model_id="offline")
-    original = session.path.read_text().replace('"schema_version":12', f'"schema_version":{version}')
+    original = session.path.read_text().replace(
+        f'"schema_version":{SCHEMA_VERSION}', f'"schema_version":{version}',
+    )
     session.path.write_text(original)
     repo.append_turn_started(session.id, user_input="inspect", interaction_id="interaction")
     messages: list[ModelMessage] = []

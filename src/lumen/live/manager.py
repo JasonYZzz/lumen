@@ -644,6 +644,20 @@ class LiveSessionManager:
                     )
                     return
                 approved_answer = transcript
+            try:
+                self._persist_turn(record, response_id)
+            except Exception as error:
+                message = f"could not persist Live turn: {type(error).__name__}: {error}"
+                self._update(
+                    record,
+                    connection=LiveConnectionState.RECONCILIATION_REQUIRED,
+                    error=message,
+                )
+                await record.journal.append(
+                    LiveEventKind.RECONCILIATION_REQUIRED,
+                    {"response_id": response_id, "message": message},
+                )
+                return
             self._update(
                 record,
                 activity=LiveActivityState.LISTENING,
@@ -653,7 +667,6 @@ class LiveSessionManager:
                 LiveEventKind.RESPONSE_COMPLETED,
                 {"response_id": response_id, "transcript": transcript},
             )
-            self._persist_turn(record, response_id)
             if approved_answer is not None:
                 await record.journal.append(
                     LiveEventKind.RESPONSE_APPROVED,

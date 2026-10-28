@@ -508,6 +508,7 @@ class NativeAgentRuntimeFactory(AgentRuntimeFactory):
             success: bool | None,
             summary: str,
             receipt_id: str | None = None,
+            recovery_receipt: dict[str, object] | None = None,
         ) -> EffectReceipt:
             prior = next((item for item in effect_receipts if item.id == receipt_id), None)
             if receipt_id is not None and (
@@ -528,6 +529,7 @@ class NativeAgentRuntimeFactory(AgentRuntimeFactory):
                 effect_kind=effect_kind,
                 operation=tool_name,
                 status=status,
+                recovery_receipt=recovery_receipt,
                 summary=summary,
                 error=summary if success is False else None,
                 created_at=prior.created_at if prior is not None else utc_now(),

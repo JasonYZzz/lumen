@@ -4115,7 +4115,7 @@
     }
   ],
   "session": {
-    "current_schema": 12,
+    "current_schema": 13,
     "model_input_manifest": {
       "$defs": {
         "ContextZone": {
@@ -4831,7 +4831,8 @@
       9,
       10,
       11,
-      12
+      12,
+      13
     ],
     "upgrade_policy": "append-only schema_upgrade; never rewrite prior records"
   },

@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import sys
+import threading
 from collections.abc import AsyncIterator
 from pathlib import Path
 
@@ -73,6 +74,14 @@ def resources(root: Path, *, phase: str | None = None) -> LocalResources:
     registry.add(ToolSpec(write_note, risk=Risk.WRITE, effect_kind=EffectKind.EXTERNAL_ACTION,
         concurrency=lambda _: ToolConcurrency.PARALLEL_SAFE), origin="test")
     repository = SessionRepository(root / "sessions")
+    original_append = repository.append_turn
+    if phase == "post_success":
+        def pause_before_checkpoint(session_id: str, **kwargs: object) -> None:
+            if kwargs.get("checkpoint") is not None:
+                print(json.dumps({"ready": phase}), flush=True)
+                threading.Event().wait()
+            original_append(session_id, **kwargs)  # type: ignore[arg-type]
+        repository.append_turn = pause_before_checkpoint  # type: ignore[method-assign]
     artifacts = ArtifactStore(root / "artifacts")
     workspace = TaskWorkspace(root, artifacts, repository)
     gateway = CapabilityGateway(registry, PermissionPolicy(PermissionsConfig(default_mode="auto")),
@@ -106,7 +115,9 @@ async def child(root: Path, phase: str) -> None:
             await asyncio.Event().wait()
 
 
-@pytest.mark.parametrize("phase", ["request", "arguments", "dispatch", "parallel", "checkpoint", "terminal"])
+@pytest.mark.parametrize(
+    "phase", ["request", "arguments", "dispatch", "parallel", "checkpoint", "post_success", "terminal"],
+)
 async def test_hard_kill_recovers_only_durable_boundaries_without_duplicate_effects(
     tmp_path: Path, phase: str,
 ) -> None:
@@ -133,17 +144,43 @@ async def test_hard_kill_recovers_only_durable_boundaries_without_duplicate_effe
         return
     expected_count = "2" if phase == "parallel" else "1"
     assert (tmp_path / "counter").read_text() == expected_count
+    if phase == "post_success":
+        assert loaded.work_state.effects[0].recovery_receipt is not None
     host = WorkspaceHost(resources(tmp_path))  # type: ignore[arg-type]
     await host.open()
     try:
         if phase in {"dispatch", "parallel"}:
             with pytest.raises(InvalidStateError, match="resolve interrupted run effects"):
                 await host.dispatch(RetryRun(session_id, "retry"))
-        elif phase == "checkpoint":
+        elif phase in {"checkpoint", "post_success"}:
             started = await host.dispatch(RetryRun(session_id, "retry"))
             events = [event async for event in host.subscribe(started.run_id)]
             assert events[-1].type == "run.completed"
         assert (tmp_path / "counter").read_text() == expected_count
+    finally:
+        await host.close()
+
+
+async def test_interrupted_verified_effect_without_replay_evidence_blocks_retry(tmp_path: Path) -> None:
+    resource = resources(tmp_path)
+    session = resource.session_repository.create(agent_name="test", model_id="offline")
+    workspace = resource.task_workspace
+    assert workspace is not None
+    workspace.bind_session(session.id)
+    workspace.bind_interaction("interrupted")
+    resource.session_repository.append_turn_started(
+        session.id, user_input="write", interaction_id="interrupted",
+    )
+    effect = workspace.record_tool_effect(
+        tool_name="write_note", effect_kind=EffectKind.EXTERNAL_ACTION,
+        success=True, summary="succeeded before the checkpoint",
+    )
+    assert effect is not None and effect.recovery_receipt is None
+    host = WorkspaceHost(resource)  # type: ignore[arg-type]
+    await host.open()
+    try:
+        with pytest.raises(InvalidStateError, match="resolve interrupted run effects"):
+            await host.dispatch(RetryRun(session.id, "retry"))
     finally:
         await host.close()
 

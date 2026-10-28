@@ -118,3 +118,80 @@ async def test_failed_live_admission_closes_an_already_opened_provider_connectio
             await asyncio.wait_for(manager.connect(request), 1)
     finally:
         await manager.close()
+
+
+async def test_live_response_completed_is_published_after_turn_persistence(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manager, transport, session_id = _manager(tmp_path)
+    repository = manager._repository  # pyright: ignore[reportPrivateUsage]
+    original_append = repository.append_turn
+    event_kinds_at_persistence: list[list[LiveEventKind]] = []
+
+    def append_and_observe(*args: object, **kwargs: object) -> None:
+        record = manager._records[connected.live_session_id]  # pyright: ignore[reportPrivateUsage]
+        event_kinds_at_persistence.append([event.kind for event in record.journal.events])
+        original_append(*args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(repository, "append_turn", append_and_observe)
+    connected = await manager.connect(LiveConnectRequest(session_id=session_id, client_request_id="order"))
+    connection = transport.connections[0]
+    try:
+        await connection.emit(LiveProviderEvent(
+            kind=LiveProviderEventKind.INPUT_TRANSCRIPT_COMPLETED, transcript="question",
+        ))
+        await connection.emit(LiveProviderEvent(
+            kind=LiveProviderEventKind.RESPONSE_TRANSCRIPT_DELTA, delta="answer",
+        ))
+        await connection.emit(LiveProviderEvent(
+            kind=LiveProviderEventKind.RESPONSE_COMPLETED,
+            response_id="response-order", response_status="completed",
+        ))
+        record = manager._records[connected.live_session_id]  # pyright: ignore[reportPrivateUsage]
+        assert len(event_kinds_at_persistence) == 1
+        assert event_kinds_at_persistence[0][-1] is LiveEventKind.RESPONSE_TRANSCRIPT_DELTA
+        assert LiveEventKind.RESPONSE_COMPLETED not in event_kinds_at_persistence[0]
+        assert [event.kind for event in record.journal.events[-2:]] == [
+            LiveEventKind.RESPONSE_COMPLETED,
+            LiveEventKind.RESPONSE_APPROVED,
+        ]
+        assert len(repository.load(session_id).turns) == 1
+    finally:
+        await manager.close()
+
+
+async def test_live_turn_persistence_failure_never_publishes_completed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manager, transport, session_id = _manager(tmp_path)
+    repository = manager._repository  # pyright: ignore[reportPrivateUsage]
+
+    def fail_append(*_args: object, **_kwargs: object) -> None:
+        raise OSError("synthetic turn write failure")
+
+    monkeypatch.setattr(repository, "append_turn", fail_append)
+    connected = await manager.connect(LiveConnectRequest(session_id=session_id, client_request_id="failure"))
+    connection = transport.connections[0]
+    try:
+        await connection.emit(LiveProviderEvent(
+            kind=LiveProviderEventKind.INPUT_TRANSCRIPT_COMPLETED, transcript="question",
+        ))
+        await connection.emit(LiveProviderEvent(
+            kind=LiveProviderEventKind.RESPONSE_TRANSCRIPT_DELTA, delta="answer",
+        ))
+        await connection.emit(LiveProviderEvent(
+            kind=LiveProviderEventKind.RESPONSE_COMPLETED,
+            response_id="response-failure", response_status="completed",
+        ))
+        record = manager._records[connected.live_session_id]  # pyright: ignore[reportPrivateUsage]
+        assert record.state.turn_count == 0
+        assert [event.kind for event in record.journal.events] == [
+            LiveEventKind.SESSION_CREATED,
+            LiveEventKind.SESSION_CONNECTED,
+            LiveEventKind.INPUT_TRANSCRIPT_COMPLETED,
+            LiveEventKind.RESPONSE_TRANSCRIPT_DELTA,
+            LiveEventKind.RECONCILIATION_REQUIRED,
+        ]
+        assert repository.load(session_id).turns == []
+    finally:
+        await manager.close()

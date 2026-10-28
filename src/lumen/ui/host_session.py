@@ -25,6 +25,7 @@ from lumen.application import (
     QueueRunInput,
     RejectAgentImport,
     RejectPlan,
+    RetryRun,
     RunDirectCommand,
     RunStartedResult,
     SendAgentMessage,
@@ -244,7 +245,9 @@ class HostSessionAdapter:
         if self.session_id is None:
             raise RuntimeError("no active session")
         started = await self.host.dispatch(
-            StartRun(
+            RetryRun(self.session_id, f"tui-retry-{uuid4()}")
+            if run_input.is_retry
+            else StartRun(
                 self.session_id,
                 run_input.display_text,
                 f"tui-{uuid4()}",

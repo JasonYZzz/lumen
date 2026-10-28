@@ -16,7 +16,7 @@ flowchart TB
 
 TUI 与 Web 不各自维护一套 Agent 状态。它们通过 `WorkspaceHost` 看到同一 session、run、approval 和 event sequence。
 
-v2 助理控制面同样通过 Host：`GetAssistantState/Page/Occurrence`、`ApplyAutomationCommand`、`EditAssistant`、`ReadAssistantResource` 和偏好命令是公共 Interface。Web／桌面通过 `/api/v1/assistant` 下的端点查询持久列表与提交操作；当前每 3 秒在可见页面轮询概览，信息流／资源库使用服务端游标分页。它们不把 SSE 当作调度队列。单次执行仍使用原 RunEvent 和 Session v12；自动化实例以固定 interaction UUID 关联 turn。TUI 没有新增同等助理面板，CLI 使用 `lumen automation`，详见[命令指南](../commands.md#14-个人助理与本地自动化)。
+v2 助理控制面同样通过 Host：`GetAssistantState/Page/Occurrence`、`ApplyAutomationCommand`、`EditAssistant`、`ReadAssistantResource` 和偏好命令是公共 Interface。Web／桌面通过 `/api/v1/assistant` 下的端点查询持久列表与提交操作；当前每 3 秒在可见页面轮询概览，信息流／资源库使用服务端游标分页。它们不把 SSE 当作调度队列。单次执行仍使用原 RunEvent 和 Session v13；自动化实例以固定 interaction UUID 关联 turn。TUI 没有新增同等助理面板，CLI 使用 `lumen automation`，详见[命令指南](../commands.md#14-个人助理与本地自动化)。
 
 Apple Silicon 桌面客户端位于 `src/desktop/`：Tauri 管理窗口、目录选择、Keychain 和它拥有的
 Python 子进程，主 WebView 使用该进程的同源 loopback Web/API。`lumen.desktop` 通过既有 Host
@@ -68,13 +68,13 @@ terminal 已随 turn append 并 `fsync` 后才交给 EventJournal。若 terminal
 
 会话文件是 append-only JSONL：
 
-- 第一条记录保存 session metadata 和创建时 schema；当前新会话写 v12；
+- 第一条记录保存 session metadata 和创建时 schema；当前新会话写 v13；
 - 后续每条 turn 保存 user input、状态、messages、timeline events、approval、usage、plan、diagnostics 与 compaction；
 - 每个 terminal turn 还保存有界 `request_receipts[]`：实际 provider/model route、step、instructions/messages/tools token、完整有序 tool schema digest、context fingerprint、output reserve、hard limit 和 estimated 标记；内嵌 `ModelInputManifest` 还保存 source refs/digests、stable prefix、dynamic tail、request fingerprint 与 replay eligibility，但不复制 secret、instructions、完整 messages/schema 或大正文；
 - context、settings、plan、Work Product/effect、Agent Thread/event/message/result 与 Live call 都使用独立类型化 record 追加，不挤入可变聚合对象；
 - 标题和归档状态由最新的 `session_catalog` record 投影；首次删除 tombstone 是终态，后到的旧目录快照不能撤销删除；不改写或物理移除 journal；
 - `history_rewind` 在同一 Session 内选择目标 user turn 之前的活动 lineage；被放弃的 turn、工具结果和 compaction summary 仍留在 JSONL 供审计，但不再进入时间线、模型 history、checkpoint retrieval 或自动记忆；
-- v1–v11 文件加载时不重写。首次写入 v5–v12 对应的新事实前追加 `schema_upgrade`，读取时按 marker 链得到的有效 schema 校验后续 record；
+- v1–v12 文件加载时不重写。首次写入 v5–v13 对应的新事实前追加 `schema_upgrade`，读取时按 marker 链得到的有效 schema 校验后续 record；
 - `load` 对不完整/非法 JSON 行明确报 `SessionCorruptError`，避免把损坏文件静默解释为合法状态；
 - active prefix、rolling summary 和 checkpoint 可从 turn 中恢复；V2 checkpoint 必须通过 parent/range/cursor/digest/full-history 校验，V1 只读兼容并映射为绝对 transcript 边界；
 - checkpoint 状态只在 append + `fsync` 成功后发布到运行中内存；
@@ -93,6 +93,11 @@ digest。读取只形成一条 turn，terminal 校验已保存前缀后覆盖投
 或未提交 compaction 父节点；超过 64 KiB 的记录先用 ArtifactStore 耐久发布至 Session 目录下的
 `checkpoint-artifacts/`，journal 仅保存 digest、长度和嵌套 Artifact 引用，且不索引正文。
 缺失或损坏 blob、变更的重复 sequence、未配对工具消息均严格拒绝。旧二进制无法加载 v12。
+
+v13 增加 Effect 级恢复 receipt 和 `review_pending` turn。成功副作用的 canonical output 与 effect
+在同一追加边界持久化；resume 合并 checkpoint 之后的恢复证据，receipt 按出现次数消费。缺少证据的
+中断 effect 禁止自动 retry。Plan review 在 terminal append 前确定为 `review_pending`，不再由 Host
+事后把 completed turn 改写成另一种状态；Live 也先保存完整转写 turn，再发布 response completed。
 
 EventJournal 的内存尾部按 JSON envelope 字节最多 1 MiB；完整显示事件保存在匿名临时文件，
 冷 cursor 扫描到边界一次，随后顺序读取，近期订阅直接读内存。文件不是 Session authority，

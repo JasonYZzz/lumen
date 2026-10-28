@@ -80,12 +80,13 @@ from lumen.plan import PlanState, PlanStep, StepStatus
 from lumen.runtime import (
     AgentRuntime,
     PartialRunOutcome,
+    RecoveryReceiptLedger,
     ToolApproval,
     _preferred_response_language,  # pyright: ignore[reportPrivateUsage]
     get_partial_outcome,
 )
 from lumen.task_control import CONTROL_TOOL_NAMES
-from lumen.tools.gateway import CapabilityDescriptor, CapabilityGateway
+from lumen.tools.gateway import CapabilityDescriptor, CapabilityGateway, CapabilityInvocation
 from lumen.tools.registry import PermissionPolicy, ToolRegistry
 from lumen.tools.spec import EffectKind, Risk, ToolConcurrency, ToolSpec
 
@@ -661,20 +662,36 @@ async def test_runtime_records_declared_non_observe_effect() -> None:
 
     await runtime.run("go", [], emit, approve, session_id="effect-session")
 
-    assert recorded == [
-        {
-            "tool_name": "execute",
-            "effect_kind": EffectKind.EXECUTION,
-            "success": None,
-            "summary": "execute prepared",
-        },
-        {
-            "tool_name": "execute",
-            "effect_kind": EffectKind.EXECUTION,
-            "success": True,
-            "summary": "execute succeeded",
-        },
-    ]
+    assert recorded[0] == {
+        "tool_name": "execute",
+        "effect_kind": EffectKind.EXECUTION,
+        "success": None,
+        "summary": "execute prepared",
+    }
+    recovery = recorded[1].pop("recovery_receipt")
+    assert recorded[1] == {
+        "tool_name": "execute",
+        "effect_kind": EffectKind.EXECUTION,
+        "success": True,
+        "summary": "execute succeeded",
+    }
+    assert isinstance(recovery, dict)
+    assert recovery["result"] == "done"
+    assert recovery["status"] == "success"
+    assert recovery["replayed"] is False
+
+
+def test_recovery_receipt_is_consumed_only_once() -> None:
+    invocation = CapabilityInvocation(
+        execution_id="run", provider_call_id="call", name="execute", arguments={},
+    )
+    original = RecoveryReceiptLedger({"execute": {"origin": "test", "risk": "execute"}}, ())
+    original.record_success(invocation, "old")
+    ledger = RecoveryReceiptLedger(
+        {"execute": {"origin": "test", "risk": "execute"}}, original.completed,
+    )
+    assert ledger.replay(invocation) is not None
+    assert ledger.replay(invocation) is None
 
 
 async def test_real_request_snapshot_updates_for_each_model_step() -> None:

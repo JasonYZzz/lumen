@@ -51,7 +51,7 @@ Lumen 是通用、可配置的 Agent framework：Provider 可替换，运行时�
 
 ### 持久化、恢复与完成
 
-- Session 是 append-only journal。当前 schema v12，v1–v11 必须可加载且不改写；升级只追加 `schema_upgrade`。配置 schema v2，v1 只在内存迁移并警告，不自动重写用户配置。
+- Session 是 append-only journal。当前 schema v13，v1–v12 必须可加载且不改写；升级只追加 `schema_upgrade`。配置 schema v2，v1 只在内存迁移并警告，不自动重写用户配置。
 - 大载荷进入内容寻址 ArtifactStore，journal 留引用和有界摘要。压缩保留 raw history，以绝对 `source_end` 去覆盖前缀；未持久化 checkpoint 不作持久父节点，瞬时 Skill/Memory/MCP 内容不重复入历史。
 - 主模型重试只由 Loop 管理；默认无次数/请求总时限硬墙，显式预算有效。可撤回候选文字但保留已完成工具，不执行半截参数或透明重放未知外部/原生工具动作。故障分类、心跳与恢复矩阵按长任务恢复文档验证，覆盖自动重连和 Session 重载。
 - 普通问答不创建 Work Product，正文按需读。mutation 记录 prepared/applied/verified/failed/rolled_back；selector 多候选拒绝，局部修改验证目标变化、非目标不变。

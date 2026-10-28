@@ -493,6 +493,7 @@ class TaskWorkspace:
         summary: str,
         resource: str | None = None,
         receipt_id: str | None = None,
+        recovery_receipt: dict[str, object] | None = None,
     ) -> EffectReceipt | None:
         """Record non-adapter tool effects without inventing resource snapshots."""
 
@@ -522,6 +523,7 @@ class TaskWorkspace:
             operation=tool_name,
             status=status,
             resource=resource,
+            recovery_receipt=recovery_receipt,
             summary=summary,
             error=summary if success is False else None,
             created_at=prior.created_at if prior is not None else _now(),

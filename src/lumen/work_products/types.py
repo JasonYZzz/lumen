@@ -95,6 +95,7 @@ class EffectReceipt(_WorkModel):
     before: RevisionSnapshot | None = None
     after: RevisionSnapshot | None = None
     verification: VerificationResult | None = None
+    recovery_receipt: dict[str, Any] | None = None
     summary: str = ""
     error: str | None = None
     created_at: str = Field(default_factory=_now)

@@ -3,7 +3,7 @@
 > **网页版入口：** 直接打开 [`index.html`](index.html)。它是无外部运行时依赖的离线 Architecture Atlas，包含可搜索导航、响应式布局、打印样式、精确技术图，以及在当前页面打开 Markdown 与源码的 Trace Reader。以下 Markdown 文件仍是可审计的文字事实来源。
 
 v2 增量复核：2026-10-20，未提交的 `2.0.0` 源码；此前整理基线 `28d1679`。
-Session schema v12、配置 schema v2 保持不变；助理 SQLite 为 v2，v1 升级先备份。
+Session schema v13、配置 schema v2；助理 SQLite 为 v2，v1 升级先备份。
 [历史代码审查](../research/2026-10-20-v2-code-review.md)保留原始反例，原四项问题已修复；
 修复、管理与连接恢复的验证和剩余门禁见[实施验收](../research/2026-10-21-v2-product-flow-validation.md)。
 
@@ -52,7 +52,7 @@ Lumen 是一个本地优先、事件驱动的可配置 Agent 框架：`Workspace
 
 `LumenAgentLoop` 是单 Agent 模型—工具循环的唯一权威；`PydanticAIModelDriver` 只在
 `ModelDriver` seam 下提供成熟的 Model/Provider wire translation 与资源生命周期。`AgentRuntime`、
-`ContextEngine`、`CapabilityGateway`、Session v12 与完成门禁各自保持单一权威，不存在运行时 selector
+`ContextEngine`、`CapabilityGateway`、Session v13 与完成门禁各自保持单一权威，不存在运行时 selector
 或隐藏旧 Agent graph 回退路径。Context 摘要与 Memory 提取中的无工具 typed Agent 仅是结构化输出
 Adapter，不是第二套模型—工具 Loop。
 
@@ -77,7 +77,7 @@ Adapter，不是第二套模型—工具 Loop。
 - TUI 与 Web 共用运行逻辑，但 UI 渲染分别由 Textual 和 Next.js 实现。
 - Realtime 语音是可选 Web transport；它共用 Host 能力和 Session，但原始音频默认不持久化，进程重启后也不会自动重放未确认的远端动作。
 - MCP 工具可以延迟暴露 schema；MCP resource 和 prompt 只有显式激活后才进入上下文。
-- 当前 Session schema 是 v12；v1–v11 只读加载，首次写入较新 record 时追加 `schema_upgrade`，不会重写 header 或历史行。同 Session 消息重生成以 `history_rewind` 选择活动 lineage，不删除旧事实。
+- 当前 Session schema 是 v13；v1–v12 只读加载，首次写入较新 record 时追加 `schema_upgrade`，不会重写 header 或历史行。同 Session 消息重生成以 `history_rewind` 选择活动 lineage，不删除旧事实。
 - `Risk`、`EffectKind`、`ToolConcurrency` 分别负责审批、效果追踪/验证与调用重叠；三者不能互相推断。
 - 所有文件 mutation 经过 expected revision 与无符号链接 hop 的 `Workspace.atomic_write/remove`；冲突返回 `STALE_RESOURCE`，不会猜测覆盖。
 - `lumen capabilities --json`、TUI `/context capabilities` 与 Web `/api/v1/capabilities` 使用同一只读能力投影。

@@ -31,7 +31,7 @@ Readers move between the offline Architecture Atlas, Markdown decision records, 
 - Python 3.11–3.13; distribution, package, and CLI names are `lumen-agent` / `lumen`.
 - The Architecture Atlas is a static HTML/CSS/JavaScript Read surface under `docs/architecture-guide/`.
 - Source, contract tests, and current schema outrank prose documentation.
-- Session is an append-only v12 journal with read compatibility for v1–v11; upgrades only append `schema_upgrade` records.
+- Session is an append-only v13 journal with read compatibility for v1–v12; upgrades only append `schema_upgrade` records.
 - Configuration schema is v2; v1 migration is memory-only and does not rewrite user files.
 - The Apple Silicon desktop Beta uses Tauri 2, bundled Python 3.13, and the existing Web/Host Interface; ad-hoc signing and manual updates are the current delivery scope.
 - Desktop first setup offers provider/model presets without credentials; existing user configuration remains authoritative. Presets do not define runtime reasoning capabilities.

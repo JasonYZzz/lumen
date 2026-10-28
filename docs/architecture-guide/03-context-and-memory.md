@@ -203,7 +203,7 @@ Runtime 会把 resolved reserve 写入真实 Provider 请求，避免预算与�
 `build_input_manifest()` 流程；工具结果和请求边界的 steer/follow-up 先进入 messages，再冻结下一步
 `ModelDriverRequest`。因此预算和请求证据只在真正掌握 provider I/O 边界的单一位置采集。
 
-每个真正准备发往 provider 的 snapshot 会连同已冻结的 route、provider/model 与 Context fingerprint 转成有界 `ProviderRequestReceipt`。Runtime 把 receipt 附在完整或 partial outcome 上，`RunCoordinator` 与 terminal turn 一起追加到 Session v12；因此正常完成、取消和失败都保留实际请求证据。
+每个真正准备发往 provider 的 snapshot 会连同已冻结的 route、provider/model 与 Context fingerprint 转成有界 `ProviderRequestReceipt`。Runtime 把 receipt 附在完整或 partial outcome 上，`RunCoordinator` 与 terminal turn 一起追加到 Session v13；因此正常完成、取消和失败都保留实际请求证据。
 
 receipt 内嵌同一步 `ModelInputManifest`：它对 instructions、实际 messages、完整有序 tool schema、模型
 settings、Context source、stable prefix 和 dynamic tail 分别计算 SHA-256，并保存 source
@@ -268,7 +268,7 @@ request/response/tool-result 轨迹，并保留 Driver 返回的完整 `ModelRes
 
 ## 3.8 SessionContextState：Skill/MCP 激活、恢复与卸载
 
-`SessionContextState` 由 schema v5 引入；当前新 session 是 v12，仍沿用同一 `context_state` record：
+`SessionContextState` 由 schema v5 引入；当前新 session 是 v13，仍沿用同一 `context_state` record：
 
 ```text
 SessionContextState
@@ -411,4 +411,4 @@ current user prompt:
   "先确认 token refresh 的实现，再告诉我是否需要改代码"
 ```
 
-若模型调用 `request_clarification`，本轮消息和工具结果照常进入模型可见历史，终态变为 `waiting_for_user`。问题持久化到当前 session；用户下一条普通输入会包装成带 question id 的 `<clarification-answer>`。只有回答轮成功完成才清除 pending；失败时保留，新问题可以替换旧问题。这里恢复的是模型请求边界，不保存 Python 调用栈，因此 P0/P1 都不需要把 LangGraph 引入生产依赖。隔离的 [LangGraph spike](../spikes/langgraph-context-resume.md) 已验证 `prepare → agent → interrupt → resume → commit` 以及 node 重入语义；只有出现原节点恢复、分支/join、time travel 或跨日节点级续跑需求，并且 LangGraph 能替换而不是复制现有执行状态机时，才重新评估。
+若模型调用 `request_clarification`，本轮消息和工具结果照常进入模型可见历史，终态变为 `waiting_for_user`。问题持久化到当前 session；用户下一条普通输入会包装成带 question id 的 `<clarification-answer>`。只有回答轮成功完成才清除 pending；失败时保留，新问题可以替换旧问题。这里恢复的是模型请求边界，不保存 Python 调用栈，因此 P0/P1 都不需要引入其他工作流框架。当前由原生 `ContextEngine`、Loop 和 Session journal 拥有执行与恢复语义，不再保留额外的 LangGraph 技术分支。

@@ -127,7 +127,35 @@ def test_external_same_size_change_with_preserved_mtime_invalidates_projection(t
     session.path.write_bytes(b"{broken")
     with pytest.raises(SessionCorruptError):
         repository.load(session.id)
-    assert SCHEMA_VERSION == 12
+    assert SCHEMA_VERSION == 13
+
+
+def test_v13_effect_recovery_and_review_turn_upgrade_append_only(tmp_path: Path) -> None:
+    repository = SessionRepository(tmp_path)
+    session = repository.create(agent_name="test", model_id="offline")
+    original = session.path.read_text().replace(
+        f'"schema_version":{SCHEMA_VERSION}', '"schema_version":12',
+    )
+    session.path.write_text(original)
+    effect = EffectReceipt(
+        id="effect:recovery",
+        effect_kind=EffectKind.EXTERNAL_ACTION,
+        operation="remote_write",
+        status=EffectStatus.VERIFIED,
+        recovery_receipt={"signature": "sha256:one", "status": "success", "result": "done"},
+    )
+    repository.append_effect(session.id, effect)
+    repository.append_turn(
+        session.id, user_input="plan", messages=[], approvals=[], usage={},
+        status="review_pending", plan=PlanState(),
+    )
+    loaded = SessionRepository(tmp_path).load(session.id)
+    assert loaded.work_state.effects[0].recovery_receipt == effect.recovery_receipt
+    assert loaded.turns[-1].status == "review_pending"
+    records = [json.loads(line) for line in session.path.read_text().splitlines()]
+    assert records[0]["schema_version"] == 12
+    assert [record["type"] for record in records].count("schema_upgrade") == 1
+    assert session.path.read_text().startswith(original)
 
 
 @pytest.mark.parametrize("turn_index", [0, 1, 2])

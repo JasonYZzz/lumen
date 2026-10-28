@@ -95,6 +95,8 @@ flowchart TD
 Plan 只信任 Capability Contract 自己声明的 `Risk=read`。不再根据 `rg`、`cat`、`git diff`
 等 argv basename 猜测只读性，因为工作区可执行文件可以伪装成同名程序。Git 检查通过
 结构化 `git_status` / `git_diff` 完成；通用 `run_command` 在 Plan 中一律拒绝。
+Plan 还在每次 run 的 Gateway 派生处安装单调执行 guard，在 replay 和 executor 前拒绝非 read 调用；
+因此 `always_allow` 造成的 `requires_approval=False` 不能绕过只读边界。
 
 允许范围分三层：`once` 只放行当前调用，`session` 写入当前 `_SessionActor.approval_keys`，`always` 额外写入项目级 `ApprovalRuleStore`。永久规则保存在 `~/.lumen/state/approval-rules/<project-id>.json`，不会回写可能含凭据和注释的 YAML 配置。普通工具使用 `origin:tool` key；`run_command` 使用 `origin:tool:sha256:<digest>`，绑定全部已校验参数（包括 argv、cwd 和 timeout）。规则不保存参数正文，不能由批准 `git status` 推导批准其他 Git 子命令或其他目录。旧 executable-wide key 保留在规则文件但不再匹配，必须重新审批。
 

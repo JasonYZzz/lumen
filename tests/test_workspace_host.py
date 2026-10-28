@@ -45,17 +45,20 @@ from lumen.application import (
 )
 from lumen.application.run_lock import WorkspaceRunLock
 from lumen.attachments import AttachmentRef, AttachmentStore
+from lumen.collaboration import CollaborationMode, PlanReviewStatus, SessionSettingsState
 from lumen.config import LimitsConfig, ModelSettingsConfig, PermissionsConfig
 from lumen.context import ArtifactStore
-from lumen.events import ApprovalRequest
-from lumen.plan import EvidenceKind, EvidenceReceipt, PlanState, PlanStep, StepStatus
-from lumen.runtime import AgentRuntime
+from lumen.events import ApprovalRequest, RunEvent
+from lumen.plan import EvidenceKind, EvidenceReceipt, PlanLifecycle, PlanState, PlanStep, StepStatus
+from lumen.run_coordinator import RunInput
+from lumen.runtime import AgentRuntime, ToolApproval
 from lumen.sessions import SessionRepository
 from lumen.skills import Skill
 from lumen.tools.gateway import CapabilityGateway
 from lumen.tools.registry import PermissionPolicy, ToolRegistry
 from lumen.tools.spec import EffectKind, Risk, ToolSpec
 from lumen.trust import ApprovalRuleStore
+from lumen.ui.host_session import HostSessionAdapter
 from lumen.work_products import EffectStatus, TaskWorkspace
 from lumen.work_products.types import EffectReceipt
 
@@ -1009,6 +1012,233 @@ async def test_plan_review_is_revisioned_persistent_and_idempotent(tmp_path: Pat
     assert execution_events[0].type == "plan.review_resolved"
     assert execution_events[-1].type == "run.completed"
     assert restored.plan.approved_revision == restored.plan.revision
+
+
+async def test_plan_always_allow_cannot_bypass_read_only_execution_guard(tmp_path: Path) -> None:
+    executions: list[str] = []
+
+    def write_note(content: str) -> str:
+        """Write one note."""
+        executions.append(content)
+        return content
+
+    async def stream(messages: list[ModelMessage], _info: AgentInfo):  # type: ignore[no-untyped-def]
+        returned = [
+            part.tool_name for message in messages if isinstance(message, ModelRequest)
+            for part in message.parts if isinstance(part, ToolReturnPart)
+        ]
+        if "set_plan" not in returned:
+            yield {0: DeltaToolCall(
+                "set_plan",
+                '{"goal":"Stay read-only","steps":[{"id":"one","title":"Inspect"}]}',
+                tool_call_id="plan-create",
+            )}
+        elif "write_note" not in returned:
+            yield {0: DeltaToolCall(
+                "write_note", '{"content":"must-not-run"}', tool_call_id="write-one",
+            )}
+        else:
+            yield "Plan ready."
+
+    registry = ToolRegistry(tmp_path)
+    registry.add(ToolSpec(write_note, risk=Risk.WRITE, effect_kind=EffectKind.MUTATION), origin="test")
+    gateway = CapabilityGateway(
+        registry,
+        PermissionPolicy(PermissionsConfig(always_allow=["write_note"])),
+        default_timeout=5,
+    )
+    resources = LocalResources(tmp_path, AgentRuntime(
+        model=FunctionModel(stream_function=stream), tools=[], toolsets=[], instructions="help",
+        limits=LimitsConfig(), tool_metadata={"write_note": {"origin": "test", "risk": "write"}},
+        capability_gateway=gateway,
+    ))
+    resources.capability_gateway = gateway
+    host = WorkspaceHost(resources)  # type: ignore[arg-type]
+    await host.open()
+    try:
+        session = await host.dispatch(CreateSession())
+        await host.dispatch(SetCollaborationMode(session.session_id, "plan"))
+        started = await host.dispatch(StartRun(session.session_id, "plan only", "plan-guard"))
+        events = [event async for event in host.subscribe(started.run_id)]
+    finally:
+        await host.close()
+
+    assert executions == []
+    finished = next(
+        event for event in events
+        if event.type == "tool.finished" and event.data["name"] == "write_note"
+    )
+    assert finished.data["is_error"] is True
+    assert "monotonic guard" in finished.data["result"]
+
+
+async def test_plan_review_turn_is_terminal_and_recovers_settings_projection(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    phase = 0
+
+    async def stream(_messages: list[ModelMessage], _info: AgentInfo):  # type: ignore[no-untyped-def]
+        nonlocal phase
+        if phase == 0:
+            phase = 1
+            yield {0: DeltaToolCall(
+                "set_plan",
+                '{"goal":"Recover review","steps":[{"id":"one","title":"Implement"}]}',
+                tool_call_id="plan-create",
+            )}
+        else:
+            yield "Plan ready."
+
+    resources = LocalResources(tmp_path, AgentRuntime(
+        model=FunctionModel(stream_function=stream), tools=[], toolsets=[], instructions="help",
+        limits=LimitsConfig(), tool_metadata={},
+    ))
+    original_append = resources.session_repository.append_session_settings
+
+    def fail_review_projection(session_id: str, state: SessionSettingsState) -> None:
+        if state.plan_review_status is PlanReviewStatus.REVIEW_PENDING:
+            raise OSError("synthetic settings projection failure")
+        original_append(session_id, state)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(resources.session_repository, "append_session_settings", fail_review_projection)
+    host = WorkspaceHost(resources)  # type: ignore[arg-type]
+    await host.open()
+    try:
+        session = await host.dispatch(CreateSession())
+        await host.dispatch(SetCollaborationMode(session.session_id, "plan"))
+        started = await host.dispatch(StartRun(session.session_id, "plan this", "planning"))
+        events = [event async for event in host.subscribe(started.run_id)]
+    finally:
+        await host.close()
+
+    assert events[-1].type == "run.completed"
+    loaded = resources.session_repository.load(session.session_id, revalidate=True)
+    assert loaded.turns[-1].status == "review_pending"
+    assert loaded.plan.lifecycle is PlanLifecycle.REVIEW_PENDING
+    cold_host = WorkspaceHost(resources)  # type: ignore[arg-type]
+    await cold_host.open()
+    try:
+        snapshot = await cold_host.snapshot(session.session_id)
+        assert snapshot.plan_review_status == "review_pending"
+        assert snapshot.plan["lifecycle"] == "review_pending"
+    finally:
+        await cold_host.close()
+
+
+async def test_cold_plan_approval_recovers_interrupted_execution_identity(tmp_path: Path) -> None:
+    phase = 0
+
+    async def stream(_messages: list[ModelMessage], _info: AgentInfo):  # type: ignore[no-untyped-def]
+        nonlocal phase
+        if phase == 0:
+            phase = 1
+            yield {0: DeltaToolCall(
+                "set_plan",
+                '{"goal":"Resume execution","steps":[{"id":"one","title":"Implement"}]}',
+                tool_call_id="plan-create",
+            )}
+        elif phase == 1:
+            phase = 2
+            yield "Plan ready."
+        elif phase == 2:
+            phase = 3
+            yield {0: DeltaToolCall(
+                "update_step", '{"step_id":"one","status":"completed"}', tool_call_id="step-done",
+            )}
+        else:
+            yield "Executed."
+
+    resources = LocalResources(tmp_path, AgentRuntime(
+        model=FunctionModel(stream_function=stream), tools=[], toolsets=[], instructions="help",
+        limits=LimitsConfig(), tool_metadata={},
+    ))
+    host = WorkspaceHost(resources)  # type: ignore[arg-type]
+    await host.open()
+    try:
+        session = await host.dispatch(CreateSession())
+        await host.dispatch(SetCollaborationMode(session.session_id, "plan"))
+        planning = await host.dispatch(StartRun(session.session_id, "plan this", "planning"))
+        _ = [event async for event in host.subscribe(planning.run_id)]
+        loaded = resources.session_repository.load(session.session_id)
+        interrupted_id = "interrupted-execution"
+        settings = loaded.settings.model_copy(update={
+            "collaboration_mode": CollaborationMode.DEFAULT,
+            "plan_review_status": PlanReviewStatus.APPROVED_WAITING_TO_EXECUTE,
+            "review_client_request_id": "approve-recovery",
+            "execution_run_id": interrupted_id,
+        })
+        resources.session_repository.append_session_settings(session.session_id, settings)
+        approved_plan = loaded.plan.model_copy(update={
+            "approved_revision": loaded.plan.revision,
+            "lifecycle": PlanLifecycle.APPROVED,
+        })
+        resources.session_repository.append_plan_state(session.session_id, approved_plan)
+        resources.session_repository.append_turn_started(
+            session.session_id,
+            user_input="Implement the approved plan.",
+            interaction_id=interrupted_id,
+            plan=approved_plan,
+        )
+    finally:
+        await host.close()
+
+    cold_host = WorkspaceHost(resources)  # type: ignore[arg-type]
+    await cold_host.open()
+    try:
+        recovered = await cold_host.dispatch(
+            ApprovePlan(session.session_id, loaded.plan.revision, "approve-recovery")
+        )
+        events = [event async for event in cold_host.subscribe(recovered.run_id)]
+    finally:
+        await cold_host.close()
+
+    assert recovered.run_id != interrupted_id
+    assert events[-1].type == "run.completed"
+    turns = resources.session_repository.load(session.session_id).turns
+    assert [(turn.interaction_id, turn.status) for turn in turns[-2:]] == [
+        (interrupted_id, "running"),
+        (recovered.run_id, "completed"),
+    ]
+
+
+async def test_tui_retry_uses_host_recovery_command(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    resources = LocalResources(tmp_path, _runtime("recovered"))
+    host = WorkspaceHost(resources)  # type: ignore[arg-type]
+    await host.open()
+    original_dispatch = host.dispatch
+    commands: list[object] = []
+
+    async def record_command(command: object) -> object:
+        commands.append(command)
+        return await original_dispatch(command)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(host, "dispatch", record_command)
+    adapter = HostSessionAdapter(host)
+    try:
+        created = await host.dispatch(CreateSession())
+        adapter.session_id = created.session_id
+
+        async def emit(_event: RunEvent) -> None:
+            return None
+
+        async def approve(_request: ApprovalRequest) -> ToolApproval:
+            raise AssertionError("no approval expected")
+
+        await adapter.run(RunInput("repeat me", "repeat me"), emit, approve)
+        outcome = await adapter.run(
+            RunInput("repeat me", "repeat me", is_retry=True), emit, approve,
+        )
+        assert outcome is not None and outcome.status == "completed"
+        assert isinstance(commands[-1], RetryRun)
+        turns = resources.session_repository.load(created.session_id).turns
+        assert [(turn.user_input, turn.status) for turn in turns] == [
+            ("repeat me", "completed"),
+            ("repeat me", "completed"),
+        ]
+    finally:
+        await host.close()
 
 
 async def test_workspace_host_cancel_is_persisted_and_idempotent(tmp_path: Path) -> None:

@@ -5,7 +5,7 @@
 
 ## 决策
 
-Lumen 使用 Host 生命周期内稳定的 `AgentOrchestrator` 作为多 Agent 控制面，以 Session v12 append-only records 作为持久状态权威。模型可调用的 spawn、message、follow-up、wait、interrupt、list、close 工具保持为薄 Adapter；`NativeAgentRuntimeFactory` 为每个 child 创建独立 `ContextEngine`、`PydanticAIModelDriver` 与唯一的 `LumenAgentLoop` Runtime。child Gateway 严格收窄父能力，writable child 的本地工具重绑定到独立 worktree，MCP 只复用父级连接 Adapter，不共享执行结果或幂等状态。v10 增加 Session 推理选择与 child 推理快照，v11 引入 `history_rewind`；v9 由 Realtime `live_session` record 引入，不改变 v8 Agent record 的语义。
+Lumen 使用 Host 生命周期内稳定的 `AgentOrchestrator` 作为多 Agent 控制面，以 Session v13 append-only records 作为持久状态权威。模型可调用的 spawn、message、follow-up、wait、interrupt、list、close 工具保持为薄 Adapter；`NativeAgentRuntimeFactory` 为每个 child 创建独立 `ContextEngine`、`PydanticAIModelDriver` 与唯一的 `LumenAgentLoop` Runtime。child Gateway 严格收窄父能力，writable child 的本地工具重绑定到独立 worktree，MCP 只复用父级连接 Adapter，不共享执行结果或幂等状态。v10 增加 Session 推理选择与 child 推理快照，v11 引入 `history_rewind`；v9 由 Realtime `live_session` record 引入，不改变 v8 Agent record 的语义。
 
 child 的非自记录 Effect 使用同一 receipt ID 从 prepared 更新到结果；dispatch 后失败保留
 `reconciliation_required`，不能由最终正文掩盖。worktree 只为 `completed` execution 执行

@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+from collections import Counter
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 from pydantic_ai.messages import ModelMessage
 
@@ -24,7 +25,7 @@ from lumen.events import (
 from lumen.execution import BackgroundExecution
 from lumen.interactive_queue import QueuedMessage, QueueMode
 from lumen.io import run_io
-from lumen.plan import PlanState
+from lumen.plan import PlanLifecycle, PlanState
 from lumen.runtime import (
     AgentRuntime,
     ApprovalBatchHandler,
@@ -105,6 +106,21 @@ class RunCoordinator:
     def resume(self, session_id: str) -> CoordinatorState:
         loaded = self._repository.load(session_id)
         summary = loaded.latest_compaction_summary
+        recovery_receipts = list(loaded.turns[-1].recovery_receipts) if loaded.turns else []
+        if loaded.turns:
+            interaction_id = loaded.turns[-1].interaction_id
+            persisted = Counter(
+                str(receipt.get("signature")) for receipt in recovery_receipts
+            )
+            for effect in loaded.work_state.effects:
+                receipt = effect.recovery_receipt
+                if effect.interaction_id != interaction_id or receipt is None:
+                    continue
+                signature = str(receipt.get("signature"))
+                if persisted[signature] > 0:
+                    persisted[signature] -= 1
+                else:
+                    recovery_receipts.append(receipt)
         self._state = CoordinatorState(
             session=loaded.metadata,
             history=list(loaded.history),
@@ -127,7 +143,7 @@ class RunCoordinator:
                 else recoverable_orphaned_input(loaded)
             ),
             last_attachments=(tuple(loaded.turns[-1].attachments) if loaded.turns else ()),
-            last_recovery_receipts=(tuple(loaded.turns[-1].recovery_receipts) if loaded.turns else ()),
+            last_recovery_receipts=tuple(recovery_receipts),
         )
         return self._state
 
@@ -361,6 +377,23 @@ class RunCoordinator:
                 "runtime outcome status does not match its terminal event: "
                 f"{outcome.status}, {type(terminal_event).__name__}"
             )
+        if completion_policy is not None and completion_policy.require_reviewable_plan:
+            if outcome.status == "completed" and outcome.plan.is_reviewable():
+                outcome = replace(
+                    outcome,
+                    status="review_pending",
+                    plan=outcome.plan.model_copy(
+                        update={
+                            "lifecycle": PlanLifecycle.REVIEW_PENDING,
+                            "state_version": outcome.plan.state_version + 1,
+                        }
+                    ),
+                )
+            elif outcome.status == "completed":
+                terminal_event = RunFailed(
+                    "plan_invalid: plan mode requires a non-empty goal and pending steps"
+                )
+                outcome = replace(outcome, status="failed")
         durable_timeline_events = timeline_with_terminal(terminal_event)
 
         summary = state.compaction_summary

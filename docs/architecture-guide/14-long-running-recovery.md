@@ -119,9 +119,10 @@ Coordinator 持久化后发布；Session 检查 `completed_model_steps` 数量�
 状态：Accepted（2026-10-09）。保留 Loop、Coordinator、Host、TaskWorkspace 的单一权威，
 不保存 Loop program counter，不提供透明崩溃接管。
 
-Session v12 的完整批次 checkpoint 在下一模型请求前 fsync；同一 interaction 仅一条恢复 turn，
-terminal 校验前缀后覆盖投影。重启显示 interrupted，明确 retry 才续跑，已确认成功的精确 receipt
-继续按原契约复用。半截参数不能执行，部分并行工具只保留 Effect 证据，prepared 外部结果必须对账。
+Session v13 的完整批次 checkpoint 在下一模型请求前 fsync；同一 interaction 仅一条恢复 turn，
+terminal 校验前缀后覆盖投影。成功 Effect 同时保存恢复 receipt，重启后合并 checkpoint 之后的证据，
+每次 replay 最多消费一项。重启显示 interrupted，明确 retry 才续跑；缺少恢复证据的 Effect 禁止自动
+retry，不能重复外部副作用。半截参数不能执行，prepared 外部结果必须对账。
 同轮 compaction 仍只由 terminal 发布 durable parent，不把批次 marker 当作 summary parent。
 
 根 Host 的 `InspectSessionRepair` / `RepairSessionJournal` 提供显式尾行维修。普通加载始终严格。
@@ -144,7 +145,7 @@ TUI 检查点的 F 键及 Web 的“预览文件恢复”都要求单独确认�
 Session 冷加载继续严格物化全部消息；暂不增加第二套 catalog/offset 持久化投影。热列表与分页
 已满足同机目标，完整 load 的复制成本单独报告，后续根据真实 UI 冷加载预算决定索引。
 
-回归入口：`test_turn_checkpoint.py`（v1–v11、边界、重复、payload）、`test_process_recovery.py`
+回归入口：`test_turn_checkpoint.py`（v1–v12、边界、重复、payload）、`test_process_recovery.py`
 （管道同步的真实硬退出）、`test_turn_restore.py`（冲突、确认、取消、API）、
 `test_event_journal.py`（慢重连、断线、1000 run 回收）及 TUI/Web 的确认交互。
 诊断 schema v2 仅累加实际 attempt 和工具 execution，wall time/未知 cache 保留未知；退避字段为

@@ -68,13 +68,13 @@ discussion 可保留多个 ContextRef，不覆盖已有资源或目标引用；�
 | 定义、实例、checkpoint、投递、目标、资料集合／关系与讨论关联 | `automation/store.py`，SQLite 本地事务；严格 Pydantic 输入 |
 | 时间与排队 | `automation/engine.py`，单个 OS owner；调用 Host，不直接执行 Runtime |
 | Session、执行席位、固定 identity、工具管理命令 | `application/host.py`，WorkspaceCommand / CommandAcknowledged |
-| 运行与终态 | 原 RunCoordinator、AgentRuntime、LumenAgentLoop；Session v12 的 interaction_id 关联 occurrence |
+| 运行与终态 | 原 RunCoordinator、AgentRuntime、LumenAgentLoop；Session v13 的 interaction_id 关联 occurrence |
 | 来源权限与 Hook | 原 CapabilityGateway；派生受限快照读取能力，不能添加父能力集合以外的工具 |
 | 偏好 | MemoryManager；SQLite 自动化库只固定本次已确认偏好，不成为第二个偏好权威 |
 | Work Product 正文与修改 | TaskWorkspace、SessionWorkState；资源库只索引 canonical 引用 |
 
 控制面落在 `<sessions.directory>/assistant/<canonical-workspace-sha256-prefix>/state.sqlite3`，同目录有独立 ArtifactStore。
-助理库 schema v2；识别到完整 v1 布局后先用 SQLite backup 保存受限权限备份，再在事务中增加关系、资源版本、活动索引与 admission 表。失败不提升版本；未知版本和不完整布局不自动重建。Session v12 和配置 v2 不变。
+助理库 schema v2；识别到完整 v1 布局后先用 SQLite backup 保存受限权限备份，再在事务中增加关系、资源版本、活动索引与 admission 表。失败不提升版本；未知版本和不完整布局不自动重建。Session v13 和配置 v2 不变。
 默认 Session 目录仍是 `<workspace>/.lumen/sessions/`。即使多个工作区共用自定义 Session 目录，助理状态也按 canonical workspace 分离。
 只在默认的工作区目录索引旧 Session；共享自定义目录只索引本 Host 显式登记的 Session，避免自动收录其他工作区产物。
 数据库损坏、缺失关键表、未知无版本布局、版本不支持或结算故障会停止新执行并显示存储错误，不重建覆盖数据库，也不阻断普通对话。

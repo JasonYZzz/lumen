@@ -1269,6 +1269,30 @@ class WorkspaceHost:
                             "resolve interrupted run effects before retrying",
                             details={"issues": issues},
                         )
+                available = Counter(
+                    str(receipt.get("signature")) for receipt in state.last_recovery_receipts
+                )
+                interaction_id = loaded.turns[-1].interaction_id
+                for effect in loaded.work_state.effects:
+                    if (
+                        effect.interaction_id != interaction_id
+                        or effect.status is not EffectStatus.VERIFIED
+                        or effect.effect_kind is EffectKind.OBSERVE
+                    ):
+                        continue
+                    signature = (
+                        str(effect.recovery_receipt.get("signature"))
+                        if effect.recovery_receipt is not None
+                        else None
+                    )
+                    if signature is None or available[signature] <= 0:
+                        raise InvalidStateError(
+                            "resolve interrupted run effects before retrying",
+                            details={"issues": [
+                                f"effect {effect.id} ({effect.operation}) lacks durable replay evidence",
+                            ]},
+                        )
+                    available[signature] -= 1
             return await self._start_run(
                 StartRun(
                     command.session_id,
@@ -1761,12 +1785,33 @@ class WorkspaceHost:
             raise InvalidStateError("child runs are disabled")
         return manager
 
+    @staticmethod
+    def _execution_settings(loaded: SessionData) -> SessionSettingsState:
+        if (
+            loaded.turns
+            and loaded.turns[-1].status == "review_pending"
+            and loaded.settings.plan_review_status not in {
+                PlanReviewStatus.APPROVED_WAITING_TO_EXECUTE,
+                PlanReviewStatus.EXECUTING,
+            }
+        ):
+            return loaded.settings.model_copy(
+                update={
+                    "collaboration_mode": CollaborationMode.PLAN,
+                    "plan_review_status": PlanReviewStatus.REVIEW_PENDING,
+                    "reviewed_revision": loaded.plan.revision,
+                    "review_client_request_id": None,
+                    "execution_run_id": None,
+                }
+            )
+        return loaded.settings
+
     def _actor(self, session_id: str) -> _SessionActor:
         # Another Host can append a tombstone after this actor was cached.
         # The journal remains authoritative for every public access.
         actor = self._sessions.get(session_id)
         if actor is not None:
-            actor.settings = self._managed_session(session_id).settings
+            actor.settings = self._execution_settings(self._managed_session(session_id))
             return actor
         loaded = self._managed_session(session_id)
         try:
@@ -1782,7 +1827,7 @@ class WorkspaceHost:
             with sandbox_scope(loaded.settings.sandbox_mode):
                 task_workspace.bind_session(session_id)
             loaded = self.resources.session_repository.load(session_id)
-        actor = _SessionActor(coordinator, state.session, loaded.settings)
+        actor = _SessionActor(coordinator, state.session, self._execution_settings(loaded))
         # Cross-session "always" rules carry over from previous sessions; the
         # project-scoped store is the persistence authority for them.
         actor.approval_keys.update(self._persistent_approval_keys)
@@ -1828,6 +1873,7 @@ class WorkspaceHost:
         completion_revision: int | None = None,
         automation: Occurrence | None = None,
         advancing_goal: tuple[str, str] | None = None,
+        run_id: str | None = None,
     ) -> RunStartedResult:
         model_prompt = model_prompt if model_prompt is not None else command.model_prompt
         attachments = self._validated_attachments(command.attachments)
@@ -1901,7 +1947,7 @@ class WorkspaceHost:
                 else:
                     state = actor.coordinator.resume(command.session_id)
                     actor.metadata = state.session
-                    actor.settings = loaded.settings
+                    actor.settings = self._execution_settings(loaded)
                 selection = self._reasoning_for(actor)
                 if selection.requested is not None:
                     selection = self._resolve_reasoning(selection.requested, source=selection.source)
@@ -1910,7 +1956,9 @@ class WorkspaceHost:
                     runtime.configure_reasoning(selection)
                 if actor.settings.reasoning.get(self._reasoning_key()) != selection:
                     self._store_reasoning(actor, selection)
-                run_id = automation.interaction_id if automation is not None else str(uuid4())
+                run_id = run_id or (
+                    automation.interaction_id if automation is not None else str(uuid4())
+                )
                 if refs and automation is None:
                     candidate = run_id
                     run_id = await run_io(
@@ -3124,38 +3172,30 @@ class WorkspaceHost:
             if (
                 outcome is not None
                 and actor.settings.collaboration_mode is CollaborationMode.PLAN
-                and outcome.status == "completed"
+                and outcome.status == "review_pending"
             ):
-                if outcome.plan.is_reviewable():
-                    review_plan = outcome.plan.model_copy(
-                        update={
-                            "lifecycle": PlanLifecycle.REVIEW_PENDING,
-                            "state_version": outcome.plan.state_version + 1,
-                        }
-                    )
-                    actor.coordinator.replace_plan(review_plan)
-                    self.resources.session_repository.append_plan_state(actor.metadata.id, review_plan)
-                    actor.settings = actor.settings.model_copy(
-                        update={
-                            "plan_review_status": PlanReviewStatus.REVIEW_PENDING,
-                            "reviewed_revision": review_plan.revision,
-                            "review_client_request_id": None,
-                            "execution_run_id": None,
-                        }
-                    )
+                review_plan = outcome.plan
+                actor.settings = actor.settings.model_copy(
+                    update={
+                        "plan_review_status": PlanReviewStatus.REVIEW_PENDING,
+                        "reviewed_revision": review_plan.revision,
+                        "review_client_request_id": None,
+                        "execution_run_id": None,
+                    }
+                )
+                try:
                     self.resources.session_repository.append_session_settings(
                         actor.metadata.id, actor.settings
                     )
-                    await emit(PlanReviewPending(review_plan, review_plan.revision))
-                    if deferred_completion is not None:
-                        terminal_seen = True
-                        terminal_event = deferred_completion
-                    record.status = "review_pending"
-                else:
-                    await emit(
-                        RunFailed("plan_invalid: plan mode requires a non-empty goal and pending steps")
+                except Exception as error:
+                    self.resources.warnings.append(
+                        "Plan review settings projection failed; "
+                        f"the durable turn remains authoritative: {error}"
                     )
-                    record.status = "failed"
+                await emit(PlanReviewPending(review_plan, review_plan.revision))
+                if deferred_completion is not None:
+                    terminal_seen = True
+                    terminal_event = deferred_completion
             elif (
                 outcome is not None
                 and actor.settings.plan_review_status is PlanReviewStatus.EXECUTING
@@ -3616,14 +3656,27 @@ class WorkspaceHost:
 
     async def _approve_plan(self, command: ApprovePlan) -> RunStartedResult:
         actor = self._actor(command.session_id)
+        execution_run_id = actor.settings.execution_run_id
+        retry_interrupted = False
         if actor.settings.review_client_request_id == command.client_request_id:
-            if actor.settings.execution_run_id is not None:
-                existing = self._runs.get(actor.settings.execution_run_id)
-                return RunStartedResult(
-                    actor.settings.execution_run_id,
-                    command.session_id,
-                    existing.status if existing is not None else "running",
+            if execution_run_id is not None:
+                existing = self._runs.get(execution_run_id)
+                if existing is not None:
+                    return RunStartedResult(execution_run_id, command.session_id, existing.status)
+                prior_turn = next(
+                    (
+                        turn for turn in self.resources.session_repository.load(command.session_id).turns
+                        if turn.interaction_id == execution_run_id
+                    ),
+                    None,
                 )
+                if prior_turn is not None and prior_turn.status != "running":
+                    return RunStartedResult(
+                        execution_run_id, command.session_id, prior_turn.status,
+                    )
+                retry_interrupted = prior_turn is not None
+                if retry_interrupted:
+                    execution_run_id = str(uuid4())
             if actor.settings.plan_review_status is not PlanReviewStatus.APPROVED_WAITING_TO_EXECUTE:
                 raise InvalidStateError("plan review request was already resolved")
         if (
@@ -3643,11 +3696,13 @@ class WorkspaceHost:
             or actor.coordinator.state.plan.revision != command.revision
         ):
             raise InvalidStateError("plan revision is not pending review")
+        execution_run_id = execution_run_id or str(uuid4())
         actor.settings = actor.settings.model_copy(
             update={
                 "collaboration_mode": CollaborationMode.DEFAULT,
                 "plan_review_status": PlanReviewStatus.APPROVED_WAITING_TO_EXECUTE,
                 "review_client_request_id": command.client_request_id,
+                "execution_run_id": execution_run_id,
             }
         )
         self.resources.session_repository.append_session_settings(command.session_id, actor.settings)
@@ -3667,8 +3722,10 @@ class WorkspaceHost:
         started = await self._start_run(
             StartRun(command.session_id, "Implement the approved plan.", command.client_request_id),
             model_prompt=prompt,
+            is_retry=retry_interrupted,
             initial_events=(PlanReviewResolved(command.revision, True),),
             completion_revision=command.revision,
+            run_id=execution_run_id,
         )
         actor.settings = actor.settings.model_copy(
             update={

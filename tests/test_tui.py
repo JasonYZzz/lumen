@@ -757,18 +757,20 @@ async def test_scrolling_restored_timeline_to_top_loads_older_page_without_jump(
         assert app.timeline_store.next_cursor == 5
         anchor = messages.children[0]
         messages.scroll_home(animate=False)
-        await pilot.pause(0.01)
+        await pilot.pause()
         anchor_y = anchor.region.y
         await app._load_older_if_at_top()  # type: ignore[attr-defined]
-        await pilot.pause()
 
+        async with asyncio.timeout(1):
+            while abs(anchor.region.y - anchor_y) > 1:
+                await pilot.pause(0.01)
         assert app.timeline_store.next_cursor is None
         assert anchor in messages.children
-        assert abs(anchor.region.y - anchor_y) <= 1
         assert not app._follow_tail  # type: ignore[attr-defined]
         messages.refresh(layout=True)
-        await pilot.pause()
-        assert abs(anchor.region.y - anchor_y) <= 1
+        async with asyncio.timeout(1):
+            while abs(anchor.region.y - anchor_y) > 1:
+                await pilot.pause(0.01)
 
 
 # ---------------------------------------------------------------------------

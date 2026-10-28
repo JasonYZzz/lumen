@@ -129,7 +129,7 @@ ApprovalHandler = Callable[[ApprovalRequest], Awaitable[CapabilityApproval]]
 CapabilityBeforeHandler = Callable[[CapabilityInvocation], Awaitable[CapabilityBeforeDecision]]
 CapabilityAfterHandler = Callable[[CapabilityInvocation, CapabilityResult], Awaitable[str | None]]
 CapabilityReplayHandler = Callable[[CapabilityInvocation], CapabilityReplay | None]
-CapabilitySuccessHandler = Callable[[CapabilityInvocation, object], None]
+CapabilitySuccessHandler = Callable[[CapabilityInvocation, object], dict[str, object] | None]
 EffectRecorder = Callable[..., object]
 ToolGuard = Callable[[ToolExecutionIdentity], ToolGuardDecision]
 
@@ -259,6 +259,7 @@ class CapabilityGateway:
         *,
         replay: CapabilityReplayHandler | None = None,
         record_success: CapabilitySuccessHandler | None = None,
+        guards: Sequence[ToolGuard] = (),
     ) -> CapabilityGateway:
         """Create a run-local catalog overlay without a second policy authority."""
 
@@ -267,7 +268,7 @@ class CapabilityGateway:
         derived._policy = self._policy
         derived._default_timeout = self._default_timeout
         derived._effect_recorder = self._effect_recorder
-        derived._guards = self._guards
+        derived._guards = (*self._guards, *guards)
         derived._before_invoke = self._before_invoke
         derived._after_invoke = self._after_invoke
         derived._replay = replay if replay is not None else self._replay
@@ -648,10 +649,16 @@ class CapabilityGateway:
         except Exception:
             presentation = None
 
-        if record_recovery and self._record_success is not None:
+        recovery_receipt = (
             self._record_success(invocation, canonical)
+            if record_recovery and self._record_success is not None
+            else None
+        )
         receipt_id = (
-            await self._record_effect(capability, invocation.name, True, "succeeded", receipt_id=receipt_id)
+            await self._record_effect(
+                capability, invocation.name, True, "succeeded",
+                receipt_id=receipt_id, recovery_receipt=recovery_receipt,
+            )
             if record_effect
             else None
         )
@@ -736,6 +743,7 @@ class CapabilityGateway:
         summary: str,
         *,
         receipt_id: str | None = None,
+        recovery_receipt: dict[str, object] | None = None,
     ) -> str | None:
         if (
             self._effect_recorder is None
@@ -744,6 +752,8 @@ class CapabilityGateway:
         ):
             return None
         kwargs: dict[str, object] = {"receipt_id": receipt_id} if receipt_id is not None else {}
+        if recovery_receipt is not None:
+            kwargs["recovery_receipt"] = recovery_receipt
         receipt = self._effect_recorder(
             tool_name=name,
             effect_kind=capability.descriptor.effect_kind,

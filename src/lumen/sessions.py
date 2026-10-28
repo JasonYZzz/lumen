@@ -41,7 +41,7 @@ from lumen.live.types import LiveConnectionState, LiveSessionState, SessionLiveS
 from lumen.plan import PlanState
 from lumen.work_products import EffectReceipt, SessionWorkState
 
-SCHEMA_VERSION = 12
+SCHEMA_VERSION = 13
 SUPPORTED_SCHEMA_VERSIONS = tuple(range(1, SCHEMA_VERSION + 1))
 SCHEMA_UPGRADE_TARGETS = tuple(range(5, SCHEMA_VERSION + 1))
 SESSION_RECORD_TYPES = (
@@ -596,6 +596,8 @@ class SessionRepository:
             record["partial_text"] = partial_text
         if retryable:
             record["retryable"] = True
+        if status == "review_pending":
+            self._ensure_schema(path, 13)
         if checkpoint is not None:
             record["type"] = "turn_checkpoint"
             record["checkpoint"] = checkpoint.model_dump(mode="json")
@@ -697,7 +699,14 @@ class SessionRepository:
         path = self._path(session_id)
         if not path.is_file():
             raise FileNotFoundError(f"session not found: {session_id}")
-        self._ensure_schema(path, 12 if any(item.interaction_id for item in state.effects) else 7)
+        self._ensure_schema(
+            path,
+            13
+            if any(item.recovery_receipt is not None for item in state.effects)
+            else 12
+            if any(item.interaction_id for item in state.effects)
+            else 7,
+        )
         self._append(
             path,
             {
@@ -713,7 +722,9 @@ class SessionRepository:
         path = self._path(session_id)
         if not path.is_file():
             raise FileNotFoundError(f"session not found: {session_id}")
-        self._ensure_schema(path, 12 if effect.interaction_id else 7)
+        self._ensure_schema(
+            path, 13 if effect.recovery_receipt is not None else 12 if effect.interaction_id else 7,
+        )
         self._append(
             path,
             {
@@ -775,7 +786,10 @@ class SessionRepository:
         path = self._path(session_id)
         if not path.is_file():
             raise FileNotFoundError(f"session not found: {session_id}")
-        self._ensure_schema(path, 8)
+        self._ensure_schema(
+            path,
+            13 if any(item.recovery_receipt is not None for item in result.effect_receipts) else 8,
+        )
         self._append(
             path,
             {
@@ -893,7 +907,7 @@ class SessionRepository:
         with self._projection_lock:
             turns = tuple(self._load_projection(session_id).turns)
         for turn_index, turn in enumerate(turns):
-            if turn.status not in {"completed", "waiting_for_user"}:
+            if turn.status not in {"completed", "waiting_for_user", "review_pending"}:
                 continue
             compaction = turn.compaction
             if compaction is not None:
@@ -1156,6 +1170,12 @@ class SessionRepository:
                     raise SessionCorruptError(
                         f"effect turn ownership requires schema v12 at line {line_number}"
                     )
+                if effective_schema < 13 and any(
+                    item.recovery_receipt is not None for item in work_state.effects
+                ):
+                    raise SessionCorruptError(
+                        f"effect recovery evidence requires schema v13 at line {line_number}"
+                    )
                 continue
             if record.get("type") == "effect":
                 if effective_schema < 7:
@@ -1169,6 +1189,10 @@ class SessionRepository:
                 if effective_schema < 12 and effect.interaction_id is not None:
                     raise SessionCorruptError(
                         f"effect turn ownership requires schema v12 at line {line_number}"
+                    )
+                if effective_schema < 13 and effect.recovery_receipt is not None:
+                    raise SessionCorruptError(
+                        f"effect recovery evidence requires schema v13 at line {line_number}"
                     )
                 work_state = work_state.upsert_effect(effect)
                 continue
@@ -1218,6 +1242,12 @@ class SessionRepository:
                     result = AgentResult.model_validate(record.get("result"))
                 except ValueError as error:
                     raise SessionCorruptError(f"invalid agent_result at line {line_number}") from error
+                if effective_schema < 13 and any(
+                    item.recovery_receipt is not None for item in result.effect_receipts
+                ):
+                    raise SessionCorruptError(
+                        f"Agent recovery evidence requires schema v13 at line {line_number}"
+                    )
                 existing = agent_state.get(result.agent_id)
                 if existing is None:
                     raise SessionCorruptError(f"agent_result references unknown agent at line {line_number}")
@@ -1322,6 +1352,10 @@ class SessionRepository:
                 except (ValueError, ArtifactStoreError) as error:
                     raise SessionCorruptError(f"invalid turn_checkpoint at line {line_number}") from error
             turn = _parse_turn(record, line_number=line_number)
+            if effective_schema < 13 and turn.status == "review_pending":
+                raise SessionCorruptError(
+                    f"review_pending turn requires schema v13 at line {line_number}"
+                )
             messages = turn.messages
             if is_checkpoint:
                 position = running_turn_positions.get(turn.interaction_id or "")
@@ -1392,7 +1426,7 @@ class SessionRepository:
                 and item.get("message_count") == len(messages)
                 for item in turn.diagnostics
             ) and not validate_active_history(messages)
-            if turn.status in {"completed", "waiting_for_user"} or (
+            if turn.status in {"completed", "waiting_for_user", "review_pending"} or (
                 turn.status in {"failed", "cancelled"} and completed_steps
             ):
                 covered_messages = 0
@@ -1644,7 +1678,7 @@ def _project_turn_history(
             and item.get("message_count") == len(messages)
             for item in turn.diagnostics
         ) and not validate_active_history(messages)
-        if turn.status not in {"completed", "waiting_for_user"} and not (
+        if turn.status not in {"completed", "waiting_for_user", "review_pending"} and not (
             (turn.status in {"failed", "cancelled"} or turn.checkpoint is not None) and completed_steps
         ):
             continue
