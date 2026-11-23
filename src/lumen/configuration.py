@@ -14,6 +14,7 @@ import yaml
 from lumen.config import AgentSection, ConfigLoadError, ModelSettingsConfig
 from lumen.config_resolver import ConfigResolution, ConfigResolver
 from lumen.models import native_web_search_enabled
+from lumen.skills import disabled_skill_sources
 
 _MANAGED_HEADER = "# Managed by Lumen Web settings. Edit through the UI or remove this file.\n"
 _MODEL_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$")
@@ -193,6 +194,19 @@ class WorkspaceConfiguration:
         if current.config.agent.default_model_name() == name:
             agent["default_model"] = remaining[0]
         return self._validate_write_and_snapshot(raw)
+
+    def set_skill_enabled(self, expected_revision: str, path: str, enabled: bool) -> list[str]:
+        self._require_editable(expected_revision)
+        paths = disabled_skill_sources(self.workspace, self.resolved_agent().disabled_skill_paths)
+        if enabled:
+            paths.discard(Path(path))
+        else:
+            paths.add(Path(path))
+        values = sorted(str(source) for source in paths)
+        raw = self._read_managed()
+        self._mapping(raw, "agent")["disabled_skill_paths"] = values
+        self._validate_write_and_snapshot(raw)
+        return values
 
     def set_mcp_server_enabled(
         self,

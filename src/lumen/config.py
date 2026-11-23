@@ -233,6 +233,8 @@ class AgentSection(StrictModel):
     #: catalog is injected through the dynamic runtime-context zone. Set to
     #: ``false`` to disable skill discovery entirely.
     skills_enabled: bool = True
+    shared_skills_enabled: bool = False
+    disabled_skill_paths: list[str] = Field(default_factory=list)
     #: Ship builtin skills with the wheel but keep activation opt-in so
     #: existing installations retain their exact discovered catalog.
     builtin_skills_enabled: bool = False

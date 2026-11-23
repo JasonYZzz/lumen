@@ -1,7 +1,0 @@
-.page { min-height: 100dvh; padding: 28px max(20px, 5vw); background: var(--page); color: var(--ink); }
-.page header { display: flex; justify-content: space-between; gap: 16px; font-size: 13px; }
-.page a { color: inherit; text-underline-offset: 4px; }
-.preview { display: grid; justify-items: center; gap: 24px; margin: 64px auto 0; max-width: 560px; }
-.page footer { display: flex; justify-content: center; flex-wrap: wrap; align-items: center; gap: 16px; padding: 28px 0; }
-.page footer button { min-height: 44px; padding: 8px 16px; border: 1px solid var(--line-strong); border-radius: 8px; background: transparent; color: inherit; }
-.page footer button[aria-pressed='true'] { background: var(--surface-soft); color: var(--ink); }

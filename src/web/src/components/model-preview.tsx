@@ -4,12 +4,12 @@ import { OrbitControls } from '@react-three/drei'
 import { useCallback, useEffect, useRef, useState, type ComponentRef } from 'react'
 import { Box3, Group, Vector3, type Object3D } from 'three'
 import { parseModel, disposeModel } from '@/lib/three-model'
-import { useMascotVisibility } from './mascot/mascot-visibility'
+import { useSceneVisibility } from './use-scene-visibility'
 import { SceneCanvas } from './scene-canvas'
 
 export function ModelPreview({ buffer }: { buffer: ArrayBuffer }) {
   const stage = useRef<HTMLDivElement>(null), controls = useRef<ComponentRef<typeof OrbitControls>>(null)
-  const visible = useMascotVisibility(stage)
+  const visible = useSceneVisibility(stage)
   const [model, setModel] = useState<Object3D | null>(null)
   const [error, setError] = useState('')
   const [attempt, setAttempt] = useState(0)

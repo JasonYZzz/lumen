@@ -274,7 +274,7 @@ def _stop_web(workspace: Path, *, timeout: float = 5.0) -> bool:
 def _ensure_project_trust(resolver: ConfigResolver, workspace: Path) -> bool:
     project_sources = resolver.project_sources()
     has_skills = resolver.has_project_skills()
-    if resolver.exclusive or (not project_sources and not has_skills):
+    if not project_sources and not has_skills:
         return True
 
     store = TrustStore()
@@ -283,7 +283,8 @@ def _ensure_project_trust(resolver: ConfigResolver, workspace: Path) -> bool:
 
     material = [str(source.path) for source in project_sources]
     if has_skills:
-        material.append(str(workspace / ".lumen" / "skills"))
+        material.extend(str(workspace / root) for root in (".lumen/skills", ".agents/skills")
+                        if (workspace / root).is_dir())
     listed = "\n".join(f"  - {item}" for item in material)
     if not sys.stdin.isatty():
         raise ConfigLoadError(
@@ -706,7 +707,7 @@ def trust_project(
 def _mcp_config(cwd: Path, config_path: Path | None) -> tuple[Path, AppConfig]:
     workspace = _workspace(cwd)
     resolver = ConfigResolver(workspace, explicit_path=config_path)
-    if not resolver.exclusive and (resolver.project_sources() or resolver.has_project_skills()):
+    if resolver.project_sources() or resolver.has_project_skills():
         if not TrustStore().is_trusted(workspace):
             raise ConfigLoadError(f"project is not trusted; run 'lumen trust --cwd {workspace}' first")
     return workspace, resolver.resolve(project_trusted=True).config

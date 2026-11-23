@@ -10,9 +10,12 @@ from pathlib import Path
 
 import httpx
 import pytest
+from fastapi.testclient import TestClient
 from pydantic_ai.messages import ModelMessage
 from pydantic_ai.models.function import AgentInfo, DeltaToolCall, FunctionModel
 
+from lumen.api import create_web_app
+from lumen.application import WorkspaceHost
 from lumen.config import load_config
 from lumen.context.artifacts import ArtifactStore
 from lumen.events import ApprovalRequest, RunEvent
@@ -23,6 +26,7 @@ from lumen.skill_install import SkillInstaller
 from lumen.skills import SkillLoader
 from lumen.tools.gateway import CapabilityApproval, CapabilityInvocation
 from lumen.work_products import EffectStatus, TaskWorkspace
+from lumen.work_products.directories import BundleFile, DirectoryBundle
 
 SHA = "a" * 40
 SKILL = (
@@ -112,6 +116,97 @@ async def test_repo_default_branch_complete_binary_install_idempotency_and_resto
     workspace.restore_work_product(result["work_product_id"], "missing")
     assert not await asyncio.to_thread(target.exists)
     assert not workspace.completion_blockers(session_id)
+
+
+@pytest.mark.parametrize("directory", [True, False])
+async def test_upload_preview_confirm_and_managed_removal(tmp_path: Path, directory: bool) -> None:
+    installer, workspace, session, _ = setup_installer(tmp_path, b"")
+    bundle = DirectoryBundle(files={"SKILL.md": BundleFile.from_bytes(SKILL)})
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w") as output:
+        output.writestr("SKILL.md", SKILL)
+    preview = await installer.preview(
+        session, "directory" if directory else "zip",
+        bundle.model_dump_json().encode() if directory else buffer.getvalue(), "project",
+    )
+    candidate, = preview["candidates"]
+    assert candidate["path"] == "." and candidate["installed_revision"] == "missing"
+    assert not (installer.workspace.root / ".lumen/skills/sample-skill").exists()
+    token = preview["preview"]
+    with pytest.raises(ValueError, match="expired"):
+        await installer.confirm("different-session", token, ".", "project", False)
+    with pytest.raises(ValueError, match="selection"):
+        await installer.confirm(session, token, ".", "user", False)
+    stale = await installer.preview(session, "directory", bundle.model_dump_json().encode(), "project")
+    installed = await installer.confirm(session, token, ".", "project", False)
+    assert await installer.confirm(session, token, ".", "project", False) == installed
+    with pytest.raises(ValueError, match="changed since preview"):
+        await installer.confirm(session, stale["preview"], ".", "project", True)
+    assert len(workspace.state_for(session).effects) == 1
+    target = Path(installed["path"])
+    skill = next(s for s in SkillLoader(installer.workspace.root).discover() if s.name == "sample-skill")
+    original = workspace.open_work_product(".lumen/skills/sample-skill", "directory")["current"]["revision"]
+    with pytest.raises(ValueError, match="requires confirmation"):
+        workspace.change_work_product(installed["work_product_id"], "whole", {"remove_install": original})
+    (target / "SKILL.md").write_bytes(SKILL + b"edit")
+    with pytest.raises(ValueError, match="locally modified"):
+        installer.remove(skill, bundle.revision)
+    (target / "SKILL.md").write_bytes(SKILL)
+    assert installer.remove(skill, bundle.revision)["status"] == "removed"
+    assert not await asyncio.to_thread(target.exists)
+    workspace.restore_work_product(installed["work_product_id"], original)
+    assert (target / "SKILL.md").read_bytes() == SKILL
+
+
+def test_web_import_uses_authenticated_host_and_refreshes_inventory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(Path, "home", lambda: tmp_path / "home")
+    config = tmp_path / ".lumen/agent.yaml"
+    config.parent.mkdir()
+    config.write_text("version: 2\nagent: {model: {id: test}}\ntools: {builtins: [install_skill]}\n")
+    from lumen.config_resolver import ConfigResolver
+
+    manager = ResourceManager(ConfigResolver(tmp_path).resolve().config, workspace=tmp_path)
+    app = create_web_app(WorkspaceHost(manager), launch_token="fixture-token", api_only=True)
+    body = DirectoryBundle(files={"SKILL.md": BundleFile.from_bytes(SKILL)}).encoded()
+    headers = {"Origin": "http://testserver"}
+    with TestClient(app, base_url="http://testserver") as client:
+        assert client.post("/api/v1/sessions", headers=headers).status_code == 401
+        client.get("/auth/exchange", params={"token": "fixture-token"})
+        session = client.post("/api/v1/sessions", headers=headers).json()["sessionId"]
+        url = f"/api/v1/sessions/{session}/skills"
+        response = client.post(f"{url}/preview?kind=directory", content=body, headers=headers)
+        assert response.status_code == 200, response.text
+        token = response.json()["preview"]
+        selection = {"preview": token, "path": ".", "scope": "project"}
+        assert client.post(f"{url}/confirm", json=selection, headers={"Origin": "http://elsewhere"}).is_error
+        result = client.post(f"{url}/confirm", json=selection, headers=headers)
+        assert result.json()["status"] == "installed", result.text
+        skill, = client.get("/api/v1/capabilities").json()["skills"]
+        revision = client.get("/api/v1/configuration").json()["revision"]
+        change = {"path": skill["path"], "action": "disable", "revision": revision}
+        changed = client.post(f"{url}/manage", json=change, headers=headers)
+        assert changed.is_success, changed.text
+        assert client.get("/api/v1/capabilities").json()["skills"][0]["status"] == "disabled"
+        client.patch(f"/api/v1/sessions/{session}/settings", headers=headers,
+                     json={"collaborationMode": "plan"})
+        assert client.post(f"{url}/confirm", json=selection, headers=headers).is_error
+
+
+async def test_quota_response_and_expired_preview_preserve_destination(tmp_path: Path) -> None:
+    installer, _, session, _ = setup_installer(tmp_path, b"")
+    installer.transport = httpx.MockTransport(lambda _: httpx.Response(
+        403, headers={"X-RateLimit-Remaining": "0", "Retry-After": "60"},
+    ))
+    with pytest.raises(ValueError, match="rate limit reached; retry after 60"):
+        await installer.preview(session, "github", b"org/repo", "project")
+    manifest = DirectoryBundle(files={"SKILL.md": BundleFile.from_bytes(SKILL)}).encoded()
+    token = (await installer.preview(session, "directory", manifest, "project"))["preview"]
+    installer.clear_previews()
+    with pytest.raises(ValueError, match="expired"):
+        await installer.confirm(session, token, ".", "project", False)
+    assert not (installer.workspace.root / ".lumen/skills/sample-skill").exists()
 
 
 async def test_ambiguous_collection_returns_paths_without_writing(tmp_path: Path) -> None:

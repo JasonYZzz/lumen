@@ -391,7 +391,15 @@ class ConfigResolver:
         )
 
     def has_project_skills(self) -> bool:
-        return not self.exclusive and (self.workspace / ".lumen" / "skills").is_dir()
+        if not self.exclusive and (self.workspace / ".lumen/skills").is_dir():
+            return True
+        if not (self.workspace / ".agents/skills").is_dir():
+            return False
+        if self.project_sources():
+            return True
+        return bool(self.discovered_sources()) and self.resolve(
+            project_trusted=False, resolve_environment=False,
+        ).config.agent.shared_skills_enabled
 
     def resolve(
         self,

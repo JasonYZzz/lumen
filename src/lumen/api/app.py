@@ -10,7 +10,7 @@ from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager, suppress
 from dataclasses import asdict
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, Literal, cast
 from urllib.parse import quote, urlencode
 from uuid import UUID
 
@@ -124,8 +124,10 @@ from .schemas import (
     AttachmentBody,
     ChildRunActionBody,
     ConfigurationRevisionBody,
+    ConfirmSkillBody,
     ControlBody,
     ForkSessionBody,
+    ManageSkillBody,
     McpServerConfigurationBody,
     ModelConfigurationBody,
     PlanReviewBody,
@@ -134,6 +136,7 @@ from .schemas import (
     RepairJournalBody,
     RetryRunBody,
     SessionSettingsBody,
+    SkillPreview,
     StartLiveBody,
     StartRunBody,
     TurnRestoreBody,
@@ -355,7 +358,7 @@ def create_web_app(
 
     @app.get("/api/v1/capabilities")
     async def capability_inventory() -> dict[str, Any]:
-        return host.capabilities()
+        return await asyncio.to_thread(host.capabilities)
 
     @app.get("/api/v1/assistant", response_model=AssistantState)
     async def get_assistant() -> dict[str, Any]:
@@ -382,6 +385,29 @@ def create_web_app(
             "resource", before=before, query=query, category=category, limit=limit,
             session_id=session_id,
         ))).data
+
+    @app.post("/api/v1/sessions/{session_id}/skills/preview", response_model=SkillPreview)
+    async def preview_skill(
+        session_id: str, request: Request, kind: Literal["zip", "directory", "github"],
+        scope: Literal["project", "user"] = "project",
+    ) -> dict[str, Any]:
+        from lumen.work_products.directories import MAX_BUNDLE_BYTES
+
+        limit = {"zip": MAX_BUNDLE_BYTES, "directory": MAX_BUNDLE_BYTES * 3 // 2, "github": 4096}[kind]
+        content = bytearray()
+        async for chunk in request.stream():
+            if len(content) + len(chunk) > limit:
+                raise StarletteHTTPException(413, "Skill package exceeds upload limit")
+            content.extend(chunk)
+        return await host.preview_skill(session_id, kind, bytes(content), scope)
+
+    @app.post("/api/v1/sessions/{session_id}/skills/manage")
+    async def manage_skill(session_id: str, body: ManageSkillBody) -> dict[str, Any]:
+        return await host.manage_skill(session_id, body.path, body.action, body.revision)
+
+    @app.post("/api/v1/sessions/{session_id}/skills/confirm")
+    async def confirm_skill(session_id: str, body: ConfirmSkillBody) -> dict[str, Any]:
+        return await host.confirm_skill(session_id, body.preview, body.path, body.scope, body.overwrite)
 
     @app.post("/api/v1/assistant/resources/import", response_model=Resource)
     async def import_assistant_file(request: Request, filename: str, identity: UUID) -> Resource:

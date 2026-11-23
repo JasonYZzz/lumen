@@ -153,6 +153,7 @@
         const href = anchor.getAttribute('href') || '';
         if (href.startsWith('#')) return;
         const resolved = normalizePath(entry.path, href);
+        if (resolved) anchor.href = new URL(href, original.href).href;
         if (resolved && entryFor(resolved)) {
           anchor.dataset.inspectPath = resolved;
           anchor.classList.add('reader-link');

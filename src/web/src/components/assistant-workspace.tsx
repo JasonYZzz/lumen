@@ -1,6 +1,5 @@
 'use client'
 
-import dynamic from 'next/dynamic'
 import {
   BookmarkSimple,
   ChatCircle,
@@ -14,7 +13,6 @@ import {
   CaretDown,
   MagnifyingGlass,
   SquaresFour,
-  Books,
   ListBullets,
   ArrowClockwise,
   DotsThree,
@@ -48,7 +46,6 @@ import type {
   AutomationSpec,
 } from '@/lib/api/types'
 import { MarkdownMessage } from './markdown-message'
-import { foxImage } from './mascot/fox-growth'
 import { DocumentPreview } from './document-preview'
 import { ResourceIcon, ResourceThumbnail, resourceTypeLabel } from './resource-icon'
 import { useModalFocus } from './use-modal-focus'
@@ -56,7 +53,6 @@ import { ActionsMenu } from './session-actions-menu'
 import { IdeaWorkbench } from './idea-workbench'
 import './assistant-workspace.css'
 
-const LibraryScene = dynamic(() => import('./library-scene').then(module => module.LibraryScene), {ssr:false})
 
 export type AssistantPage =
   | 'chat'
@@ -78,6 +74,8 @@ export type AssistantDiscussion = { intent: string; context?: AssistantContextRe
 export const goalStatusLabels = {active: '未完成', completed: '已完成', archived: '已归档'}
 export const goalExecutionLabels = {active: '正在推进', paused: '已暂停', blocked: '需要处理', budget_reached: '已达轮数上限', review: '待你验收', accepted: '已验收'}
 export type AssistantView = { filter: string; query: string; scrollTop: number }
+type LibraryView = 'grid' | 'list'
+const libraryViewKey = 'lumen.libraryView'
 type ManagedItem = {kind: 'goal'; value: AssistantGoal} | {kind: 'resource'; value: AssistantResource}
   | {kind: 'collection'; value: AssistantState['collections'][number]}
 
@@ -174,9 +172,18 @@ export function AssistantWorkspace({
   const [renaming, setRenaming] = useState<ManagedItem | null>(null)
   const [renameTitle, setRenameTitle] = useState('')
   const [removing, setRemoving] = useState<ManagedItem | null>(null)
-  const [grid, setGrid] = useState(true)
-  const [shelf, setShelf] = useState(true)
-  const showShelf = shelf && filter !== 'trash'
+  const [libraryView, setLibraryView] = useState<LibraryView>('grid')
+  const showList = libraryView === 'list'
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem(libraryViewKey)
+      if (saved === 'grid' || saved === 'list') setLibraryView(saved)
+    } catch { /* A stored view is an optional preference. */ }
+  }, [])
+  const selectLibraryView = useCallback((view: LibraryView) => {
+    setLibraryView(view)
+    try { localStorage.setItem(libraryViewKey, view) } catch { /* The control still works without storage. */ }
+  }, [])
   const importRef = useRef<HTMLInputElement>(null)
   const [resource, setResource] = useState<Awaited<
     ReturnType<typeof lumenApi.assistantResource>
@@ -804,6 +811,18 @@ export function AssistantWorkspace({
                 <nav className="library-types" aria-label="资料类型">
                   {libraryTypes.map(([value, label]) => <button type="button" key={value} aria-pressed={filter === value} onClick={() => setFilter(value)}>{label}</button>)}
                 </nav>
+                <select className="library-mobile-filter" aria-label="资料类型筛选" value={filter} onChange={e => setFilter(e.target.value)}>
+                  {libraryTypes.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+                  <option value="saved">已收藏</option>
+                  <option value="code">代码</option>
+                  <option value="file">其他文件</option>
+                  <option value="report">简报</option>
+                  <option value="work_product">对话产物</option>
+                  <option value="trial">试跑预览</option>
+                  <option value="materials">执行材料与未收录</option>
+                  <option value="trash">回收站</option>
+                  {(state.collections ?? []).map(c => <option key={c.id} value={`collection:${c.id}`}>{c.title}</option>)}
+                </select>
                 <div className="library-view-actions">
                 <button type="button" aria-label="已收藏" aria-pressed={filter === 'saved'} onClick={() => setFilter(filter === 'saved' ? 'all' : 'saved')}><BookmarkSimple size={18} /></button>
                 <select
@@ -821,9 +840,8 @@ export function AssistantWorkspace({
                   <option value="trash">回收站</option>
                   {(state.collections ?? []).map(c => <option key={c.id} value={`collection:${c.id}`}>{c.title}</option>)}
                 </select>
-                <button aria-label="3D 书架视图" title="3D 书架" disabled={filter === 'trash'} aria-pressed={showShelf} onClick={() => setShelf(true)}><Books size={19} /></button>
-                <button aria-label="网格视图" aria-pressed={!showShelf && grid} onClick={() => { setShelf(false); setGrid(true) }}><SquaresFour size={18} /></button>
-                <button aria-label="列表视图" aria-pressed={!showShelf && !grid} onClick={() => { setShelf(false); setGrid(false) }}><ListBullets size={19} /></button>
+                <button aria-label="网格视图" aria-pressed={!showList} onClick={() => selectLibraryView('grid')}><SquaresFour size={18} /></button>
+                <button aria-label="列表视图" aria-pressed={showList} onClick={() => selectLibraryView('list')}><ListBullets size={19} /></button>
                 <button aria-label="刷新资料" disabled={collectionBusy} onClick={() => setCollectionEpoch(value => value + 1)}><ArrowClockwise size={17} /></button>
                 </div>
               </div>
@@ -831,13 +849,12 @@ export function AssistantWorkspace({
               {filter.startsWith('collection:') && state.collections.filter(c => filter === `collection:${c.id}`).map(c => <div className="library-collection-heading" key={c.id}>
                 <h2>{c.title}</h2><button disabled={ownerDisabled} aria-label={`管理集合 ${c.title}`} onClick={e => setMenu({anchor: e.currentTarget, item: {kind: 'collection', value: c}})}><DotsThree size={21} /></button>
               </div>)}
-              {showShelf && libraryItems.length > 0 && !resource && <LibraryScene key={`${filter}:${query}`} resources={libraryItems} onOpen={id => void openResource(id)} />}
-              {!showShelf && !grid && <div className="library-columns" aria-hidden="true"><span>名称</span><span>来源</span><span>最近更新</span><span /></div>}
-              {!showShelf && <div className={`assistant-resource-list ${grid ? 'is-grid' : ''}`}>
+              {showList && <div className="library-columns" aria-hidden="true"><span>名称</span><span>来源</span><span>最近更新</span><span /></div>}
+              <div className={`assistant-resource-list ${showList ? '' : 'is-grid'}`}>
                 {libraryItems.map((r) => (
                   <article key={r.id}>
                     <button className="library-resource-open" aria-label={`打开 ${r.title}`} disabled={!!r.deleted_at} onClick={() => void openResource(r.id)}>
-                      {grid && <span className="library-cover"><ResourceThumbnail resource={r} /></span>}
+                      {!showList && <span className="library-cover"><ResourceThumbnail resource={r} /></span>}
                       <span className="library-file-icon"><ResourceIcon type={r.file_type} /></span>
                       <span className="library-resource-name"><strong>{r.title}</strong>
                         <small>{resourceTypeLabel(r)}{r.byte_size != null ? ` · ${r.byte_size < 1024 ? `${r.byte_size} B` : `${Math.ceil(r.byte_size / 1024)} KB`}` : ''}{r.status !== 'active' ? ' · 需要核实来源' : ''}</small>
@@ -873,7 +890,7 @@ export function AssistantWorkspace({
                     </div>
                   </article>
                 ))}
-              </div>}
+              </div>
               {libraryItems.length === 0 &&
                 !collectionBusy &&
                 !collectionError && (
@@ -1407,7 +1424,6 @@ export function AssistantWorkspace({
 function Empty({ title, detail, action }: { title: string; detail: string; action?: React.ReactNode }) {
   return (
     <div className="assistant-empty">
-      <img className="assistant-empty-fox" src={foxImage(0)} alt="" />
       <h3>{title}</h3>
       <p>{detail}</p>
       {action && <div className="assistant-empty-actions">{action}</div>}

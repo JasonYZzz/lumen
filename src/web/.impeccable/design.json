@@ -581,8 +581,8 @@
         "purpose": "The existing textarea and highlight layer share these metrics."
       },
       "welcome": {
-        "displayName": "Welcome greeting",
-        "purpose": "Centered conversation welcome only, using clamp(22px, 2.1vw, 28px)."
+        "displayName": "Welcome wordmark",
+        "purpose": "Centered LUMEN wordmark in the new conversation, 2.75–4.25rem."
       }
     },
     "shadows": [
@@ -634,36 +634,6 @@
         "purpose": "Assistant page, panel, and mobile-navigation transitions/animations are removed; global retained motion uses 0.01ms duration and one iteration."
       },
       {
-        "name": "fox-form-transition",
-        "value": "320ms ease-out",
-        "purpose": "Preload the new responsive image before crossfading; failed loads retain the current image, stale callbacks are cancelled, and inactive/static/reduced views do not animate."
-      },
-      {
-        "name": "fox-breathing",
-        "value": "5.6s ease-in-out",
-        "purpose": "Low-amplitude breathing while visible; disabled in static/reduced modes."
-      },
-      {
-        "name": "fox-greeting",
-        "value": "650ms ease-out",
-        "purpose": "650ms greeting on interaction, cleared by a 700ms timer; hidden/offscreen and static/reduced modes stop animation."
-      },
-      {
-        "name": "fox-blink",
-        "value": "6.8s steps(1, end)",
-        "purpose": "Base form only: a clipped generated eye patch appears for about 136ms; inactive/static/reduced or transitioning scenes do not mount the image."
-      },
-      {
-        "name": "fox-pointer-attention",
-        "value": "240ms cubic-bezier(.16, 1, .3, 1)",
-        "purpose": "Lean about ±2.5° within the pointer target, reset on leave; no touch or static/reduced tracking."
-      },
-      {
-        "name": "fox-focus-attention",
-        "value": "320ms cubic-bezier(.16, 1, .3, 1)",
-        "purpose": "Small attentive pose while the input is focused; static/reduced modes remove the pose."
-      },
-      {
         "name": "appearance-background",
         "value": "320ms ease-out",
         "purpose": "Page and sidebar background changes from the inline five-stop appearance slider; reduced motion removes the transition."
@@ -698,7 +668,7 @@
       {
         "name": "stacked-ideas",
         "value": "640px",
-        "purpose": "Maximum width: stacked idea summary/launch, 168px welcome fox, full-viewport voice focus, and a fluid inline appearance slider."
+        "purpose": "Maximum width: stacked idea summary/launch, compact wordmark and full-viewport voice focus."
       },
       {
         "name": "compact-library",
@@ -713,7 +683,7 @@
       {
         "name": "short-landing",
         "value": "700px",
-        "purpose": "Maximum viewport height: 144px welcome fox, tighter entry gaps/padding, and vertical landing scrolling without shrinking the entry."
+        "purpose": "Maximum viewport height: vertically scrollable landing and composer."
       }
     ]
   },
@@ -800,19 +770,19 @@
     }
   ],
   "narrative": {
-    "northStar": "The snow-fox Lumen workspace",
-    "overview": "Lumen is a calm place to see what is progressing, read a real result, and choose the next action. Pink-snow canvas surrounds white reading surfaces; muted plum identifies the current destination and deliberate primary actions. Bundled Geist, the original Fold L marks and a regenerated transparent nine-tail snow fox give the Web client its identity.\n\nThe existing workflows make work legible before adding context. Results, source and version identity, explicit state, and recovery actions carry the meaning. The fox stays a quiet companion whose five forms follow an independent light-background preference. Dense controls use solid surfaces and short transitions.",
+    "northStar": "The Lumen workspace",
+    "overview": "Lumen is a calm place to see what is progressing, read a real result, and choose the next action. Pink-snow canvas surrounds white reading surfaces; muted plum identifies the current destination and deliberate primary actions. A centered LUMEN wordmark in bundled Geist anchors the new conversation.\n\nThe existing workflows make work legible before adding context. Results, source and version identity, explicit state, and recovery actions carry the meaning. Dense controls use solid surfaces and short transitions.",
     "keyCharacteristics": [
       "Pink-snow canvas, white reading surfaces, fine boundaries, and muted plum actions.",
       "One Geist family with Chinese system fallbacks.",
       "Clear work status, real output previews, and one visible next action.",
       "Optional context collapses on narrow screens while results remain visible.",
-      "Five regenerated fox forms share one character identity and nine separately visible tail tips."
+      "A centered LUMEN wordmark precedes the composer."
     ],
     "rules": [
       {
         "name": "The One Action Accent Rule",
-        "body": "Use muted plum for deliberate primary actions and current navigation; preserve the fox's authored colors.",
+        "body": "Use muted plum for deliberate primary actions and current navigation.",
         "section": "colors"
       },
       {
@@ -832,12 +802,12 @@
       },
       {
         "name": "The Appearance Rule",
-        "body": "Fox growth follows the selected light-background stop, independently of model, thinking strength, Session or task progress.",
+        "body": "General settings persist the selected background locally.",
         "section": "components"
       }
     ],
     "dos": [
-      "**Do** preserve the pink-snow palette, Geist, Fold L marks, and the regenerated fox's detail, nine-tail silhouette and transparency.",
+      "**Do** preserve the pink-snow palette, Geist and Fold L marks.",
       "**Do** put actual progress, a real result, and its primary action in the first viewport.",
       "**Do** keep resource ID and displayed revision together when opening or discussing results.",
       "**Do** use written status, source information, and explicit recovery actions.",
@@ -849,8 +819,7 @@
       "**Don't** use decorative faint gray for body text or a meaning-bearing icon.",
       "**Don't** expand optional mobile context so it displaces the first result.",
       "**Don't** add a separate Memory navigation entry or encode state only with color.",
-      "**Don't** replace the corner L marks with the companion, restore archived renderers, or infer model load from fox forms.",
-      "**Don't** treat a prepared result, screenshot, or companion expression as proof of delivery or execution."
+      "**Don't** treat a prepared result or screenshot as proof of delivery or execution."
     ]
   }
 }

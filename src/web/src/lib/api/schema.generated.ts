@@ -982,6 +982,57 @@ export interface paths {
         patch: operations["update_session_settings_api_v1_sessions__session_id__settings_patch"];
         trace?: never;
     };
+    "/api/v1/sessions/{session_id}/skills/confirm": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Confirm Skill */
+        post: operations["confirm_skill_api_v1_sessions__session_id__skills_confirm_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/sessions/{session_id}/skills/manage": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Manage Skill */
+        post: operations["manage_skill_api_v1_sessions__session_id__skills_manage_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/sessions/{session_id}/skills/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Preview Skill */
+        post: operations["preview_skill_api_v1_sessions__session_id__skills_preview_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/sessions/{session_id}/timeline": {
         parameters: {
             query?: never;
@@ -1261,6 +1312,23 @@ export interface components {
         ConfigurationRevisionBody: {
             /** Expectedrevision */
             expectedRevision: string;
+        };
+        /** ConfirmSkillBody */
+        ConfirmSkillBody: {
+            /**
+             * Overwrite
+             * @default false
+             */
+            overwrite: boolean;
+            /** Path */
+            path: string;
+            /** Preview */
+            preview: string;
+            /**
+             * Scope
+             * @enum {string}
+             */
+            scope: "project" | "user";
         };
         /** ContextRef */
         ContextRef: {
@@ -1590,6 +1658,18 @@ export interface components {
             /** Title */
             title: string;
         };
+        /** ManageSkillBody */
+        ManageSkillBody: {
+            /**
+             * Action
+             * @enum {string}
+             */
+            action: "enable" | "disable" | "remove";
+            /** Path */
+            path: string;
+            /** Revision */
+            revision: string;
+        };
         /** McpServerConfigurationBody */
         McpServerConfigurationBody: {
             /** Enabled */
@@ -1913,6 +1993,51 @@ export interface components {
             reasoningEffort?: components["schemas"]["ReasoningLevel"] | null;
             /** Transcriptdensity */
             transcriptDensity?: ("normal" | "verbose") | null;
+        };
+        /** SkillCandidate */
+        SkillCandidate: {
+            /** Body */
+            body: string;
+            /** Description */
+            description: string;
+            /** Diagnostics */
+            diagnostics: string[];
+            /** Installed Revision */
+            installed_revision: string;
+            /** Installed Source */
+            installed_source: string;
+            /** Locally Modified */
+            locally_modified: boolean;
+            /** Manual Only */
+            manual_only: boolean;
+            /** Name */
+            name: string;
+            /** Path */
+            path: string;
+            /** Scripts */
+            scripts: string[];
+            /** User Invocable */
+            user_invocable: boolean;
+        };
+        /** SkillPreview */
+        SkillPreview: {
+            /** Bytes */
+            bytes: number;
+            /** Candidates */
+            candidates: components["schemas"]["SkillCandidate"][];
+            /** Files */
+            files: number;
+            /** Preview */
+            preview: string;
+            /** Revision */
+            revision: string;
+            /**
+             * Scope
+             * @enum {string}
+             */
+            scope: "project" | "user";
+            /** Source */
+            source: string;
         };
         /** SourceReceipt */
         SourceReceipt: {
@@ -4141,6 +4266,114 @@ export interface operations {
                     "application/json": {
                         [key: string]: unknown;
                     };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    confirm_skill_api_v1_sessions__session_id__skills_confirm_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ConfirmSkillBody"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    manage_skill_api_v1_sessions__session_id__skills_manage_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ManageSkillBody"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    preview_skill_api_v1_sessions__session_id__skills_preview_post: {
+        parameters: {
+            query: {
+                kind: "zip" | "directory" | "github";
+                scope?: "project" | "user";
+            };
+            header?: never;
+            path: {
+                session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SkillPreview"];
                 };
             };
             /** @description Validation Error */

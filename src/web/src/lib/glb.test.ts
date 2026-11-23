@@ -64,7 +64,7 @@ describe('bounded GLB preview', () => {
       json.images = [{ bufferView: 1, mimeType: 'image/png' }]
     }, binary))).toThrow('纹理尺寸')
   })
-  it('keeps rig support exclusive to the formal mascot loader', () => {
+  it('rejects rigged models in document previews', () => {
     const buffer = fixture(json => { json.skins = [{ joints: [0] }] })
     expect(() => validateGlb(buffer)).toThrow('蒙皮')
     expect(validateGlb(buffer, true).vertices).toBe(3)

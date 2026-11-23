@@ -930,6 +930,13 @@
             "default": null,
             "title": "Default Model"
           },
+          "disabled_skill_paths": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Disabled Skill Paths",
+            "type": "array"
+          },
           "limits": {
             "$ref": "#/$defs/LimitsConfig"
           },
@@ -958,6 +965,11 @@
           },
           "prompt": {
             "$ref": "#/$defs/PromptConfig"
+          },
+          "shared_skills_enabled": {
+            "default": false,
+            "title": "Shared Skills Enabled",
+            "type": "boolean"
           },
           "skills_enabled": {
             "default": true,
@@ -4115,7 +4127,7 @@
     }
   ],
   "session": {
-    "current_schema": 13,
+    "current_schema": 14,
     "model_input_manifest": {
       "$defs": {
         "ContextZone": {
@@ -4832,7 +4844,8 @@
       10,
       11,
       12,
-      13
+      13,
+      14
     ],
     "upgrade_policy": "append-only schema_upgrade; never rewrite prior records"
   },

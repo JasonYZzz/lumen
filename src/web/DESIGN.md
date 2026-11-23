@@ -1,6 +1,6 @@
 ---
 name: Lumen Web
-description: A snow-fox workspace for real progress, inspectable results, and the next action.
+description: A Lumen workspace for real progress, inspectable results, and the next action.
 colors:
   page: "#faf7f8"
   surface: "#ffffff"
@@ -78,10 +78,10 @@ typography:
     lineHeight: 1.55
   welcome:
     fontFamily: 'Geist, "PingFang SC", "Microsoft YaHei", sans-serif'
-    fontSize: "clamp(22px, 2.1vw, 28px)"
-    fontWeight: 550
-    lineHeight: 1.5
-    letterSpacing: "-0.02em"
+    fontSize: "clamp(2.75rem, 5vw, 4.25rem)"
+    fontWeight: 600
+    lineHeight: 1
+    letterSpacing: "-0.035em"
 rounded:
   status: "6px"
   field: "8px"
@@ -196,11 +196,11 @@ components:
 
 ## Overview
 
-**Creative North Star: "The snow-fox Lumen workspace"**
+**Creative North Star: "The Lumen workspace"**
 
-Lumen is a calm place to see what is progressing, read a real result, and choose the next action. Pink-snow canvas surrounds white reading surfaces; muted plum identifies the current destination and deliberate primary actions. Bundled Geist, the original Fold L marks and a regenerated transparent nine-tail snow fox give the Web client its identity.
+Lumen is a calm place to see what is progressing, read a real result, and choose the next action. Pink-snow canvas surrounds white reading surfaces; muted plum identifies the current destination and deliberate primary actions. The Fold L marks identify the shell. A centered LUMEN wordmark in bundled Geist anchors the new conversation.
 
-The existing workflows make work legible before adding context. Results, source and version identity, explicit state, and recovery actions carry the meaning. The fox stays a quiet companion whose five forms follow an independent light-background preference. Dense controls use solid surfaces and short transitions.
+The existing workflows make work legible before adding context. Results, source and version identity, explicit state, and recovery actions carry the meaning. Dense controls use solid surfaces and short transitions.
 
 **Key Characteristics:**
 
@@ -208,7 +208,7 @@ The existing workflows make work legible before adding context. Results, source 
 - One Geist family with Chinese system fallbacks.
 - Clear work status, real output previews, and one visible next action.
 - Optional context collapses on narrow screens while results remain visible.
-- Five regenerated fox forms share one character identity and nine separately visible tail tips.
+- A single wordmark and composer share the center of the new conversation.
 
 This app-scoped specification refreshes production CSS and components after the approved 2026-10-22 Web identity upgrade. It does not replace root DESIGN.md or PRODUCT.md, which describe Architecture Atlas, or the Fold assets used by TUI and native startup/app icons. Source styles remain authoritative for component details; this document records the reusable vocabulary, not every legacy literal.
 
@@ -220,7 +220,7 @@ The palette uses pink-snow neutrals for reading and muted plum for action. Front
 
 - **Muted plum** (`accent`): assistant primary actions, active navigation, card-kind labels, progress indicators, and keyboard focus. **Deep plum** (`accent-hover`) is the primary action's hover state.
 - **Lumen ink** (`ink`): headings, body emphasis, tab underlines, and input caret or native accent treatments. Retained legacy controls may still use ink-filled actions.
-- The regenerated fox keeps its source colors and transparent background. Fold L marks keep their local amber/gold identity colors.
+- Fold L marks keep their local amber/gold identity colors.
 
 ### Secondary
 
@@ -239,7 +239,7 @@ The palette uses pink-snow neutrals for reading and muted plum for action. Front
 - **Excerpt paper** (`excerpt`): real text previews in resource thumbnails.
 - **Five light appearances:** 樱粉 `#faf7f8`, 杏白 `#fdf5eb`, 薄荷 `#eff8f4`, 雾蓝 `#f0f6fc`, 浅紫 `#f5f1fb`. Each coordinates page, sidebar, soft surface and boundaries through `data-appearance`; white reading panels, dark text and plum actions remain consistent. Appearance changes use a 320ms background transition, removed with reduced motion.
 
-**The One Action Accent Rule.** Use muted plum for deliberate primary actions and current navigation; preserve the fox's authored colors.
+**The One Action Accent Rule.** Use muted plum for deliberate primary actions and current navigation.
 
 **The State Has Words Rule.** Color never replaces execution state, source coverage, version identity, or recovery text.
 
@@ -257,7 +257,7 @@ One family serves navigation, reading, and controls. Size and weight establish h
 - **Label:** actions use `label`; desktop navigation uses 14px, form labels use 13px at weight 500, and mobile navigation uses 11px with visible destination names.
 - **Metadata:** status, dates, and footnotes use `metadata`; timestamps use tabular numerals. Library source labels and cover labels have compact 11–12px treatments.
 - **Resource:** library filenames wrap below their preview and retain the full name in the detail view.
-- **Composer:** the existing overlay editor uses `composer`; textarea and highlight layer retain matching metrics. The centered welcome greeting uses `welcome`, with a responsive 22–28px size at weight 550 and line-height 1.5.
+- **Composer:** the existing overlay editor uses `composer`; textarea and highlight layer retain matching metrics. The centered LUMEN wordmark uses the responsive `welcome` scale.
 - **Appearance selector:** standard settings headings, 16px current color, and 13px color choices and notes. Five positions communicate the explicit selection order, without fantasy stage names.
 
 ## Layout
@@ -268,11 +268,11 @@ Assistant pages use 40px top padding, at least 32px side padding with a centered
 
 Goals use a two-column grid with a 24px gap and a 1200px maximum width. Goal details use a white reading region capped at 900px, with 28px 32px padding, section separators, a two-column result list, and collapsed optional follow-ups. Ideas use white workbenches capped at 1120px; the explanation stays within 68ch and expands an inset task plan.
 
-The library shares search and create controls beside its heading, followed immediately by type filters and view controls above a fine separator. The default 3D shelf is the actual catalogue, using the registered Ashen Press source with Lumen titles, types, versions, theme colors and Chinese actions. It retains the authored oak furniture and reflections, clothbound volumes, hover lift, selection, front/back flip, drag rotation, background blur and torn-paper detail reveal. At most ten actual resources occupy a shelf; paging covers further loaded results. No example games or invented files fill empty slots. The original mobile stack and reduced-motion path remain; the selected mobile volume also supports dragging. Opening a volume's resource uses the existing viewer, while grid and list remain directly selectable, including after scene-loading failure. The recycle bin uses grid/list. This source flips a whole book, not individual content pages. The canonical source is preserved; adaptation and provenance are documented in `src/shaders/ashen-press/README.md`.
+The library shares search and create controls beside its heading, followed immediately by type filters and view controls above a fine separator. Grid and list share the same query. Grid is the default and also opens for a previously saved shelf choice. On phones a native type selector replaces the horizontal filters.
 
-List rows use name, source, update date, and management columns; the row minimum is 66px. The grid auto-fills columns of at least 220px with 32px row and 24px column gaps. Cover stages use a 1.2 ratio on desktop and .9 on mobile; real image bytes or bounded text excerpts lead when available, otherwise a typed cover carries the resource identity. Names wrap below the cover; source, update date, favorites and management remain directly available. The 3D frame is 520–680px tall on desktop and 580px on compact screens; only this view loads its source bundle. Offscreen, hidden and unmounted scenes release their iframe rather than running a background WebGL loop.
+List rows use name, source, update date, and management columns; the row minimum is 66px. The grid auto-fills columns of at least 220px with 32px row and 24px column gaps. Cover stages use a 1.2 ratio on desktop and .9 on mobile; real image bytes or bounded text excerpts lead when available, otherwise a typed cover carries the resource identity. Names wrap below the cover; source, update date, favorites and management remain directly available.
 
-Resource discussion places a 42% reading column, with a 280px minimum, beside conversation. A shared context bar identifies the resource and its stored version. Ordinary conversations use the existing centered 800px conversation rail. The welcome region uses a centered 760px cap with the fox, greeting and input stacked vertically. Its fox stage is 240px square, reducing to 168px on mobile and 144px at viewport heights up to 700px. The landing region scrolls vertically, and its entry does not shrink, so the whole composer stays reachable on short screens.
+Resource discussion places a 42% reading column, with a 280px minimum, beside conversation. A shared context bar identifies the resource and its stored version. Ordinary conversations use the existing centered 800px conversation rail. The welcome centers the wordmark 24–36px above the composer on a rail up to 760px wide. The landing region scrolls vertically, and its entry does not shrink, so the whole composer stays reachable on short screens.
 
 | Implemented breakpoint | Behavior |
 | --- | --- |
@@ -281,9 +281,9 @@ Resource discussion places a 42% reading column, with a 280px minimum, beside co
 | At most 900px | Library heading and toolbar stack; search expands and type filters scroll horizontally. |
 | At most 800px | Shell becomes one main region with a 270px off-canvas sidebar. Five labeled bottom destinations appear; the workspace reserves 64px plus the safe-area inset. Resource discussion switches between content and conversation. |
 | At most 700px | Page padding becomes 24px 20px 48px; feed cards use 20px padding, goal and idea cards use 22px, goal details use 24px 20px, panels use 22px 18px, and result/form columns stack. Assistant page and panel buttons, relevant summary actions, and header actions have a 44px minimum touch height. Goal-editor text fields use 16px. |
-| At most 640px | Idea summaries and launch actions stack; plan padding becomes 16px. Welcome fox becomes 168px; existing voice focus fills the viewport. |
-| At most 700px high | Welcome fox becomes 144px; entry gaps and padding tighten while the landing region remains vertically scrollable. |
-| At most 600px | Library retains a two-column grid with 22px 12px gaps. List rows omit the source column, which remains available in resource details. |
+| At most 640px | Idea summaries and launch actions stack; plan padding becomes 16px. The wordmark uses the lower end of its type scale. Voice focus fills the viewport. |
+| At most 700px high | The landing region scrolls vertically when needed to reach the composer. |
+| At most 600px | Library retains a two-column grid with 22px 12px gaps. A complete native filter replaces horizontal type filters. List rows omit the source column, which remains available in resource details. |
 | At most 480px | Combined composer model/effort trigger truncates long names and omits the provider icon/default suffix; independent approval and add/send actions remain on one row. Full names and supported effort stops remain available in the panel. |
 
 Assistant panels are capped at 700px and `calc(100vw - 32px)`, with `calc(100dvh - 40px)` maximum height. The goal editor is capped at 560px, keeps its fields internally scrollable, and retains a visible footer action. Composer model and effort share the incumbent 360px anchored settings/search panel.
@@ -360,7 +360,7 @@ The original composer keeps its white shell, focus-within border shift, overlay 
 
 ### Navigation
 
-The five main destinations are 对话、信息流、灵感、目标、资料空间. Desktop navigation pairs Phosphor SVG icons with text; the current page uses muted plum on pale lilac and `aria-current="page"`. Bottom navigation preserves all five visible labels and uses 50px minimum-height destination buttons plus bottom safe-area padding. The top-left brand and top-right activity entry use the original Fold L SVG; the favicon uses `/favicon.svg`. The brand lockup retains an accessible text wordmark. These marks never follow fox-form settings.
+The five main destinations are 对话、信息流、灵感、目标、资料空间. Desktop navigation pairs Phosphor SVG icons with text; the current page uses muted plum on pale lilac and `aria-current="page"`. Bottom navigation preserves all five visible labels and uses 50px minimum-height destination buttons plus bottom safe-area padding. The top-left brand and top-right activity entry use the original Fold L SVG; the favicon uses `/favicon.svg`. The brand lockup retains an accessible text wordmark.
 
 活动与持续跟进 is the global Fold-mark header action and remains available in goal details. Its status text reports current work or connection state. Preferences remain in Settings. Preserve mobile sidebar focus, close behavior, and the inert underlying regions while navigation/search overlays are open.
 
@@ -380,25 +380,15 @@ Assistant panels reuse the modal focus hook, labelled dialog semantics, close co
 
 Read and execution failures stay near the affected content with a recovery action. Loading and failed reads are distinct. These component observations and the reviewed fixture screenshots are not a full accessibility certification or proof of live provider execution.
 
-### Snow-fox companion
+### Appearance
 
-The welcome mounts `MascotScene` with regenerated transparent fox assets. All five forms use the same character family with nine separately visible tail tips. Native sources are 1254×1254 PNGs; lossless WebP derivatives use the original size plus 960px, 480px and 160px widths without enlargement. The companion's `srcSet` describes the real 480px and 960px widths; its sizes match the 240px desktop and 168px mobile display. At desktop DPR2 the 480px derivative covers the display size; higher DPR can select 960px. Empty states use the base fox; corner L marks and favicon stay Fold. The 18px thinking icon uses `lumen-claude-amber.svg` with its original breathing and rocking motion; reduced motion keeps it static.
-
-`fox-growth.ts` defines five independent appearance choices. A compact native five-stop slider below the welcome composer changes the background and fox immediately, following the short-track interaction observed at local port 3080. 樱粉, 杏白, 薄荷, 雾蓝 and 浅紫 map to forms 01–05. Default is pink/base, independent of model or reasoning settings. `useAppearance` applies the root theme, saves the color ID in `lumen.appearance`, restores on reload and synchronizes other tabs. Invalid values fall back to pink; unavailable storage keeps the control working and displays a persistence notice. Appearance requires no Host write, configuration save or task submission. Settings contains no appearance menu.
-
-Image changes wait for the new responsive image to preload, then crossfade for 320ms. A failed preload retains the displayed image, and rapid changes cancel stale callbacks. Low-amplitude breathing (5.6s) and greeting motion (650ms, cleared by a 700ms timer) use CSS. The base form blinks every 6.8s for about 136ms using a clipped eye patch from its generated alternate frame; its full silhouette stays in place. Other forms retain breathing and greeting motion. Pointer attention leans by about ±2.5° within the target and resets on leave; focus adds a small attentive pose. These effects do not provide skeletal or independently animated tail motion.
-
-Hidden/offscreen, reduced-motion and static modes stop motion and crossfades; the blink image is not mounted while inactive, static/reduced or transitioning. Initial image failure falls back to the base form. The supplied original PNGs remain as input references; earlier WebP and video/layered/Rive/three.js alternatives are archived in ignored local backups. Sources, full generation prompts and conversion are documented in `../../docs/brand/mascot/README.md`.
-
-**The Appearance Rule.** Fox growth follows the selected light-background stop, independently of model, thinking strength, Session or task progress.
-
-The welcome uses “陪你从一个想法开始” and an inline “外观” control, capped at 320px with a 44px-high native range target. A fine rail, five color ticks and a plum-ring thumb keep the control quiet; the current color sits at its right. Dragging, clicking the rail and arrow/Home/End keys update the same selection. The model/effort panel contains no companion. The standalone `/mascot-preview` displays the fox above the same control, with optional static mode and a full-resolution download. It previews locally without changing the saved appearance or Session settings.
+General settings offer five light backgrounds. Changes apply locally and synchronize between tabs through `lumen.appearance`.
 
 ## Do's and Don'ts
 
 ### Do:
 
-- **Do** preserve the pink-snow palette, Geist, Fold L marks, and the regenerated fox's detail, nine-tail silhouette and transparency.
+- **Do** preserve the pink-snow palette, Geist and Fold L marks.
 - **Do** put actual progress, a real result, and its primary action in the first viewport.
 - **Do** keep resource ID and displayed revision together when opening or discussing results.
 - **Do** use written status, source information, and explicit recovery actions.
@@ -411,5 +401,4 @@ The welcome uses “陪你从一个想法开始” and an inline “外观” co
 - **Don't** use decorative faint gray for body text or a meaning-bearing icon.
 - **Don't** expand optional mobile context so it displaces the first result.
 - **Don't** add a separate Memory navigation entry or encode state only with color.
-- **Don't** replace the corner L marks with the companion, restore archived renderers, or infer model load from fox forms.
-- **Don't** treat a prepared result, screenshot, or companion expression as proof of delivery or execution.
+- **Don't** treat a prepared result or screenshot as proof of delivery or execution.

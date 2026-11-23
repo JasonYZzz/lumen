@@ -1,0 +1,780 @@
+{
+  "model": "openai:k3.1-pro",
+  "results": [
+    {
+      "case": "paraphrase",
+      "mode": "manual",
+      "repeat": 1,
+      "success": true,
+      "contains_answer": true,
+      "requests": 3,
+      "usage": {
+        "input_tokens": 13611,
+        "cache_write_tokens": 0,
+        "cache_read_tokens": 12032,
+        "output_tokens": 239,
+        "input_audio_tokens": 0,
+        "cache_audio_read_tokens": 0,
+        "output_audio_tokens": 0,
+        "requests": 3,
+        "tool_calls": 2,
+        "model_attempts": 3,
+        "agents": {}
+      },
+      "status": "returned",
+      "catalog": [
+        "cold-chain",
+        "cold-storage",
+        "handover",
+        "seal-check"
+      ],
+      "tools": [
+        "load_skill",
+        "read_skill_resource"
+      ],
+      "script_ok": false,
+      "active": [
+        "cold-chain"
+      ],
+      "elapsed_seconds": 10.89
+    },
+    {
+      "case": "unrelated",
+      "mode": "manual",
+      "repeat": 1,
+      "success": true,
+      "contains_answer": true,
+      "requests": 1,
+      "usage": {
+        "input_tokens": 4125,
+        "cache_write_tokens": 0,
+        "cache_read_tokens": 3584,
+        "output_tokens": 67,
+        "input_audio_tokens": 0,
+        "cache_audio_read_tokens": 0,
+        "output_audio_tokens": 0,
+        "requests": 1,
+        "tool_calls": 0,
+        "model_attempts": 1,
+        "agents": {}
+      },
+      "status": "returned",
+      "catalog": [
+        "cold-chain",
+        "cold-storage",
+        "handover",
+        "seal-check"
+      ],
+      "tools": [],
+      "script_ok": false,
+      "active": [],
+      "elapsed_seconds": 3.48
+    },
+    {
+      "case": "disabled",
+      "mode": "auto",
+      "repeat": 1,
+      "success": true,
+      "contains_answer": true,
+      "requests": 1,
+      "usage": {
+        "input_tokens": 4125,
+        "cache_write_tokens": 0,
+        "cache_read_tokens": 3584,
+        "output_tokens": 320,
+        "input_audio_tokens": 0,
+        "cache_audio_read_tokens": 0,
+        "output_audio_tokens": 0,
+        "requests": 1,
+        "tool_calls": 0,
+        "model_attempts": 1,
+        "agents": {}
+      },
+      "status": "returned",
+      "catalog": [
+        "cold-chain",
+        "cold-storage",
+        "handover",
+        "seal-check"
+      ],
+      "tools": [],
+      "script_ok": false,
+      "active": [],
+      "elapsed_seconds": 11.63
+    },
+    {
+      "case": "missing",
+      "mode": "auto",
+      "repeat": 1,
+      "success": true,
+      "contains_answer": true,
+      "requests": 3,
+      "usage": {
+        "input_tokens": 13441,
+        "cache_write_tokens": 0,
+        "cache_read_tokens": 11776,
+        "output_tokens": 209,
+        "input_audio_tokens": 0,
+        "cache_audio_read_tokens": 0,
+        "output_audio_tokens": 0,
+        "requests": 3,
+        "tool_calls": 2,
+        "model_attempts": 3,
+        "agents": {}
+      },
+      "status": "returned",
+      "catalog": [
+        "cold-chain",
+        "cold-storage",
+        "handover",
+        "seal-check"
+      ],
+      "tools": [
+        "load_skill",
+        "read_skill_resource"
+      ],
+      "script_ok": false,
+      "active": [
+        "handover"
+      ],
+      "elapsed_seconds": 6.62
+    },
+    {
+      "case": "reference",
+      "mode": "off",
+      "repeat": 1,
+      "success": true,
+      "contains_answer": true,
+      "requests": 5,
+      "usage": {
+        "input_tokens": 25007,
+        "cache_write_tokens": 0,
+        "cache_read_tokens": 20992,
+        "output_tokens": 696,
+        "input_audio_tokens": 0,
+        "cache_audio_read_tokens": 0,
+        "output_audio_tokens": 0,
+        "requests": 5,
+        "tool_calls": 4,
+        "model_attempts": 5,
+        "agents": {}
+      },
+      "status": "returned",
+      "catalog": [],
+      "tools": [
+        "open_work_product",
+        "inspect_work_product",
+        "inspect_personal_assistant",
+        "read_artifact"
+      ],
+      "script_ok": false,
+      "active": [],
+      "elapsed_seconds": 12.64
+    },
+    {
+      "case": "unrelated",
+      "mode": "off",
+      "repeat": 1,
+      "success": true,
+      "contains_answer": true,
+      "requests": 1,
+      "usage": {
+        "input_tokens": 3652,
+        "cache_write_tokens": 0,
+        "cache_read_tokens": 3328,
+        "output_tokens": 32,
+        "input_audio_tokens": 0,
+        "cache_audio_read_tokens": 0,
+        "output_audio_tokens": 0,
+        "requests": 1,
+        "tool_calls": 0,
+        "model_attempts": 1,
+        "agents": {}
+      },
+      "status": "returned",
+      "catalog": [],
+      "tools": [],
+      "script_ok": false,
+      "active": [],
+      "elapsed_seconds": 2.37
+    },
+    {
+      "case": "paraphrase",
+      "mode": "auto",
+      "repeat": 1,
+      "success": true,
+      "contains_answer": true,
+      "requests": 3,
+      "usage": {
+        "input_tokens": 13687,
+        "cache_write_tokens": 0,
+        "cache_read_tokens": 12032,
+        "output_tokens": 293,
+        "input_audio_tokens": 0,
+        "cache_audio_read_tokens": 0,
+        "output_audio_tokens": 0,
+        "requests": 3,
+        "tool_calls": 2,
+        "model_attempts": 3,
+        "agents": {}
+      },
+      "status": "returned",
+      "catalog": [
+        "cold-chain",
+        "cold-storage",
+        "handover",
+        "seal-check"
+      ],
+      "tools": [
+        "load_skill",
+        "read_skill_resource"
+      ],
+      "script_ok": false,
+      "active": [
+        "cold-chain"
+      ],
+      "elapsed_seconds": 8.09
+    },
+    {
+      "case": "reference",
+      "mode": "auto",
+      "repeat": 1,
+      "success": true,
+      "contains_answer": true,
+      "requests": 3,
+      "usage": {
+        "input_tokens": 13516,
+        "cache_write_tokens": 0,
+        "cache_read_tokens": 11776,
+        "output_tokens": 217,
+        "input_audio_tokens": 0,
+        "cache_audio_read_tokens": 0,
+        "output_audio_tokens": 0,
+        "requests": 3,
+        "tool_calls": 2,
+        "model_attempts": 3,
+        "agents": {}
+      },
+      "status": "returned",
+      "catalog": [
+        "cold-chain",
+        "cold-storage",
+        "handover",
+        "seal-check"
+      ],
+      "tools": [
+        "load_skill",
+        "read_skill_resource"
+      ],
+      "script_ok": false,
+      "active": [
+        "cold-chain"
+      ],
+      "elapsed_seconds": 9.89
+    },
+    {
+      "case": "script",
+      "mode": "off",
+      "repeat": 1,
+      "success": false,
+      "contains_answer": false,
+      "requests": 0,
+      "usage": {},
+      "status": "failed",
+      "catalog": [],
+      "tools": [
+        "open_work_product",
+        "inspect_work_product",
+        "read_artifact",
+        "open_work_product",
+        "open_work_product"
+      ],
+      "script_ok": false,
+      "active": [],
+      "elapsed_seconds": 15.23
+    },
+    {
+      "case": "paraphrase",
+      "mode": "off",
+      "repeat": 1,
+      "success": false,
+      "contains_answer": false,
+      "requests": 0,
+      "usage": {},
+      "status": "failed",
+      "catalog": [],
+      "tools": [
+        "open_work_product",
+        "inspect_personal_assistant",
+        "open_work_product",
+        "open_work_product",
+        "inspect_work_product"
+      ],
+      "script_ok": false,
+      "active": [],
+      "elapsed_seconds": 34.31
+    },
+    {
+      "case": "script",
+      "mode": "auto",
+      "repeat": 1,
+      "success": false,
+      "contains_answer": true,
+      "requests": 3,
+      "usage": {
+        "input_tokens": 13698,
+        "cache_write_tokens": 0,
+        "cache_read_tokens": 11264,
+        "output_tokens": 342,
+        "input_audio_tokens": 0,
+        "cache_audio_read_tokens": 0,
+        "output_audio_tokens": 0,
+        "requests": 3,
+        "tool_calls": 2,
+        "model_attempts": 3,
+        "agents": {}
+      },
+      "status": "returned",
+      "catalog": [
+        "cold-chain",
+        "cold-storage",
+        "handover",
+        "seal-check"
+      ],
+      "tools": [
+        "load_skill",
+        "run_skill_script"
+      ],
+      "script_ok": true,
+      "active": [
+        "seal-check"
+      ],
+      "elapsed_seconds": 12.63
+    },
+    {
+      "case": "manual",
+      "mode": "manual",
+      "repeat": 1,
+      "success": false,
+      "contains_answer": true,
+      "requests": 1,
+      "usage": {
+        "input_tokens": 4262,
+        "cache_write_tokens": 0,
+        "cache_read_tokens": 3584,
+        "output_tokens": 368,
+        "input_audio_tokens": 0,
+        "cache_audio_read_tokens": 0,
+        "output_audio_tokens": 0,
+        "requests": 1,
+        "tool_calls": 0,
+        "model_attempts": 1,
+        "agents": {}
+      },
+      "status": "returned",
+      "catalog": [
+        "cold-chain",
+        "cold-storage",
+        "handover",
+        "seal-check"
+      ],
+      "tools": [],
+      "script_ok": false,
+      "active": [
+        "dispatch"
+      ],
+      "elapsed_seconds": 6.31
+    },
+    {
+      "case": "script",
+      "mode": "manual",
+      "repeat": 1,
+      "success": false,
+      "contains_answer": true,
+      "requests": 2,
+      "usage": {
+        "input_tokens": 9021,
+        "cache_write_tokens": 0,
+        "cache_read_tokens": 7424,
+        "output_tokens": 385,
+        "input_audio_tokens": 0,
+        "cache_audio_read_tokens": 0,
+        "output_audio_tokens": 0,
+        "requests": 2,
+        "tool_calls": 1,
+        "model_attempts": 2,
+        "agents": {}
+      },
+      "status": "returned",
+      "catalog": [
+        "cold-chain",
+        "cold-storage",
+        "handover",
+        "seal-check"
+      ],
+      "tools": [
+        "run_skill_script"
+      ],
+      "script_ok": true,
+      "active": [
+        "seal-check"
+      ],
+      "elapsed_seconds": 9.99
+    },
+    {
+      "case": "unrelated",
+      "mode": "auto",
+      "repeat": 1,
+      "success": true,
+      "contains_answer": true,
+      "requests": 1,
+      "usage": {
+        "input_tokens": 4124,
+        "cache_write_tokens": 0,
+        "cache_read_tokens": 3584,
+        "output_tokens": 46,
+        "input_audio_tokens": 0,
+        "cache_audio_read_tokens": 0,
+        "output_audio_tokens": 0,
+        "requests": 1,
+        "tool_calls": 0,
+        "model_attempts": 1,
+        "agents": {}
+      },
+      "status": "returned",
+      "catalog": [
+        "cold-chain",
+        "cold-storage",
+        "handover",
+        "seal-check"
+      ],
+      "tools": [],
+      "script_ok": false,
+      "active": [],
+      "elapsed_seconds": 1.88
+    },
+    {
+      "case": "manual",
+      "mode": "off",
+      "repeat": 1,
+      "success": true,
+      "contains_answer": true,
+      "requests": 2,
+      "usage": {
+        "input_tokens": 8222,
+        "cache_write_tokens": 0,
+        "cache_read_tokens": 6912,
+        "output_tokens": 401,
+        "input_audio_tokens": 0,
+        "cache_audio_read_tokens": 0,
+        "output_audio_tokens": 0,
+        "requests": 2,
+        "tool_calls": 1,
+        "model_attempts": 2,
+        "agents": {}
+      },
+      "status": "returned",
+      "catalog": [],
+      "tools": [
+        "inspect_personal_assistant"
+      ],
+      "script_ok": false,
+      "active": [],
+      "elapsed_seconds": 9.91
+    },
+    {
+      "case": "disabled",
+      "mode": "off",
+      "repeat": 1,
+      "success": false,
+      "contains_answer": true,
+      "requests": 2,
+      "usage": {
+        "input_tokens": 8144,
+        "cache_write_tokens": 0,
+        "cache_read_tokens": 6912,
+        "output_tokens": 252,
+        "input_audio_tokens": 0,
+        "cache_audio_read_tokens": 0,
+        "output_audio_tokens": 0,
+        "requests": 2,
+        "tool_calls": 1,
+        "model_attempts": 2,
+        "agents": {}
+      },
+      "status": "returned",
+      "catalog": [],
+      "tools": [
+        "inspect_personal_assistant"
+      ],
+      "script_ok": false,
+      "active": [],
+      "elapsed_seconds": 10.32
+    },
+    {
+      "case": "disabled",
+      "mode": "manual",
+      "repeat": 1,
+      "success": true,
+      "contains_answer": true,
+      "requests": 2,
+      "usage": {
+        "input_tokens": 8610,
+        "cache_write_tokens": 0,
+        "cache_read_tokens": 7680,
+        "output_tokens": 314,
+        "input_audio_tokens": 0,
+        "cache_audio_read_tokens": 0,
+        "output_audio_tokens": 0,
+        "requests": 2,
+        "tool_calls": 1,
+        "model_attempts": 2,
+        "agents": {}
+      },
+      "status": "returned",
+      "catalog": [
+        "cold-chain",
+        "cold-storage",
+        "handover",
+        "seal-check"
+      ],
+      "tools": [
+        "list_skills"
+      ],
+      "script_ok": false,
+      "active": [],
+      "elapsed_seconds": 8.96
+    },
+    {
+      "case": "manual",
+      "mode": "auto",
+      "repeat": 1,
+      "success": true,
+      "contains_answer": true,
+      "requests": 2,
+      "usage": {
+        "input_tokens": 8677,
+        "cache_write_tokens": 0,
+        "cache_read_tokens": 7680,
+        "output_tokens": 464,
+        "input_audio_tokens": 0,
+        "cache_audio_read_tokens": 0,
+        "output_audio_tokens": 0,
+        "requests": 2,
+        "tool_calls": 1,
+        "model_attempts": 2,
+        "agents": {}
+      },
+      "status": "returned",
+      "catalog": [
+        "cold-chain",
+        "cold-storage",
+        "handover",
+        "seal-check"
+      ],
+      "tools": [
+        "list_skills"
+      ],
+      "script_ok": false,
+      "active": [],
+      "elapsed_seconds": 7.43
+    },
+    {
+      "case": "reference",
+      "mode": "manual",
+      "repeat": 1,
+      "success": true,
+      "contains_answer": true,
+      "requests": 3,
+      "usage": {
+        "input_tokens": 13714,
+        "cache_write_tokens": 0,
+        "cache_read_tokens": 12032,
+        "output_tokens": 242,
+        "input_audio_tokens": 0,
+        "cache_audio_read_tokens": 0,
+        "output_audio_tokens": 0,
+        "requests": 3,
+        "tool_calls": 2,
+        "model_attempts": 3,
+        "agents": {}
+      },
+      "status": "returned",
+      "catalog": [
+        "cold-chain",
+        "cold-storage",
+        "handover",
+        "seal-check"
+      ],
+      "tools": [
+        "load_skill",
+        "read_skill_resource"
+      ],
+      "script_ok": false,
+      "active": [
+        "cold-chain"
+      ],
+      "elapsed_seconds": 8.32
+    },
+    {
+      "case": "missing",
+      "mode": "manual",
+      "repeat": 1,
+      "success": true,
+      "contains_answer": true,
+      "requests": 3,
+      "usage": {
+        "input_tokens": 14066,
+        "cache_write_tokens": 0,
+        "cache_read_tokens": 12288,
+        "output_tokens": 465,
+        "input_audio_tokens": 0,
+        "cache_audio_read_tokens": 0,
+        "output_audio_tokens": 0,
+        "requests": 3,
+        "tool_calls": 2,
+        "model_attempts": 3,
+        "agents": {}
+      },
+      "status": "returned",
+      "catalog": [
+        "cold-chain",
+        "cold-storage",
+        "handover",
+        "seal-check"
+      ],
+      "tools": [
+        "load_skill",
+        "read_skill_resource"
+      ],
+      "script_ok": false,
+      "active": [
+        "handover"
+      ],
+      "elapsed_seconds": 11.3
+    },
+    {
+      "case": "missing",
+      "mode": "off",
+      "repeat": 1,
+      "success": true,
+      "contains_answer": true,
+      "requests": 2,
+      "usage": {
+        "input_tokens": 8133,
+        "cache_write_tokens": 0,
+        "cache_read_tokens": 6912,
+        "output_tokens": 398,
+        "input_audio_tokens": 0,
+        "cache_audio_read_tokens": 0,
+        "output_audio_tokens": 0,
+        "requests": 2,
+        "tool_calls": 1,
+        "model_attempts": 2,
+        "agents": {}
+      },
+      "status": "returned",
+      "catalog": [],
+      "tools": [
+        "inspect_personal_assistant"
+      ],
+      "script_ok": false,
+      "active": [],
+      "elapsed_seconds": 7.63
+    }
+  ],
+  "recovery": {
+    "restart_and_explicit_compaction_request": [
+      {
+        "stage": "active",
+        "expected_answer": "V1-317",
+        "contains_expected": true,
+        "used_resource_tool": true,
+        "returned_v2_bytes": false,
+        "checkpoint_persisted": false,
+        "history_preserved": true,
+        "old_body_available": true,
+        "run_failed": false
+      },
+      {
+        "stage": "changed",
+        "expected_answer": "重新选择",
+        "contains_expected": true,
+        "used_resource_tool": true,
+        "returned_v2_bytes": false,
+        "checkpoint_persisted": false,
+        "history_preserved": true,
+        "old_body_available": true,
+        "run_failed": false
+      },
+      {
+        "stage": "reselected",
+        "expected_answer": "V2-914",
+        "contains_expected": true,
+        "used_resource_tool": true,
+        "returned_v2_bytes": true,
+        "checkpoint_persisted": false,
+        "history_preserved": true,
+        "old_body_available": true,
+        "run_failed": false
+      },
+      {
+        "stage": "revoked",
+        "expected_answer": "不可用",
+        "contains_expected": true,
+        "used_resource_tool": true,
+        "returned_v2_bytes": false,
+        "checkpoint_persisted": false,
+        "history_preserved": true,
+        "old_body_available": true,
+        "run_failed": false
+      }
+    ],
+    "resume_from_persisted_fixture_checkpoint": [
+      {
+        "stage": "active",
+        "expected_answer": "V1-317",
+        "contains_expected": true,
+        "used_resource_tool": true,
+        "returned_v2_bytes": false,
+        "checkpoint_persisted": true,
+        "history_preserved": true,
+        "old_body_available": true,
+        "run_failed": false
+      },
+      {
+        "stage": "changed",
+        "expected_answer": "重新选择",
+        "contains_expected": true,
+        "used_resource_tool": true,
+        "returned_v2_bytes": false,
+        "checkpoint_persisted": true,
+        "history_preserved": true,
+        "old_body_available": true,
+        "run_failed": false
+      },
+      {
+        "stage": "reselected",
+        "expected_answer": "V2-914",
+        "contains_expected": false,
+        "used_resource_tool": false,
+        "returned_v2_bytes": false,
+        "checkpoint_persisted": true,
+        "history_preserved": true,
+        "old_body_available": true,
+        "run_failed": false
+      },
+      {
+        "stage": "revoked",
+        "expected_answer": "不可用",
+        "contains_expected": true,
+        "used_resource_tool": true,
+        "returned_v2_bytes": false,
+        "checkpoint_persisted": true,
+        "history_preserved": true,
+        "old_body_available": true,
+        "run_failed": false
+      }
+    ]
+  }
+}

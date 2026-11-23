@@ -5,8 +5,10 @@ import json
 import os
 import subprocess
 import sys
+import tempfile
 from collections.abc import Mapping
-from contextlib import AsyncExitStack
+from contextlib import AsyncExitStack, ExitStack
+from contextvars import ContextVar
 from functools import partial
 from importlib.resources import files
 from pathlib import Path
@@ -58,12 +60,13 @@ from lumen.reasoning import ReasoningLevel, apply_reasoning, resolve_reasoning
 from lumen.runtime import AgentRuntime
 from lumen.sandbox import SandboxRunner
 from lumen.sessions import SessionRepository
-from lumen.skill_install import SkillInstaller
+from lumen.skill_install import SkillInstaller, installation_metadata
 from lumen.skills import (
     Skill,
     SkillLoader,
     expand_skill_for_message,
     format_skills_for_prompt,
+    skill_child,
 )
 from lumen.task_control import CONTROL_TOOL_NAMES
 from lumen.tools.builtin import build_builtin_specs
@@ -88,6 +91,7 @@ from lumen.tools.web.browser import close_browser
 from lumen.tools.workspace import WorkspaceViolation
 from lumen.trust import canonical_project_identity
 from lumen.work_products import TaskWorkspace
+from lumen.work_products.directories import DirectoryBundle, DirectoryResourceAdapter, bundle_path
 
 # Names the runtime reserves for control tools; the resource manager refuses to
 # register any builtin/plugin/MCP tool that collides so a misconfigured plugin
@@ -167,14 +171,9 @@ class ResourceManager:
         # Skill discovery is dynamic request context; it is intentionally not
         # folded into the stable provider instructions.
         self.skills: list[Skill] = []
-        if config.agent.skills_enabled:
-            loader = SkillLoader(
-                self.workspace,
-                include_project=config.project_trusted,
-                include_builtin=config.agent.builtin_skills_enabled,
-            )
-            self.skills = loader.discover()
-            self.warnings.extend(loader.warnings)
+        self.all_skills: list[Skill] = []
+        self._disabled_skills: set[Path] = set()
+        self.refresh_skills()
         profile_loader = AgentProfileLoader(
             self.workspace,
             include_project=config.project_trusted,
@@ -391,7 +390,7 @@ class ResourceManager:
             skill_loader=self._find_skill,
             resource_loader=self.mcp_content.fetch_resource,
         )
-        self._active_session_id: str | None = None
+        self._skill_session: ContextVar[str | None] = ContextVar("lumen_skill_session", default=None)
         self.project_id = canonical_project_identity(self.workspace)
         self.memory_manager = self._build_memory_manager()
         self.tool_metadata: dict[str, dict[str, str]] = {
@@ -792,7 +791,7 @@ class ResourceManager:
         # roots, so its resolved path must live under one of them. If a future
         # change ever produced a path outside the roots we refuse to serve it
         # rather than risk leaking a file outside the workspace.
-        if not self._skill_path_is_confined(skill):
+        if not self._skill_path_is_confined(skill.file_path):
             return None
         return skill
 
@@ -804,12 +803,17 @@ class ResourceManager:
     def refresh_skills(self) -> None:
         """Refresh discovery without changing active Session artifact snapshots."""
         if not self.config.agent.skills_enabled:
+            self.skills, self.all_skills = [], []
             return
         loader = SkillLoader(
             self.workspace, include_project=self.config.project_trusted,
             include_builtin=self.config.agent.builtin_skills_enabled,
+            include_shared=self.config.agent.shared_skills_enabled,
+            disabled_paths=tuple(self.config.agent.disabled_skill_paths),
         )
         self.skills = loader.discover()
+        self.all_skills = loader.all_skills
+        self._disabled_skills = loader.disabled_paths
         for warning in loader.warnings:
             if warning not in self.warnings:
                 self.warnings.append(warning)
@@ -848,13 +852,13 @@ class ResourceManager:
         return [
             {"name": skill.name, "description": skill.description[:1024], "source": skill.source,
              "path": str(skill.file_path), "manual_only": skill.disable_model_invocation}
-            for skill in self.skills
+            for skill in self.skills if skill.user_invocable
         ]
 
     def bind_session_context(self, session_id: str) -> None:
         """Bind model-invoked context-source tools to the current main run."""
 
-        self._active_session_id = session_id
+        self._skill_session.set(session_id)
         self.refresh_skills()
         if self.config.work_products.enabled:
             self.task_workspace.bind_session(session_id)
@@ -863,8 +867,51 @@ class ResourceManager:
         skill = self.load_skill_by_name(name)
         if skill is None:
             raise FileNotFoundError(f"skill not found: {name}")
-        self.session_context.activate_skill(session_id, name, skill=skill)
+        if not skill.user_invocable:
+            raise ValueError(f"{name}: user invocation is disabled by the author")
+        self._save_skill_activation(session_id, skill, user_selected=True)
         return skill
+
+    def _save_skill_activation(self, session_id: str, skill: Skill, *, user_selected: bool) -> None:
+        revision = None
+        if skill.directory_skill:
+            try:
+                bundle = DirectoryResourceAdapter.read_tree(skill.base_dir)
+            except (OSError, ValueError) as error:
+                self.warnings.append(f"{skill.name}: dependencies not pinned ({type(error).__name__})")
+            else:
+                definition = bundle.files.get("SKILL.md")
+                if definition is None:
+                    raise ValueError(f"{skill.name}: definition disappeared during activation")
+                text = definition.bytes().decode().replace("\r\n", "\n").replace("\r", "\n")
+                if hashlib.sha256(text.encode()).hexdigest() != skill.definition_digest:
+                    raise ValueError(f"{skill.name}: definition changed during activation; select it again")
+                sidecar = bundle.files.get("agents/openai.yaml")
+                sidecar_digest = hashlib.sha256(sidecar.bytes()).hexdigest() if sidecar else None
+                if sidecar_digest != skill.sidecar_digest:
+                    raise ValueError(f"{skill.name}: invocation policy changed; select it again")
+                revision = bundle.revision
+        self.session_context.activate_skill(
+            session_id, skill.name, skill=skill, bundle_revision=revision, user_selected=user_selected,
+        )
+
+    def _skill_dependencies(self, skill: Skill) -> DirectoryBundle | None:
+        session_id = None if skill_child.get() else self._skill_session.get()
+        active = next((
+            item for item in self.session_context.load(session_id).active_skills if item.name == skill.name
+        ), None) if session_id else None
+        if skill.disable_model_invocation and (active is None or active.selected_in != session_id):
+            raise FileNotFoundError(f"model-invocable skill not found: {skill.name}")
+        if not skill.directory_skill:
+            raise ValueError(f"{skill.name}: place the Skill in its own directory to use dependencies")
+        if active is None:
+            return None
+        if active.source != str(skill.file_path) or not active.bundle_revision:
+            raise ValueError(f"{skill.name}: dependencies are not pinned; select the directory skill again")
+        bundle = DirectoryResourceAdapter.read_tree(skill.base_dir)
+        if bundle.revision != active.bundle_revision:
+            raise ValueError(f"{skill.name}: skill files changed; select the new version explicitly")
+        return bundle
 
     def _load_model_skill(self, name: str) -> str:
         """Model tool implementation confined to visible discovered skills."""
@@ -872,8 +919,17 @@ class ResourceManager:
         skill = self.load_skill_by_name(name)
         if skill is None or skill.disable_model_invocation:
             raise FileNotFoundError(f"model-invocable skill not found: {name}")
-        if self._active_session_id is not None:
-            self.session_context.activate_skill(self._active_session_id, name, skill=skill)
+        if (session_id := self._skill_session.get()) and not skill_child.get():
+            active = next((item for item in self.session_context.load(session_id).active_skills
+                           if item.name == name), None)
+            if active is None:
+                self._save_skill_activation(session_id, skill, user_selected=False)
+            elif active.bundle_revision:
+                self._skill_dependencies(skill)
+            elif active.source != str(skill.file_path) or active.revision != hashlib.sha256(
+                skill.body.encode()
+            ).hexdigest():
+                raise ValueError(f"{name}: active instructions changed; select the new version explicitly")
         return expand_skill_for_message(skill)
 
     def _read_artifact(self, ref: str, start: int = 0, max_chars: int = 8000) -> str:
@@ -932,8 +988,9 @@ class ResourceManager:
         """
 
         skill = self.load_skill_by_name(name)
-        if skill is None or skill.disable_model_invocation:
+        if skill is None:
             raise FileNotFoundError(f"model-invocable skill not found: {name}")
+        bundle = self._skill_dependencies(skill)
 
         relative = Path(path)
         if relative.is_absolute():
@@ -945,7 +1002,13 @@ class ResourceManager:
         if not resource.is_file():
             raise FileNotFoundError(f"Skill 资源不存在: {name}/{path}")
         try:
-            body = resource.read_text(encoding="utf-8")
+            if bundle is None:
+                body = resource.read_text(encoding="utf-8")
+            else:
+                item = bundle.files.get(bundle_path(relative.as_posix()))
+                if item is None:
+                    raise FileNotFoundError(path)
+                body = item.bytes().decode("utf-8")
         except UnicodeDecodeError as error:
             raise ValueError(f"Skill 资源不是 UTF-8 文本: {name}/{path}") from error
         except OSError as error:
@@ -966,6 +1029,7 @@ class ResourceManager:
         skill = self.load_skill_by_name(skill_name)
         if skill is None:
             return f"错误: 未知 Skill {skill_name!r}"
+        bundle = self._skill_dependencies(skill)
         path = skill.scripts.get(script_name)
         if path is None:
             return f"错误: Skill {skill_name!r} 没有脚本 {script_name!r}"
@@ -983,8 +1047,24 @@ class ResourceManager:
         }.get(resolved.suffix.lower())
         if interpreter is None:
             return f"错误: 不支持的 Skill 脚本解释器: {resolved.suffix}"
+        with ExitStack() as stack:
+            if bundle is not None:
+                snapshot = Path(stack.enter_context(tempfile.TemporaryDirectory(prefix="lumen-skill-")))
+                for directory in bundle.directory_names():
+                    (snapshot / directory).mkdir(parents=True, exist_ok=True)
+                for key, data in bundle.files.items():
+                    location = snapshot / key
+                    location.write_bytes(data.bytes())
+                    location.chmod(0o700 if data.executable else 0o600)
+                resolved = snapshot / resolved.relative_to(base_dir)
+                base_dir = snapshot
+            return self._execute_skill_script(interpreter, resolved, base_dir, args or [])
+
+    def _execute_skill_script(
+        self, interpreter: list[str], resolved: Path, base_dir: Path, args: list[str],
+    ) -> str:
         prepared = self.sandbox_runner.prepare(
-            [*interpreter, str(resolved), *(args or [])],
+            [*interpreter, str(resolved), *args],
             cwd=base_dir,
             read_paths=(base_dir,),
         )
@@ -1014,13 +1094,17 @@ class ResourceManager:
             lines.extend(("stderr:", error))
         return "\n".join(lines)
 
-    def _skill_path_is_confined(self, skill: Skill) -> bool:
+    def _skill_path_is_confined(self, path: Path) -> bool:
         """Whether ``skill``'s file path lives under a known skill root."""
-        path = skill.file_path
-        roots: list[Path] = [self.workspace / ".lumen" / "skills"]
-        user_root = Path.home() / ".lumen" / "skills"
-        roots.append(user_root)
-        roots.append(Path(str(files("lumen").joinpath("builtin_skills"))))
+        roots = [Path.home() / ".lumen/skills"]
+        if self.config.project_trusted:
+            roots.append(self.workspace / ".lumen/skills")
+        if self.config.agent.shared_skills_enabled:
+            roots.append(Path.home() / ".agents/skills")
+            if self.config.project_trusted:
+                roots.append(self.workspace / ".agents/skills")
+        if self.config.agent.builtin_skills_enabled:
+            roots.append(Path(str(files("lumen").joinpath("builtin_skills"))))
         for root in roots:
             try:
                 resolved_root = root.resolve()
@@ -1582,6 +1666,8 @@ class ResourceManager:
         }
 
     async def close(self) -> None:
+        if hasattr(self, "skill_installer"):
+            self.skill_installer.clear_previews()
         if self.live_manager is not None:
             await self.live_manager.close()
         await self.agent_orchestrator.shutdown()
@@ -1710,20 +1796,36 @@ class ResourceManager:
             )
         return rows
 
+    def skill_inventory(self) -> list[dict[str, Any]]:
+        self.refresh_skills()
+        rows: list[dict[str, Any]] = []
+        for skill in self.all_skills:
+            path = str(skill.file_path)
+            status = "manual" if skill.disable_model_invocation else "loaded"
+            if skill.file_path in self._disabled_skills:
+                status = "disabled"
+            elif skill not in self.skills:
+                status = "shadowed"
+            managed: dict[str, str] = {}
+            marker = skill.base_dir / ".lumen-install.json"
+            if skill.source in {"project", "user"} and marker.is_file() and not marker.is_symlink():
+                try:
+                    if marker.stat().st_size <= 8192:
+                        managed = installation_metadata(marker.read_bytes())
+                except (OSError, ValueError):
+                    pass
+            rows.append({"name": skill.name, "source": skill.source, "path": path, "status": status,
+                         "description": skill.description, "diagnostics": list(skill.diagnostics),
+                         "managed": managed, "user_invocable": skill.user_invocable,
+                         "revision": "sha256:" + hashlib.sha256(skill.body.encode()).hexdigest()})
+        return rows
+
     def capabilities_report(self) -> dict[str, Any]:
         """Return the shared CLI/TUI/Web capability observation projection."""
 
         return {
             "tools": self.capability_inventory(),
-            "skills": [
-                {
-                    "name": skill.name,
-                    "source": skill.source,
-                    "status": "manual" if skill.disable_model_invocation else "loaded",
-                    "revision": "sha256:" + hashlib.sha256(skill.body.encode("utf-8")).hexdigest(),
-                }
-                for skill in sorted(self.skills, key=lambda item: item.name)
-            ],
+            "skills": self.skill_inventory(),
             "mcp_servers": self.mcp_summary(),
             "agent_profiles": [
                 {
@@ -1787,7 +1889,11 @@ class ResourceManager:
         return rows
 
     def active_skill_documents(self, session_id: str) -> tuple[dict[str, object], ...]:
-        return self.session_context.resolve_documents(session_id).skill_documents
+        if not self.config.agent.skills_enabled:
+            return ()
+        return tuple(doc for doc in self.session_context.resolve_documents(session_id).skill_documents
+                     if (source := Path(str(doc["source"]))) not in self._disabled_skills
+                     and self._skill_path_is_confined(source))
 
     def retrieved_context_documents(self, session_id: str) -> tuple[dict[str, object], ...]:
         return self.session_context.resolve_documents(session_id).resource_documents

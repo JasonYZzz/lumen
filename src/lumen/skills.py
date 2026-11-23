@@ -31,7 +31,10 @@ the skill's ``base_dir`` (parent of SKILL.md) is the resolution root.
 
 from __future__ import annotations
 
+import hashlib
 import re
+from collections.abc import Iterable
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 from importlib.resources import files
 from pathlib import Path
@@ -47,6 +50,8 @@ _MAX_DESCRIPTION = 1024
 
 #: Maximum name length (spec: 64 chars).
 _MAX_NAME = 64
+
+skill_child: ContextVar[bool] = ContextVar("skill_child", default=False)
 
 #: Regex for valid skill names: lowercase kebab-case, no leading/trailing
 #: hyphens, no consecutive hyphens. Matches the agentskills.io spec.
@@ -94,6 +99,11 @@ class Skill:
     source: str
     disable_model_invocation: bool = False
     scripts: dict[str, Path] = field(default_factory=dict[str, Path])
+    directory_skill: bool = False
+    definition_digest: str = ""
+    sidecar_digest: str | None = None
+    user_invocable: bool = True
+    diagnostics: tuple[str, ...] = ()
 
 
 def _parse_frontmatter(text: str) -> tuple[dict[str, object], str]:
@@ -153,6 +163,7 @@ def load_skill(
     file_path: Path,
     source: str,
     warnings: list[str] | None = None,
+    *, standalone: bool = False,
 ) -> Skill | None:
     """Parse a single ``SKILL.md`` file into a ``Skill``, or None on failure.
 
@@ -166,6 +177,8 @@ def load_skill(
     prompt-formatting time.
     """
 
+    if file_path.is_symlink():
+        return None
     try:
         text = file_path.read_text(encoding="utf-8")
     except (OSError, UnicodeError):
@@ -183,7 +196,46 @@ def load_skill(
     if name is None:
         return None
     disable = bool(frontmatter.get("disable-model-invocation", False))
-    scripts = _parse_scripts(file_path, name, frontmatter.get("scripts"), warnings)
+    diagnostics: list[str] = []
+    sidecar_digest = None
+    for key in ("context", "agent", "allowed-tools", "hooks", "model"):
+        if key in frontmatter:
+            diagnostics.append(f"{key}: Lumen does not apply this execution policy")
+            disable = True
+    if re.search(r"!`[^\n]+`|(?m:^\s*!```)", body):
+        diagnostics.append("dynamic commands are displayed as literal instructions")
+        disable = True
+    directory_skill = file_path.name == "SKILL.md" and not standalone
+    if directory_skill:
+        sidecar = file_path.parent / "agents" / "openai.yaml"
+        if sidecar.parent.is_symlink() or sidecar.is_symlink():
+            diagnostics.append("agents/openai.yaml: linked policy is not supported")
+            disable = True
+        elif sidecar.is_file():
+            try:
+                raw = sidecar.read_bytes()
+                sidecar_digest = hashlib.sha256(raw).hexdigest()
+                settings = yaml.safe_load(raw.decode("utf-8"))
+                if not isinstance(settings, dict):
+                    raise ValueError
+                settings = cast(dict[str, object], settings)
+                policy = settings.get("policy", {})
+                if not isinstance(policy, dict):
+                    raise ValueError
+                implicit = cast(dict[str, object], policy).get("allow_implicit_invocation", True)
+                if not isinstance(implicit, bool):
+                    raise ValueError
+                disable |= not implicit
+                if settings.get("dependencies"):
+                    diagnostics.append("agents/openai.yaml: tool dependencies need operator configuration")
+            except (OSError, UnicodeError, ValueError, yaml.YAMLError):
+                diagnostics.append("agents/openai.yaml: invalid policy; manual invocation required")
+                disable = True
+    scripts = _parse_scripts(file_path, name, frontmatter.get("scripts"), diagnostics)
+    if frontmatter.get("user-invocable", True) is not True:
+        diagnostics.append("user-invocable: manual invocation disabled")
+    if warnings is not None:
+        warnings.extend(f"{name}: {item}" for item in diagnostics)
     return Skill(
         name=name,
         description=description[:_MAX_DESCRIPTION],
@@ -193,6 +245,11 @@ def load_skill(
         source=source,
         disable_model_invocation=disable,
         scripts=scripts,
+        directory_skill=directory_skill,
+        definition_digest=hashlib.sha256(text.encode()).hexdigest(),
+        sidecar_digest=sidecar_digest,
+        user_invocable=frontmatter.get("user-invocable", True) is True,
+        diagnostics=tuple(diagnostics),
     )
 
 
@@ -231,6 +288,10 @@ def _parse_scripts(
     return scripts
 
 
+def disabled_skill_sources(workspace: Path, paths: Iterable[str]) -> set[Path]:
+    return {(workspace / Path(path).expanduser()).resolve() for path in paths}
+
+
 class SkillLoader:
     """Discovers and parses skills from project and user directories.
 
@@ -255,6 +316,8 @@ class SkillLoader:
         *,
         include_project: bool = True,
         include_builtin: bool = False,
+        include_shared: bool = False,
+        disabled_paths: tuple[str, ...] = (),
     ) -> None:
         self.workspace = Path(workspace).expanduser().resolve()
         self._project_dir = self.workspace / ".lumen" / "skills"
@@ -262,6 +325,9 @@ class SkillLoader:
         self._builtin_dir = Path(str(files("lumen").joinpath("builtin_skills")))
         self.include_project = include_project
         self.include_builtin = include_builtin
+        self.include_shared = include_shared
+        self.disabled_paths = disabled_skill_sources(self.workspace, disabled_paths)
+        self.all_skills: list[Skill] = []
         self.warnings: list[str] = []
 
     def discover(self) -> list[Skill]:
@@ -275,19 +341,19 @@ class SkillLoader:
         builtin = self._scan_root(self._builtin_dir, "builtin") if self.include_builtin else []
         project = self._scan_root(self._project_dir, "project") if self.include_project else []
         user = self._scan_root(self._user_dir, "user")
+        if self.include_shared:
+            user = self._scan_root(Path.home() / ".agents/skills", "shared-user") + user
+            if self.include_project:
+                project = self._scan_root(self.workspace / ".agents/skills", "shared-project") + project
+        self.all_skills = [*builtin, *user, *project]
         # Merge: project > user > builtin.
         by_name: dict[str, Skill] = {}
-        for skill in builtin:
-            by_name[skill.name] = skill
-        for skill in user:
-            if skill.name in by_name:
-                self.warnings.append(f"skill '{skill.name}' overrides builtin version ({skill.file_path})")
-            by_name[skill.name] = skill
-        for skill in project:
+        for skill in self.all_skills:
+            if skill.file_path in self.disabled_paths:
+                continue
             if skill.name in by_name:
                 self.warnings.append(
-                    f"skill '{skill.name}' exists in both project and user dirs; "
-                    f"using project version ({skill.file_path})"
+                    f"skill '{skill.name}' overrides {by_name[skill.name].source} ({skill.file_path})"
                 )
             by_name[skill.name] = skill
         return sorted(by_name.values(), key=lambda s: s.name)
@@ -304,7 +370,7 @@ class SkillLoader:
         - ``_SKIP_DIRS`` are pruned in place.
         """
 
-        if not root.is_dir():
+        if root.is_symlink() or root.parent.is_symlink() or not root.is_dir():
             return []
         skills: list[Skill] = []
         try:
@@ -318,7 +384,7 @@ class SkillLoader:
                 self.warnings.append(f"ignored symlinked skill path outside trusted roots: {entry}")
                 continue
             if entry.is_file() and entry.suffix == ".md":
-                skill = load_skill(entry, source, self.warnings)
+                skill = load_skill(entry, source, self.warnings, standalone=True)
                 if skill is not None:
                     skills.append(skill)
                 continue

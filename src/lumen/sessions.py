@@ -41,7 +41,7 @@ from lumen.live.types import LiveConnectionState, LiveSessionState, SessionLiveS
 from lumen.plan import PlanState
 from lumen.work_products import EffectReceipt, SessionWorkState
 
-SCHEMA_VERSION = 13
+SCHEMA_VERSION = 14
 SUPPORTED_SCHEMA_VERSIONS = tuple(range(1, SCHEMA_VERSION + 1))
 SCHEMA_UPGRADE_TARGETS = tuple(range(5, SCHEMA_VERSION + 1))
 SESSION_RECORD_TYPES = (
@@ -649,7 +649,7 @@ class SessionRepository:
         path = self._path(session_id)
         if not path.is_file():
             raise FileNotFoundError(f"session not found: {session_id}")
-        self._ensure_schema(path, 5)
+        self._ensure_schema(path, 14 if state.active_skills else 5)
         self._append(
             path,
             {
@@ -1268,6 +1268,10 @@ class SessionRepository:
                     )
                 try:
                     context_state = SessionContextState.model_validate(record.get("state"))
+                    if effective_schema < 14 and any(
+                        ref.bundle_revision or ref.selected_in for ref in context_state.active_skills
+                    ):
+                        raise ValueError("versioned Skill activation requires schema v14")
                 except ValueError as error:
                     raise SessionCorruptError(f"invalid context_state at line {line_number}") from error
                 continue

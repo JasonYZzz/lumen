@@ -127,7 +127,29 @@ def test_external_same_size_change_with_preserved_mtime_invalidates_projection(t
     session.path.write_bytes(b"{broken")
     with pytest.raises(SessionCorruptError):
         repository.load(session.id)
-    assert SCHEMA_VERSION == 13
+    assert SCHEMA_VERSION == 14
+
+
+def test_v14_skill_activation_upgrade_keeps_v13_prefix(tmp_path: Path) -> None:
+    from datetime import UTC, datetime
+
+    from lumen.context.session_state import ActiveSkillRef, SessionContextState
+
+    repo = SessionRepository(tmp_path)
+    session = repo.create(agent_name="test", model_id="offline")
+    prefix = session.path.read_bytes().replace(b'"schema_version":14', b'"schema_version":13')
+    session.path.write_bytes(prefix)
+    repo = SessionRepository(tmp_path)
+    assert not repo.load(session.id).context_state.active_skills
+    assert session.path.read_bytes() == prefix
+    now = datetime.now(UTC)
+    ref = ActiveSkillRef(name="manual", revision="v1", source="fixture", body_artifact_ref="body",
+                         bundle_revision="tree-v1", selected_in=session.id,
+                         activated_at=now, last_used_at=now)
+    repo.append_context_state(session.id, SessionContextState(active_skills=(ref,)))
+    assert SessionRepository(tmp_path).load(session.id).context_state.active_skills == (ref,)
+    assert session.path.read_bytes().startswith(prefix)
+    assert session.path.read_bytes().count(b'"type":"schema_upgrade"') == 1
 
 
 def test_v13_effect_recovery_and_review_turn_upgrade_append_only(tmp_path: Path) -> None:

@@ -26,7 +26,7 @@ async function slide(value: number) {
     range.dispatchEvent(new Event('input', {bubbles: true}))
   })
 }
-it('restores a saved color and form without overwriting it during hydration', async () => {
+it('restores a saved color without overwriting it during hydration', async () => {
   localStorage.setItem('lumen.appearance', 'blue')
   await act(async () => root.render(<Harness />))
   expect(document.documentElement.dataset.appearance).toBe('blue')

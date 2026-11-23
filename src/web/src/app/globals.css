@@ -1256,6 +1256,69 @@ button:disabled {
   display: block;
 }
 
+.extension-settings, .extension-list { min-width: 0; }
+.extension-settings .extension-list { margin: 24px 0 0; }
+.extension-list-heading, .extension-pagination, .skill-actions {
+  display: flex; align-items: center; gap: 8px;
+}
+.extension-list-heading { justify-content: space-between; min-height: 36px; margin-bottom: 8px; }
+.extension-list-heading h3 { display: flex; align-items: baseline; gap: 8px; padding: 0; font-size: 16px; font-weight: 600; }
+.extension-list-heading h3 small, .extension-pagination { font-size: 12px; font-variant-numeric: tabular-nums; }
+.extension-list button {
+  display: inline-flex; align-items: center; justify-content: center; gap: 5px;
+  min-height: 32px; padding: 4px 10px; border: 1px solid var(--line); border-radius: 8px;
+  background: var(--surface); color: var(--ink); font-size: 13px;
+}
+.extension-list button:hover:enabled, .skill-entry > summary:hover { background: var(--page); }
+.extension-list button:disabled { opacity: .5; cursor: default; }
+.extension-list :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.extension-list .extension-primary { background: var(--accent); border-color: transparent; color: white; }
+.extension-list .extension-primary:hover:enabled { background: var(--accent-hover); }
+.extension-empty, .skill-feedback { margin: 8px 0; color: var(--muted); font-size: 13px; overflow-wrap: anywhere; }
+.extension-settings section > .skill-feedback { margin-bottom: 10px; color: var(--accent); }
+.extension-pagination { padding-top: 6px; border-top: 1px solid var(--line); color: var(--muted); }
+.extension-pagination span { margin-right: auto; }
+.extension-pagination button { border: 0; color: var(--accent); }
+.skill-entry { border-top: 1px solid var(--line); min-width: 0; }
+.skill-entry > summary {
+  display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: 10px;
+  padding: 11px 4px; cursor: pointer; list-style: none;
+}
+.skill-entry > summary::-webkit-details-marker { display: none; }
+.skill-entry-title { min-width: 0; display: grid; gap: 3px; }
+.skill-entry-title strong { font-size: 14px; font-weight: 550; overflow-wrap: anywhere; }
+.skill-entry-title small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: 12px; }
+.skill-state { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font-size: 12px; }
+.skill-state::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: var(--faint); }
+.skill-state[data-status="loaded"]::before { background: var(--accent); }
+.skill-caret { color: var(--muted); }
+.skill-entry[open] > summary .skill-caret { transform: rotate(90deg); }
+.skill-detail, .skill-import {
+  min-width: 0; margin: 0 0 12px; padding: 12px 14px; border-radius: 10px; background: var(--page);
+  color: var(--ink-soft); font-size: 13px; line-height: 1.55; overflow-wrap: anywhere;
+}
+.skill-detail p { margin: 0 0 8px; }
+.skill-detail dl { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 5px 12px; margin: 0; }
+.skill-detail dt { color: var(--muted); }
+.skill-detail dd { margin: 0; }
+.skill-actions { flex-wrap: wrap; min-width: 0; margin: 10px 0 0; padding: 0; border: 0; }
+.skill-actions .is-danger { color: var(--danger); }
+.skill-import { display: grid; gap: 12px; border: 1px solid var(--line); }
+.skill-import[hidden] { display: none; }
+.skill-import-options { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.skill-import label { display: grid; gap: 4px; min-width: 0; color: var(--muted); font-size: 12px; }
+.skill-import input, .skill-import select {
+  width: 100%; min-width: 0; min-height: 34px; border: 1px solid var(--line-strong); border-radius: 8px;
+  padding: 4px 8px; background: var(--surface); color: var(--ink); font-size: 13px;
+}
+.skill-import input::file-selector-button { margin-right: 8px; padding: 3px 8px; border: 0; border-radius: 6px; background: var(--surface-soft); font: inherit; color: var(--ink); }
+.skill-import-input { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.skill-import-input input { flex: 1 1 180px; }
+.skill-import-input small { flex-basis: 100%; }
+.skill-preview { min-width: 0; border-top: 1px solid var(--line); }
+.skill-preview pre { white-space: pre-wrap; overflow-wrap: anywhere; }
+.extension-settings .capability-row { padding: 11px 4px; }
+
 .session-management-dialog {
   display: grid;
   width: min(440px, 100%);
@@ -3917,7 +3980,10 @@ button:disabled {
 
   .settings-nav {
     display: grid;
-    grid-template-columns: repeat(4, minmax(0, 1fr));
+    grid-template-columns: none;
+    grid-auto-flow: column;
+    grid-auto-columns: max-content;
+    justify-content: safe space-between;
     overflow-x: auto;
     border-right: 0;
     padding: 0 12px 10px;

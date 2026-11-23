@@ -22,6 +22,8 @@ class ActiveSkillRef(_StateModel):
     revision: str
     source: str
     body_artifact_ref: str
+    bundle_revision: str | None = None
+    selected_in: str | None = None
     activated_at: datetime
     last_used_at: datetime
 

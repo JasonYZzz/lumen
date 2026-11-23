@@ -35,6 +35,7 @@ class SessionContextManager:
 
     def activate_skill(
         self, session_id: str, name: str, *, skill: Skill | None = None,
+        bundle_revision: str | None = None, user_selected: bool = False,
     ) -> SessionContextState:
         skill = skill if skill is not None else self.skill_loader(name)
         if skill is None:
@@ -51,6 +52,8 @@ class SessionContextManager:
                 name=name,
                 revision=revision,
                 source=str(skill.file_path),
+                bundle_revision=bundle_revision,
+                selected_in=session_id if user_selected else None,
                 body_artifact_ref=artifact_ref,
                 activated_at=now,
                 last_used_at=now,

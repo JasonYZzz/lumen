@@ -20,6 +20,45 @@ class AttachmentBody(WebModel):
     byte_size: int = Field(alias="byteSize", ge=1, le=20 * 1024 * 1024)
 
 
+class SkillCandidate(WebModel):
+    path: str
+    name: str
+    description: str
+    manual_only: bool
+    user_invocable: bool
+    installed_source: str
+    diagnostics: list[str]
+    scripts: list[str]
+    body: str
+    installed_revision: str
+    locally_modified: bool
+
+
+class SkillPreview(WebModel):
+    preview: str
+    scope: Literal["project", "user"]
+    source: str
+    revision: str
+    files: int
+    bytes: int
+    candidates: list[SkillCandidate]
+
+
+class ManageSkillBody(WebModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    action: Literal["enable", "disable", "remove"]
+    path: str = Field(min_length=1, max_length=8192)
+    revision: str = Field(min_length=1, max_length=200)
+
+
+class ConfirmSkillBody(WebModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    preview: str = Field(min_length=1, max_length=64)
+    path: str = Field(min_length=1, max_length=1024)
+    scope: Literal["project", "user"]
+    overwrite: bool = False
+
+
 class StartRunBody(WebModel):
     input: str = Field(min_length=1)
     client_request_id: str = Field(alias="clientRequestId", min_length=1, max_length=200)

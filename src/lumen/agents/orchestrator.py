@@ -17,6 +17,7 @@ from lumen.config import AgentsConfig
 from lumen.context.artifacts import ArtifactStore
 from lumen.plan import EvidenceKind, EvidenceReceipt, PlanState
 from lumen.sessions import SessionRepository
+from lumen.skills import skill_child
 
 from .types import (
     ACTIVE_AGENT_STATUSES,
@@ -533,8 +534,12 @@ class AgentOrchestrator:
                 profile = self.profiles[thread.ref.agent_type]
                 state = self.repository.load(thread.ref.parent_session_id).agent_state
                 messages = [item for item in state.messages if item.agent_id == agent_id]
-                async with asyncio.timeout(thread.config.timeout_seconds):
-                    execution = await self.runtime_factory.execute(thread, profile, messages)
+                token = skill_child.set(True)
+                try:
+                    async with asyncio.timeout(thread.config.timeout_seconds):
+                        execution = await self.runtime_factory.execute(thread, profile, messages)
+                finally:
+                    skill_child.reset(token)
                 execution = execution.model_copy(update={
                     "usage": {**execution.usage, "agent_queue_seconds": round(queue_seconds, 6)},
                 })

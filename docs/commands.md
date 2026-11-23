@@ -126,7 +126,7 @@ SDK 的名称推断不再决定档位；更新目录的流程见[维护约定](a
 Host 在每轮持久化后根据实际回执和进度报告决定继续、阻塞或提交验收；原有运行预算、审批和沙箱继续生效。
 可以暂停／恢复；重启后需明确恢复，不重放未知操作。待验收不等于已完成。完成／归档时有已启用跟进，须选择暂停或保留；
 暂停取消尚未执行的排队项，正在执行的任务须先停止或等待结束。删除目标不会删除原对话，恢复目标后重新关联上下文。
-资料可新建空白页面、导入至多 100 KB 的 UTF-8 Markdown／文本／JSON／CSV／HTML、收藏、分组、隐藏和版本编辑。导入的 HTML 只作文本，不在此执行脚本；PDF／DOCX 未作为可读来源。资料讨论保留 ID／版本，AI 候选需明确应用。原 Work Product 仍由 TaskWorkspace 修改。个人偏好继续使用设置内的 MemoryManager。
+资料空间支持页面、原文件和集合。导入保留文件原始字节，每份最多 20 MiB；可解码的 UTF-8 内容可用于正文搜索。资料讨论保留 ID／版本，AI 候选需明确应用。原 Work Product 仍由 TaskWorkspace 修改。个人偏好继续使用设置内的 MemoryManager。
 
 ```bash
 lumen automation status --cwd .
@@ -166,7 +166,8 @@ observe 的断线重试语义。
 ### 1.6 配置、信任与 MCP 审批
 
 ```bash
-lumen init [--cwd PATH | --global | --local]
+lumen init [--cwd PATH] [--local]
+lumen init --global
 lumen trust --cwd PATH
 lumen trust --revoke --cwd PATH
 
@@ -240,7 +241,6 @@ lumen mcp reset [--name <name>] --cwd . [--config PATH]
 
 ## 3. Web slash 命令支持矩阵
 
-Web 新任务页的九尾狐使用透明 WebP 与 CSS 呼吸、基础形象眨眼和轻微关注动作。思考设置保存后先预载对应图片，再用 320ms 交叉淡入；预载失败保留当前图，快速切换取消过时回调。离屏、隐藏或 reduced/static 模式停止动画；不再使用视频或 WebGL 角色渲染器。
 
 Web 通过 FastAPI application host 执行命令；本地显示类命令不会伪造 Agent run。`/context sources`、`/context capabilities`、`/instructions`、`/prompts`、`/hooks` 使用只读 Interface；prompt 诊断投影位于 `GET /api/v1/instructions`，能力投影位于 `GET /api/v1/capabilities`；`/prompt` 在后端渲染模板后启动 run，`/copy` 使用浏览器剪贴板。
 
@@ -259,6 +259,10 @@ Web 通过 FastAPI application host 执行命令；本地显示类命令不会�
 Web 当前不提供 `/sessions`、`/resume`、`/resources`、`/theme`、`/exit` 的 slash 形式；其中 session 浏览/恢复由侧边栏承担。TUI 与 Web 同一工作区同时只允许一个 Agent run，运行期间的状态变更命令可能返回 workspace busy。
 
 Web 的 `/model`、`/mode` 无参数形式直接打开选择器，点击菜单项与完整 slash 命令共用处理路径。模型名来自配置注册表，未知名称不会被替换为列表第一项。输入区 `+` 提供常用操作，完整命令通过 `/` 检索；模型和审批的参数选项在检索时出现，避免占满主菜单。`@文件`、图片粘贴、拖放和附件能力检查保持有效。
+
+Web 与桌面的「设置 → 扩展能力」按 Skills、MCP 服务和工具分组，每组默认显示 5 条。「显示更多」每次追加 5 条，「收起」恢复前 5 条。展开某个 Skill 可查看调用命令、文件位置和可用的管理操作。
+
+在 Skills 标题旁点击「导入技能」，可选择 ZIP、文件夹或 GitHub 来源及安装范围。预览后选择候选并确认安装，支持手动调用的技能可用 `/skill:<name>` 激活。导入需要在 `tools.builtins` 中包含 `install_skill`。停用按来源保存到当前项目的受管配置。移除受管安装会校验内容，遇到本地修改会保留文件。`/skill unload <name>` 只取消当前会话的激活。
 
 Skill 补全以发现的 `name` 为标识，`description` 仅作辅助说明。Web 用名称和单行省略的说明组成紧凑菜单项，悬停可查看完整说明；TUI 保持 `/skill:<name>` 为主标签，说明中的换行只在显示时合并，并按终端宽度省略。两端选择 Skill 后均插入 `/skill:<name> `，不会把描述插入输入框，也不会在选中时立即发起 Skill 执行。
 
@@ -380,14 +384,7 @@ Web 回复中的工作区文档链接与内联文件路径可点击预览；本�
 
 GLB（`.glb`）文件支持按需 3D 预览，可拖动旋转，也可使用旋转、缩放与重置视角按钮。加载或渲染失败可重新预览，下载始终保留；关闭后释放模型资源。首版仅支持有界的内嵌静态模型，外部/data/blob URI、压缩扩展、sparse、morph 和蒙皮会被拒绝，不加载外部解码器。格式/顶点/纹理解码限额见 WebUI Three.js 实施记录，尚未完成真机性能验收。
 
-Web 在[首页输入框下方](brand/mascot/README.md)直接提供「外观」五档浅色滑杆，系统设置不再提供
-「背景与形象」菜单。樱粉、杏白、薄荷、雾蓝、浅紫依次对应五种成长形象；默认樱粉基础图。
-拖动即时应用并自动保存在当前浏览器，刷新恢复、跨标签页同步；无法保存时会提示。
-外观与模型、思考强度完全独立，不修改模型配置、会话设置或任务状态，不显示幻想阶段名称。
-`/mascot-preview`（静态导出 `/mascot-preview.html`）复用五档控件，可切换静态模式和下载高清
-WebP；预览不改变已保存外观。它是可逆的视觉偏好，不代表能力、实时负载或任务进度。
-旧视频、分层、Rive、3D 角色开关
-及制作素材已归档到本地 Git 排除目录；独立的 GLB 文件预览不受影响。
+Web 首页在任务输入框上方显示 LUMEN 字标。「设置 → 通用设置 → 背景配色」提供五种浅色背景，沿用已有的浏览器偏好，刷新和跨标签页可同步。资料空间默认以网格展示，支持切换列表；旧书架偏好会打开网格。
 
 本地开发的 `/scene-preview`（静态导出 `/scene-preview.html`）用于检查语音场景和 GLB 示例，所有状态/RMS/审批均标注为模拟，不申请麦克风或建立通话。
 

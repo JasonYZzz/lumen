@@ -22,11 +22,25 @@ import time
 import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import Any, Literal
+from unittest.mock import patch
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, field_validator
+from pydantic_ai.messages import ToolCallPart, ToolReturnPart
 
 from lumen.agents.types import AgentEventKind, AgentProfile, AgentStatus
-from lumen.config import AppConfig, PromptConfig, ToolsConfig, load_config
+from lumen.config import (
+    AgentsConfig,
+    AgentSection,
+    AppConfig,
+    LimitsConfig,
+    MemoryConfig,
+    ModelNativeWebSearchConfig,
+    PermissionsConfig,
+    PromptConfig,
+    SessionsConfig,
+    ToolsConfig,
+    load_config,
+)
 from lumen.headless import run_headless
 from lumen.reasoning import ReasoningLevel, apply_reasoning, resolve_reasoning
 from lumen.resources import ResourceManager
@@ -203,6 +217,96 @@ async def trial(config: AppConfig, task: BenchmarkTask, effort: ReasoningLevel,
         }
 
 
+async def skill_trials(config: AppConfig, repeats: int, output: Path) -> None:
+    """Run a synthetic Skill selection matrix. Only the selected provider route is reused."""
+    model = config.agent.model_registry()[config.agent.default_model_name()].model_copy(
+        update={"native_web_search": ModelNativeWebSearchConfig(mode="disabled")}
+    )
+    cases = [
+        ("reference", "查一下本项目的冷链验收口令。只回答口令。", "ICE-728", "cold-chain"),
+        ("script", "执行本项目的封签校验。返回校验回执。", "SEAL-516", "seal-check"),
+        ("manual", "请查询人工发货签核词。缺少可用流程时回答未知。", "PACK-831", "dispatch"),
+        ("paraphrase", "冷藏货物交接时验收员需要报出口令。只回答口令。", "ICE-728", "cold-chain"),
+        ("missing", "查交接班代号。缺少资料时只回答未知。", "未知", "handover"),
+        ("disabled", "查档案核验码。缺少可用流程时只回答未知。", "未知", None),
+        ("unrelated", "计算 17 加 25。只回答数字。", "42", None),
+    ]
+    rows: list[dict[str, Any]] = []
+    matrix = [(case, mode, i) for i in range(repeats) for case in cases for mode in ("off", "manual", "auto")]
+    random.Random(0).shuffle(matrix)
+    for (case, prompt, expected, wanted), mode, repeat in matrix:
+        with tempfile.TemporaryDirectory(prefix="lumen-skill-eval-") as tmp:
+            root = Path(tmp)
+            with patch.object(Path, "home", return_value=root / "home"):
+                workspace = root / "work"
+                workspace.mkdir()
+                for name, description, extra, body in (
+                    ("cold-chain", "查询冷链验收口令", "", "读取 reference.txt 并只返回其中的口令。"),
+                    ("handover", "查询交接班代号", "", "读取 missing.txt。文件缺失时只回答未知。"),
+                    ("archive", "查询档案核验码", "", "核验码是 ARCHIVE-102。"),
+                    ("cold-storage", "查询冷库设备型号", "", "设备型号是 FREEZER-1。"),
+                    ("seal-check", "运行封签校验并返回回执", "scripts: {check: check.py}",
+                     "运行声明脚本 check。"),
+                    ("dispatch", "人工发货签核词", "disable-model-invocation: true", "签核词是 PACK-831。"),
+                ):
+                    folder = workspace / ".lumen/skills" / name
+                    folder.mkdir(parents=True)
+                    (folder / "SKILL.md").write_text(
+                        f"---\nname: {name}\ndescription: {description}\n{extra}\n---\n{body}",
+                        encoding="utf-8",
+                    )
+                    if name == "cold-chain":
+                        (folder / "reference.txt").write_text("ICE-728")
+                    if name == "seal-check":
+                        (folder / "check.py").write_text("print('SEAL-516')")
+                policy = AppConfig(
+                    version=2, config_path=workspace / "fixture.yaml",
+                    agent=AgentSection(
+                        model=model, skills_enabled=mode != "off",
+                        disabled_skill_paths=[str(workspace / ".lumen/skills/archive/SKILL.md")],
+                        limits=LimitsConfig(request_count=5, tool_calls=6, model_request_timeout_seconds=25,
+                                            model_retries=0),
+                    ), agents=AgentsConfig(enabled=False), memory=MemoryConfig(use=False, learn=False),
+                    sessions=SessionsConfig(directory=root / "sessions"), tools=ToolsConfig(builtins=[]),
+                    permissions=PermissionsConfig(always_allow=[] if mode == "off" else ["run_skill_script"]),
+                )
+                manager = ResourceManager(policy, workspace=workspace)
+                session = manager.session_repository.create(agent_name="eval", model_id=model.id)
+                catalog = [str(doc["name"]) for doc in manager.skill_catalog_documents()]
+                if "archive" in catalog or "dispatch" in catalog or (mode == "off" and catalog):
+                    raise RuntimeError("evaluation catalog includes an ineligible Skill")
+                if mode == "manual" and wanted:
+                    manager.activate_skill(session.id, wanted)
+                started = time.monotonic()
+                row: dict[str, Any] = {"case": case, "mode": mode, "repeat": repeat + 1, "success": False}
+                try:
+                    async with asyncio.timeout(75):
+                        outcome = await run_headless(
+                            manager, prompt, resume_id=session.id, output_format="json", stdout=io.StringIO(),
+                        )
+                    answer = "未知" if case == "manual" and mode != "manual" else expected
+                    row.update(success=not outcome.error and outcome.text.strip() == answer,
+                               contains_answer=not outcome.error and answer in outcome.text,
+                               requests=outcome.request_count, usage=outcome.usage,
+                               status="failed" if outcome.error else "returned")
+                except (ValueError, RuntimeError, OSError, TimeoutError) as error:
+                    row["status"] = type(error).__name__
+                loaded = manager.session_repository.load(session.id)
+                parts = [part for turn in loaded.turns for message in turn.messages for part in message.parts]
+                row["catalog"] = catalog
+                row["tools"] = [part.tool_name for part in parts if isinstance(part, ToolCallPart)]
+                row["script_ok"] = any(
+                    isinstance(part, ToolReturnPart) and part.tool_name == "run_skill_script"
+                    and "exit_code: 0" in str(part.content) for part in parts
+                )
+                row["active"] = [item.name for item in loaded.context_state.active_skills]
+                row["elapsed_seconds"] = round(time.monotonic() - started, 2)
+                rows.append(row)
+                await asyncio.to_thread(
+                    output.write_text, json.dumps({"model": model.id, "results": rows}, indent=2) + "\n",
+                )
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", type=Path)
@@ -217,7 +321,13 @@ def main() -> None:
     parser.add_argument("--repeats", type=int, default=5)
     parser.add_argument("--execute", action="store_true", help="Actually call the configured model")
     parser.add_argument("--output", type=Path)
+    parser.add_argument("--skill-eval", action="store_true", help="Compare off, manual and automatic Skills")
     args = parser.parse_args()
+    if args.skill_eval:
+        if not (args.config and args.execute and args.output and args.repeats > 0):
+            parser.error("--skill-eval requires --config, --execute, --output and positive --repeats")
+        asyncio.run(skill_trials(load_config(args.config), args.repeats, args.output))
+        return
     if args.offline:
         if args.micro or args.execute or args.config or args.tasks:
             parser.error("--offline cannot be combined with micro/provider arguments")

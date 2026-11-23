@@ -8,11 +8,14 @@ import json
 import re
 import stat
 import tempfile
+import time
 import zipfile
 from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal, cast
 from urllib.parse import quote, unquote, urlparse
+from uuid import uuid4
 
 import httpx
 
@@ -37,6 +40,42 @@ _NAME = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 _HOSTS = {"api.github.com", "codeload.github.com"}
 
 
+def installation_metadata(body: bytes) -> dict[str, str]:
+    if len(body) > 8192:
+        return {}
+    try:
+        fields = json.loads(body)
+        if not isinstance(fields, dict):
+            return {}
+        values = {k: v for k, v in cast(dict[str, object], fields).items()
+                  if k in {"source", "ref", "path", "content_revision"} and isinstance(v, str)}
+        if (len(values) != 4 or not re.fullmatch(r"sha256:[a-f0-9]{64}", values["content_revision"])
+                or not re.fullmatch(r"[a-f0-9]{40}|sha256:[a-f0-9]{64}", values["ref"])):
+            return {}
+        if values["path"] != ".":
+            bundle_path(values["path"])
+        if values["source"] != "upload" and not re.fullmatch(
+            r"https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", values["source"],
+        ):
+            values["source"] = "workspace"
+        return values
+    except (ValueError, UnicodeError):
+        return {}
+
+
+@dataclass(slots=True)
+class InstallPreview:
+    expires: float
+    session_id: str
+    scope: str
+    source: str
+    commit: str
+    tree: DirectoryBundle
+    destinations: dict[str, str]
+    confirmed_path: str | None = None
+    result: dict[str, Any] | None = None
+
+
 class SkillInstaller:
     def __init__(
         self,
@@ -58,6 +97,7 @@ class SkillInstaller:
         self.token = token
         self.transport = transport
         self.host_guard = host_guard
+        self._previews: dict[str, InstallPreview] = {}
 
     def spec(self) -> ToolSpec:
         scopes = ["project"] if self.project_trusted else []
@@ -112,6 +152,121 @@ class SkillInstaller:
 
         async with asyncio.timeout(110):
             source_id, commit, selected, tree = await self._source(source, path, ref)
+        return await self._install_tree(source_id, commit, selected, tree, name, scope, overwrite)
+
+    def clear_previews(self) -> None:
+        self._previews.clear()
+
+    def _destination(self, name: str, scope: str) -> str:
+        if scope == "project" and self.project_trusted:
+            return f".lumen/skills/{name}"
+        if scope == "user" and self.user_skills is not None:
+            return f"{USER_SKILLS_PREFIX}{name}"
+        raise ValueError("requested installation scope is unavailable")
+
+    def _adapter(self) -> DirectoryResourceAdapter:
+        return DirectoryResourceAdapter(
+            self.workspace, self.task_workspace.artifacts, user_skills=self.user_skills,
+        )
+
+    async def preview(
+        self, session_id: str, kind: Literal["zip", "directory", "github"], data: bytes,
+        scope: Literal["project", "user"],
+    ) -> dict[str, Any]:
+        self._destination("preview", scope)
+        selected = None
+        if kind == "github":
+            source = data.decode().strip()
+            self._github(source, None, None)
+            async with asyncio.timeout(110):
+                source_id, commit, selected, tree = await self._source(source, None, None)
+        elif kind == "zip":
+            tree = await asyncio.to_thread(self._archive, data, github=False)
+            source_id, commit = "upload", tree.revision
+        else:
+            try:
+                tree = DirectoryBundle.model_validate_json(data)
+            except ValueError:
+                raise ValueError("invalid directory manifest or file count") from None
+            await asyncio.to_thread(tree.validated_files)
+            source_id, commit = "upload", tree.revision
+
+        def inspect() -> tuple[list[dict[str, Any]], dict[str, str]]:
+            rows: list[dict[str, Any]] = []
+            revisions: dict[str, str] = {}
+            candidates = self._candidates(tree, selected, source_id.split("/")[-1])
+            if len(candidates) > 32:
+                raise ValueError("choose a smaller skill collection (maximum 32 candidates)")
+            for folder, skill in candidates:
+                resource = self._destination(skill.name, scope)
+                existing = self._adapter().read(resource)
+                revisions[folder] = existing.revision if existing else "missing"
+                marker = existing.files.get(_METADATA) if existing else None
+                prior = installation_metadata(marker.bytes()) if marker else {}
+                rows.append({
+                    "user_invocable": skill.user_invocable, "installed_source": prior.get("source", ""),
+                    "path": folder, "name": skill.name, "description": skill.description,
+                    "manual_only": skill.disable_model_invocation, "diagnostics": list(skill.diagnostics),
+                    "scripts": sorted(skill.scripts), "body": skill.body[:6000],
+                    "installed_revision": revisions[folder],
+                    "locally_modified": bool(existing and (
+                        _METADATA not in existing.files or self._locally_modified(existing)
+                    )),
+                })
+            if not rows:
+                raise ValueError("no valid SKILL.md in this package")
+            return rows, revisions
+
+        rows, revisions = await asyncio.to_thread(inspect)
+        now = time.monotonic()
+        if len(self._previews) >= 4:
+            del self._previews[next(iter(self._previews))]
+        identity = str(uuid4())
+        self._previews[identity] = InstallPreview(
+            now + 300, session_id, scope, source_id, commit, tree, revisions,
+        )
+        asyncio.get_running_loop().call_later(300, self._previews.pop, identity, None)
+        return {"preview": identity, "scope": scope, "source": source_id, "revision": commit,
+                "files": len(tree.files), "bytes": sum(len(item.bytes()) for item in tree.files.values()),
+                "candidates": rows}
+
+    @staticmethod
+    def _locally_modified(existing: DirectoryBundle) -> bool:
+        files = dict(existing.files)
+        metadata = files.pop(_METADATA, None)
+        if metadata is None:
+            return False
+        try:
+            stored = json.loads(metadata.bytes())
+            actual = DirectoryBundle(files=files, directories=existing.directories)
+            return stored["content_revision"] != actual.revision
+        except (KeyError, TypeError, ValueError, UnicodeError):
+            return True
+
+    async def confirm(
+        self, session_id: str, preview: str, path: str, scope: Literal["project", "user"], overwrite: bool,
+    ) -> dict[str, Any]:
+        entry = self._previews.get(preview)
+        if entry is None or entry.expires <= time.monotonic() or entry.session_id != session_id:
+            raise ValueError("preview expired; preview the package again")
+        if scope != entry.scope or path not in entry.destinations:
+            raise ValueError("selection does not match preview")
+        if entry.result is not None:
+            if entry.confirmed_path != path:
+                raise ValueError("preview already confirmed for a different candidate")
+            return dict(entry.result)
+        result = await self._install_tree(
+            entry.source, entry.commit, path, entry.tree, None, scope, overwrite, entry.destinations[path],
+        )
+        if result["status"] in {"installed", "updated", "already_installed"}:
+            entry.confirmed_path, entry.result = path, result
+        return result
+
+    async def _install_tree(
+        self, source_id: str, commit: str, selected: str | None, tree: DirectoryBundle,
+        name: str | None, scope: Literal["project", "user"], overwrite: bool,
+        preview_revision: str | None = None,
+    ) -> dict[str, Any]:
         candidates = await asyncio.to_thread(
             self._candidates, tree, selected, name or source_id.rsplit("/", 1)[-1]
         )
@@ -145,9 +300,7 @@ class SkillInstaller:
         bundle = DirectoryBundle(files=files, directories=directories)
         bundle.validated_files()
         directory_name = name or skill.name
-        resource = (
-            f"{USER_SKILLS_PREFIX}{directory_name}" if scope == "user" else f".lumen/skills/{directory_name}"
-        )
+        resource = self._destination(directory_name, scope)
 
         def publish() -> dict[str, Any]:
             adapter = DirectoryResourceAdapter(
@@ -157,12 +310,17 @@ class SkillInstaller:
             )
             existing = adapter.read(resource)
             source_revision = bundle.revision
+            current_revision = existing.revision if existing else "missing"
+            if preview_revision is not None and current_revision != preview_revision:
+                raise ValueError("destination changed since preview")
             if existing is not None:
                 local_files = dict(existing.files)
                 metadata_file = local_files.pop(_METADATA, None)
                 local_revision = DirectoryBundle(files=local_files, directories=existing.directories).revision
                 if local_revision == source_revision:
                     return self._result("already_installed", skill, adapter.path(resource), source_id, commit)
+                if preview_revision is not None and metadata_file is None:
+                    raise ValueError("unmanaged destination; existing files preserved")
                 if not overwrite:
                     return {
                         "status": "conflict",
@@ -247,6 +405,27 @@ class SkillInstaller:
             "message": f"Skill {skill.name!r} is available now; use {invocation}. No restart required.",
         }
 
+    def remove(self, skill: Skill, expected_revision: str) -> dict[str, Any]:
+        if skill.source not in {"user", "project"}:
+            raise ValueError("only managed installations can be removed")
+        resource = self._destination(skill.base_dir.name, skill.source)
+        if self._adapter().path(resource) != skill.base_dir:
+            raise ValueError("this directory is not a managed install destination")
+        existing = self._adapter().read(resource)
+        if existing is None or _METADATA not in existing.files or self._locally_modified(existing):
+            raise ValueError("unmanaged or locally modified installation; files preserved")
+        metadata = json.loads(existing.files[_METADATA].bytes())
+        if metadata.get("content_revision") != expected_revision:
+            raise ValueError("installation changed; refresh before removal")
+        product = self.task_workspace.open_work_product(resource, WorkProductKind.DIRECTORY.value)
+        if product["current"]["revision"] != existing.revision:
+            raise ValueError("installation changed during removal")
+        result = self.task_workspace.remove_skill_install(product["id"], existing.revision)
+        if result["status"] != "verified":
+            raise ValueError("removal did not verify")
+        self.refresh()
+        return {"status": "removed", "effect_id": result["id"]}
+
     async def _get(self, client: httpx.AsyncClient, url: str) -> bytes:
         for _ in range(4):
             parsed = urlparse(url)
@@ -262,6 +441,12 @@ class SkillInstaller:
                         raise ValueError("GitHub returned a redirect without a location")
                     url = str(response.url.join(location))
                     continue
+                if response.status_code == 429 or (
+                    response.status_code == 403 and response.headers.get("X-RateLimit-Remaining") == "0"
+                ):
+                    retry = response.headers.get("Retry-After", "")
+                    suffix = f"; retry after {retry} seconds" if retry.isdecimal() else ""
+                    raise ValueError("GitHub API rate limit reached" + suffix)
                 if response.status_code >= 400:
                     raise ValueError(
                         f"GitHub returned HTTP {response.status_code}; check repository/ref/access. "
@@ -297,8 +482,10 @@ class SkillInstaller:
                 resolved_ref = info.get("default_branch")
                 if not isinstance(resolved_ref, str) or not resolved_ref:
                     raise ValueError("GitHub did not return a default branch")
-            info = json.loads(await self._get(client, base + "/commits/" + quote(resolved_ref, safe="")))
-            commit = info.get("sha")
+            commit = resolved_ref
+            if not re.fullmatch(r"[0-9a-f]{40}", resolved_ref):
+                info = json.loads(await self._get(client, base + "/commits/" + quote(resolved_ref, safe="")))
+                commit = info.get("sha")
             if not isinstance(commit, str) or not re.fullmatch(r"[0-9a-f]{40}", commit):
                 raise ValueError("GitHub did not return a valid commit SHA")
             archive = await self._get(
@@ -349,7 +536,7 @@ class SkillInstaller:
         return owner, repository, ref, path
 
     @staticmethod
-    def _archive(body: bytes) -> DirectoryBundle:
+    def _archive(body: bytes, *, github: bool = True) -> DirectoryBundle:
         files: dict[str, BundleFile] = {}
         directories: list[str] = []
         total = 0
@@ -362,7 +549,9 @@ class SkillInstaller:
                 first, _, relative = safe.partition("/")
                 if root is None:
                     root = first
-                if first != root:
+                if not github:
+                    relative = safe
+                elif first != root:
                     raise ValueError("unexpected GitHub archive layout")
                 mode = item.external_attr >> 16
                 if stat.S_IFMT(mode) not in {0, stat.S_IFREG, stat.S_IFDIR}:
@@ -389,8 +578,12 @@ class SkillInstaller:
     ) -> list[tuple[str, Skill]]:
         candidates: list[tuple[str, Skill]] = []
         with tempfile.TemporaryDirectory(prefix="lumen-skill-inspect-") as temporary:
-            root = Path(temporary) / fallback
-            for file, item in sorted(tree.files.items()):
+            root = Path(temporary) / (fallback if _SEGMENT.fullmatch(fallback) else "upload")
+            for name, body in tree.validated_files().items():
+                target = root / name
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(body)
+            for file in sorted(tree.files):
                 if file != "SKILL.md" and not file.endswith("/SKILL.md"):
                     continue
                 folder = file.removesuffix("SKILL.md").rstrip("/") or "."
@@ -403,8 +596,6 @@ class SkillInstaller:
                 ):
                     continue
                 candidate = root / file
-                candidate.parent.mkdir(parents=True, exist_ok=True)
-                candidate.write_bytes(item.bytes())
                 skill = load_skill(candidate, "project")
                 if skill is not None:
                     candidates.append((folder, skill))

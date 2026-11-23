@@ -18,8 +18,7 @@ controls in goal details. Personal preferences and connections belong in Setting
 no standalone Memory button. The approved 2026-10-22 Web identity upgrade uses a pink-snow
 canvas, white reading surfaces and muted plum actions (#FAF7F8 / #302B33 / #795271 / #F2E9F1),
 preserving Geist and the existing workflows. The Web corners and favicon use the original
-Lumen Fold L; the welcome companion uses five regenerated transparent nine-tail fox forms
-based on the supplied reference. Dense controls use solid surfaces. Architecture Atlas, TUI,
+Lumen Fold L. The welcome centers the LUMEN wordmark above the task composer. Dense controls use solid surfaces. Architecture Atlas, TUI,
 native startup and app icons retain their Fold identity.
 
 The user approved the runnable r2 design in `../../design/lumen-v2/`. That prototype supplies
@@ -75,25 +74,9 @@ fresh approval. Unrestricted commands have the current user's file and network a
 response is reconciled from a fresh snapshot; if that fails, execution waits for reconnection.
 The existing approval-only API and /mode commands continue to preserve the current scope.
 
-Fox growth is an independent browser appearance preference. The welcome places a compact
-five-stop native “外观” slider directly below the composer; no appearance menu remains in Settings.
-樱粉 (default), 杏白, 薄荷, 雾蓝 and 浅紫 pair light page/side surfaces with the five fox forms
-from juvenile to mature. The current color is visible; assistive technology also reads the position.
-`src/components/mascot/fox-growth.ts` defines the choices; `appearance-control.tsx` owns the
-local preference. Changes apply immediately and save the color ID in `lumen.appearance`;
-reload restores it and other tabs synchronize it. Invalid values fall back to the base pink
-appearance; unavailable storage leaves the control usable with an honest notice. Model,
-reasoning and Session settings never select a form, and changing appearance sends no runtime
-mutation. The model/effort panel contains no fox. New images preload before a 320ms crossfade;
-a failed load retains the current image and a newer choice cancels stale callbacks. Static,
-reduced and inactive views do not animate. The two corner L marks and favicon remain independent of the form;
-empty states use the base fox. The thinking icon uses `lumen-claude-amber.svg` with its original
-breathing motion, disabled for reduced motion. Form changes do not represent model load,
-ability, task progress or accumulated experience. The centered welcome uses native 1254px
-regenerated sources with lossless responsive assets, quiet breathing, a base-form eye blink,
-pointer attention and a brief greeting. Reduced/static and hidden/offscreen modes stop motion.
-Short screens can scroll the complete welcome and composer. The original input PNGs remain;
-earlier WebP and video/layered/Rive/three.js alternatives are archived in ignored local backups.
+General settings offer five browser-local background colors. Changes apply immediately and synchronize
+across tabs using the existing `lumen.appearance` preference. A storage failure leaves the selection
+usable for the current page. On short screens the welcome and composer scroll together.
 
 Ideas are explainable rules over unfinished goals and visible document results. Active advancement
 is not proposed again; awaiting review opens the goal, and an unvalidated follow-up opens its existing
@@ -107,13 +90,10 @@ The material space collects verified Work Product outputs and newly generated lo
 in a completed answer. Files keep their actual bytes, type, source conversation and version;
 associated goals receive output links automatically. Ordinary conversation text is not a file.
 The material space also supports blank pages, original-file imports up to 20 MiB, collections,
-favorites, saved / hidden state, indexed-content search and versioned edits. Type filters, list
-and grid views share the same query. The default 3D shelf shares that query too: real resources become
-clothbound volumes with hover, selection, front/back flipping and drag rotation from the registered
-Ashen Press source. Its original source has no individual-page animation. “打开资料” reads the existing
-resource through its format-aware viewer. The shelf shows up to ten items at a time and pages through
-loaded results; grid/list remain available when WebGL or the source's external dependency cannot load.
-No example books substitute for missing resources. Goal, feed and conversation links open the same resource identity.
+favorites, saved / hidden state, indexed-content search and versioned edits. Grid and list use the same filters, search and resource actions. Grid is the default,
+including for browsers with the retired shelf preference. An explicit grid or list choice persists
+in `lumen.libraryView`. On phones one complete type selector replaces the horizontal filters.
+Goal, feed and conversation links open the same resource identity.
 Goals support creation, editing, status changes, archive, deletion and restoration, with search
 and state filters. Per-row menus expose management without opening the conversation. New goals
 start their associated planning conversation after saving; continuous goal advancement and
@@ -161,5 +141,4 @@ The 2026-10-22 workflow and visual upgrade is recorded in
 `../../docs/research/2026-10-22-muse-ui-upgrade-validation.md`; its current create-and-plan behavior
 supersedes the older save-only goal creation record. Root PRODUCT.md / DESIGN.md describe the
 Architecture Atlas and must not be overwritten.
-The Web identity assets, mapping, backup boundary and validation entry points are documented in
-`../../docs/brand/mascot/README.md`.
+The Web identity assets are documented in `../../docs/brand/README.md`.

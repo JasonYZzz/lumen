@@ -70,7 +70,7 @@ import {
   parsePromptInvocation,
 } from '@/lib/slash-commands'
 import { Composer } from './composer'
-import { useAppearance } from './appearance-control'
+import { AppearanceControl, useAppearance } from './appearance-control'
 import { AssistantWorkspace, assistantPages, goalStatusLabels, goalExecutionLabels, type AssistantPage, type AssistantDiscussion, type AssistantView } from './assistant-workspace'
 import type { AssistantContextRef, AssistantIdea } from '@/lib/api/types'
 import { PersonalPreferences } from './personal-preferences'
@@ -108,6 +108,8 @@ import {
   type TurnPresentation,
 } from '@/lib/turn-activity'
 import { useModalFocus } from './use-modal-focus'
+import { SkillSettings } from './skill-settings'
+import { SettingsList } from './settings-list'
 import { ModelSettingsControl, modelDisplayName, type ModelSettingsView } from './model-settings-control'
 
 function requestId() {
@@ -1808,6 +1810,8 @@ export function LumenApp() {
 
         {settingsOpen && (
           <SettingsDialog
+            appearance={appearance}
+            ensureSession={async () => sessionId ?? createSession()}
             workspace={bootstrap?.workspace ?? ''}
             runActive={workspaceBusy}
             onClose={() => setSettingsOpen(false)}
@@ -1925,9 +1929,6 @@ export function LumenApp() {
         <div className={`conversation-stage ${isLanding ? 'is-landing' : ''}`}>
           {isLanding ? (
             <LandingEntry
-              stage={appearance.stage}
-              onAppearanceChange={appearance.selectStage}
-              appearanceNote={appearance.storageAvailable ? undefined : '浏览器无法保存外观，刷新后可能恢复默认。'}
               value={input}
               busy={false}
               queueMode={queueMode}
@@ -2191,11 +2192,15 @@ function modelDraftChanged(draft: ModelDraft | null, configuration: Configuratio
 }
 
 function SettingsDialog({
+  appearance,
+  ensureSession,
   workspace,
   runActive,
   onClose,
   onModelConfigurationApplied,
 }: {
+  appearance: ReturnType<typeof useAppearance>
+  ensureSession: () => Promise<string>
   workspace: string
   runActive: boolean
   onClose: () => void
@@ -2456,7 +2461,12 @@ function SettingsDialog({
                 </div>
               </div>
             )}
-            {loading ? (
+            {section === 'overview' && <>
+              <div className="settings-section-heading"><h2>通用设置</h2></div>
+              <AppearanceControl stage={appearance.stage} onChange={appearance.selectStage}
+                note={appearance.storageAvailable ? undefined : '浏览器无法保存外观，刷新后可能恢复默认。'} />
+            </>}
+            {loading && !(section === 'extensions' && configuration) ? (
               <div className="settings-loading"><CircleNotch size={18} className="spin" /> 正在读取配置</div>
             ) : error && !configuration ? (
               <div className="settings-error" role="alert">
@@ -2636,7 +2646,10 @@ function SettingsDialog({
                 restartRequired={restartRequired || Boolean(configuration?.restartRequired)}
                 onRetry={() => void loadCapabilities()}
                 onMcpEnabled={(name, enabled) => void setMcpEnabled(name, enabled)}
-              />
+              ><SkillSettings inventory={capabilities} configRevision={editable ? configuration?.revision : undefined}
+                ensureSession={ensureSession} busy={runActive} onChange={async () => {
+                  await Promise.all([loadCapabilities(), load()]); onModelConfigurationApplied()
+                }} /></CapabilitySettings>
             ) : (
               <AgentProfileSettings
                 capabilities={capabilities}
@@ -2663,7 +2676,6 @@ function SettingsOverview({
 }) {
   return (
     <div className="settings-overview">
-      <div className="settings-section-heading"><div><h2>通用设置</h2><p>当前工作区的配置来源与运行能力概览。</p></div></div>
       {capabilityError && <div className="settings-notice"><WarningCircle size={17} /><span><strong>运行能力暂不可用</strong>{capabilityError}。模型配置仍可独立管理。</span></div>}
       {configuration?.warnings.map((warning) => <div className="settings-notice" key={warning}><Info size={17} /><span>{warning}</span></div>)}
       <dl className="settings-stat-grid">
@@ -2683,7 +2695,10 @@ function SettingsOverview({
   )
 }
 
+const toolStatusLabels: Record<string, string> = { disabled: '已停用', deferred: '按需加载', loaded: '已加载' }
+
 function CapabilitySettings({
+  children,
   capabilities,
   configuration,
   loading,
@@ -2695,6 +2710,7 @@ function CapabilitySettings({
   onRetry,
   onMcpEnabled,
 }: {
+  children: React.ReactNode
   capabilities: CapabilityInventory | null
   configuration: ConfigurationSnapshot | null
   loading: boolean
@@ -2710,15 +2726,38 @@ function CapabilitySettings({
     (capabilities?.mcp_servers ?? []).map((item) => [String(item.name), item]),
   )
   const configuredMcp = configuration?.mcpServers ?? []
-  const groups = [
-    { title: 'Skills', items: capabilities?.skills ?? [], key: 'name' },
-    { title: '工具', items: capabilities?.tools ?? [], key: 'name' },
-  ]
-  return <div className="capability-settings"><div className="settings-section-heading"><div><h2>扩展能力</h2><p>模型内建联网在模型页配置；这里控制 Exa 等外部 MCP 连接。</p></div></div>{restartRequired && <div className="settings-notice is-success" role="status"><CheckCircle size={17} weight="fill" /><span><strong>扩展配置已保存</strong>重启 Lumen Web 后应用 MCP 连接变化。</span></div>}{mutationError && <div className="settings-inline-error" role="alert"><span>{mutationError}</span></div>}{loading ? <div className="settings-loading"><CircleNotch size={18} className="spin" /> 正在读取运行能力</div> : error ? <div className="settings-error" role="alert"><WarningCircle size={18} /><span>{error}</span><button type="button" onClick={onRetry}>重试</button></div> : <><section className="mcp-settings-list"><h3>MCP Servers <small>{configuredMcp.length}</small></h3>{configuredMcp.length ? configuredMcp.map((server) => {
-    const runtime = runtimeMcp.get(server.name)
-    const status = String(runtime?.status ?? (server.enabled ? '等待重启' : 'disabled'))
-    return <div className="capability-row capability-toggle" key={server.name}><span><strong>{server.name}</strong><small>{server.enabled ? `配置为启用 · 当前状态：${status}` : '配置为停用 · 不连接、不加载工具与内容'}</small></span><label className="settings-checkbox"><span className="sr-only">{server.enabled ? `停用 ${server.name}` : `启用 ${server.name}`}</span><input type="checkbox" role="switch" aria-label={`${server.name} MCP`} checked={server.enabled} disabled={!editable || busy !== null} onChange={(event) => onMcpEnabled(server.name, event.target.checked)} /></label></div>
-  }) : <p>当前没有 MCP Server。</p>}</section>{groups.map((group) => <section key={group.title}><h3>{group.title} <small>{group.items.length}</small></h3>{group.items.length ? group.items.map((item, index) => <div className="capability-row" key={`${String(item[group.key] ?? index)}`}><span><strong>{String(item.name ?? item.reference ?? `item-${index + 1}`)}</strong><small>{String(item.description ?? item.origin ?? '')}</small></span><em>{String(item.status ?? '已载入')}</em></div>) : <p>当前没有 {group.title}。</p>}</section>)}</>}</div>
+  return <div className="capability-settings extension-settings">
+    <div className="settings-section-heading"><h2>扩展能力</h2></div>
+    {restartRequired && <div className="settings-notice is-success" role="status">
+      <CheckCircle size={17} weight="fill" /><span>扩展配置已保存，重启 Lumen Web 后应用 MCP 连接变化。</span>
+    </div>}
+    {mutationError && <div className="settings-inline-error" role="alert">{mutationError}</div>}
+    {loading && !capabilities ? <div className="settings-loading"><CircleNotch size={18} className="spin" /> 正在读取运行能力</div>
+      : error && !capabilities ? <div className="settings-error" role="alert">{error}<button type="button" onClick={onRetry}>重试</button></div>
+      : <>
+        {error && <div className="settings-error" role="alert">{error}<button type="button" onClick={onRetry}>重试</button></div>}
+        {children}
+        <SettingsList title="MCP 服务" items={configuredMcp} empty="当前没有配置 MCP 服务。">
+          {server => {
+            const runtime = runtimeMcp.get(server.name)
+            const status = String(runtime?.status ?? '等待重启')
+            return <div className="capability-row capability-toggle" key={server.name}>
+              <span><strong>{server.name}</strong><small>{server.enabled
+                ? `已启用 · ${status === 'ok' ? '已连接' : status}` : '已停用'}</small></span>
+              <label className="settings-checkbox"><input type="checkbox" role="switch" aria-label={`${server.name} MCP`}
+                checked={server.enabled} disabled={!editable || busy !== null}
+                onChange={event => onMcpEnabled(server.name, event.target.checked)} /></label>
+            </div>
+          }}
+        </SettingsList>
+        <SettingsList title="工具" items={capabilities?.tools ?? []} empty="当前没有可用工具。">
+          {item => <div className="capability-row" key={String(item.name)}>
+            <span><strong>{String(item.name)}</strong><small>{String(item.description ?? item.origin ?? '')}</small></span>
+            <em>{toolStatusLabels[String(item.status)] ?? String(item.status ?? '')}</em>
+          </div>}
+        </SettingsList>
+      </>}
+  </div>
 }
 
 function AgentProfileSettings({

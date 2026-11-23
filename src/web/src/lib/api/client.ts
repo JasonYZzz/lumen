@@ -35,6 +35,7 @@ import type {
   TurnRestorePreview,
 } from './types'
 
+import type { components } from './schema.generated'
 import { checkAuthentication } from './errors'
 
 const apiBaseUrl = process.env.NEXT_PUBLIC_LUMEN_API_BASE?.replace(/\/$/, '') ?? ''
@@ -91,7 +92,21 @@ export async function exchangeLaunchToken() {
   window.history.replaceState({}, '', `${url.pathname}${url.search}${url.hash}`)
 }
 
+export type SkillPreview = components['schemas']['SkillPreview']
+
 export const lumenApi = {
+  previewSkill: (session: string, kind: string, scope: string, body: BodyInit) =>
+    requestJson<SkillPreview>(`/api/v1/sessions/${session}/skills/preview?kind=${kind}&scope=${scope}`, {
+      method: 'POST', headers: { 'Content-Type': 'application/octet-stream' }, body,
+    }),
+  confirmSkill: (session: string, preview: SkillPreview, path: string, overwrite: boolean) =>
+    requestJson<{ status: string; name: string }>(`/api/v1/sessions/${session}/skills/confirm`, {
+      method: 'POST', body: JSON.stringify({ preview: preview.preview, scope: preview.scope, path, overwrite }),
+    }),
+  manageSkill: (session: string, path: string, action: string, revision: string) =>
+    requestJson(`/api/v1/sessions/${session}/skills/manage`, {
+      method: 'POST', body: JSON.stringify({ path, action, revision }),
+    }),
   preferences: () => requestJson<{ available: boolean; records: Array<{
     id: string; content: string; scope: string; source_kind: string; status: string; updated_at: string
   }> }>('/api/v1/assistant/preferences'),

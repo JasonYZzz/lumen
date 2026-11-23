@@ -1,6 +1,6 @@
 import { useEffect, useState, type RefObject } from 'react'
 
-export function useMascotVisibility(target: RefObject<HTMLElement | null>) {
+export function useSceneVisibility(target: RefObject<HTMLElement | null>) {
   const [pageVisible, setPageVisible] = useState(true)
   const [onScreen, setOnScreen] = useState(true)
 

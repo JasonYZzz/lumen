@@ -109,6 +109,8 @@ agent:
     parallel_tool_calls: parallel_safe
   # Builtins are packaged but opt-in so existing catalogs stay unchanged.
   builtin_skills_enabled: true
+  # 可选发现用户和受信项目的 .agents/skills；同一范围内 .lumen/skills 优先。
+  shared_skills_enabled: false
   # Only the managed installer may write ~/.lumen/skills; shell sandbox stays enabled.
   user_skill_install_enabled: true
 

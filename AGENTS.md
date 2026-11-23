@@ -51,7 +51,7 @@ Lumen 是通用、可配置的 Agent framework：Provider 可替换，运行时�
 
 ### 持久化、恢复与完成
 
-- Session 是 append-only journal。当前 schema v13，v1–v12 必须可加载且不改写；升级只追加 `schema_upgrade`。配置 schema v2，v1 只在内存迁移并警告，不自动重写用户配置。
+- Session 是 append-only journal。当前 schema v14，v1–v13 必须可加载且不改写；升级只追加 `schema_upgrade`。配置 schema v2，v1 只在内存迁移并警告，不自动重写用户配置。
 - 大载荷进入内容寻址 ArtifactStore，journal 留引用和有界摘要。压缩保留 raw history，以绝对 `source_end` 去覆盖前缀；未持久化 checkpoint 不作持久父节点，瞬时 Skill/Memory/MCP 内容不重复入历史。
 - 主模型重试只由 Loop 管理；默认无次数/请求总时限硬墙，显式预算有效。可撤回候选文字但保留已完成工具，不执行半截参数或透明重放未知外部/原生工具动作。故障分类、心跳与恢复矩阵按长任务恢复文档验证，覆盖自动重连和 Session 重载。
 - 普通问答不创建 Work Product，正文按需读。mutation 记录 prepared/applied/verified/failed/rolled_back；selector 多候选拒绝，局部修改验证目标变化、非目标不变。
@@ -63,7 +63,7 @@ Lumen 是通用、可配置的 Agent framework：Provider 可替换，运行时�
 - 本地/MCP 工具经 Gateway；canonical output 派生模型文字和客户端展示，post Hook 不改 canonical output/Effect。工具与 UI 不自行写 timeline。Provider 原生工具属于 ModelDriverRequest，不属于 `search_tools` 目录。
 - MCP/插件未声明副作用默认 unknown。Lumen Plan 只信任 Contract 的 `Risk=read`，不猜命令 basename；Git 检查用 `git_status` / `git_diff`。
 - Lumen Git stage/commit/push 由根 Host 的结构化 Interface 持有：stage 不执行仓库 content filter；commit/push 为 `Risk=confirm`，每次新审批，auto、记忆规则和 child 均不能放宽。
-- 文件经 Workspace 路径解析，默认拒绝 `..`、绝对路径/符号链接逃逸；配置默认 `sandbox.mode: disabled` 或 Host 明确确认的会话“完全访问”可授权外部目录，仍保留 mutation 的符号链接、revision 与验证保护。范围由 Host 派生 task-local 投影，不修改共享配置；切换预设先结束运行／Agent／Live，fork 收回工作区范围。可写 child 的文件工具、cwd 与命令 sandbox 保持 worktree 边界。Sandbox 与审批正交，`workspace_write` fail closed。`run_command` 只提供 execution receipt，不代表捕获全部文件副作用。
+- 文件经 Workspace 路径解析，默认 `sandbox.mode: workspace_write`，拒绝 `..`、绝对路径/符号链接逃逸。显式配置 `sandbox.mode: disabled` 或经 Host 确认的会话“完全访问”可授权外部目录，仍保留 mutation 的符号链接、revision 与验证保护。范围由 Host 派生 task-local 投影，不修改共享配置；切换预设先结束运行／Agent／Live，fork 收回工作区范围。可写 child 的文件工具、cwd 与命令 sandbox 保持 worktree 边界。Sandbox 与审批正交，`workspace_write` fail closed。`run_command` 只提供 execution receipt，不代表捕获全部文件副作用。
 - command Hook 使用 SandboxRunner，启动或沙箱失败即拒绝；Python Hook/Plugin 是显式信任的 Host 进程内代码。secret、API key、个人数据和完整凭据不进入日志、Session、fixture、diff 或 Artifact 摘要。
 - Lumen child 深度最多一，工具为父有效集合 ∩ 角色 allow-list ∩ workspace mode，无多 Agent 控制工具；角色/Skill 不扩大权限。explorer 共享只读，default/worker 写独立 worktree；校验父 Session 所有权，spawn 幂等。
 - worktree 导入检查基线、父 dirty path 和三方冲突，并验证导入。`LegacyChildRunAdapter` 只投影到 AgentOrchestrator；Session fork 不复制运行中执行，未完成 Agent 记录 `not_carried`。

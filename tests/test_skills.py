@@ -11,6 +11,7 @@ from pathlib import Path
 
 import pytest
 
+from lumen.config import AppConfig
 from lumen.skills import (
     Skill,
     SkillLoader,
@@ -374,7 +375,7 @@ def test_expand_skill_with_args() -> None:
 # ---------------------------------------------------------------------------
 
 
-def _config_with_skills(tmp_path: Path) -> object:
+def _config_with_skills(tmp_path: Path) -> AppConfig:
     from lumen.config import load_config
 
     config_path = tmp_path / "agent.yaml"
@@ -510,6 +511,118 @@ def test_session_skill_load_saves_complete_snapshot(tmp_path: Path) -> None:
     assert manager.active_skill_documents(session.id)[0]["body"] == body
     loader("review")
     assert len(manager.active_skill_documents(session.id)) == 1
+
+
+def test_codex_policy_manual_dependencies_are_session_bound_and_versioned(tmp_path: Path) -> None:
+    from lumen.resources import ResourceManager
+    from lumen.skills import skill_child
+
+    root = tmp_path / ".lumen/skills/manual"
+    _write_skill(root, name="manual")
+    (root / "agents").mkdir()
+    (root / "agents/openai.yaml").write_text("policy: {allow_implicit_invocation: false}")
+    (root / "guide.md").write_text("first revision")
+    manager = ResourceManager(_config_with_skills(tmp_path), workspace=tmp_path)
+    read = manager.registry.entries["read_skill_resource"].spec.function
+    assert "manual" not in {item["name"] for item in manager.skill_catalog_documents()}
+    session = manager.session_repository.create(agent_name="test", model_id="test")
+    other = manager.session_repository.create(agent_name="test", model_id="test")
+    manager.bind_session_context(session.id)
+    manager.activate_skill(session.id, "manual")
+    assert "first revision" in read("manual", "guide.md")
+    token = skill_child.set(True)
+    try:
+        with pytest.raises(FileNotFoundError):
+            read("manual", "guide.md")
+    finally:
+        skill_child.reset(token)
+    manager.bind_session_context(other.id)
+    with pytest.raises(FileNotFoundError):
+        read("manual", "guide.md")
+    resumed = ResourceManager(_config_with_skills(tmp_path), workspace=tmp_path)
+    resumed.bind_session_context(session.id)
+    read = resumed.registry.entries["read_skill_resource"].spec.function
+    (root / "guide.md").write_text("second revision")
+    with pytest.raises(ValueError, match="changed"):
+        read("manual", "guide.md")
+    resumed.activate_skill(session.id, "manual")
+    assert "second revision" in read("manual", "guide.md")
+    resumed.config.agent.disabled_skill_paths = [str(root / ".." / "manual" / "SKILL.md")]
+    resumed.refresh_skills()
+    assert not resumed.active_skill_documents(session.id)
+    assert resumed.session_context.load(session.id).active_skills
+    with pytest.raises(FileNotFoundError):
+        read("manual", "guide.md")
+    resumed.config.agent.disabled_skill_paths = []
+    resumed.config.project_trusted = False
+    resumed.refresh_skills()
+    assert not resumed.active_skill_documents(session.id)
+    with pytest.raises(FileNotFoundError):
+        read("manual", "guide.md")
+    resumed.config.project_trusted = True
+    resumed.session_context.deactivate(session.id, "skill", "manual")
+    with pytest.raises(FileNotFoundError):
+        read("manual", "guide.md")
+
+
+def test_root_skill_markdown_only_pins_its_own_body(tmp_path: Path) -> None:
+    from lumen.resources import ResourceManager
+
+    shared = tmp_path / ".lumen/skills"
+    shared.mkdir(parents=True)
+    (shared / "SKILL.md").write_text("---\nname: standalone\ndescription: top level\n---\nBody only.")
+    (shared / "neighbor.txt").write_text("unrelated asset")
+    manager = ResourceManager(_config_with_skills(tmp_path), workspace=tmp_path)
+    session = manager.session_repository.create(agent_name="test", model_id="test")
+    manager.bind_session_context(session.id)
+    manager.activate_skill(session.id, "standalone")
+    active, = manager.session_context.load(session.id).active_skills
+    assert active.bundle_revision is None
+    assert manager.active_skill_documents(session.id)[0]["body"] == "Body only."
+    with pytest.raises(ValueError, match="own directory"):
+        manager.registry.entries["read_skill_resource"].spec.function("standalone", "neighbor.txt")
+
+
+def test_explicit_script_activation_refuses_changed_helper(tmp_path: Path) -> None:
+    from lumen.resources import ResourceManager
+
+    folder = tmp_path / ".lumen/skills/scripted"
+    folder.mkdir(parents=True)
+    (folder / "SKILL.md").write_text(
+        "---\nname: scripted\ndescription: check\ndisable-model-invocation: true\n"
+        "scripts: {check: check.py}\n---\nUse check."
+    )
+    (folder / "check.py").write_text("from helper import word\nprint(word)")
+    helper = folder / "helper.py"
+    helper.write_text('word = "first"')
+    config = _config_with_skills(tmp_path)
+    config.sandbox.mode = "disabled"
+    manager = ResourceManager(config, workspace=tmp_path)
+    session = manager.session_repository.create(agent_name="test", model_id="test")
+    manager.bind_session_context(session.id)
+    runner = manager.registry.entries["run_skill_script"].spec.function
+    with pytest.raises(FileNotFoundError):
+        runner("scripted", "check")
+    manager.activate_skill(session.id, "scripted")
+    assert "first" in runner("scripted", "check")
+    helper.write_text('word = "changed"')
+    with pytest.raises(ValueError, match="changed"):
+        runner("scripted", "check")
+
+
+def test_shared_skill_roots_are_opt_in_and_shadowing_is_visible(tmp_path: Path) -> None:
+    shared = tmp_path / ".agents/skills/example"
+    local = tmp_path / ".lumen/skills/example"
+    _write_skill(shared, name="example")
+    assert not any(s.name == "example" for s in SkillLoader(tmp_path).discover())
+    _write_skill(local, name="example")
+    loader = SkillLoader(tmp_path, include_shared=True)
+    assert next(s for s in loader.discover() if s.name == "example").base_dir == local
+    alternate = tmp_path / ".lumen/skills/../skills/example/SKILL.md"
+    loader = SkillLoader(tmp_path, include_shared=True, disabled_paths=(str(alternate),))
+    assert next(s for s in loader.discover() if s.name == "example").base_dir == shared
+    loader = SkillLoader(tmp_path, include_shared=True, include_project=False)
+    assert not any(s.base_dir in {local, shared} for s in loader.discover())
 
 
 def test_model_skill_resource_refuses_manual_only_skill_when_reader_exists(tmp_path: Path) -> None:

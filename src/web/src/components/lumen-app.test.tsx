@@ -12,6 +12,7 @@ vi.mock('../lib/api/client', () => ({
   subscribeRun: vi.fn(() => () => {}),
   lumenApi: {
     readAttachment: vi.fn(async () => new Blob()),
+    previewSkill: vi.fn(), confirmSkill: vi.fn(),
     bootstrap: vi.fn(), listSessions: vi.fn(), createSession: vi.fn(), session: vi.fn(),
     updateSessionSettings: vi.fn(), updateWorkspaceSettings: vi.fn(), startRun: vi.fn(),
     forkSession: vi.fn(), renameSession: vi.fn(), cancelRun: vi.fn(), invokeSkill: vi.fn(), invokePrompt: vi.fn(),
@@ -25,7 +26,6 @@ vi.mock('../lib/api/client', () => ({
     editAssistant: vi.fn(), assistantFeed: vi.fn(), assistantDiscussion: vi.fn(),
   },
 }))
-vi.mock('./mascot/mascot-scene', () => ({ MascotScene: ({stage = 0}: {stage?: number}) => <div data-testid="fox" data-stage={stage} /> }))
 vi.mock('./live-voice-controls', () => ({ LiveVoiceControls: () => null }))
 
 let root: Root
@@ -160,9 +160,11 @@ it('changes local appearance without model writes, and keeps it when thinking ef
     return {status: 'updated'}
   })
   await mount()
-  expect(container.querySelector('[data-testid="fox"]')?.getAttribute('data-stage')).toBe('0')
+  expect(container.querySelector('[aria-label="开始新任务"] h2')?.textContent).toBe('LUMEN')
   await type('保留外观测试草稿')
-  const range = container.querySelector<HTMLInputElement>('[aria-label="背景与成长档位"]')!
+  await click(button('打开系统设置'))
+  await click(button('通用设置'))
+  const range = container.querySelector<HTMLInputElement>('[aria-label="背景配色"]')!
   await act(async () => {
     Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(range, '2')
     range.dispatchEvent(new Event('input', {bubbles: true}))
@@ -173,14 +175,9 @@ it('changes local appearance without model writes, and keeps it when thinking ef
   expect(lumenApi.updateWorkspaceSettings).not.toHaveBeenCalled()
   expect(lumenApi.upsertModelConfiguration).not.toHaveBeenCalled()
   expect(lumenApi.startRun).not.toHaveBeenCalled()
-  expect(lumenApi.configuration).not.toHaveBeenCalled()
-  await click(button('打开系统设置'))
-  expect(container.querySelector('[role="dialog"]')?.textContent).not.toContain('背景与形象')
   await click(button('关闭设置'))
-  expect(container.querySelector('[data-testid="fox"]')?.getAttribute('data-stage')).toBe('2')
   await choose('推理强度：high', 'low')
   expect(lumenApi.updateSessionSettings).toHaveBeenCalledWith('discussion', {reasoningEffort: 'low'})
-  expect(container.querySelector('[data-testid="fox"]')?.getAttribute('data-stage')).toBe('2')
   expect(document.documentElement.dataset.appearance).toBe('mint')
   expect(container.querySelector('textarea')?.value).toBe('保留外观测试草稿')
 })
@@ -768,6 +765,60 @@ describe('settings editing', () => {
     expect(lumenApi.upsertModelConfiguration).toHaveBeenLastCalledWith('model-a', expect.objectContaining({
       reasoningProfile: 'openai-gpt56-sol', id: 'openai:gpt-5.6',
     }))
+  })
+
+  it('shows five entries per extension list and expands each list independently', async () => {
+    const named = (prefix: string, count: number) => Array.from({ length: count }, (_, i) => ({ name: prefix + i }))
+    configuration.mcpServers = named('server-', 6).map(item => ({ ...item, enabled: true, source: null }))
+    vi.mocked(lumenApi.capabilities).mockResolvedValue({
+      skills: named('skill-', 10), tools: named('tool-', 12), agent_profiles: [], mcp_servers: [],
+    })
+    await mount()
+    await click(button('打开系统设置'))
+    await click(button('扩展能力'))
+    const counts = () => Array.from(document.querySelectorAll('.extension-list'), list =>
+      list.querySelectorAll('.skill-entry, .capability-row').length)
+    expect(counts()).toEqual([5, 5, 5])
+    await click(button('显示更多工具'))
+    expect(counts()).toEqual([5, 5, 10])
+    await click(button('显示更多工具'))
+    expect(counts()).toEqual([5, 5, 12])
+    expect(document.querySelector('[aria-label="显示更多工具"]')).toBeNull()
+    await click(button('显示更多Skills'))
+    await click(button('显示更多MCP 服务'))
+    expect(counts()).toEqual([10, 6, 12])
+    expect(document.querySelectorAll('.extension-pagination button')).toHaveLength(3)
+    await click(button('收起工具'))
+    expect(counts()).toEqual([10, 6, 5])
+  })
+
+  it('keeps the invocation hint after an uploaded Skill refreshes settings', async () => {
+    vi.mocked(lumenApi.capabilities).mockResolvedValue({
+      tools: [{ name: 'install_skill', status: 'loaded', approval: 'confirm' }],
+      skills: [], agent_profiles: [], mcp_servers: [],
+    })
+    const preview = {
+      preview: 'selected-upload', scope: 'project' as const, source: 'upload', revision: 'v1', files: 1, bytes: 128,
+      candidates: [{ name: 'review', path: '.', description: 'Review notes', manual_only: true, diagnostics: [],
+        scripts: [], body: 'Review notes', user_invocable: true, installed_source: '', installed_revision: 'missing', locally_modified: false }],
+    }
+    vi.mocked(lumenApi.previewSkill).mockResolvedValue(preview)
+    vi.mocked(lumenApi.confirmSkill).mockResolvedValue({ name: 'review', status: 'installed' })
+    await mount()
+    await click(button('打开系统设置'))
+    await click(button('扩展能力'))
+    expect(document.querySelector('.extension-pagination')).toBeNull()
+    expect(button('导入技能').getAttribute('aria-expanded')).toBe('false')
+    await click(button('导入技能'))
+    const input = document.querySelector<HTMLInputElement>('input[aria-label="选择技能包"]')!
+    const file = new File(['fixture'], 'review.zip')
+    Object.defineProperty(input, 'files', { value: [file] })
+    await act(async () => { input.dispatchEvent(new Event('change', { bubbles: true })) })
+    await click(button('预览技能包'))
+    expect(lumenApi.confirmSkill).not.toHaveBeenCalled()
+    await click(button('确认安装'))
+    expect(lumenApi.confirmSkill).toHaveBeenCalledWith(expect.any(String), preview, '.', false)
+    expect(document.body.textContent).toContain('可以在会话中输入 /skill:review')
   })
 
   it('saves provider-native search independently from external MCP activation', async () => {

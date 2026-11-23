@@ -33,7 +33,6 @@ export interface ComposerProps {
   onSubmit: () => void
   onCommand?: (command: string, preserveDraft?: boolean) => void
   onStop: () => void
-  onFocusChange?: (focused: boolean) => void
   liveControl?: ReactNode
   settingsControl?: ReactNode
 }
@@ -53,7 +52,6 @@ export function Composer({
   onSubmit,
   onCommand,
   onStop,
-  onFocusChange,
   liveControl,
   settingsControl,
 }: ComposerProps) {
@@ -342,8 +340,6 @@ export function Composer({
             onScroll={syncHighlight}
             onKeyDown={handleKeyDown}
             onPaste={handlePaste}
-            onFocus={() => onFocusChange?.(true)}
-            onBlur={() => onFocusChange?.(false)}
             aria-expanded={matchingCommands.length > 0 || files.length > 0}
             aria-controls={files.length ? 'file-completion-menu' : matchingCommands.length ? 'slash-command-menu' : undefined}
             aria-activedescendant={files.length ? `file-completion-${fileIndex}` : matchingCommands.length ? `slash-command-${commandIndex}` : undefined}

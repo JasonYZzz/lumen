@@ -96,8 +96,8 @@ def configuration_stamp(resolver: ConfigResolver) -> str:
             digest.update(source.path.read_bytes())
         except FileNotFoundError:
             digest.update(b"<missing>")
-    skills = resolver.workspace / ".lumen" / "skills"
-    digest.update(str(skills.is_dir()).encode())
+    for root in (".lumen", ".agents"):
+        digest.update(str((resolver.workspace / root / "skills").is_dir()).encode())
     return digest.hexdigest()
 
 

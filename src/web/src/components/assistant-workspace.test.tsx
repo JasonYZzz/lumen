@@ -36,6 +36,7 @@ let resource: AssistantResource
 
 beforeEach(() => {
   vi.clearAllMocks()
+  window.localStorage.clear()
   vi.stubGlobal('ResizeObserver', class {observe() {} disconnect() {}})
   state = {
     owner: true,
@@ -272,6 +273,39 @@ it('queries the Library on the server and preserves a bookmark control after sav
     'older note',
     'all',
   )
+})
+
+it('defaults to the grid and restores an explicitly saved library view', async () => {
+  const render = async () => {
+    await act(async () => root.render(<AssistantWorkspace page="library" initialIntent=""
+      onDiscuss={vi.fn()} onOpenSession={vi.fn()} />))
+    await settle()
+  }
+  await render()
+  expect(container.querySelector('.assistant-resource-list.is-grid')).not.toBeNull()
+  expect(container.querySelector('.library-scene')).toBeNull()
+  expect(container.querySelector('select[aria-label="资料类型筛选"] option[value="trash"]')).not.toBeNull()
+  await click('列表视图')
+  expect(window.localStorage.getItem('lumen.libraryView')).toBe('list')
+  await act(async () => root.unmount())
+  root = createRoot(container)
+  await render()
+  expect(container.querySelector('.library-columns')).not.toBeNull()
+  expect(container.querySelector('.assistant-resource-list.is-grid')).toBeNull()
+  await click('网格视图')
+  expect(container.querySelector('.assistant-resource-list.is-grid')).not.toBeNull()
+  expect(window.localStorage.getItem('lumen.libraryView')).toBe('grid')
+})
+
+it('opens the grid for a previously saved shelf preference', async () => {
+  window.localStorage.setItem('lumen.libraryView', 'shelf')
+  await act(async () => root.render(<AssistantWorkspace page="library" initialIntent=""
+    onDiscuss={vi.fn()} onOpenSession={vi.fn()} />))
+  await settle()
+  expect(container.querySelector('.assistant-resource-list.is-grid')).not.toBeNull()
+  expect(container.querySelector('.library-scene')).toBeNull()
+  expect(container.querySelector('button[aria-label="3D 书架视图"]')).toBeNull()
+  expect(window.localStorage.getItem('lumen.libraryView')).toBe('shelf')
 })
 
 it('does not present an empty result when a Library query fails', async () => {

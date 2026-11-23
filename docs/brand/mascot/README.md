@@ -1,4 +1,6 @@
-# 九尾狐外观与成长
+# 九尾狐外观与成长（历史归档）
+
+以下记录 2026-10-22 版本。当前首页采用 LUMEN 字标；历史素材不随 Web 服务分发。
 
 2026-10-22 v2：参考用户提供的基础幼狐，通过内置 image_gen 重新生成五种同一角色的
 九尾形态，并为基础形象生成一张闭眼帧。每种形态都要求九个分离可数的尾尖。
@@ -8,7 +10,7 @@
 
 - 原生透明 PNG 为 1254×1254，保存在 [`sources-v2/`](sources-v2/)；这不是 2K 输出，也未插值放大。
 - 完整提示词保存在 [`fox-v2-prompts.md`](fox-v2-prompts.md)。提示词中的目标尺寸不代表实际输出尺寸。
-- 用户提供的五张中文名 PNG 仍保留在 [`src/web/public/new-design/`](../../../src/web/public/new-design/)，作为输入参考。
+- 用户提供的五张中文名 PNG 仍保留在 [`reference/`](reference/)，作为输入参考。
 - 第一轮视频、分层、Rive 与旧 3D 方案保留在 `local-backups/identity-before-snow-fox-2026-10-22/`，共 57 个文件。
 - 本轮开始前的页面、组件与旧版 WebP 保留在 `local-backups/identity-before-retina-motion-2026-10-22/`，共 42 个文件。
 
@@ -16,7 +18,7 @@
 
 ## 素材
 
-运行 `node src/web/scripts/convert-fox-assets.mjs`，从 `sources-v2/` 生成 lossless WebP：
+当时的转换脚本从 `sources-v2/` 生成 lossless WebP：
 
 - `fox-stage-01-v2.webp` 至 `fox-stage-05-v2.webp`：保留 1254×1254 原生尺寸，供下载。
 - `-960.webp` 和 `-480.webp`：首页响应式形象与预览；`srcSet` 的 960w/480w 与文件实际宽度一致。

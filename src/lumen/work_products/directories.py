@@ -8,9 +8,10 @@ import json
 import os
 import shutil
 import stat
+import sys
 import tempfile
 from pathlib import Path, PurePosixPath
-from typing import Any
+from typing import Any, cast
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -29,6 +30,8 @@ def bundle_path(value: str) -> str:
     path = PurePosixPath(value)
     if (
         not value
+        or len(value) > 4096
+        or len(path.parts) > 128
         or path.is_absolute()
         or "\\" in value
         or "\x00" in value
@@ -86,7 +89,12 @@ class DirectoryBundle(BaseModel):
             if any(parent.as_posix().casefold() in folded for parent in PurePosixPath(name).parents):
                 raise AdapterError("bundle path is both a file and a directory")
         directory_case: set[str] = set()
-        for name in self.directory_names():
+        for name in self.directories:
+            bundle_path(name)
+        directories = self.directory_names()
+        if len(directories) > MAX_BUNDLE_FILES or len(set(self.directories)) != len(self.directories):
+            raise AdapterError("too many or duplicate bundle directories")
+        for name in directories:
             bundle_path(name)
             if name.casefold() in folded or name.casefold() in directory_case:
                 raise AdapterError("bundle directory paths collide")
@@ -135,32 +143,60 @@ class DirectoryResourceAdapter:
         target = self.path(resource)
         if not target.exists():
             return None
-        if not target.is_dir():
+        return self.read_tree(target)
+
+    @staticmethod
+    def read_tree(target: Path) -> DirectoryBundle:
+        if target.is_symlink() or not target.is_dir():
             raise AdapterError("bundle target is not a directory")
         files: dict[str, BundleFile] = {}
         directory_names: list[str] = []
         total = 0
-        for current, directories, names in os.walk(target, followlinks=False):
-            directory_names.extend(
-                (Path(current) / name).relative_to(target).as_posix() for name in directories
-            )
+        def fail(error: OSError) -> None:
+            raise error
+
+        if sys.platform == "win32":
+            entries = ((str(path), dirs, names, None) for path, dirs, names in
+                       os.walk(target, onerror=fail, followlinks=False))
+        else:
+            entries = os.fwalk(target, onerror=fail, follow_symlinks=False)
+        for current, directories, names, descriptor in entries:
+            for name in directories:
+                path = Path(current) / name
+                info = (path.lstat() if sys.platform == "win32"
+                        else os.stat(name, dir_fd=descriptor, follow_symlinks=False))
+                if not stat.S_ISDIR(info.st_mode):
+                    raise AdapterError("bundle contains a symbolic link or special file")
+                directory_names.append(path.relative_to(target).as_posix())
             if len(directory_names) > MAX_BUNDLE_FILES:
                 raise AdapterError("bundle contains too many directories")
-            for name in (*directories, *names):
-                path = Path(current) / name
-                mode = path.lstat().st_mode
-                if not stat.S_ISREG(mode) and not stat.S_ISDIR(mode):
-                    raise AdapterError("bundle contains a symbolic link or special file")
             for name in sorted(names):
                 path = Path(current) / name
-                size = path.stat().st_size
-                total += size
-                if total > MAX_BUNDLE_BYTES or len(files) >= MAX_BUNDLE_FILES:
+                if len(files) >= MAX_BUNDLE_FILES:
                     raise AdapterError("bundle exceeds snapshot limits")
-                body = path.read_bytes()
+                if sys.platform == "win32":
+                    info = path.lstat()
+                    if not stat.S_ISREG(info.st_mode):
+                        raise AdapterError("bundle contains a symbolic link or special file")
+                    stream = path.open("rb")
+                else:
+                    flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK
+                    stream = os.fdopen(os.open(name, flags, dir_fd=descriptor), "rb")
+                with stream:
+                    opened = os.fstat(stream.fileno())
+                    if not stat.S_ISREG(opened.st_mode):
+                        raise AdapterError("bundle contains a symbolic link or special file")
+                    if sys.platform == "win32" and not os.path.samestat(path.lstat(), opened):
+                        raise AdapterError("bundle file changed during read")
+                    remaining = MAX_BUNDLE_BYTES - total
+                    if opened.st_size > remaining:
+                        raise AdapterError("bundle exceeds snapshot limits")
+                    body = stream.read(remaining + 1)
+                    if len(body) > remaining:
+                        raise AdapterError("bundle exceeds snapshot limits")
+                total += len(body)
                 files[path.relative_to(target).as_posix()] = BundleFile.from_bytes(
-                    body,
-                    executable=bool(path.stat().st_mode & 0o111),
+                    body, executable=bool(opened.st_mode & 0o111),
                 )
         bundle = DirectoryBundle(files=files, directories=directory_names)
         bundle.validated_files()
@@ -200,7 +236,19 @@ class DirectoryResourceAdapter:
         change: Any,
     ) -> RevisionSnapshot:
         del target
-        bundle = DirectoryBundle.model_validate(change)
+        if self._removal(resource, before, change):
+            current = self.read(resource)
+            if current is None or ".lumen-install.json" not in current.files:
+                raise AdapterError("only managed installations can be removed")
+            marker = current.files.pop(".lumen-install.json")
+            fields = json.loads(marker.bytes())
+            if not isinstance(fields, dict) or cast(dict[str, object], fields).get(
+                "content_revision"
+            ) != current.revision:
+                raise AdapterError("locally modified installation; files preserved")
+            bundle = None
+        else:
+            bundle = DirectoryBundle.model_validate(change)
         self._publish(resource, bundle, expected_revision=before.revision)
         return self.snapshot(resource)
 
@@ -212,8 +260,9 @@ class DirectoryResourceAdapter:
         target: TargetCandidate,
         change: Any,
     ) -> VerificationResult:
-        del resource, target
-        expected = DirectoryBundle.model_validate(change).revision
+        del target
+        expected = ("missing" if self._removal(resource, before, change)
+                    else DirectoryBundle.model_validate(change).revision)
         changed = before.revision != after.revision
         passed = after.revision == expected and changed
         return VerificationResult(
@@ -223,6 +272,14 @@ class DirectoryResourceAdapter:
             summary="directory bytes and executable modes verified"
             if passed
             else "directory verification failed",
+        )
+
+    @staticmethod
+    def _removal(resource: str, before: RevisionSnapshot, change: Any) -> bool:
+        return (
+            any(resource.startswith(prefix) and "/" not in resource.removeprefix(prefix)
+                for prefix in (".lumen/skills/", USER_SKILLS_PREFIX))
+            and before.exists and change == {"remove_install": before.revision}
         )
 
     def restore(

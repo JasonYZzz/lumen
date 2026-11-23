@@ -8,12 +8,11 @@
     "build": "next build",
     "api:schema": "uv run --project ../.. python ../../scripts/export_web_openapi.py && openapi-typescript openapi.json -o src/lib/api/schema.generated.ts",
     "api:schema:check": "pnpm api:schema && git diff --exit-code -- openapi.json src/lib/api/schema.generated.ts",
-    "start": "next start",
+    "start": "uv run --project ../.. lumen web --cwd ../..",
     "test": "vitest run",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@designcodeio/threeui": "file:./src/shaders",
     "@lobehub/icons": "^5.18.0",
     "@phosphor-icons/react": "^2.1.10",
     "@react-three/drei": "^10.7.8",
@@ -39,7 +38,6 @@
     "@types/three": "^0.186.0",
     "jsdom": "^30.0.1",
     "openapi-typescript": "^7.9.1",
-    "raw-loader": "^4.0.2",
     "typescript": "^5.8.3",
     "vitest": "^3.2.4"
   },

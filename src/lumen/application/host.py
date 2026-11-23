@@ -17,7 +17,9 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal, Protocol, cast, overload
 from uuid import UUID, uuid4
+from zipfile import BadZipFile
 
+import httpx
 from pydantic import BaseModel
 from pydantic_ai.messages import ModelResponse, TextPart
 
@@ -93,7 +95,8 @@ from lumen.run_diagnostics import build_run_diagnostic
 from lumen.runtime import AgentRuntime, CompletionPolicy, ToolApproval
 from lumen.sandbox import SandboxMode, sandbox_scope
 from lumen.sessions import SessionCorruptError, SessionData, SessionMetadata, SessionRepository
-from lumen.skills import expand_skill_for_message
+from lumen.skill_install import SkillInstaller
+from lumen.skills import Skill, expand_skill_for_message
 from lumen.timeline import RepositoryTimelineAdapter, TimelineStore
 from lumen.tools.gateway import CapabilityApproval, CapabilityInvocation
 from lumen.tools.spec import EffectKind, Risk, ToolSpec
@@ -420,6 +423,76 @@ class WorkspaceHost:
             return await asyncio.to_thread(read_workspace_document, self.resources.workspace, path)
         except (OSError, ValueError) as error:
             raise InvalidStateError("Document unavailable: check its path, type and 20 MiB limit") from error
+
+    def _skill_installer(self, session_id: str, scope: str = "project") -> SkillInstaller:
+        session = self._managed_session(session_id)
+        installer = getattr(self.resources, "skill_installer", None)
+        config = self.resources.config
+        if (not config.agent.skills_enabled or not isinstance(installer, SkillInstaller)
+                or "install_skill" not in config.tools.builtins
+                or "install_skill" in config.permissions.always_deny):
+            raise InvalidStateError("请在 tools.builtins 启用 install_skill，并启用 Skill 发现")
+        if (scope == "user" and not config.agent.user_skill_install_enabled
+                and self._sandbox_mode(session.settings) != "disabled"):
+            raise InvalidStateError("用户级安装需要 agent.user_skill_install_enabled")
+        if not installer.task_workspace.enabled:
+            raise InvalidStateError("Skill 安装需要启用工作对象验证")
+        if session.catalog.archived_at or session.settings.collaboration_mode is CollaborationMode.PLAN:
+            raise InvalidStateError("请在未归档的 Default 会话中管理 Skill")
+        return installer
+
+    async def preview_skill(
+        self, session_id: str, kind: Literal["zip", "directory", "github"], content: bytes,
+        scope: Literal["project", "user"],
+    ) -> dict[str, Any]:
+        installer = self._skill_installer(session_id, scope)
+        try:
+            return await installer.preview(session_id, kind, content, scope)
+        except (ValueError, OSError, RuntimeError, TimeoutError, BadZipFile, httpx.HTTPError) as error:
+            raise InvalidStateError(f"Skill 预览失败：{error}") from error
+
+    async def manage_skill(
+        self, session_id: str, path: str, action: Literal["enable", "disable", "remove"], revision: str,
+    ) -> dict[str, Any]:
+        async with self._state_lock:
+            with self._session_management(session_id):
+                installer = self._skill_installer(session_id)
+                refresh = getattr(self.resources, "refresh_skills", None)
+                if refresh is None:
+                    raise InvalidStateError("skill discovery unavailable")
+                await run_io(refresh)
+                skills = cast(list[Skill], getattr(self.resources, "all_skills", ()))
+                skill = next((item for item in skills if str(item.file_path) == path), None)
+                if skill is None:
+                    raise InvalidStateError("Skill 来源已变更，请刷新列表")
+                if action == "remove":
+                    self._skill_installer(session_id, skill.source)
+                    installer.task_workspace.bind_session(session_id)
+                    try:
+                        return await run_io(installer.remove, skill, revision)
+                    except (ValueError, OSError) as error:
+                        raise InvalidStateError(str(error)) from error
+                try:
+                    paths = await run_io(
+                        self.resources.configuration.set_skill_enabled, revision, path, action == "enable",
+                    )
+                    self.resources.config.agent.disabled_skill_paths = paths
+                    await run_io(refresh)
+                except (ValueError, OSError) as error:
+                    raise InvalidStateError(str(error)) from error
+                return {"status": action}
+
+    async def confirm_skill(
+        self, session_id: str, preview: str, path: str, scope: Literal["project", "user"], overwrite: bool,
+    ) -> dict[str, Any]:
+        async with self._state_lock:
+            with self._session_management(session_id):
+                installer = self._skill_installer(session_id, scope)
+                try:
+                    installer.task_workspace.bind_session(session_id)
+                    return await installer.confirm(session_id, preview, path, scope, overwrite)
+                except (ValueError, OSError) as error:
+                    raise InvalidStateError(f"Skill 安装失败：{error}") from error
 
     async def import_resource_file(self, filename: str, content: bytes, identity: str) -> Resource:
         try:
@@ -1337,7 +1410,7 @@ class WorkspaceHost:
                 "name": str(getattr(skill, "name", "")),
                 "description": str(getattr(skill, "description", "")),
             }
-            for skill in self.resources.skills
+            for skill in self.resources.skills if getattr(skill, "user_invocable", True)
         ]
         tools = [
             {"name": name, **metadata} for name, metadata in sorted(self.resources.tool_metadata.items())
@@ -1868,6 +1941,7 @@ class WorkspaceHost:
         command: StartRun,
         *,
         model_prompt: str | None = None,
+        selected_skill: str | None = None,
         is_retry: bool = False,
         initial_events: tuple[RunEvent, ...] = (),
         completion_revision: int | None = None,
@@ -2010,6 +2084,7 @@ class WorkspaceHost:
                             record,
                             command.input,
                             model_prompt=model_prompt,
+                            selected_skill=selected_skill,
                             is_retry=is_retry,
                             completion_revision=completion_revision,
                             attachments=attachments,
@@ -3006,6 +3081,7 @@ class WorkspaceHost:
         text: str,
         *,
         model_prompt: str | None = None,
+        selected_skill: str | None = None,
         is_retry: bool = False,
         completion_revision: int | None = None,
         attachments: tuple[AttachmentRef, ...] = (),
@@ -3140,6 +3216,11 @@ class WorkspaceHost:
                     definition = definition.model_copy(update={"spec": automation.spec_snapshot})
                 prepared_prompt = await self._automation_sources(definition, automation)
                 execution = BackgroundExecution(definition.spec.request_limit)
+            if selected_skill is not None:
+                activate = getattr(self.resources, "activate_skill", None)
+                if activate is None:
+                    raise InvalidStateError("skill activation unavailable")
+                await run_io(activate, record.session_id, selected_skill)
             outcome = await actor.coordinator.run(
                 RunInput(
                     text,
@@ -3943,13 +4024,12 @@ class WorkspaceHost:
     async def _invoke_skill(self, command: InvokeSkill) -> RunStartedResult:
         activate_skill = getattr(self.resources, "activate_skill", None)
         snapshot_activated = activate_skill is not None
-        if activate_skill is not None:
-            skill = activate_skill(command.session_id, command.name)
-        else:
-            load_skill = getattr(self.resources, "load_skill_by_name", None)
-            skill = load_skill(command.name) if load_skill is not None else None
+        load_skill = getattr(self.resources, "load_skill_by_name", None)
+        skill = await run_io(load_skill, command.name) if load_skill is not None else None
         if skill is None:
             raise InvalidStateError(f"unknown skill: {command.name}")
+        if not getattr(skill, "user_invocable", True):
+            raise InvalidStateError("user invocation is disabled by the Skill author")
         display = f"/skill:{command.name}"
         if command.arguments.strip():
             display = f"{display} {command.arguments.strip()}"
@@ -3969,6 +4049,7 @@ class WorkspaceHost:
                 regenerate_from_turn=command.regenerate_from_turn,
             ),
             model_prompt=prompt,
+            selected_skill=command.name if snapshot_activated else None,
         )
 
     async def _invoke_prompt(self, command: InvokePrompt) -> RunStartedResult:
@@ -4003,7 +4084,10 @@ class WorkspaceHost:
                 activate = getattr(self.resources, "activate_skill", None)
                 if activate is None:
                     raise InvalidStateError("Skill activation is unavailable")
-                activate(command.session_id, command.reference)
+                try:
+                    await run_io(activate, command.session_id, command.reference)
+                except (ValueError, OSError) as error:
+                    raise InvalidStateError(str(error)) from error
             else:
                 activate_resource = getattr(self.resources, "activate_mcp_resource", None)
                 if activate_resource is None:

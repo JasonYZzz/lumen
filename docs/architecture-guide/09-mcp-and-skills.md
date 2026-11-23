@@ -119,12 +119,16 @@ flowchart LR
 覆盖优先级为：
 
 ```text
-builtin < user < project
+builtin < shared-user < user < shared-project < project
 ```
+
+共享根为 `.agents/skills`，仅在 `agent.shared_skills_enabled` 打开时参与发现，项目根还要求项目信任。按文件路径持久停用时，下一优先级的同名来源生效。
 
 项目级 Skill 可以覆盖用户级和内置同名 Skill。符号链接和不符合命名规范的 Skill 会被拒绝或产生诊断。
 
-### 安装远端 Skill
+### 从 Web、桌面和工具安装 Skill
+
+Web 与桌面使用 Host 的 `preview_skill`、`confirm_skill` 和 `manage_skill`。预览只解析内容，当前 Host 最多保留四个包、每个五分钟。确认核对会话、范围、候选及目标 revision。受管目录移除与恢复沿用 TaskWorkspace 的完整目录快照。用户上传遵循同一发布路径。
 
 安装是将原始 `SKILL.md` 和实际存在的引用资源按目录结构保存到发现根目录，不需要执行 Skill
 正文中的流程。工作区写权限下使用 `.lumen/skills/<name>/`，不能尝试其他工具绕过限制写入
@@ -165,7 +169,7 @@ Skill 不是启动时完整注入的 Prompt 文件集合。
 7. resume 恢复相同 artifact，不读取已变化的源文件；重新激活才更新 revision；
 8. `/skill unload <name>` 只影响当前 session，P0 不自动删除失去引用的 artifact。
 
-`disable-model-invocation: true` 的 Skill 不会出现在模型目录中，只允许用户手动调用。
+`disable-model-invocation: true` 或 Codex `allow_implicit_invocation: false` 会排除模型自动调用。Session v14 记录包 revision 和明确选择的会话。手动包的引用与脚本只对原会话开放，fork 或 child 不能继承这项授权。读取和执行都会检查当前来源与目录内容。变化时提示重新选择，旧正文仍保存在 artifact。
 
 模型目录预算为 `min(window × 1%, 8000)` tokens，与工具 schema 和运行时事实分开计量。
 按当前输入中的名称、描述词项匹配和名称排序选择完整条目，超长条目不截断后伪装成完整描述。

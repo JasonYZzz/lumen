@@ -588,6 +588,43 @@
         "title": "ConfigurationRevisionBody",
         "type": "object"
       },
+      "ConfirmSkillBody": {
+        "additionalProperties": false,
+        "properties": {
+          "overwrite": {
+            "default": false,
+            "title": "Overwrite",
+            "type": "boolean"
+          },
+          "path": {
+            "maxLength": 1024,
+            "minLength": 1,
+            "title": "Path",
+            "type": "string"
+          },
+          "preview": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Preview",
+            "type": "string"
+          },
+          "scope": {
+            "enum": [
+              "project",
+              "user"
+            ],
+            "title": "Scope",
+            "type": "string"
+          }
+        },
+        "required": [
+          "preview",
+          "path",
+          "scope"
+        ],
+        "title": "ConfirmSkillBody",
+        "type": "object"
+      },
       "ContextRef": {
         "additionalProperties": false,
         "properties": {
@@ -1417,6 +1454,39 @@
           "category"
         ],
         "title": "Idea",
+        "type": "object"
+      },
+      "ManageSkillBody": {
+        "additionalProperties": false,
+        "properties": {
+          "action": {
+            "enum": [
+              "enable",
+              "disable",
+              "remove"
+            ],
+            "title": "Action",
+            "type": "string"
+          },
+          "path": {
+            "maxLength": 8192,
+            "minLength": 1,
+            "title": "Path",
+            "type": "string"
+          },
+          "revision": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Revision",
+            "type": "string"
+          }
+        },
+        "required": [
+          "action",
+          "path",
+          "revision"
+        ],
+        "title": "ManageSkillBody",
         "type": "object"
       },
       "McpServerConfigurationBody": {
@@ -2341,6 +2411,125 @@
           }
         },
         "title": "SessionSettingsBody",
+        "type": "object"
+      },
+      "SkillCandidate": {
+        "properties": {
+          "body": {
+            "title": "Body",
+            "type": "string"
+          },
+          "description": {
+            "title": "Description",
+            "type": "string"
+          },
+          "diagnostics": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Diagnostics",
+            "type": "array"
+          },
+          "installed_revision": {
+            "title": "Installed Revision",
+            "type": "string"
+          },
+          "installed_source": {
+            "title": "Installed Source",
+            "type": "string"
+          },
+          "locally_modified": {
+            "title": "Locally Modified",
+            "type": "boolean"
+          },
+          "manual_only": {
+            "title": "Manual Only",
+            "type": "boolean"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "path": {
+            "title": "Path",
+            "type": "string"
+          },
+          "scripts": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Scripts",
+            "type": "array"
+          },
+          "user_invocable": {
+            "title": "User Invocable",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "path",
+          "name",
+          "description",
+          "manual_only",
+          "user_invocable",
+          "installed_source",
+          "diagnostics",
+          "scripts",
+          "body",
+          "installed_revision",
+          "locally_modified"
+        ],
+        "title": "SkillCandidate",
+        "type": "object"
+      },
+      "SkillPreview": {
+        "properties": {
+          "bytes": {
+            "title": "Bytes",
+            "type": "integer"
+          },
+          "candidates": {
+            "items": {
+              "$ref": "#/components/schemas/SkillCandidate"
+            },
+            "title": "Candidates",
+            "type": "array"
+          },
+          "files": {
+            "title": "Files",
+            "type": "integer"
+          },
+          "preview": {
+            "title": "Preview",
+            "type": "string"
+          },
+          "revision": {
+            "title": "Revision",
+            "type": "string"
+          },
+          "scope": {
+            "enum": [
+              "project",
+              "user"
+            ],
+            "title": "Scope",
+            "type": "string"
+          },
+          "source": {
+            "title": "Source",
+            "type": "string"
+          }
+        },
+        "required": [
+          "preview",
+          "scope",
+          "source",
+          "revision",
+          "files",
+          "bytes",
+          "candidates"
+        ],
+        "title": "SkillPreview",
         "type": "object"
       },
       "SourceReceipt": {
@@ -5426,6 +5615,175 @@
           }
         },
         "summary": "Update Session Settings"
+      }
+    },
+    "/api/v1/sessions/{session_id}/skills/confirm": {
+      "post": {
+        "operationId": "confirm_skill_api_v1_sessions__session_id__skills_confirm_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "schema": {
+              "title": "Session Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConfirmSkillBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Confirm Skill Api V1 Sessions  Session Id  Skills Confirm Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Confirm Skill"
+      }
+    },
+    "/api/v1/sessions/{session_id}/skills/manage": {
+      "post": {
+        "operationId": "manage_skill_api_v1_sessions__session_id__skills_manage_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "schema": {
+              "title": "Session Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ManageSkillBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Manage Skill Api V1 Sessions  Session Id  Skills Manage Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Manage Skill"
+      }
+    },
+    "/api/v1/sessions/{session_id}/skills/preview": {
+      "post": {
+        "operationId": "preview_skill_api_v1_sessions__session_id__skills_preview_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "schema": {
+              "title": "Session Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "kind",
+            "required": true,
+            "schema": {
+              "enum": [
+                "zip",
+                "directory",
+                "github"
+              ],
+              "title": "Kind",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "scope",
+            "required": false,
+            "schema": {
+              "default": "project",
+              "enum": [
+                "project",
+                "user"
+              ],
+              "title": "Scope",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SkillPreview"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Preview Skill"
       }
     },
     "/api/v1/sessions/{session_id}/timeline": {

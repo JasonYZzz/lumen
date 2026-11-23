@@ -1,10 +1,7 @@
 # Lumen Brand System
 
 Lumen Web 的左上品牌标志、右上活动入口及 favicon 使用 **Lumen Fold** 的 L 标志。
-2026-10-22 的九尾狐升级用于对话首页、设置预览及空状态；思考图标恢复 `lumen-claude-amber.svg` 及原有呼吸摆动动画。角色基于用户参考重新生成为
-五种九尾形态，原生源为 1254×1254 透明 PNG。五档浅色背景对应独立的形象成长，与思考强度无关；角落 L 标志不随形态变化。规则与资产见
-[`mascot/README.md`](mascot/README.md)，Web 色彩、布局和组件见
-[`src/web/DESIGN.md`](../../src/web/DESIGN.md)。本轮仅升级 Web，未替换其他客户端的既有身份。
+对话首页使用居中的 LUMEN 英文字标。字体和布局见 [Web 设计规范](../../src/web/DESIGN.md)。
 
 Architecture Atlas、TUI、macOS 原生启动页、原生应用图标及 README 继续使用 **Lumen Fold**。
 以下几何、色彩与 SVG 规范适用于 Fold：粗体字母 L 是品牌名称与本地执行路径的共同骨架，转角处的透明

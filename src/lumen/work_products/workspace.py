@@ -220,9 +220,20 @@ class TaskWorkspace:
     ) -> dict[str, Any]:
         """对已打开的工作对象执行一次受约束的修改并验证结果。"""
 
+        return self._change(work_product_id, target, change)
+
+    def remove_skill_install(self, work_product_id: str, revision: str) -> dict[str, Any]:
+        return self._change(work_product_id, "whole", {"remove_install": revision}, remove_skill=True)
+
+    def _change(
+        self, work_product_id: str, target: str, change: Any, *, remove_skill: bool = False,
+    ) -> dict[str, Any]:
         self._require_enabled()
         session_id, state = self._bound()
         product = self._require_product(state, work_product_id)
+        if (product.kind is WorkProductKind.DIRECTORY and isinstance(change, dict)
+                and "remove_install" in change and not remove_skill):
+            raise AdapterError("managed removal requires confirmation through Skill settings")
         adapter = self._adapters[product.kind]
         actual = adapter.snapshot(product.resource)
         if actual.revision != product.current.revision:

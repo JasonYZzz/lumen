@@ -277,6 +277,17 @@ mcp_servers:
     assert server.env["LUMEN_PROJECT_DIR"] == str(workspace)
 
 
+def test_explicit_config_requires_trust_only_for_enabled_shared_skills(tmp_path: Path) -> None:
+    workspace = tmp_path / "project"
+    (workspace / ".agents/skills").mkdir(parents=True)
+    config = tmp_path / "operator.yaml"
+    resolver = ConfigResolver(workspace, explicit_path=config)
+    for enabled in (False, True):
+        config.write_text("version: 2\nagent:\n  model: {id: test}\n  shared_skills_enabled: "
+                          + str(enabled).lower() + "\n")
+        assert resolver.has_project_skills() is enabled
+
+
 def test_untrusted_project_file_is_not_parsed(tmp_path: Path) -> None:
     workspace = tmp_path / "project"
     workspace.mkdir()
