@@ -253,6 +253,7 @@ class HostSessionAdapter:
                 f"tui-{uuid4()}",
                 model_prompt=run_input.model_prompt,
                 attachments=run_input.attachments,
+                input_origin="composer" if run_input.memory_query == run_input.display_text else None,
             )
         )
         return await self._consume(started.run_id, emit, approve, approve_batch)

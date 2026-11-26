@@ -1226,7 +1226,9 @@ async def test_tui_retry_uses_host_recovery_command(
         async def approve(_request: ApprovalRequest) -> ToolApproval:
             raise AssertionError("no approval expected")
 
-        await adapter.run(RunInput("repeat me", "repeat me"), emit, approve)
+        await adapter.run(RunInput("repeat me", "expanded prompt", memory_query="repeat me"), emit, approve)
+        assert isinstance(commands[-1], StartRun)
+        assert commands[-1].input_origin == "composer"
         outcome = await adapter.run(
             RunInput("repeat me", "repeat me", is_retry=True), emit, approve,
         )
@@ -2012,6 +2014,16 @@ async def test_workspace_host_invokes_skills_and_routes_context_controls(tmp_pat
         session = await host.dispatch(CreateSession())
         report = await host.dispatch(ContextControl(session.session_id, "report"))
         memory = await host.dispatch(ContextControl(session.session_id, "memory", action="list"))
+        unavailable = await host.dispatch(ContextControl(session.session_id, "memory", action="openviking"))
+        assert unavailable.data["payload"] == {"configured": False}
+        with pytest.raises(InvalidStateError, match="user configuration"):
+            await host.dispatch(ContextControl(
+                session.session_id, "memory", action="openviking", payload={"operation": "enable"}
+            ))
+        with pytest.raises(InvalidStateError, match="Invalid OpenViking"):
+            await host.dispatch(ContextControl(
+                session.session_id, "memory", action="openviking", payload={"endpoint": "https://example.org"}
+            ))
         runtime.context_engine = None
         started = await host.dispatch(
             InvokeSkill(session.session_id, "review", "src/main.py", "skill-request")

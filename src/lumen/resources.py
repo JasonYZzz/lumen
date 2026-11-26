@@ -44,6 +44,7 @@ from lumen.context.memory import (
     SQLiteMemoryRepository,
     SQLiteMemoryWorkQueue,
 )
+from lumen.context.memory.openviking import OpenVikingService
 from lumen.context.memory.redaction import redact_secrets
 from lumen.context.rendering import render_mcp_prompt
 from lumen.context.session_manager import SessionContextManager
@@ -392,7 +393,7 @@ class ResourceManager:
         )
         self._skill_session: ContextVar[str | None] = ContextVar("lumen_skill_session", default=None)
         self.project_id = canonical_project_identity(self.workspace)
-        self.memory_manager = self._build_memory_manager()
+        self.memory_manager = self._build_memory_manager(os.environ if environ is None else environ)
         self.tool_metadata: dict[str, dict[str, str]] = {
             name: {
                 "origin": entry.origin,
@@ -643,7 +644,7 @@ class ResourceManager:
 
         return self.model_registry[self._active_model_name]
 
-    def _build_memory_manager(self) -> MemoryManager:
+    def _build_memory_manager(self, environ: Mapping[str, str]) -> MemoryManager:
         """Build the durable-memory manager on the SQLite authority (plan §11.2).
 
         ``memory.use`` defaults to True (explicit recall on), while automatic
@@ -656,8 +657,16 @@ class ResourceManager:
         store_path = state_dir / "memory.sqlite3"
         repository = SQLiteMemoryRepository(store_path)
         work_queue = SQLiteMemoryWorkQueue(state_dir / "memory-work.sqlite3")
+        connection = self.config.memory.openviking
+        semantic = None
+        if connection.enabled and connection.endpoint:
+            semantic = OpenVikingService(
+                repository, endpoint=connection.endpoint, api_key=environ.get(connection.api_key_env, ""),
+                project_id=self.project_id,
+            )
         return MemoryManager(
             repository,
+            semantic=semantic,
             project_id=self.project_id,
             use=self.config.memory.use,
             learn=self.config.memory.learn,

@@ -13,6 +13,17 @@ def _write(path: Path, text: str) -> None:
     path.write_text(text, encoding="utf-8")
 
 
+@pytest.mark.parametrize("relative", ["agent.yaml", ".lumen/agent.yaml", ".lumen/agent.local.yaml",
+                                       ".lumen/agent.web.yaml"])
+def test_project_cannot_override_memory_service(tmp_path: Path, relative: str) -> None:
+    home, workspace = tmp_path / "home", tmp_path / "project"
+    _write(home / ".lumen/agent.yaml", "version: 2\nagent: {name: test, model: {id: test}}\n")
+    declaration = "memory: {openviking: {enabled: true, endpoint: 'https://memory.example.org'}}\n"
+    _write(workspace / relative, declaration)
+    with pytest.raises(ConfigLoadError, match=r"memory\.openviking requires user-level"):
+        ConfigResolver(workspace, home=home).resolve(project_trusted=True)
+
+
 def test_four_layers_merge_with_special_rules(tmp_path: Path) -> None:
     home = tmp_path / "home"
     workspace = tmp_path / "project"

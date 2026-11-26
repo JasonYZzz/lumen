@@ -61,6 +61,7 @@ class ConfirmSkillBody(WebModel):
 
 class StartRunBody(WebModel):
     input: str = Field(min_length=1)
+    input_origin: Literal["composer"] | None = Field(default=None, alias="inputOrigin")
     client_request_id: str = Field(alias="clientRequestId", min_length=1, max_length=200)
     attachments: list[AttachmentBody] = Field(default_factory=list[AttachmentBody], max_length=8)
     regenerate_from_turn: int | None = Field(default=None, alias="regenerateFromTurn", ge=0)

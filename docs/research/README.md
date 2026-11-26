@@ -8,6 +8,7 @@
 
 ## 实施与验收
 
+- [OpenViking 长期记忆实施与试点](2026-11-26-openviking-pilot.md) 记录固定版本的真实服务契约、合成记忆检索对照与推广判断。
 - [全仓库质量扫描与修复](2026-10-23-quality-audit.md)：自动化故障清理、TUI 历史分页、偏好保存及文档新鲜度，含最终全量测试与发行边界。
 - [Lumen 功能联动与 UI 升级验收](2026-10-22-muse-ui-upgrade-validation.md)：创建并规划、成果版本信息流、目标待处理生命周期、桌面与手机界面升级。
 - [v2 目标、资料空间与持续跟进闭环实施验收](2026-10-21-v2-product-flow-validation.md)：含权限与管理、旧数据回收及 Web 刷新认证恢复验证。
@@ -28,6 +29,7 @@
 
 ## 架构与技术研究
 
+- [Lumen 第三方长期记忆后端选型](2026-11-25-external-memory-backends.md) 比较 TencentDB 指定分支与 OpenViking 的接口、数据边界和部署取舍。
 - [Muse 与 ChatGPT 资料空间的功能研究及 Lumen 联动审计](2026-10-21-muse-chatgpt-space-product-research.md)：一级资料核验、当前账号观察、真实 Lumen 截图和优化依据；区别于独立演示原型。
 - [Lumen 网页检索与文件下载能力审计](2026-09-10-web-retrieval-capability-audit.md)
 - [Thinking 标签、协议与产物输出审校](2026-09-04-thinking-plan-output-review.md)

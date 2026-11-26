@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
+from unittest.mock import patch
 
 import pytest
 from pydantic_ai import Tool
@@ -151,9 +152,12 @@ def _last_tool_return(messages: list[ModelMessage]) -> ToolReturnPart | None:
 
 async def test_headless_text_streams_deltas_and_persists_session(tmp_path: Path) -> None:
     out = io.StringIO()
-    resources = LocalResources(tmp_path, _text_runtime("final answer"))
-
-    result = await run_headless(resources, "explain this repo", stdout=out)
+    runtime = _text_runtime("final answer")
+    resources = LocalResources(tmp_path, runtime)
+    with patch.object(runtime, "run", wraps=runtime.run) as runtime_run:
+        result = await run_headless(resources, "explain this repo", stdout=out)
+        assert runtime_run.await_args is not None
+        assert runtime_run.await_args.kwargs["memory_query"] is None
 
     assert result.error is None
     assert result.exit_code() == 0

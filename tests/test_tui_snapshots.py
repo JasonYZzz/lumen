@@ -274,6 +274,10 @@ def test_tui_state_snapshot(
             await app.render_event(RunStarted("Run a fragile operation"))
             await app.render_event(TextDelta("Partial output before failure."))
             await app.render_event(RunFailed("Provider connection was interrupted"))
+            # The failure hides the activity row, changing the transcript viewport.
+            # Capture the settled tail, independent of Markdown's next layout frame.
+            await pilot.pause()
+            app.action_follow_tail()
         elif state == "approval":
             await app.render_event(
                 ToolCallStarted(

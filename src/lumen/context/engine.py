@@ -29,7 +29,7 @@ from pydantic_ai.models import Model
 
 from lumen.config import ContextConfig, ModelSettingsConfig
 from lumen.context.artifacts import ArtifactStore
-from lumen.context.assembler import ContextAssembler
+from lumen.context.assembler import ContextAssembler, ZoneCaps
 from lumen.context.budget import (
     TokenCounter,
     TokenCounterFactory,
@@ -51,8 +51,10 @@ from lumen.context.legacy import (
     retain_recent_tokens,
     validate_active_history,
 )
-from lumen.context.memory import MemoryManager, render_memory_index
-from lumen.context.memory.records import MemoryKind, MemoryScope
+from lumen.context.memory import MemoryManager
+from lumen.context.memory.projection import select_memory_index
+from lumen.context.memory.records import MemoryKind, MemoryRecord, MemoryScope, Sensitivity
+from lumen.context.memory.redaction import contains_secret
 from lumen.context.profiles import ResolvedContextPolicy, resolve_context_policy
 from lumen.context.rendering import (
     render_context_data,
@@ -316,6 +318,13 @@ class ContextRequest:
     source_offset: int = 0
     focus: str | None = None
     force_compaction: bool = False
+    memory_query: str | None = field(default=None, repr=False)
+
+
+@dataclass(slots=True)
+class _TurnMemory:
+    uris: tuple[str, ...] = ()
+    used_ids: set[str] = field(default_factory=set[str])
 
 
 @dataclass(frozen=True, slots=True)
@@ -343,6 +352,7 @@ class ContextEnvelope:
     #: A request-boundary checkpoint may already cover part of this run.
     #: This cursor is derived from the checkpoint on Session replay.
     covered_new_messages: int = 0
+    recalled_ids: frozenset[str] = field(default_factory=frozenset[str], repr=False)
 
     @property
     def messages(self) -> tuple[ModelMessage, ...]:
@@ -470,6 +480,7 @@ class ContextEngine:
     #: session id -> last prepared envelope, for commit verification.
     _pending: dict[str, ContextEnvelope] = field(default_factory=dict[str, ContextEnvelope])
     _pending_requests: dict[str, ContextRequest] = field(default_factory=dict[str, ContextRequest])
+    _turn_memory: dict[str, _TurnMemory] = field(default_factory=dict[str, _TurnMemory])
     #: fingerprint -> committed transition, for commit idempotency.
     _committed: dict[str, tuple[str, str, ContextTransition]] = field(
         default_factory=dict[str, tuple[str, str, ContextTransition]]
@@ -554,6 +565,7 @@ class ContextEngine:
         self._background_tasks.clear()
         self._background_candidates.clear()
         self._background_status.clear()
+        self._turn_memory.clear()
 
     # -- prepare -----------------------------------------------------------
 
@@ -744,7 +756,19 @@ class ContextEngine:
         # runs the fixed-context preflight against the model window with the
         # active model counter, so a request whose fixed footprint cannot fit
         # fails here, before the provider call (plan §8.2 #3).
-        memory_index, recalled_memory = self._memory_context(request.prompt)
+        turn_memory = _TurnMemory()
+        self._turn_memory[request.session.id] = turn_memory
+        semantic = self.memory.semantic if self.memory is not None else None
+        query = request.memory_query
+        if (
+            semantic is not None and self.memory is not None and self.memory.use
+            and not self.memory.incognito and query and query.strip() and not contains_secret(query)
+        ):
+            _, index_ids = await run_io(self._fixed_memory)
+            if self.memory.use and not self.memory.incognito:
+                turn_memory.uris = await semantic.find(query.strip()[:512], index_ids)
+        request = replace(request, memory_query=None)
+        memory_index, recalled_memory, recalled_ids = await self._memory_context(request.prompt, turn_memory)
         assembled = self._assembler.assemble(
             instructions=request.runtime.system_instructions or request.runtime.instructions,
             policy=request.runtime.policy_instructions,
@@ -823,6 +847,7 @@ class ContextEngine:
             canonical_history=tuple(active_history),
             request_snapshot=provisional_snapshot,
             fingerprint=fingerprint,
+            recalled_ids=recalled_ids,
         )
         self._pending[request.session.id] = envelope
         self._pending_requests[request.session.id] = request
@@ -884,10 +909,17 @@ class ContextEngine:
                 else tuple(work_product_documents)
             ),
         )
-        if refreshed_runtime != request.runtime or task != request.task:
+        turn_memory = self._turn_memory.get(session_id)
+        memory_index, recalled_memory, recalled_ids = await self._memory_context(request.prompt, turn_memory)
+        memory_changed = self._rendered_memory(envelope) != (memory_index, recalled_memory)
+        # Continuations may retain an earlier frozen request across a provider retry.
+        stale_transients = (
+            [m for m in current if _transient_kind(m) is not None]
+            != [m for m in envelope.provider_history if _transient_kind(m) is not None]
+        )
+        if refreshed_runtime != request.runtime or task != request.task or memory_changed or stale_transients:
             request = replace(request, runtime=refreshed_runtime, task=task)
             canonical_current = [message for message in current if _transient_kind(message) is None]
-            memory_index, recalled_memory = self._memory_context(request.prompt)
             assembled = self._assembler.assemble(
                 instructions=refreshed_runtime.system_instructions or refreshed_runtime.instructions,
                 policy=refreshed_runtime.policy_instructions,
@@ -923,6 +955,7 @@ class ContextEngine:
                 budget=assembled.budget,
                 request_snapshot=snapshot,
                 fingerprint=self._fingerprint(request, current),
+                recalled_ids=recalled_ids,
             )
             self._pending[session_id] = envelope
             self._pending_requests[session_id] = request
@@ -1281,6 +1314,7 @@ class ContextEngine:
             task.cancel()
         self._pending.pop(session_id, None)
         self._pending_requests.pop(session_id, None)
+        self.finish_memory_turn(session_id)
         self._thrash.pop(session_id, None)
         self._force_sessions.discard(session_id)
         self._last_checkpoints.pop(session_id, None)
@@ -1629,21 +1663,76 @@ class ContextEngine:
         ).encode("utf-8")
         return hashlib.sha256(payload).hexdigest()
 
-    def _memory_context(self, prompt: str) -> tuple[str, str]:
-        """Return bounded fixed index and query recall text for one turn."""
+    def finish_memory_turn(self, session_id: str) -> None:
+        self._turn_memory.pop(session_id, None)
 
-        if self.memory is None or not self.memory.use:
-            return "", ""
-        index_records = self.memory.index()
-        index_ids = {record.id for record in index_records}
-        recalled = self.memory.recall(prompt, exclude_ids=index_ids)
-        index_text = render_memory_index(index_records) if index_records else ""
-        recalled_text = "\n".join(
-            f"- [{record.id}] ({record.scope.value}, {record.source_kind.value}, "
-            f"confidence={record.confidence:.2f}) {record.content}"
-            for record in recalled
+    @staticmethod
+    def _rendered_memory(envelope: ContextEnvelope) -> tuple[str, str]:
+        blocks = {b.zone: b.payload.text or "" for b in envelope.blocks}
+        return blocks.get(ContextZone.MEMORY_INDEX, ""), blocks.get(ContextZone.RECALLED_MEMORY, "")
+
+    async def memory_is_current(self, envelope: ContextEnvelope, session_id: str) -> bool:
+        """Allow an unchanged provider retry to keep its original request and receipt."""
+        request = self._pending_requests.get(session_id)
+        if request is None:
+            return False
+        index, recalled, _ = await self._memory_context(request.prompt, self._turn_memory.get(session_id))
+        return self._rendered_memory(envelope) == (index, recalled)
+
+    async def record_memory_use(self, session_id: str, envelope: ContextEnvelope) -> None:
+        """Count selected dynamic memories once per turn after an actual driver attempt."""
+        manager = self.memory
+        turn = self._turn_memory.get(session_id)
+        if manager is None or turn is None or not manager.use or manager.incognito:
+            return
+        added = envelope.recalled_ids - turn.used_ids
+        if added:
+            await run_io(manager.mark_recalled, added)
+            turn.used_ids.update(added)
+
+    def _fixed_memory(self) -> tuple[str, set[str]]:
+        if self.memory is None or not self.memory.use or self.memory.incognito:
+            return "", set()
+        cap = ZoneCaps.for_window(self._assembler.window_tokens).caps[ContextZone.MEMORY_INDEX]
+        return select_memory_index(
+            self.memory.index(), lambda text: self._counter.count_text(text).tokens <= cap,
         )
-        return index_text, recalled_text
+
+    async def _memory_context(
+        self, prompt: str, turn: _TurnMemory | None,
+    ) -> tuple[str, str, frozenset[str]]:
+        manager = self.memory
+        if manager is None or not manager.use or manager.incognito or turn is None:
+            return "", "", frozenset()
+        result = await run_io(self._select_memory, manager, prompt, turn)
+        return result if manager.use and not manager.incognito else ("", "", frozenset())
+
+    def _select_memory(
+        self, manager: MemoryManager, prompt: str, turn: _TurnMemory,
+    ) -> tuple[str, str, frozenset[str]]:
+        index_text, index_ids = self._fixed_memory()
+        lexical = manager.recall(prompt, exclude_ids=index_ids, mark_used=False)
+        semantic = manager.semantic.resolve(turn.uris) if manager.semantic is not None and turn.uris else []
+        ranked: list[MemoryRecord] = []
+        for rank in range(max(len(lexical), len(semantic))):
+            if rank < len(lexical):
+                ranked.append(lexical[rank])
+            if rank < len(semantic):
+                ranked.append(semantic[rank])
+        cap = ZoneCaps.for_window(self._assembler.window_tokens).caps[ContextZone.RECALLED_MEMORY]
+        selected: set[str] = set()
+        rendered = ""
+        for record in ranked:
+            if (record.id in index_ids or record.id in selected
+                    or record.sensitivity is Sensitivity.RESTRICTED):
+                continue
+            line = (f"- [{record.id}] ({record.scope.value}, {record.source_kind.value}, "
+                    f"confidence={record.confidence:.2f}) {record.content}")
+            candidate = f"{rendered}\n{line}" if rendered else line
+            if self._counter.count_text(candidate).tokens <= cap:
+                selected.add(record.id)
+                rendered = candidate
+        return index_text, rendered, frozenset(selected)
 
     @staticmethod
     def _policy_message(

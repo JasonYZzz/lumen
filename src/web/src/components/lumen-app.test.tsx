@@ -446,12 +446,33 @@ it('submits once and ignores a late start response after switching conversations
   await click(button('发送消息'))
   await click(button('发送消息'))
   expect(lumenApi.startRun).toHaveBeenCalledTimes(1)
+  expect(vi.mocked(lumenApi.startRun).mock.calls[0][7]).toBe('composer')
   await click(button('other'))
   await type('Keep this new draft')
   await act(async () => { resolve({runId: 'late-run', sessionId: 'source', status: 'running'}) })
   expect(window.location.search).toBe('?session=other')
   expect(container.querySelector('textarea')?.value).toBe('Keep this new draft')
   expect(subscribeRun).not.toHaveBeenCalled()
+})
+
+it('keeps a generated feed draft out of semantic queries after a partial edit', async () => {
+  vi.useFakeTimers()
+  vi.mocked(lumenApi.assistant).mockResolvedValue({owner: true, status: 'running', definitions: [],
+    occurrences: [], feed: [], resources: [], goals: [], ideas: [], collections: [],
+    workspace_source_available: true, research_available: false})
+  vi.mocked(lumenApi.assistantFeed).mockResolvedValue({items: [{id: 'item', title: 'Generated report title',
+    sequence: 1, result: 'complete', detail: '', created_at: '', read: true, saved: false}], next_cursor: null})
+  vi.mocked(lumenApi.startRun).mockResolvedValue({runId: 'next', sessionId: 'session-1', status: 'completed'})
+  await mount()
+  await click(button('信息流'))
+  await act(async () => { await vi.advanceTimersByTimeAsync(250) })
+  await click(button('继续聊聊'))
+  const generated = container.querySelector('textarea')!.value
+  expect(generated).toContain('Generated report title')
+  await type(generated + '?')
+  await click(button('发送消息'))
+  expect(lumenApi.startRun).toHaveBeenCalledTimes(1)
+  expect(vi.mocked(lumenApi.startRun).mock.calls[0][7]).toBeUndefined()
 })
 
 it('keeps approvals beside the composer, handles failures, and prevents repeated submissions', async () => {

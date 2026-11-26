@@ -3,8 +3,10 @@ from __future__ import annotations
 import os
 import re
 from collections.abc import Mapping
+from ipaddress import ip_address
 from pathlib import Path
 from typing import Annotated, Any, Literal, cast
+from urllib.parse import urlsplit
 
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
@@ -513,8 +515,43 @@ class ContextConfig(StrictModel):
         return self
 
 
+class OpenVikingConfig(StrictModel):
+    enabled: bool = False
+    endpoint: str | None = None
+    api_key_env: str = Field(default="LUMEN_OPENVIKING_API_KEY", pattern=r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+    @field_validator("endpoint")
+    @classmethod
+    def validate_endpoint(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        url = urlsplit(value)
+        host = url.hostname
+        if (not host or url.username is not None or url.password is not None
+                or url.query or url.fragment or url.path not in {"", "/"}
+                or any(c.isspace() or ord(c) < 32 for c in value) or "\\" in value):
+            raise ValueError("OpenViking endpoint must be a service origin without credentials")
+        try:
+            loopback = ip_address(host).is_loopback
+        except ValueError:
+            loopback = host == "localhost"
+        if url.scheme != "https" and not (url.scheme == "http" and loopback):
+            raise ValueError("OpenViking requires HTTPS or a loopback HTTP endpoint")
+        if url.port == 0:
+            raise ValueError("OpenViking endpoint has an invalid port")
+        return value.rstrip("/")
+
+    @model_validator(mode="after")
+    def validate_enabled(self) -> OpenVikingConfig:
+        if self.enabled and not self.endpoint:
+            raise ValueError("memory.openviking.enabled requires an endpoint")
+        return self
+
+
 class MemoryConfig(StrictModel):
     """Durable memory and opt-in background learning policy."""
+
+    openviking: OpenVikingConfig = Field(default_factory=OpenVikingConfig)
 
     use: bool = True
     learn: bool = False

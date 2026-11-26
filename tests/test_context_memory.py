@@ -86,6 +86,11 @@ def test_valid_until_must_be_after_valid_from() -> None:
         _record(valid_until=now - timedelta(days=1))
 
 
+def test_legacy_timestamp_without_offset_is_read_as_utc() -> None:
+    record = MemoryRecord.model_validate({**_record().model_dump(), "valid_from": "2026-01-01T00:00:00"})
+    assert record.valid_from == datetime(2026, 1, 1, tzinfo=UTC)
+
+
 def test_record_round_trips() -> None:
     record = _record()
     restored = MemoryRecord.model_validate_json(record.model_dump_json())
@@ -126,10 +131,14 @@ def test_index_excludes_conflicted_low_confidence_and_expired() -> None:
     past = datetime(2026, 7, 24, tzinfo=UTC) - timedelta(days=1)
     long_ago = datetime(2026, 7, 24, tzinfo=UTC) - timedelta(days=2)
     repo.remember(_record(id="expired", content="an expired thing", valid_from=long_ago, valid_until=past))
+    future = datetime.now(UTC) + timedelta(days=1)
+    repo.remember(_record(id="future", content="planned future fact", valid_from=future))
     index_ids = {r.id for r in repo.index()}
     assert "active" in index_ids
     assert "low" not in index_ids
     assert "expired" not in index_ids
+    assert "future" not in index_ids
+    assert "future" not in {record.id for record in repo.query("future")}
 
 
 def test_query_ranks_by_relevance() -> None:

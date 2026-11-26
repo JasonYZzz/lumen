@@ -59,7 +59,7 @@ CLI 默认使用进程环境。首次配置通过 `O_CREAT | O_EXCL` 与 `0600` 
 | `sessions` | JSONL 会话目录 |
 | `agent.models.*.context` | 模型 profile、window/output/tokenizer 与模型级覆盖 |
 | `context` | ratio 阈值、recent 上限、summary 与后台压缩策略 |
-| `memory` | recall、自动学习、队列重试 |
+| `memory` | recall、自动学习、队列重试、用户级可选 OpenViking 连接 |
 | `agents` | 原生 Agent Profile、并发、每 Run 数量与用量限制；`delegation` 仅为弃用兼容输入 |
 | `sandbox` | 未选会话预设时的默认范围；`workspace_write` 限定工作区，`disabled` 完全本地访问；审批独立 |
 | `live` | Realtime Route、provider、媒体与严格 completion |
@@ -167,6 +167,7 @@ stateDiagram-v2
 | automation owner | `<workspace>/.lumen/automation.lock` | OS advisory 生命周期锁；执行另取现有 `run.lock` |
 | artifacts | `~/.lumen/artifacts/` | 大型工具输出内容寻址存储 |
 | memory authority | `~/.lumen/state/memory.sqlite3` | 长期记忆权威库 |
+| OpenViking 恢复检查 | `~/.lumen/state/memory.sqlite3.openviking-guard` | 检测单独恢复主库造成的授权回滚。整机恢复至旧备份时，先关闭连接、核对撤权与遗忘记录，再授权同步 |
 | memory queue | `~/.lumen/state/memory-work.sqlite3` | 后台提取任务 |
 | memory projection | `~/.lumen/projects/<id>/memory/` | 人类可读审计投影 |
 | approval rules | `~/.lumen/state/approval-rules/<id>.json` | 项目级跨 Session allow 规则 |

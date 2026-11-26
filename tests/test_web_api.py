@@ -5,6 +5,7 @@ import time
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
+from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 from pydantic_ai.messages import ModelMessage
@@ -772,6 +773,33 @@ def test_web_api_regenerates_in_place_without_creating_a_second_session(tmp_path
         sessions = client.get("/api/v1/sessions").json()["sessions"]
         assert len(sessions) == 1
         assert sessions[0]["title"] == "Stable title"
+
+
+def test_memory_query_requires_literal_composer_origin_on_a_new_turn(tmp_path: Path) -> None:
+    resources = ApiResources(tmp_path)
+    host = WorkspaceHost(resources)  # type: ignore[arg-type]
+    app = create_web_app(host, launch_token="launch-secret", api_only=True)
+    with TestClient(app, base_url="http://testserver") as client:
+        client.get("/auth/exchange", params={"token": "launch-secret"})
+        headers = {"Origin": "http://testserver"}
+        session_id = client.post("/api/v1/sessions", headers=headers).json()["sessionId"]
+        endpoint = f"/api/v1/sessions/{session_id}/runs"
+        with patch.object(resources.runtime, "run", wraps=resources.runtime.run) as runtime_run:
+            cases: tuple[tuple[dict[str, object], str | None], ...] = (
+                ({}, None),
+                ({"inputOrigin": "composer"}, "review @notes.md"),
+                ({"inputOrigin": "composer", "regenerateFromTurn": 0}, None),
+            )
+            for index, (options, expected) in enumerate(cases):
+                body = {"input": "review @notes.md", "clientRequestId": str(index), **options}
+                result = client.post(endpoint, headers=headers, json=body)
+                assert result.status_code == 202
+                assert client.get(f"/api/v1/runs/{result.json()['runId']}/events").is_success
+                assert runtime_run.await_args is not None
+                assert runtime_run.await_args.kwargs["memory_query"] == expected
+            assert runtime_run.await_count == 3
+        invalid = {"input": "generated", "clientRequestId": "bad-origin", "inputOrigin": "automatic"}
+        assert client.post(endpoint, headers=headers, json=invalid).status_code == 422
 
 
 def test_web_delete_failed_research_preserves_effect_journal_and_is_idempotent(tmp_path: Path) -> None:

@@ -116,6 +116,8 @@ function requestId() {
   return crypto.randomUUID()
 }
 
+const emptyDraft = { text: '', fromComposer: false }
+
 const permissionChoices: Array<ChoiceOption<PermissionPreset | 'custom'>> = [
   { value: 'manual', label: '每次确认', description: '仅限工作区。读取通常免确认，修改和执行按规则确认。' },
   { value: 'accept_edits', label: '自动改文件', description: '仅限工作区。文件修改自动允许，其他动作按规则确认。' },
@@ -159,7 +161,7 @@ export function LumenApp() {
   const [approvalSubmitting, setApprovalSubmitting] = useState(false)
   const [approvalError, setApprovalError] = useState('')
   const approvalRequestRef = useRef(false)
-  const discussionDrafts = useRef(new Map<string, string>())
+  const discussionDrafts = useRef(new Map<string, typeof emptyDraft>())
   const assistantViews = useRef(new Map<string, AssistantView>())
   const navigateAssistant = useCallback((page: AssistantPage, id?: string) => {
     setAssistantPage(page); setAssistantObjectId(id); setAutomationIntent(''); setGoalSourceSessionId(undefined); setSidebarOpen(false)
@@ -183,8 +185,19 @@ export function LumenApp() {
   } | null>(null)
   const [sessionManagementBusy, setSessionManagementBusy] = useState(false)
   const [run, dispatch] = useReducer(runReducer, initialRunState)
-  const [input, setInput] = useState('')
-  useEffect(() => { discussionDrafts.current.set(sessionId ?? 'new', input) }, [sessionId, input])
+  const [draftInput, setDraftInput] = useState(emptyDraft)
+  const { text: input, fromComposer } = draftInput
+  const setInput = useCallback((value: string | ((text: string) => string)) => {
+    setDraftInput(current => {
+      const text = typeof value === 'string' ? value : value(current.text)
+      return text === current.text && typeof value === 'function' ? current : { text, fromComposer: false }
+    })
+  }, [])
+  const editComposerInput = useCallback((text: string) => {
+    // A partially edited generated discussion prompt still contains machine-authored text.
+    setDraftInput(current => ({ text, fromComposer: !current.text || current.fromComposer }))
+  }, [])
+  useEffect(() => { discussionDrafts.current.set(sessionId ?? 'new', draftInput) }, [sessionId, draftInput])
   const [attachments, setAttachments] = useState<AttachmentRef[]>([])
   const [queueMode, setQueueMode] = useState<QueueMode>('steer')
   const [loading, setLoading] = useState(true)
@@ -928,13 +941,18 @@ export function LumenApp() {
           const action = parts[1] ?? 'list'
           const rest = parts.slice(2).join(' ')
           const payload: Record<string, unknown> = {}
+          if (action === 'openviking') {
+            if (parts.length > 4) throw new Error('用法：/memory openviking <操作> [project|user]')
+            payload.operation = parts[2] ?? 'status'
+            payload.scope = parts[3] ?? 'project'
+          }
           if (action === 'remember') payload.content = rest
           if (action === 'forget' || action === 'edit') payload.target = rest
           if (action === 'use' || action === 'learn' || action === 'incognito') {
             payload.enabled = (parts[2] ?? 'on') !== 'off'
           }
           const result = await lumenApi.memoryControl(sessionId, action, payload)
-          dispatch({ type: 'local-message', message: formatControlResult(result) })
+          dispatch({ type: 'local-message', message: action === 'openviking' ? result.message : formatControlResult(result) })
         }
         setInput('')
         return true
@@ -1031,17 +1049,16 @@ export function LumenApp() {
   )
 
   const executeCommand = useCallback(async (command: string, preserveDraft = false) => {
-    const draft = input
     try {
       await handleSlashCommand(command)
       if (preserveDraft && ['/model', '/thinking', '/mode', '/tasks', '/copy', '/checkpoints', '/skills', '/tools'].includes(command)) {
-        setInput(draft)
+        setDraftInput(draftInput)
       }
     } catch (error) {
       if (error instanceof AuthenticationError) return
       dispatch({ type: 'local-error', message: error instanceof Error ? error.message : '命令执行失败' })
     }
-  }, [handleSlashCommand, input])
+  }, [handleSlashCommand, draftInput])
 
   const submit = useCallback(async () => {
     if (submitRequestRef.current || modelChangeRef.current || approvalChangeRef.current || editingRef.current || stoppingRef.current || planReviewRequest.current) return
@@ -1063,7 +1080,8 @@ export function LumenApp() {
         return
       }
       targetSession = sessionId ?? (await createSession())
-      const started = await lumenApi.startRun(targetSession, prompt, requestId(), attachments, undefined, assistantContext)
+      const inputOrigin = fromComposer && input.trim() ? 'composer' : undefined
+      const started = await lumenApi.startRun(targetSession, prompt, requestId(), attachments, undefined, assistantContext, false, inputOrigin)
       if (selectedSessionRef.current !== targetSession) { void refreshChrome(); return }
       if (['completed', 'failed', 'cancelled'].includes(started.status)) {
         await openSession(targetSession)
@@ -1090,6 +1108,7 @@ export function LumenApp() {
     attachments,
     bootstrap?.inputModalities,
     createSession,
+    fromComposer,
     handleSlashCommand,
     input,
     queueMode,
@@ -1283,10 +1302,10 @@ export function LumenApp() {
         await openSession(discussion.session_id)
         setAssistantContext(discussion.context_refs)
         if (context.kind === 'resource') setContextResource(await lumenApi.assistantResource(context.id, false, context.revision ?? undefined))
-        const draft = discussionDrafts.current.get(discussion.session_id) ?? ''
-        setInput(draft)
-        if (intent) setInput(draft ? `${draft}\n\n${intent}` : intent)
-        else if (!draft && context.kind === 'goal') setInput('请根据这个目标，与我一起确认现状、成功标准和下一步。')
+        const draft = discussionDrafts.current.get(discussion.session_id) ?? emptyDraft
+        if (intent) setInput(draft.text ? `${draft.text}\n\n${intent}` : intent)
+        else if (!draft.text && context.kind === 'goal') setInput('请根据这个目标，与我一起确认现状、成功标准和下一步。')
+        else setDraftInput(draft)
       } else {
         leaveSession()
         if (intent) setInput(current => current ? `${current}\n\n${intent}` : intent)
@@ -1310,11 +1329,11 @@ export function LumenApp() {
         '请围绕关联目标，与我一起确认现状、可验证的成功标准和第一步。已有说明与原对话约束继续有效。先提出规划；不要自行启用持续推进或定时跟进。',
         `goal-plan:${identity}`, [], undefined, discussion.context_refs)
       if (window.location.href !== originView) { void refreshChrome(); return }
-      const draft = discussionDrafts.current.get(discussion.session_id) ?? ''
+      const draft = discussionDrafts.current.get(discussion.session_id) ?? emptyDraft
       await openSession(discussion.session_id)
       if (selectedSessionRef.current === discussion.session_id) {
         setAssistantContext(discussion.context_refs)
-        setInput(draft)
+        setDraftInput(draft)
         if (!['completed', 'failed', 'cancelled'].includes(started.status)) {
           dispatch({type: 'run-registered', runId: started.runId})
           attachRun(started.runId)
@@ -1347,10 +1366,10 @@ export function LumenApp() {
       const started = await lumenApi.startRun(attempt.sessionId, prompt, attempt.requestId, [], undefined, attempt.refs)
       if (window.location.href !== originView) { void refreshChrome(); return }
       // Navigation happens after admission: a failed start keeps the proposal and retry identity.
-      const draft = discussionDrafts.current.get(attempt.sessionId) ?? ''
+      const draft = discussionDrafts.current.get(attempt.sessionId) ?? emptyDraft
       await openSession(attempt.sessionId)
       if (selectedSessionRef.current === attempt.sessionId) {
-        setInput(draft)
+        setDraftInput(draft)
         if (!['completed', 'failed', 'cancelled'].includes(started.status)) {
           dispatch({type: 'run-registered', runId: started.runId})
           attachRun(started.runId)
@@ -1935,7 +1954,7 @@ export function LumenApp() {
               slashCommands={slashCommands}
               attachments={attachments}
               imageInputEnabled={bootstrap?.inputModalities.includes('image') ?? false}
-              onChange={setInput}
+              onChange={editComposerInput}
               onQueueModeChange={setQueueMode}
               onAttachmentsChange={setAttachments}
               onSubmit={() => void submit()}
@@ -2049,7 +2068,7 @@ export function LumenApp() {
                   slashCommands={slashCommands}
                   attachments={attachments}
                   imageInputEnabled={bootstrap?.inputModalities.includes('image') ?? false}
-                  onChange={setInput}
+                  onChange={editComposerInput}
                   onQueueModeChange={setQueueMode}
                   onAttachmentsChange={setAttachments}
                   onSubmit={() => void submit()}
@@ -2474,7 +2493,7 @@ function SettingsDialog({
                 <span>{error}</span>
                 <button type="button" onClick={() => void load()}>重试</button>
               </div>
-            ) : section === 'preferences' ? <PersonalPreferences /> : section === 'overview' ? (
+            ) : section === 'preferences' ? <PersonalPreferences ensureSession={ensureSession} /> : section === 'overview' ? (
               <SettingsOverview
                 configuration={configuration}
                 capabilities={capabilities}
@@ -3600,7 +3619,7 @@ MCP:
   /prompt <server:name> [key=value] — 渲染并运行 MCP prompt 模板
   /resource [refresh|unload] <ref>  — 激活 / 刷新 / 卸载 MCP resource
 Memory:
-  /memory [list|remember|edit|forget|use|learn|incognito] — 管理记忆
+  /memory [list|remember|edit|forget|use|learn|incognito|openviking] — 管理记忆
 Other:
   /tools                            — 查看可用工具
   /hooks                            — 查看 hooks 与触发统计

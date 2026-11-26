@@ -257,10 +257,11 @@ export const lumenApi = {
     regenerateFromTurn?: number,
     contextRefs: AssistantContextRef[] = [],
     publishResult = false,
+    inputOrigin?: 'composer',
   ) =>
     requestJson<RunStartedResponse>(`/api/v1/sessions/${sessionId}/runs`, {
       method: 'POST',
-      body: JSON.stringify({ input, clientRequestId, attachments, regenerateFromTurn, contextRefs, publishResult }),
+      body: JSON.stringify({ input, clientRequestId, attachments, regenerateFromTurn, contextRefs, publishResult, inputOrigin }),
     }),
   retryRun: (sessionId: string, clientRequestId: string) =>
     requestJson<RunStartedResponse>(`/api/v1/sessions/${sessionId}/retry`, {

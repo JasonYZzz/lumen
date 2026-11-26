@@ -272,7 +272,7 @@ _COMMANDS: tuple[SlashCommand, ...] = (
     # --- memory ---------------------------------------------------------------
     SlashCommand(
         name="memory",
-        usage="/memory [list|remember|edit|forget|use|learn|incognito|rebuild]",
+        usage="/memory [list|remember|edit|forget|use|learn|incognito|rebuild|openviking]",
         description="Memory: list, remember, edit, forget, use, learn, rebuild",
         category=CATEGORY_MEMORY,
         handler="_cmd_memory",

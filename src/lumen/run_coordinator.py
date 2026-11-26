@@ -70,6 +70,7 @@ class RunInput:
     attachments: tuple[AttachmentRef, ...] = ()
     execution: BackgroundExecution | None = None
     host_tools: tuple[tuple[ToolSpec, str], ...] = ()
+    memory_query: str | None = None
 
 
 class RunCoordinator:
@@ -336,6 +337,7 @@ class RunCoordinator:
                 batch_completed=persist_batch,
                 execution=run_input.execution,
                 host_tools=run_input.host_tools,
+                memory_query=run_input.memory_query if run_input.execution is None else None,
             )
         except asyncio.CancelledError as error:
             terminal = terminal_event or RunCancelled("cancelled")

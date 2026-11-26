@@ -2080,6 +2080,8 @@ export interface components {
             contextRefs: components["schemas"]["ContextRef"][];
             /** Input */
             input: string;
+            /** Inputorigin */
+            inputOrigin?: "composer" | null;
             /**
              * Publishresult
              * @default false

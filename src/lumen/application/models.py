@@ -181,6 +181,7 @@ class StartRun:
     context_refs: tuple[ContextRef, ...] = ()
     publish_result: bool = False
     type: Literal["start_run"] = "start_run"
+    input_origin: Literal["composer"] | None = None
 
 
 @dataclass(frozen=True, slots=True)

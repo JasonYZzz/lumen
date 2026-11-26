@@ -488,8 +488,12 @@ class LumenAgentLoop(Generic[MessageT]):
         limits: LoopLimits | None = None,
         capability_gateway: CapabilityGateway | None = None,
         capability_visible: CapabilityVisibility | None = None,
+        refresh_attempt: Callable[
+            [ModelDriverRequest[MessageT], bool], Awaitable[ModelDriverRequest[MessageT]]
+        ] | None = None,
     ) -> None:
         self._driver = driver
+        self._refresh_attempt = refresh_attempt
         self._completion_evaluator: CompletionEvaluator = completion_evaluator or _accept_completion
         self._limits = limits or LoopLimits()
         self._capability_gateway = capability_gateway
@@ -1004,7 +1008,7 @@ class LumenAgentLoop(Generic[MessageT]):
         *,
         partial_output: str,
         sink: LoopEventSink,
-    ) -> _StreamedResponse[MessageT]:
+    ) -> tuple[ModelDriverRequest[MessageT], _StreamedResponse[MessageT]]:
         provider_attempt = 0
         while True:
             self._model_attempts += 1
@@ -1028,6 +1032,8 @@ class LumenAgentLoop(Generic[MessageT]):
             provider_error: ModelProviderError | None = None
             response_holder: list[MessageT | None] = []
 
+            if self._refresh_attempt is not None:
+                request = await self._refresh_attempt(request, provider_attempt > 0)
             async with aclosing(self._driver_events(request, response_holder, sink)) as events:
                 async for event in events:
                     if event.sequence != expected_sequence:
@@ -1177,7 +1183,7 @@ class LumenAgentLoop(Generic[MessageT]):
                     retryable=True,
                 )
             if provider_error is None:
-                return _StreamedResponse(
+                return request, _StreamedResponse(
                     text="".join(candidate_text),
                     thinking="".join(candidate_thinking),
                     tool_calls=tuple(tool_calls),
@@ -1284,7 +1290,7 @@ class LumenAgentLoop(Generic[MessageT]):
             deadline = asyncio.timeout(self._limits.model_request_timeout_seconds)
             try:
                 async with deadline:
-                    streamed = await self._stream_request(
+                    request, streamed = await self._stream_request(
                         request,
                         partial_output=partial_output,
                         sink=sink,

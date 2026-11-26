@@ -84,6 +84,9 @@ class SlashHandlersMixin:
             message=str(cast(Any, result).data.get("message", "")),
             payload=dict(cast(Any, result).data.get("payload", {})),
         )
+        if action == "openviking" and control == "memory":
+            await self._append_system(rendered.message)
+            return
         await self._append_system(self.format_context_result(rendered))
 
     async def _render_context(self: LumenApp, parts: list[str]) -> None:
@@ -740,7 +743,13 @@ class SlashHandlersMixin:
 
         action = parts[1] if len(parts) > 1 else "list"
         payload: dict[str, Any] = {}
-        if action == "remember":
+        if action == "openviking":
+            if len(parts) > 4:
+                await self._append_system("Use /memory openviking <operation> [project|user]")
+                return
+            payload = {"operation": parts[2] if len(parts) > 2 else "status",
+                       "scope": parts[3] if len(parts) > 3 else "project"}
+        elif action == "remember":
             args = parts[2:]
             if "--scope" in args:
                 scope_index = args.index("--scope")

@@ -1905,6 +1905,9 @@
             "title": "Min Session Turns",
             "type": "integer"
           },
+          "openviking": {
+            "$ref": "#/$defs/OpenVikingConfig"
+          },
           "retry_base_seconds": {
             "default": 2.0,
             "minimum": 0.0,
@@ -2305,6 +2308,36 @@
           }
         },
         "title": "OpenAILiveRouteConfig",
+        "type": "object"
+      },
+      "OpenVikingConfig": {
+        "additionalProperties": false,
+        "properties": {
+          "api_key_env": {
+            "default": "LUMEN_OPENVIKING_API_KEY",
+            "pattern": "^[A-Za-z_][A-Za-z0-9_]*$",
+            "title": "Api Key Env",
+            "type": "string"
+          },
+          "enabled": {
+            "default": false,
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "endpoint": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Endpoint"
+          }
+        },
+        "title": "OpenVikingConfig",
         "type": "object"
       },
       "PermissionsConfig": {
@@ -7495,6 +7528,19 @@
           "input": {
             "title": "Input",
             "type": "string"
+          },
+          "input_origin": {
+            "anyOf": [
+              {
+                "const": "composer",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Input Origin"
           },
           "model_prompt": {
             "anyOf": [

@@ -328,7 +328,8 @@ async def test_enter_submits_prompt(tmp_path: Path) -> None:
     app = _make_app(tmp_path)
     submitted: list[str] = []
 
-    async def capture(text: str) -> None:
+    async def capture(text: str, **options: object) -> None:
+        assert options.get("from_composer") is True
         submitted.append(text)
 
     async with app.run_test(size=(100, 30)) as pilot:
@@ -352,7 +353,8 @@ async def test_shift_enter_inserts_newline(tmp_path: Path) -> None:
     app = _make_app(tmp_path)
     submitted: list[str] = []
 
-    async def capture(text: str) -> None:
+    async def capture(text: str, **options: object) -> None:
+        assert options.get("from_composer") is True
         submitted.append(text)
 
     async with app.run_test(size=(100, 30)) as pilot:

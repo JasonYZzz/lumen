@@ -23,11 +23,33 @@ vi.mock('@/lib/api/client', () => ({
     editAssistant: vi.fn(),
     cancelRun: vi.fn(),
     preferences: vi.fn(),
+    memoryControl: vi.fn(),
     editPreference: vi.fn(),
     readResourceFile: vi.fn(),
     importResourceFile: vi.fn(),
   },
 }))
+
+it('requires a separate action to grant semantic recall and confirm remote removal', async () => {
+  vi.mocked(lumenApi.preferences).mockResolvedValue({ available: true, records: [] })
+  vi.mocked(lumenApi.memoryControl).mockResolvedValue({
+    status: 'ok', message: 'configured', payload: { configured: true, enabled: false, endpoint: 'https://test.invalid' },
+  })
+  await act(async () => root.render(<PersonalPreferences ensureSession={async () => 'sess'} />))
+  const click = async (label: string) => {
+    const button = Array.from(container.querySelectorAll('button')).find(b => b.textContent === label)
+    expect(button).toBeDefined()
+    await act(async () => button!.click())
+  }
+  expect(lumenApi.memoryControl).not.toHaveBeenCalled()
+  await click('读取同步状态')
+  await click('授权此范围')
+  expect(lumenApi.memoryControl).toHaveBeenLastCalledWith('sess', 'openviking', {operation: 'enable', scope: 'project'})
+  await click('移除远端副本')
+  expect(lumenApi.memoryControl).toHaveBeenCalledTimes(2)
+  await click('确认移除')
+  expect(lumenApi.memoryControl).toHaveBeenLastCalledWith('sess', 'openviking', {operation: 'purge', scope: 'project'})
+})
 
 let root: Root
 let container: HTMLDivElement

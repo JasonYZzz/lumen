@@ -6,7 +6,57 @@ import './assistant-workspace.css'
 
 type Preferences = Awaited<ReturnType<typeof lumenApi.preferences>>
 
-export function PersonalPreferences() {
+type VikingOperation = 'status' | 'enable' | 'disable' | 'backfill' | 'purge'
+
+function SemanticMemory({ ensureSession }: { ensureSession: () => Promise<string> }) {
+  const [scope, setScope] = useState<'project' | 'user'>('project')
+  const [result, setResult] = useState<Awaited<ReturnType<typeof lumenApi.memoryControl>> | null>(null)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+  const [confirmPurge, setConfirmPurge] = useState(false)
+  const apply = async (operation: VikingOperation) => {
+    setBusy(true)
+    setError('')
+    try {
+      setResult(await lumenApi.memoryControl(await ensureSession(), 'openviking', { operation, scope }))
+      setConfirmPurge(false)
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : '操作失败，请重新读取状态')
+    } finally {
+      setBusy(false)
+    }
+  }
+  return <fieldset disabled={busy} className="assistant-form">
+    <legend>OpenViking 语义记忆</legend>
+    <label>同步范围
+      <select value={scope} onChange={event => {
+        setScope(event.target.value === 'user' ? 'user' : 'project')
+        setConfirmPurge(false)
+        setResult(null)
+        setError('')
+      }}>
+        <option value="project">当前项目</option>
+        <option value="user">跨项目个人记忆</option>
+      </select>
+    </label>
+    <button type="button" onClick={() => void apply('status')}>读取同步状态</button>
+    {error && <p role="alert">{error}</p>}
+    {result && <p role="status">{result.message}</p>}
+    {result?.payload.configured === true && <>
+      {result.payload.enabled === true ? <>
+        <button type="button" onClick={() => void apply('disable')}>停用此范围</button>
+        <button type="button" onClick={() => void apply('backfill')}>同步现有已确认条目</button>
+      </> : <button type="button" onClick={() => void apply('enable')}>授权此范围</button>}
+      {confirmPurge ? <>
+        <p>将停用选定范围，并移除该服务上的记忆副本。</p>
+        <button type="button" onClick={() => void apply('purge')}>确认移除</button>
+        <button type="button" onClick={() => setConfirmPurge(false)}>取消</button>
+      </> : <button type="button" onClick={() => setConfirmPurge(true)}>移除远端副本</button>}
+    </>}
+  </fieldset>
+}
+
+export function PersonalPreferences({ ensureSession }: { ensureSession?: () => Promise<string> } = {}) {
   const [data, setData] = useState<Preferences | null>(null)
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
@@ -59,6 +109,7 @@ export function PersonalPreferences() {
         </div>
       </div>
       <p>用户范围会跨项目共享；项目与路径范围保留现有隔离规则。</p>
+      {ensureSession && <SemanticMemory ensureSession={ensureSession} />}
       {error && (
         <div role="alert" className="settings-inline-error">
           {error}

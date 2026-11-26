@@ -208,7 +208,7 @@ lumen mcp reset [--name <name>] --cwd . [--config PATH]
 | MCP | `/resource unload <ref>` | 卸载当前 session 的 resource | 可用 |
 | MCP | `/prompts` | 列出 MCP prompt 模板 | 可用 |
 | MCP | `/prompt <server:name> [key=value ...]` | 渲染模板并作为一次 Agent run 提交 | 需先结束当前 run |
-| Memory | `/memory [action]` | 管理持久记忆，详见下节 | 可用 |
+| Memory | `/memory [action]` | 管理持久记忆，详见下节 | OpenViking 专项控制可在运行中使用，普通记忆控制需等当前 run 结束 |
 | Other | `/theme [lumen-dark\|lumen-light]` | 查看或即时切换主题 | 可用 |
 | Other | `/transcript` | 打开可搜索、可展开/Raw/复制的结构化 transcript | 可用 |
 | Other | `/help` | 显示分组命令帮助 | 可用 |
@@ -235,9 +235,16 @@ lumen mcp reset [--name <name>] --cwd . [--config PATH]
 /memory learn on|off
 /memory incognito on|off
 /memory rebuild
+/memory openviking status [project|user]
+/memory openviking enable [project|user]
+/memory openviking backfill [project|user]
+/memory openviking disable [project|user]
+/memory openviking purge [project|user]
 ```
 
 无 action 时等同于 `list`。`edit <id>` 导出私有 Markdown 草稿；`--apply` 校验并写回 SQLite 权威存储，`--set` 直接替换内容。
+
+首次接入请按 [Lumen + OpenViking 长期记忆手册](openviking-memory.md)部署服务、核验身份并配置用户级连接。项目和跨项目个人记忆分别授权。`enable` 允许后续同步，`backfill` 显式补传历史，`disable` 停用，`purge` 撤权并清理在线副本。退役时先在原身份下确认待清理归零，再关闭连接。
 
 ## 3. Web slash 命令支持矩阵
 
@@ -251,7 +258,7 @@ Web 通过 FastAPI application host 执行命令；本地显示类命令不会�
 | 模型/审批 | `/model [name]`、`/mode [mode]`、`/plan <task>` | `auto` 仍需显式确认；`/plan` 以 Plan collaboration mode 启动任务 |
 | 计划 | `/tasks` | 打开最新计划侧栏；完成与跳过分开计数；此入口不批准执行 |
 | Context | `/context`、`/context sources`、`/context capabilities`、`/instructions`、`/compact [focus]`、`/clarification cancel` | `/instructions` 不回显 prompt 正文 |
-| Memory | `/memory [action]` | 支持常用 list/remember/forget/use/learn/incognito 操作 |
+| Memory | `/memory [action]` | 支持本地记忆与 OpenViking 同步控制。Web 的个人范围、编辑和确认请使用「个性化偏好」表单 |
 | MCP | `/mcp`、`/resource [refresh\|unload] <ref>`、`/prompts`、`/prompt <ref> [key=value ...]` | `/prompt` 支持单/双引号参数值 |
 | Skill | `/skills`、`/skill:<name> [args]`、`/skill unload <name>` | 动态 Skill 也进入补全 |
 | 其他 | `/tools`、`/hooks`、`/copy`、`/help` | `/copy` 复制最新助手回复 |

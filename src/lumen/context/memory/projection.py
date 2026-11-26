@@ -11,7 +11,7 @@ could be re-parsed as a config include is escaped.
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 
 from lumen.context.memory.records import MemoryRecord, MemoryScope, MemoryStatus, Sensitivity
 
@@ -28,7 +28,16 @@ def render_memory_index(records: Iterable[MemoryRecord]) -> str:
     the context window when re-injected.
     """
 
-    lines = ["# 记忆索引", ""]
+    return select_memory_index(records)[0]
+
+
+def select_memory_index(
+    records: Iterable[MemoryRecord], fits: Callable[[str], bool] | None = None,
+) -> tuple[str, set[str]]:
+    """Select complete records once, including section overhead in the provider budget."""
+
+    text = "# 记忆索引\n"
+    included: set[str] = set()
     by_scope: dict[MemoryScope, list[MemoryRecord]] = {
         MemoryScope.USER: [],
         MemoryScope.PROJECT: [],
@@ -43,16 +52,17 @@ def render_memory_index(records: Iterable[MemoryRecord]) -> str:
         by_scope.setdefault(record.scope, []).append(record)
 
     for scope in (MemoryScope.USER, MemoryScope.PROJECT, MemoryScope.PATH, MemoryScope.AGENT):
-        rows = by_scope.get(scope, [])
-        if not rows:
-            continue
-        lines.append(f"## {scope.value}")
-        for record in rows:
-            lines.append(f"- [{record.id}] {record.content}")
-        lines.append("")
-
-    text = "\n".join(lines).rstrip() + "\n"
-    return _cap(text)
+        header = f"\n## {scope.value}\n"
+        for record in by_scope[scope]:
+            candidate = f"{text}{header}- [{record.id}] {record.content}\n"
+            if len(candidate.encode("utf-8")) > MAX_INDEX_BYTES or candidate.count("\n") > MAX_INDEX_LINES:
+                continue
+            if fits is not None and not fits(candidate):
+                continue
+            text = candidate
+            included.add(record.id)
+            header = ""
+    return (text if included or fits is None else ""), included
 
 
 def render_topic(records: Iterable[MemoryRecord], *, title: str) -> str:
@@ -72,16 +82,6 @@ def render_topic(records: Iterable[MemoryRecord], *, title: str) -> str:
             lines.append(f"- supersedes: {', '.join(record.supersedes)}")
         lines.append("")
     return "\n".join(lines).rstrip() + "\n"
-
-
-def _cap(text: str) -> str:
-    """Truncate the projection to the line/byte caps, noting the cut."""
-
-    if len(text.encode("utf-8")) <= MAX_INDEX_BYTES and text.count("\n") <= MAX_INDEX_LINES:
-        return text
-    truncated = text.encode("utf-8")[:MAX_INDEX_BYTES].decode("utf-8", errors="ignore")
-    lines = truncated.splitlines()[:MAX_INDEX_LINES]
-    return "\n".join(lines) + "\n\n(记忆索引已截断以符合容量上限)\n"
 
 
 __all__ = [

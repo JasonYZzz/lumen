@@ -426,8 +426,11 @@ async def test_host_freezes_effort_on_wire_and_saves_changes_for_the_next_run(
     bodies: list[dict[str, Any]] = []
 
     async def respond(request: httpx.Request) -> httpx.Response:
-        bodies.append(json.loads(request.content))
-        entered.set()
+        body = json.loads(request.content)
+        # Title generation can reach the transport before the streamed agent turn.
+        if body.get("stream") is True:
+            bodies.append(body)
+            entered.set()
         await asyncio.Event().wait()
         return httpx.Response(503)
 

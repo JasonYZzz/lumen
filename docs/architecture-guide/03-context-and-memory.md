@@ -1,5 +1,12 @@
 # 3. 上下文引擎、Prompt、压缩与记忆
 
+根 Host 可以给 SQLite 已确认的 USER／PROJECT 记忆建立可选的 OpenViking 私有资源投影。
+SQLite 写事务记录版本与待同步操作，后台 worker 按绑定处理。普通交互最多进行一次有界语义查询，
+模型只读取经当前本地状态复核的条目正文。固定索引按完整条目计入预算，动态召回只排除实际展示的 ID。
+TUI 与 Web 在用户从普通输入框发送原文时显式标记来源。文件展开、附件正文、自动生成的目标／灵感任务、
+重试与重新生成、headless 输入都无法作为查询来源。启用授权后，隐私状态与服务时限仍约束每次请求。
+部署、授权、存储、召回和备份恢复见 [Lumen + OpenViking 长期记忆手册](../openviking-memory.md)，命令速查见[记忆命令](../commands.md#21-memory-actions)。
+
 本章描述当前源码中的真实组装路径。最重要的结论是：**Lumen 的模型输入不只有一段拼接字符串，Context zone 也不等于 provider role。** `ContextAssembler` 负责预算、来源、信任、保留策略和裁剪；`AgentRuntime` 在 `LumenAgentLoop` 每个请求边界冻结输入，再交给低层 `PydanticAIModelDriver`。
 
 上述组装适用于普通交互。v2 `BackgroundExecution` 使用 Host 固定的有界文件快照和已确认偏好，跳过 Context prepare／压缩与后台记忆学习，不暴露模型工具。偏好仍由 MemoryManager 持有，只有启用召回且非隐私模式下的 active、explicit USER／PROJECT 内容进入快照；PATH、候选或推测内容不进入该路径。设置内确认／编辑／遗忘及自动化指纹规则见[第 16 章](16-personal-assistant-automations.md)。

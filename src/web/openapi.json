@@ -2672,6 +2672,18 @@
             "title": "Input",
             "type": "string"
           },
+          "inputOrigin": {
+            "anyOf": [
+              {
+                "const": "composer",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Inputorigin"
+          },
           "publishResult": {
             "default": false,
             "title": "Publishresult",

@@ -1070,7 +1070,12 @@ class WorkspaceHost:
                 await self._sync_assistant_products(command.session_id)
             return result
         if isinstance(command, StartRun):
-            return await self._start_run(command)
+            query = (
+                command.input
+                if command.input_origin == "composer" and command.regenerate_from_turn is None
+                else None
+            )
+            return await self._start_run(command, memory_query=query)
         if isinstance(command, RunDirectCommand):
             return await self._start_direct_command(command)
         if isinstance(command, StartLiveSession):
@@ -1940,6 +1945,7 @@ class WorkspaceHost:
         self,
         command: StartRun,
         *,
+        memory_query: str | None = None,
         model_prompt: str | None = None,
         selected_skill: str | None = None,
         is_retry: bool = False,
@@ -2083,6 +2089,7 @@ class WorkspaceHost:
                             actor,
                             record,
                             command.input,
+                            memory_query=memory_query,
                             model_prompt=model_prompt,
                             selected_skill=selected_skill,
                             is_retry=is_retry,
@@ -3080,6 +3087,7 @@ class WorkspaceHost:
         record: _RunRecord,
         text: str,
         *,
+        memory_query: str | None = None,
         model_prompt: str | None = None,
         selected_skill: str | None = None,
         is_retry: bool = False,
@@ -3225,6 +3233,7 @@ class WorkspaceHost:
                 RunInput(
                     text,
                     prepared_prompt,
+                    memory_query=memory_query,
                     is_retry=is_retry,
                     interaction_id=record.id,
                     attachments=attachments,
@@ -4113,6 +4122,49 @@ class WorkspaceHost:
 
     async def _context_control(self, command: ContextControl) -> CommandAcknowledged:
         self._actor(command.session_id)
+        if command.control == "memory" and command.action == "openviking":
+            operation = command.payload.get("operation", "status")
+            scope = command.payload.get("scope", "project")
+            if (
+                not isinstance(operation, str)
+                or operation not in {"status", "enable", "disable", "backfill", "purge"}
+                or scope not in ("project", "user")
+                or set(command.payload) - {"operation", "scope"}
+            ):
+                raise InvalidStateError("Invalid OpenViking operation or scope")
+            manager = getattr(self.resources, "memory_manager", None)
+            service = manager.semantic if isinstance(manager, MemoryManager) else None
+            if service is None:
+                if operation != "status":
+                    raise InvalidStateError("Configure memory.openviking in the user configuration first")
+                return CommandAcknowledged(
+                    "ok", {"message": "OpenViking 未配置", "payload": {"configured": False}}
+                )
+            try:
+                status = await service.control(operation, personal=scope == "user")
+            except ValueError as error:
+                raise InvalidStateError(str(error)) from error
+            message = (
+                f"OpenViking {status.get('endpoint')} · {scope} · "
+                f"{'已授权' if status.get('enabled') else '已停用'} · "
+                f"可同步 {status.get('eligible', 0)} · 待同步 {status.get('pending', 0)} · "
+                f"待清理 {status.get('cleanup', 0)} · 本地回退 {status.get('fallbacks', 0)}"
+            )
+            if isinstance(oldest := status.get("oldest_pending_seconds"), (int, float)) and oldest > 0:
+                message += f" · 最早待办已等待 {int(oldest)} 秒"
+            if isinstance(success := status.get("last_success"), (int, float)):
+                timestamp = datetime.fromtimestamp(success, tz=UTC).isoformat(timespec="seconds")
+                message += f" · 上次同步或清理成功 {timestamp}"
+            if error_category := status.get("last_error"):
+                message += f" · 最近错误 {error_category}"
+            if isinstance(failures := status.get("consecutive_errors"), int) and failures > 0:
+                message += f" · 连续同步错误 {failures} 次"
+            if operation in {"status", "enable"}:
+                message += (
+                    "。授权后，此范围新确认的记忆和普通对话中最多 512 个字符的查询"
+                    "可发送给该服务及其模型。"
+                )
+            return CommandAcknowledged("ok", {"message": message, "payload": status})
         runtime = self.resources.runtime
         engine = runtime.context_engine if runtime is not None else None
         if engine is None:

@@ -8,6 +8,8 @@ schema，其次是 Accepted 决策记录；计划和研究不能反向定义运�
 
 ## 当前事实
 
+部署第三方长期记忆、选择同步范围和恢复数据时，参阅 [Lumen + OpenViking 长期记忆手册](openviking-memory.md)。
+
 | 范围 | 当前实现与入口 |
 | --- | --- |
 | 客户端 | Textual TUI、Next.js Web、headless CLI、Tauri 2 Apple Silicon macOS Beta，共用 WorkspaceHost |

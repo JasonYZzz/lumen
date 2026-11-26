@@ -16,10 +16,10 @@ never silently overwrites a contradictory fact.
 from __future__ import annotations
 
 import hashlib
-from datetime import datetime
+from datetime import UTC, datetime
 from enum import StrEnum
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 class MemoryScope(StrEnum):
@@ -101,6 +101,12 @@ class MemoryRecord(BaseModel):
     project_id: str | None = None
     #: Optional path glob for PATH-scope recall (plan §11.2).
     path_glob: str | None = None
+
+    @field_validator("valid_from", "valid_until", "created_at", "updated_at", "last_used_at")
+    @classmethod
+    def normalize_legacy_timestamp(cls, value: datetime | None) -> datetime | None:
+        """Older stored records can omit the offset on UTC timestamps."""
+        return value.replace(tzinfo=UTC) if value is not None and value.tzinfo is None else value
 
     @model_validator(mode="after")
     def _validate_lifecycle(self) -> MemoryRecord:

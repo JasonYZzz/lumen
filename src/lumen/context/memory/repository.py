@@ -27,6 +27,7 @@ from lumen.context.memory.records import (
     MemorySource,
     MemoryStatus,
 )
+from lumen.context.memory.viking_store import VikingStore
 
 #: Confidence floor for the default index (MEMORY_INDEX). Below this a record
 #: is recallable by query but not loaded into every prompt's fixed prefix.
@@ -74,19 +75,15 @@ def _now() -> datetime:
 def _is_active_for_index(record: MemoryRecord, now: datetime) -> bool:
     """Whether ``record`` belongs in the default MEMORY_INDEX (plan §11.5)."""
 
-    if record.status is not MemoryStatus.ACTIVE:
-        return False
-    if record.confidence < _INDEX_CONFIDENCE_FLOOR:
-        return False
-    if record.valid_until is not None and record.valid_until < now:
-        return False
-    return True
+    return record.confidence >= _INDEX_CONFIDENCE_FLOOR and _is_recallable(record, now)
 
 
 def _is_recallable(record: MemoryRecord, now: datetime) -> bool:
-    if record.status is not MemoryStatus.ACTIVE:
-        return False
-    return record.valid_until is None or record.valid_until >= now
+    return (
+        record.status is MemoryStatus.ACTIVE
+        and record.valid_from <= now
+        and (record.valid_until is None or now < record.valid_until)
+    )
 
 
 def _rank(record: MemoryRecord, text: str) -> float:
@@ -267,22 +264,42 @@ class SQLiteMemoryRepository:
     CREATE VIRTUAL TABLE IF NOT EXISTS memory_fts USING fts5(
         id UNINDEXED, content, content='memory', content_rowid='rowid'
     );
-    CREATE TRIGGER IF NOT EXISTS memory_ai AFTER INSERT ON memory BEGIN
-        INSERT INTO memory_fts(id, content) VALUES (new.id, new.content);
-    END;
-    CREATE TRIGGER IF NOT EXISTS memory_ad AFTER DELETE ON memory BEGIN
-        INSERT INTO memory_fts(memory_fts, id, content) VALUES ('delete', old.id, old.content);
-    END;
-    CREATE TRIGGER IF NOT EXISTS memory_au AFTER UPDATE ON memory BEGIN
-        INSERT INTO memory_fts(memory_fts, id, content) VALUES ('delete', old.id, old.content);
-        INSERT INTO memory_fts(id, content) VALUES (new.id, new.content);
-    END;
     """
+
+    @staticmethod
+    def _migrate_fts(db: sqlite3.Connection) -> None:
+        with db:
+            db.execute("BEGIN IMMEDIATE")
+            if db.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='trigger' AND name='memory_replace_v2'"
+            ).fetchone():
+                return
+            for trigger in ("memory_ai", "memory_ad", "memory_au"):
+                db.execute(f"DROP TRIGGER IF EXISTS {trigger}")
+            # REPLACE only fires its implicit DELETE triggers with recursive_triggers enabled.
+            # Explicitly remove the conflicting row so older clients' REPLACE statements also maintain FTS.
+            db.execute("""CREATE TRIGGER memory_replace_v2 BEFORE INSERT ON memory BEGIN
+                DELETE FROM memory WHERE id=NEW.id;
+            END""")
+            db.execute("""CREATE TRIGGER memory_ai AFTER INSERT ON memory BEGIN
+                INSERT INTO memory_fts(rowid,id,content) VALUES (NEW.rowid,NEW.id,NEW.content);
+            END""")
+            db.execute("""CREATE TRIGGER memory_ad AFTER DELETE ON memory BEGIN
+                INSERT INTO memory_fts(memory_fts,rowid,id,content)
+                VALUES('delete',OLD.rowid,OLD.id,OLD.content);
+            END""")
+            db.execute("""CREATE TRIGGER memory_au AFTER UPDATE OF id,content ON memory BEGIN
+                INSERT INTO memory_fts(memory_fts,rowid,id,content)
+                VALUES('delete',OLD.rowid,OLD.id,OLD.content);
+                INSERT INTO memory_fts(rowid,id,content) VALUES(NEW.rowid,NEW.id,NEW.content);
+            END""")
+            db.execute("INSERT INTO memory_fts(memory_fts) VALUES('rebuild')")
 
     def __init__(self, path: str | Path) -> None:
         self._path = Path(path).expanduser()
         # RLock: remember/forget/mark_used call self.get while holding the lock.
         self._lock = threading.RLock()
+        self.viking = VikingStore(self._db, self._lock, self._path)
         # Lazy: the SQLite file is created only on first use, so constructing a
         # repository (e.g. in tests that never write) touches nothing on disk.
         self._conn: sqlite3.Connection | None = None
@@ -296,22 +313,29 @@ class SQLiteMemoryRepository:
             self._conn = sqlite3.connect(str(self._path), check_same_thread=False)
             os.chmod(self._path, 0o600)
             self._conn.row_factory = sqlite3.Row
-            self._conn.executescript(self.schema)
-            self._conn.commit()
+            try:
+                self._conn.executescript(self.schema + VikingStore.schema)
+                self._migrate_fts(self._conn)
+                self.viking.check_restore(self._conn)
+            except Exception:
+                self._conn.close()
+                self._conn = None
+                raise
         return self._conn
 
     def close(self) -> None:
-        if self._conn is not None:
-            self._conn.close()
-            self._conn = None
+        with self._lock:
+            if self._conn is not None:
+                self._conn.close()
+                self._conn = None
 
     def remember(self, record: MemoryRecord) -> MemoryRecord:
-        with self._lock:
+        with self.viking.transaction() as db:
             existing = self.get(record.id)
             if existing is not None and existing.status is MemoryStatus.FORGOTTEN:
                 return existing
             stored = _merge_active_record(record, existing)
-            self._db().execute(
+            db.execute(
                 "INSERT OR REPLACE INTO memory (id, scope, kind, content, record_json, status, "
                 "confidence, path_glob, valid_until) VALUES (?,?,?,?,?,?,?,?,?)",
                 (
@@ -326,11 +350,11 @@ class SQLiteMemoryRepository:
                     stored.valid_until.isoformat() if stored.valid_until else None,
                 ),
             )
-            self._db().commit()
-            return self.get(stored.id) or stored
+            self.viking.changed(db, stored)
+            return stored
 
     def forget(self, record_id: str) -> bool:
-        with self._lock:
+        with self.viking.transaction() as db:
             record = self.get(record_id)
             if record is None:
                 return False
@@ -339,11 +363,11 @@ class SQLiteMemoryRepository:
                 "UPDATE memory SET record_json=?, status=? WHERE id=?",
                 (forgotten.model_dump_json(), MemoryStatus.FORGOTTEN.value, record_id),
             )
-            self._db().commit()
+            self.viking.changed(db, forgotten)
             return True
 
     def expire(self, record_id: str) -> bool:
-        with self._lock:
+        with self.viking.transaction() as db:
             record = self.get(record_id)
             if record is None or record.status is MemoryStatus.FORGOTTEN:
                 return False
@@ -360,7 +384,7 @@ class SQLiteMemoryRepository:
                     record_id,
                 ),
             )
-            self._db().commit()
+            self.viking.changed(db, expired)
             return True
 
     def get(self, record_id: str) -> MemoryRecord | None:
@@ -418,14 +442,11 @@ class SQLiteMemoryRepository:
         # no FTS-safe tokens (e.g. CJK without tokenization).
         matching_ids: set[str] | None = None
         try:
-            fts_rows = (
-                self._db()
-                .execute(
+            with self._lock:
+                fts_rows = self._db().execute(
                     "SELECT id FROM memory_fts WHERE memory_fts MATCH ? LIMIT ?",
                     (_fts_query(text), limit * 4),
-                )
-                .fetchall()
-            )
+                ).fetchall()
             matching_ids = {row["id"] for row in fts_rows}
         except sqlite3.OperationalError:
             matching_ids = None
@@ -435,15 +456,12 @@ class SQLiteMemoryRepository:
         return ranked[:limit]
 
     def mark_used(self, record_id: str) -> None:
-        with self._lock:
+        with self.viking.transaction() as db:
             record = self.get(record_id)
             if record is None:
                 return
             used = record.model_copy(update={"last_used_at": _now(), "use_count": record.use_count + 1})
-            self._db().execute(
-                "UPDATE memory SET record_json=? WHERE id=?", (used.model_dump_json(), record_id)
-            )
-            self._db().commit()
+            db.execute("UPDATE memory SET record_json=? WHERE id=?", (used.model_dump_json(), record_id))
 
 
 def _fts_query(text: str) -> str:

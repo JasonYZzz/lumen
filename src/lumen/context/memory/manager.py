@@ -6,10 +6,10 @@ import asyncio
 import hashlib
 import inspect
 import os
-from collections.abc import Awaitable, Callable, Collection, Sequence
+from collections.abc import Awaitable, Callable, Collection, Iterable, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import TypeAlias
+from typing import TYPE_CHECKING, TypeAlias
 
 import yaml
 from pydantic import TypeAdapter, ValidationError
@@ -35,7 +35,10 @@ from lumen.context.memory.records import (
     memory_record_id,
 )
 from lumen.context.memory.redaction import contains_secret
-from lumen.context.memory.repository import MemoryRepository
+from lumen.context.memory.repository import MemoryRepository, SQLiteMemoryRepository
+
+if TYPE_CHECKING:
+    from lumen.context.memory.openviking import OpenVikingService
 
 RawFactExtractor: TypeAlias = Callable[
     [SessionExtractionSource],
@@ -62,8 +65,10 @@ class MemoryManager:
         retry_base_seconds: float = 2.0,
         idle_seconds: float = 120.0,
         projection_dir: str | Path | None = None,
+        semantic: OpenVikingService | None = None,
     ) -> None:
         self._repo = repository
+        self.semantic = semantic
         self.project_id = project_id
         self.use = use
         self.learn = learn
@@ -262,6 +267,7 @@ class MemoryManager:
         path: str | None = None,
         limit: int = 20,
         exclude_ids: Collection[str] = (),
+        mark_used: bool = True,
     ) -> list[MemoryRecord]:
         if not self.use or self.incognito:
             return []
@@ -270,12 +276,16 @@ class MemoryManager:
             scope=scope,
             path=path,
             project_id=self.project_id,
-            limit=limit,
+            limit=limit + len(exclude_ids),
         )
-        hits = [record for record in hits if record.id not in exclude_ids]
-        for record in hits:
-            self._repo.mark_used(record.id)
+        hits = [record for record in hits if record.id not in exclude_ids][:limit]
+        if mark_used:
+            self.mark_recalled(record.id for record in hits)
         return hits
+
+    def mark_recalled(self, record_ids: Iterable[str]) -> None:
+        for record_id in record_ids:
+            self._repo.mark_used(record_id)
 
     def index(self) -> list[MemoryRecord]:
         if not self.use or self.incognito:
@@ -306,6 +316,10 @@ class MemoryManager:
 
     def set_incognito(self, enabled: bool) -> None:
         self.incognito = enabled
+        if self.semantic is not None:
+            self.semantic.set_incognito(enabled)
+        elif isinstance(self._repo, SQLiteMemoryRepository):
+            self._repo.viking.private = enabled
         if enabled:
             for task in self._idle_tasks.values():
                 task.cancel()
@@ -406,6 +420,8 @@ class MemoryManager:
     def start(self) -> None:
         """Resume due crash-recovered jobs without blocking startup."""
 
+        if self.semantic is not None:
+            self.semantic.start()
         if not self.learn or self.incognito or self._extractor is None or self._source_loader is None:
             return
         if "__recovery__" in self._idle_tasks:
@@ -466,6 +482,8 @@ class MemoryManager:
             raise
 
     async def close(self) -> None:
+        if self.semantic is not None:
+            await self.semantic.close()
         tasks = tuple(self._idle_tasks.values())
         self._idle_tasks.clear()
         for task in tasks:

@@ -621,6 +621,7 @@ def create_web_app(
                 regenerate_from_turn=body.regenerate_from_turn,
                 context_refs=body.context_refs,
                 publish_result=body.publish_result,
+                input_origin=body.input_origin,
             )
         )
         return {

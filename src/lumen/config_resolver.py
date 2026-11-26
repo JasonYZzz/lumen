@@ -227,6 +227,9 @@ def _resolve_declared_path(value: Any, source: ConfigSource) -> Any:
 
 def _prepare_layer(raw: dict[str, Any], source: ConfigSource) -> dict[str, Any]:
     prepared = copy.deepcopy(raw)
+    memory = _mapping(prepared.get("memory"))
+    if memory and "openviking" in memory and source.scope not in {ConfigScope.USER, ConfigScope.EXPLICIT}:
+        raise ConfigLoadError("memory.openviking requires user-level or explicitly selected configuration")
     agent = _mapping(prepared.get("agent"))
     prompt = _mapping(agent.get("prompt")) if agent is not None else None
     if prompt is not None:

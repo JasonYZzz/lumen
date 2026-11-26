@@ -141,7 +141,7 @@ lumen init --local  # 本机覆盖配置：.lumen/agent.local.yaml
 | 接入 MCP、安装或编写 Skill | [MCP 与 Skills](docs/architecture-guide/09-mcp-and-skills.md) · [Skill 作者指南](docs/skills/authoring.md) |
 | 接入 Hooks | [Hook 指南](docs/hooks/README.md) |
 | 使用多 Agent 协作 | [原生多 Agent](docs/architecture-guide/10-native-multi-agent-runtime.md) |
-| 理解压缩、记忆、重试与恢复 | [上下文与记忆](docs/architecture-guide/03-context-and-memory.md) · [长任务排障](docs/architecture-guide/14-long-running-recovery.md) |
+| 理解压缩、记忆、重试与恢复 | [上下文与记忆](docs/architecture-guide/03-context-and-memory.md) · [OpenViking 长期记忆部署与使用](docs/openviking-memory.md) · [长任务排障](docs/architecture-guide/14-long-running-recovery.md) |
 | 阅读架构与源码 | [架构指南](docs/architecture-guide/README.md) · [源码导航](docs/architecture-guide/08-code-navigation.md) · [交互式 Atlas](docs/architecture-guide/index.html) |
 
 全部文档及当前实现与研究资料的分层说明见[文档地图](docs/README.md)。

@@ -1137,6 +1137,7 @@ class AgentRuntime:
         batch_completed: Callable[[PartialRunOutcome], Awaitable[None]] | None = None,
         execution: BackgroundExecution | None = None,
         host_tools: tuple[tuple[ToolSpec, str], ...] = (),
+        memory_query: str | None = None,
     ) -> RunOutcome:
         async with self:
             token = self._execution.set(execution)
@@ -1149,9 +1150,11 @@ class AgentRuntime:
                     source_history=source_history, episode_documents=episode_documents, session_id=session_id,
                     focus=focus, force_compaction=force_compaction, recovery_receipts=recovery_receipts,
                     completion_policy=completion_policy, attachments=attachments,
-                    batch_completed=batch_completed,
+                    batch_completed=batch_completed, memory_query=memory_query,
                 )
             finally:
+                if self.context_engine is not None:
+                    self.context_engine.finish_memory_turn(session_id or "default")
                 self._execution.reset(token)
                 self._host_tools.reset(tools_token)
 
@@ -1177,6 +1180,7 @@ class AgentRuntime:
         completion_policy: CompletionPolicy | None = None,
         attachments: Sequence[AttachmentRef] = (),
         batch_completed: Callable[[PartialRunOutcome], Awaitable[None]] | None = None,
+        memory_query: str | None = None,
     ) -> RunOutcome:
         background = self._execution.get()
         execution_limits = self.limits if background is None else self.limits.model_copy(update={
@@ -1249,6 +1253,7 @@ class AgentRuntime:
                 session=SessionRef(id=session_id or "default"),
                 agent=AgentRef(name="lumen"),
                 prompt=prompt,
+                memory_query=memory_query,
                 task=TaskSnapshot(plan=self.controller.snapshot(), diagnostics=tuple(diagnostics)),
                 runtime=RuntimeContextSnapshot(
                     instructions=self._request_instructions(visible_tool_schemas),
@@ -1585,6 +1590,23 @@ class AgentRuntime:
                 model_step=1,
             )
 
+            async def refresh_memory_before_attempt(
+                prior: ModelDriverRequest[ModelMessage], is_retry: bool,
+            ) -> ModelDriverRequest[ModelMessage]:
+                if context_engine is None or envelope is None or await context_engine.memory_is_current(
+                    envelope, resolved_session_id,
+                ):
+                    return prior
+                # Before the first send, replace the provisional receipt. On a retry the
+                # previous manifest was sent and remains part of the run evidence.
+                if (not is_retry and request_receipts
+                        and request_receipts[-1].input_manifest == prior.input_manifest):
+                    request_receipts.pop()
+                return await prepare_request(
+                    messages=prior.messages, model_step=prior.input_manifest.step,
+                    model_settings=prior.settings,
+                )
+
             async def continue_after_tools(
                 continuation: LoopToolContinuation[ModelMessage],
             ) -> ModelDriverRequest[ModelMessage] | None:
@@ -1865,6 +1887,8 @@ class AgentRuntime:
                         "cache_write": event.cache_write_tokens or 0,
                     })
                 elif isinstance(event, LoopRequestObserved):
+                    if context_engine is not None and envelope is not None:
+                        await context_engine.record_memory_use(resolved_session_id, envelope)
                     observation = event.model_dump(mode="json", exclude={"sequence"})
                     observation["control_only"] = bool(event.tool_names) and all(
                         name in CONTROL_TOOL_NAMES for name in event.tool_names
@@ -2072,6 +2096,10 @@ class AgentRuntime:
                 ),
                 capability_gateway=native_gateway,
                 capability_visible=capability_visible,
+                refresh_attempt=(
+                    refresh_memory_before_attempt
+                    if context_engine is not None and context_engine.memory else None
+                ),
             )
             loop_outcome = await lumen_loop.run(
                 driver_request,

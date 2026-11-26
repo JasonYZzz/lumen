@@ -570,13 +570,11 @@ class LumenApp(
 
     @on(PromptEditor.Submitted)
     async def prompt_submitted(self, event: PromptEditor.Submitted) -> None:
-        if event.mode is QueueMode.STEER and event.model_prompt == event.text:
-            await self.handle_input(event.text)
-            return
         await self.handle_input(
             event.text,
             queue_mode=event.mode,
             model_prompt=event.model_prompt,
+            from_composer=True,
         )
 
     @on(PromptEditor.DequeueRequested)
@@ -598,6 +596,7 @@ class LumenApp(
         queue_mode: QueueMode = QueueMode.STEER,
         model_prompt: str | None = None,
         is_retry: bool = False,
+        from_composer: bool = False,
     ) -> None:
         if text.startswith("/"):
             await self._handle_command(text)
@@ -665,6 +664,7 @@ class LumenApp(
                     model_prompt=expanded,
                     is_retry=is_retry,
                     attachments=attachments,
+                    memory_query=text if from_composer and not is_retry else None,
                 )
             ),
             name="agent-run",
@@ -803,6 +803,7 @@ class LumenApp(
             model_prompt=self._apply_permission_mode_context(run_input.model_prompt),
             is_retry=run_input.is_retry,
             attachments=run_input.attachments,
+            memory_query=run_input.memory_query,
         )
         try:
             await self.coordinator.set_modes(
